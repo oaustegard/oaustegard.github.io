@@ -42,7 +42,8 @@
     <h1>Webex IM Space Forwarder</h1>
 
     <h2>What does this do?</h2>
-    <p>When provided a suitable query string, this page will use JavaScript to redirect to a Webex IM space</p>
+    <p>When provided a suitable query string, this page will use JavaScript to redirect to a Webex IM space, 
+        which -- assuming you have the Webex client installed -- will open a browser dialog asking if you'd like to open the link in Webex.</p>
     
     <h2>How do you use this?</h2>
     <p>Webex Space links can be found in the Space &#9881; menu. <br />
@@ -76,33 +77,67 @@
     <p>I am stuck using Webex and wanted a solution for my own needs and to share that with anyone stuck in the same boat. You're welcome.</p>
     
     <script>
-        let webex_link_prefix = "webexteams://im?space=";
-        let q = new URLSearchParams(window.location.search);
-        let thisPage = window.location.href.split('?')[0];
-        let webexUrl = '';
-        let space = '';
-        //check if we're dealing with a full webex link or a raw space id
-        if (q.has(webex_link_prefix)) {
-            webexUrl = q.get(webex_link_prefix);
-            space = webexUrl.replace(webex_link_prefix, '');
-        } else {
-            space = q.get('space');
-            //check if we have a properly formatted guid for space id
-            let spaceRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-            if (space && spaceRegex.test(space)) {
-                webexUrl = webex_link_prefix + space;
+        
+        //look for webex links or space ids in the query string or url fragment
+        var getSearchOrHash = function() {
+            let qsp = window.location.search;
+            //strip the ? from the query string, if present
+            if (qsp.startsWith("?")) {
+                qsp = qsp.substring(1);
             }
+            if (!qsp) {
+                qsp = window.location.hash;
+                //strip the # from the fragment, if present
+                if (qsp.startsWith("#")) {
+                    qsp = qsp.substring(1);
+                }
+
+            }
+            return qsp;
         }
+        
+        //get webex link and space id
+        var getWebexLink = function(qsp) {
+            let webexUrl = '';
+            let space = '';
+            let webex_link_prefix = "webexteams://im?space=";
+            //check if we're dealing with a full webex link or a raw space id
+            if (qsp.startsWith(webex_link_prefix)) {
+                webexUrl = qsp;
+                space = webexUrl.replace(webex_link_prefix, '');
+            } else {
+                //check if we're dealing with a space id
+                space = new URLSearchParams(qsp).get('space');
+                //check if we have a properly formatted guid for space id
+                let spaceRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+                if (space && spaceRegex.test(space)) {
+                    webexUrl = webex_link_prefix + space;
+                }
+            }
+            return {webexUrl, space};
+        }
+
         //update the on-page links
-        if (webexUrl) {
+        var updateLinks = function(webexUrl, space) {
             let wx = document.getElementById('wx')
             wx.innerText = wx.href = webexUrl;
 
             let lnk = document.getElementById('lnk')        
-            lnk.innerText = lnk.href = `${thisPage}?space=${space}`;
+            lnk.innerText = lnk.href = `${thisUrl}?space=${space}`;
         
             let lnkLong = document.getElementById('lnkLong')
-            lnkLong.innerText = lnkLong.href = `${thisPage}?${webexUrl}`;
+            lnkLong.innerText = lnkLong.href = `${thisUrl}?${webexUrl}`;
+
+        }
+
+        //get the absolute path of the current file, sans query string and/or hash
+        let thisUrl = `${window.location.protocol}//${window.location.host}${window.location.pathname}`;
+
+        let qsp = getSearchOrHash();
+        let {webexUrl, space} = getWebexLink(qsp);
+
+        if (webexUrl) {
+            updateLinks(webexUrl, space);
 
             //finally redirect to the webex link
             window.location.href = webexUrl;
