@@ -7,9 +7,8 @@
 		url = "https://gist.githubusercontent.com/oaustegard/" + url + "/raw/";
 	}
 	else {
-	}
 		url = url.replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/'); //Get URL of the raw file
-
+	}
 	var replaceAssets = function () {
 		var frame, a, link, links = [], script, scripts = [], i, href, src;
 		//Framesets
