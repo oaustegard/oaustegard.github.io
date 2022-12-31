@@ -1,8 +1,14 @@
 (function () {
 	
 	var previewForm = document.getElementById('previewform');
-
-	var url = location.search.substring(1).replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/'); //Get URL of the raw file
+	var url = location.search.substring(1)
+	// if just a guid, assume it's an oaustegard gist and use that gist's raw url
+	if (/^[0-9a-f]{32}$/i.test(url)) {
+		url = "https://gist.githubusercontent.com/oaustegard/" + url + "/raw/";
+	}
+	else {
+	}
+		url = url.replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/'); //Get URL of the raw file
 
 	var replaceAssets = function () {
 		var frame, a, link, links = [], script, scripts = [], i, href, src;
