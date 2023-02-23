@@ -1,5 +1,8 @@
 (function () {
-	
+	// License © 2019 Jerzy Głowacki under Apache License 2.0.
+	// https://github.com/htmlpreview/htmlpreview.github.com#license
+
+	// edited by oaustegard to serve my own gists by guid
 	var previewForm = document.getElementById('previewform');
 	var url = location.search.substring(1)
 	// if just a guid, assume it's an oaustegard gist and use that gist's raw url
