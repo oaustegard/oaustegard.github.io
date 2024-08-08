@@ -35,7 +35,6 @@
     </div>
     
     <div>
-        <button id="updateButton">Update Bookmarklet</button>
         <button id="beautifyButton">Beautify Code</button>
     </div>
     
@@ -62,7 +61,6 @@
     (function() {
         const titleInput = document.getElementById('titleInput');
         const codeTextarea = document.getElementById('codeTextarea');
-        const updateButton = document.getElementById('updateButton');
         const beautifyButton = document.getElementById('beautifyButton');
         const bookmarkletLinkDiv = document.getElementById('bookmarkletLink');
         const errorDiv = document.getElementById('error');
@@ -83,8 +81,21 @@
                 .replace(/"/g, "%22");
         }
 
-        /* Function to update the bookmarklet link */
-        function updateBookmarklet() {
+        /* Debounce function to limit how often a function is called */
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
+        /* Function to update the bookmarklet link and UI */
+        function updateBookmarkletAndUI() {
             const title = titleInput.value.trim() || 'Bookmarklet';
             let code = codeTextarea.value.trim();
 
@@ -95,9 +106,6 @@
             try {
                 /* Compress the code for the bookmarklet */
                 let compressedCode = compressCode(code);
-
-                /* Encode the compressed code */
-                const encodedCode = encodeBookmarklet(compressedCode);
 
                 /* Create the bookmarklet code */
                 const bookmarkletCode = compressedCode.startsWith('javascript:') ? compressedCode : `javascript:${compressedCode}`;
@@ -123,21 +131,24 @@
             }
         }
 
+        /* Debounced version of updateBookmarkletAndUI */
+        const debouncedUpdate = debounce(updateBookmarkletAndUI, 300);
+
         /* Function to beautify the code */
         function beautifyCode() {
             const code = codeTextarea.value.trim();
             if (code) {
                 const beautifiedCode = js_beautify(code, { indent_size: 2 });
                 codeTextarea.value = beautifiedCode;
+                updateBookmarkletAndUI(); // Update immediately after beautifying
             }
         }
 
         /* Event listeners */
-        updateButton.addEventListener('click', updateBookmarklet);
         beautifyButton.addEventListener('click', beautifyCode);
 
-        titleInput.addEventListener('input', updateBookmarklet);
-        codeTextarea.addEventListener('input', updateBookmarklet);
+        titleInput.addEventListener('input', debouncedUpdate);
+        codeTextarea.addEventListener('input', debouncedUpdate);
 
         /* Function to load data from URL */
         function loadFromUrl() {
@@ -148,7 +159,7 @@
             titleInput.value = decodeURIComponent(title);
             codeTextarea.value = decodeURIComponent(code);
 
-            updateBookmarklet();
+            updateBookmarkletAndUI();
         }
 
         /* Initial load */
