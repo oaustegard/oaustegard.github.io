@@ -25,6 +25,17 @@
     <h1>Bookmarklet Installer</h1>
     
     <div>
+        <label for="bookmarkletSelect">Select a Bookmarklet from 
+            <a href="https://github.com/oaustegard/bookmarklets">https://github.com/oaustegard/bookmarklets</a><br>
+             (or enter your own code below):</label>
+        <select id="bookmarkletSelect">
+            <option value="">-- Select a bookmarklet --</option>
+            <!-- Options will be populated dynamically -->
+        </select>
+    </div>
+
+    
+    <div>
         <label for="titleInput">Bookmarklet Title:</label>
         <input type="text" id="titleInput" placeholder="Bookmarklet">
     </div>
@@ -51,7 +62,7 @@
     <div class="info">
         <h2>API Usage</h2>
         <p>To generate a bookmarklet link programmatically, use the following URL format:</p>
-        <code>https://austegard.com/bookmarklet-installer.html?title=ENCODED_TITLE&code=ENCODED_CODE</code>
+        <code>https://your-domain.com/path-to-this-page?title=ENCODED_TITLE&code=ENCODED_CODE</code>
         <p>Both <code>title</code> and <code>code</code> parameters should be URL-encoded. If no title is provided, "Bookmarklet" will be used as the default.</p>
         <p>The code can be provided with or without the 'javascript:' prefix.</p>
     </div>
@@ -65,6 +76,55 @@
         const bookmarkletLinkDiv = document.getElementById('bookmarkletLink');
         const errorDiv = document.getElementById('error');
         const urlDisplayDiv = document.getElementById('urlDisplay');
+        const bookmarkletSelect = document.getElementById('bookmarkletSelect');
+
+        // Function to fetch bookmarklets from GitHub
+        function fetchBookmarklets() {
+            fetch('https://api.github.com/repos/oaustegard/bookmarklets/contents/')
+                .then(response => response.json())
+                .then(data => {
+                    data.forEach(file => {
+                        if (!file.name.startsWith('_') && file.name.endsWith('.js')) {
+                            const option = document.createElement('option');
+                            option.value = file.name;
+                            option.textContent = file.name.replace('.js', '');
+                            bookmarkletSelect.appendChild(option);
+                        }
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching bookmarklets:', error);
+                    errorDiv.textContent = `Error loading bookmarklet list: ${error.message}`;
+                });
+        }
+
+        // Call the function to fetch bookmarklets
+        fetchBookmarklets();
+
+        bookmarkletSelect.addEventListener('change', function() {
+            const selectedBookmarklet = this.value;
+            if (selectedBookmarklet) {
+                fetch(`https://raw.githubusercontent.com/oaustegard/bookmarklets/main/${selectedBookmarklet}`)
+                    .then(response => response.text())
+                    .then(code => {
+                        codeTextarea.value = code;
+                        // Convert selectedBookmarklet to words, handling acronyms
+                        const bookmarkletTitle = selectedBookmarklet
+                            .replace('.js', '')
+                            .replace(/([a-z])([A-Z])/g, '$1 $2') // Add space between lower and upper case
+                            .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2') // Add space between acronyms and words
+                            .replace(/_/g, ' ')         // Replace underscores with spaces
+                            .replace(/^\w/, c => c.toUpperCase()) // Capitalize first letter
+                            .trim();
+                        titleInput.value = bookmarkletTitle;
+                        updateBookmarkletAndUI();
+                    })
+                    .catch(error => {
+                        console.error('Error fetching bookmarklet:', error);
+                        errorDiv.textContent = `Error loading bookmarklet: ${error.message}`;
+                    });
+            }
+        });
 
         /* Function to compress code by removing whitespace and comments */
         function compressCode(code) {
@@ -103,14 +163,31 @@
             const title = titleInput.value.trim() || 'Bookmarklet';
             let code = codeTextarea.value.trim();
 
-            try {
-                let compressedCode = compressCode(code);
-                let bookmarkletCode;
-                /* strip javascript: if present and re-add it either way */
-                const codeToEncode = compressedCode.startsWith('javascript:') ? compressedCode.slice(11) : compressedCode;
-                bookmarkletCode = `javascript:${encodeBookmarklet(codeToEncode)}`;
+            if (!code) {
+                code = "alert('Hello, World!');";
+                codeTextarea.value = code; // Update the textarea with the default code
+            }
 
-                bookmarkletLinkDiv.innerHTML = `<a href="${bookmarkletCode}">${title}</a>`;
+            try {
+                /* Compress the code for the bookmarklet */
+                let compressedCode = compressCode(code);
+
+                /* Create the bookmarklet code */
+                let bookmarkletCode;
+                if (compressedCode.startsWith('javascript:')) {
+                    // If the code already starts with 'javascript:', encode only the part after it
+                    const codeWithoutPrefix = compressedCode.slice(11);
+                    bookmarkletCode = `javascript:${encodeBookmarklet(codeWithoutPrefix)}`;
+                } else {
+                    // If there's no 'javascript:' prefix, encode the entire code and add the prefix
+                    bookmarkletCode = `javascript:${encodeBookmarklet(compressedCode)}`;
+                }
+
+                /* Create the link element */
+                const linkHtml = `<a href="${bookmarkletCode}">${title}</a>`;
+                bookmarkletLinkDiv.innerHTML = linkHtml;
+
+                /* Display the bookmarklet URL */
                 urlDisplayDiv.innerHTML = `<strong>Bookmarklet URL (copy manually if needed):</strong><br>${bookmarkletCode}`;
 
                 /* Create the installer URL */
