@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LiteLLM Model Prices</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+        .sort-icon::after {
+            content: '↕';
+            margin-left: 4px;
+        }
+        .sort-asc::after {
+            content: '↑';
+        }
+        .sort-desc::after {
+            content: '↓';
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <div id="app" class="p-4 max-w-7xl mx-auto">
+        <div class="mb-8">
+            <h1 class="text-2xl font-bold mb-2">LiteLLM Model Prices</h1>
+            <p class="text-sm text-gray-600 mb-4">
+                Data sourced from 
+                <a href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" 
+                   class="text-blue-600 hover:underline" target="_blank">
+                    BerriAI/litellm GitHub repository
+                </a>
+            </p>
+            <div class="relative">
+                <input type="text" 
+                       id="search"
+                       placeholder="Search models, providers, or modes..." 
+                       class="w-full px-4 py-2 border rounded-lg">
+            </div>
+        </div>
+        <div id="loading" class="loading">Loading model data...</div>
+        <div id="content" class="hidden">
+            <div class="overflow-x-auto">
+                <table class="min-w-full bg-white border rounded-lg">
+                    <thead>
+                        <tr class="bg-gray-50">
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="id">Model</th>
+                            <th class="px-6 py-3 border-b">Provider</th>
+                            <th class="px-6 py-3 border-b">Mode</th>
+                            <th class="px-6 py-3 border-b">Context Window</th>
+                            <th class="px-6 py-3 border-b">Input Cost</th>
+                            <th class="px-6 py-3 border-b">Output Cost</th>
+                            <th class="px-6 py-3 border-b">Features</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modelTable"></tbody>
+                </table>
+            </div>
+            <div id="modelCount" class="mt-4 text-sm text-gray-600"></div>
+        </div>
+    </div>
+
+    <script>
+        let models = [];
+        let sortConfig = { key: 'id', direction: 'asc' };
+
+        function formatCost(cost) {
+            if (cost === undefined || cost === null) return 'N/A';
+            return '$' + cost.toFixed(8);
+        }
+
+        function renderFeatureBadge(feature, bgColor, textColor, label) {
+            return feature ? 
+                `<span class="inline-block px-2 py-1 text-xs font-medium ${bgColor} ${textColor} rounded-full mr-1">
+                    ${label}
+                </span>` : '';
+        }
+
+        function renderModels(filteredModels) {
+            const tbody = document.getElementById('modelTable');
+            const modelCount = document.getElementById('modelCount');
+            
+            tbody.innerHTML = filteredModels.map((model, index) => `
+                <tr class="${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}">
+                    <td class="px-6 py-4 border-b font-medium">${model.id}</td>
+                    <td class="px-6 py-4 border-b">${model.litellm_provider || 'N/A'}</td>
+                    <td class="px-6 py-4 border-b">${model.mode || 'N/A'}</td>
+                    <td class="px-6 py-4 border-b">
+                        ${model.max_tokens ? `${model.max_tokens.toLocaleString()} tokens` : 'N/A'}
+                    </td>
+                    <td class="px-6 py-4 border-b">${formatCost(model.input_cost_per_token)}</td>
+                    <td class="px-6 py-4 border-b">${formatCost(model.output_cost_per_token)}</td>
+                    <td class="px-6 py-4 border-b">
+                        <div class="space-y-1">
+                            ${renderFeatureBadge(model.supports_function_calling, 'bg-blue-100', 'text-blue-800', 'Function Calling')}
+                            ${renderFeatureBadge(model.supports_vision, 'bg-green-100', 'text-green-800', 'Vision')}
+                            ${renderFeatureBadge(model.supports_prompt_caching, 'bg-purple-100', 'text-purple-800', 'Prompt Caching')}
+                        </div>
+                    </td>
+                </tr>
+            `).join('');
+            
+            modelCount.textContent = `Showing ${filteredModels.length} of ${models.length} models`;
+        }
+
+        function filterAndSortModels() {
+            const searchTerm = document.getElementById('search').value.toLowerCase();
+            
+            const filteredModels = models.filter(model => 
+                model.id.toLowerCase().includes(searchTerm) ||
+                (model.litellm_provider && model.litellm_provider.toLowerCase().includes(searchTerm)) ||
+                (model.mode && model.mode.toLowerCase().includes(searchTerm))
+            );
+
+            filteredModels.sort((a, b) => {
+                const multiplier = sortConfig.direction === 'asc' ? 1 : -1;
+                return multiplier * a[sortConfig.key].localeCompare(b[sortConfig.key]);
+            });
+
+            renderModels(filteredModels);
+        }
+
+        function handleSort(key) {
+            if (sortConfig.key === key) {
+                sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                sortConfig.key = key;
+                sortConfig.direction = 'asc';
+            }
+
+            // Update sort indicators
+            document.querySelectorAll('th').forEach(th => {
+                th.classList.remove('sort-asc', 'sort-desc');
+                if (th.dataset.sort === sortConfig.key) {
+                    th.classList.add(`sort-${sortConfig.direction}`);
+                }
+            });
+
+            filterAndSortModels();
+        }
+
+        // Initialize
+        fetch('https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json')
+            .then(response => response.json())
+            .then(data => {
+                models = Object.entries(data).map(([id, details]) => ({
+                    id,
+                    ...details
+                }));
+                document.getElementById('loading').classList.add('hidden');
+                document.getElementById('content').classList.remove('hidden');
+                filterAndSortModels();
+            })
+            .catch(error => {
+                document.getElementById('loading').innerHTML = 'Error loading model data. Please try again later.';
+                console.error('Error:', error);
+            });
+
+        // Event Listeners
+        document.getElementById('search').addEventListener('input', filterAndSortModels);
+        document.querySelectorAll('th[data-sort]').forEach(th => {
+            th.addEventListener('click', () => handleSort(th.dataset.sort));
+        });
+    </script>
+</body>
+</html>
