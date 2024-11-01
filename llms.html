@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>LiteLLM Model Prices</title>
+    <title>LiteLLM's Model Prices</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .loading {
@@ -21,6 +21,9 @@
         }
         .sort-desc::after {
             content: '↓';
+        }
+        th {
+            user-select: none;
         }
     </style>
 </head>
@@ -48,12 +51,13 @@
                 <table class="min-w-full bg-white border rounded-lg">
                     <thead>
                         <tr class="bg-gray-50">
-                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="id">Model</th>
-                            <th class="px-6 py-3 border-b">Provider</th>
-                            <th class="px-6 py-3 border-b">Mode</th>
-                            <th class="px-6 py-3 border-b">Context Window</th>
-                            <th class="px-6 py-3 border-b">Input Cost</th>
-                            <th class="px-6 py-3 border-b">Output Cost</th>
+                            <!-- Added data-sort and data-type for sorting -->
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="id" data-type="string">Model</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="litellm_provider" data-type="string">Provider</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="mode" data-type="string">Mode</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="max_tokens" data-type="number">Context Window</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="input_cost_per_token" data-type="number">Input Cost</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="output_cost_per_token" data-type="number">Output Cost</th>
                             <th class="px-6 py-3 border-b">Features</th>
                         </tr>
                     </thead>
@@ -66,13 +70,26 @@
 
     <script>
         let models = [];
-        let sortConfig = { key: 'id', direction: 'asc' };
+        let sortConfig = { key: 'id', direction: 'asc', type: 'string' };
 
+        /**
+         * Formats the cost by multiplying by 1,000,000 and fixing to two decimal places.
+         * @param {number} cost - The original cost value.
+         * @returns {string} - Formatted cost string.
+         */
         function formatCost(cost) {
             if (cost === undefined || cost === null) return 'N/A';
-            return '$' + cost.toFixed(8);
+            return '$' + (cost * 1000000).toFixed(2);
         }
 
+        /**
+         * Renders feature badges based on model capabilities.
+         * @param {boolean} feature - Whether the feature is supported.
+         * @param {string} bgColor - Background color class.
+         * @param {string} textColor - Text color class.
+         * @param {string} label - Label to display.
+         * @returns {string} - HTML string for the badge.
+         */
         function renderFeatureBadge(feature, bgColor, textColor, label) {
             return feature ? 
                 `<span class="inline-block px-2 py-1 text-xs font-medium ${bgColor} ${textColor} rounded-full mr-1">
@@ -80,6 +97,10 @@
                 </span>` : '';
         }
 
+        /**
+         * Renders the models into the table.
+         * @param {Array} filteredModels - The list of models to display.
+         */
         function renderModels(filteredModels) {
             const tbody = document.getElementById('modelTable');
             const modelCount = document.getElementById('modelCount');
@@ -107,6 +128,9 @@
             modelCount.textContent = `Showing ${filteredModels.length} of ${models.length} models`;
         }
 
+        /**
+         * Filters and sorts the models based on search input and sort configuration.
+         */
         function filterAndSortModels() {
             const searchTerm = document.getElementById('search').value.toLowerCase();
             
@@ -117,19 +141,37 @@
             );
 
             filteredModels.sort((a, b) => {
-                const multiplier = sortConfig.direction === 'asc' ? 1 : -1;
-                return multiplier * a[sortConfig.key].localeCompare(b[sortConfig.key]);
+                let aValue = a[sortConfig.key];
+                let bValue = b[sortConfig.key];
+
+                // Handle undefined or null values
+                if (aValue === undefined || aValue === null) aValue = '';
+                if (bValue === undefined || bValue === null) bValue = '';
+
+                if (sortConfig.type === 'number') {
+                    return sortConfig.direction === 'asc' ? aValue - bValue : bValue - aValue;
+                } else { // string
+                    return sortConfig.direction === 'asc' 
+                        ? aValue.toString().localeCompare(bValue.toString()) 
+                        : bValue.toString().localeCompare(aValue.toString());
+                }
             });
 
             renderModels(filteredModels);
         }
 
-        function handleSort(key) {
+        /**
+         * Handles sorting when a column header is clicked.
+         * @param {string} key - The key to sort by.
+         * @param {string} type - The data type of the column.
+         */
+        function handleSort(key, type) {
             if (sortConfig.key === key) {
                 sortConfig.direction = sortConfig.direction === 'asc' ? 'desc' : 'asc';
             } else {
                 sortConfig.key = key;
                 sortConfig.direction = 'asc';
+                sortConfig.type = type;
             }
 
             // Update sort indicators
@@ -163,7 +205,11 @@
         // Event Listeners
         document.getElementById('search').addEventListener('input', filterAndSortModels);
         document.querySelectorAll('th[data-sort]').forEach(th => {
-            th.addEventListener('click', () => handleSort(th.dataset.sort));
+            th.addEventListener('click', () => {
+                const key = th.dataset.sort;
+                const type = th.dataset.type;
+                handleSort(key, type);
+            });
         });
     </script>
 </body>
