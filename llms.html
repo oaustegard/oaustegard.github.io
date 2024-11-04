@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="en">
-<!-- Head section remains unchanged -->
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>LiteLLM's Model Prices</title>
+    <!-- Replace CDN with local Tailwind -->
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
         .loading {
@@ -29,18 +29,16 @@
     </style>
 </head>
 <body class="bg-gray-50">
-    <!-- Body content remains unchanged until script section -->
     <div id="app" class="p-4 max-w-7xl mx-auto">
         <div class="mb-8">
             <h1 class="text-2xl font-bold mb-2">LiteLLM's Model Prices</h1>
             <p class="text-sm text-gray-600 mb-4">
                 Data sourced from 
                 <a href="https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json" 
-                   class="text-blue-600 hover:underline" target="_blank">BerriAI/litellm GitHub repository</a>. 
-                <a href="https://github.com/BerriAI/litellm/blob/main/LICENSE" 
-                   class="text-blue-600 hover:underline" target="_blank">License</a>.<br />
-                <a href="https://github.com/oaustegard/oaustegard.github.io/edit/main/llms.html" 
-                   class="text-blue-600 hover:underline" target="_blank">Code</a>.
+                   class="text-blue-600 hover:underline" target="_blank">
+                    BerriAI/litellm GitHub repository
+                </a>. <a href="https://github.com/BerriAI/litellm/blob/main/LICENSE">License</a><br />
+                <a href="https://github.com/oaustegard/oaustegard.github.io/edit/main/llms.html">Code</a>
             </p>
             <div class="relative">
                 <input type="text" 
@@ -51,10 +49,20 @@
         </div>
         <div id="loading" class="loading">Loading model data...</div>
         <div id="content" class="hidden">
-            <!-- Table structure remains unchanged -->
             <div class="overflow-visible">
                 <table class="min-w-full bg-white border rounded-lg">
-                    <!-- Table head and body remain unchanged -->
+                    <thead>
+                        <tr class="bg-gray-50">
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="id" data-type="string">Model</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="litellm_provider" data-type="string">Provider</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="mode" data-type="string">Mode</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="max_tokens" data-type="number">Context Window</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="input_cost_per_token" data-type="number">Input Cost</th>
+                            <th class="px-6 py-3 border-b cursor-pointer sort-icon" data-sort="output_cost_per_token" data-type="number">Output Cost</th>
+                            <th class="px-6 py-3 border-b">Features</th>
+                        </tr>
+                    </thead>
+                    <tbody id="modelTable"></tbody>
                 </table>
             </div>
             <div id="modelCount" class="mt-4 text-sm text-gray-600"></div>
@@ -62,25 +70,44 @@
     </div>
 
     <script>
+        /* Initialize state */
         let models = [];
         let sortConfig = { key: 'id', direction: 'asc', type: 'string' };
-        
+        let app = null;
+        let searchInput = null;
+        let modelTable = null;
+        let modelCount = null;
+        let loading = null;
+        let content = null;
+
+        /* Element Access Helper */
+        function getElement(id) {
+            const element = document.getElementById(id);
+            if (!element) {
+                console.error(`Element with id '${id}' not found`);
+                return null;
+            }
+            return element;
+        }
+
         /* URL Management Functions */
         function getSearchFromUrl() {
-            /* Try hash first for iframe compatibility */
-            const hashParams = new URLSearchParams(window.location.hash.slice(1));
-            if (hashParams.has('search')) {
-                return hashParams.get('search');
+            try {
+                const hashParams = new URLSearchParams(window.location.hash.slice(1));
+                if (hashParams.has('search')) {
+                    return hashParams.get('search');
+                }
+                
+                const queryParams = new URLSearchParams(window.location.search);
+                return queryParams.get('search') || '';
+            } catch (e) {
+                console.error('Error getting search from URL:', e);
+                return '';
             }
-            
-            /* Fall back to query params */
-            const queryParams = new URLSearchParams(window.location.search);
-            return queryParams.get('search') || '';
         }
 
         function updateUrl(searchTerm) {
             try {
-                /* Update both hash and query parameters for maximum compatibility */
                 const newUrl = new URL(window.location.href);
                 if (searchTerm) {
                     newUrl.searchParams.set('search', searchTerm);
@@ -90,18 +117,17 @@
                     window.location.hash = '';
                 }
                 
-                /* Try to update history, falling back gracefully if in iframe */
                 try {
                     window.history.replaceState({}, '', newUrl.toString());
                 } catch (e) {
-                    console.log('History API not available, falling back to hash');
+                    console.log('History API not available, using hash fallback');
                 }
             } catch (e) {
-                console.log('Error updating URL:', e);
+                console.error('Error updating URL:', e);
             }
         }
 
-        /* Existing helper functions remain unchanged */
+        /* Helper Functions */
         function formatCost(cost) {
             if (cost === undefined || cost === null) return 'N/A';
             return '$' + (cost * 1000000).toFixed(2);
@@ -114,9 +140,11 @@
                 </span>` : '';
         }
 
-        /* Modified filterAndSortModels to handle URL updates */
+        /* Core Functions */
         function filterAndSortModels(updateUrlFlag = true) {
-            const searchTerm = document.getElementById('search').value.toLowerCase();
+            if (!searchInput || !modelTable) return;
+            
+            const searchTerm = searchInput.value.toLowerCase();
             
             const filteredModels = models.filter(model => 
                 model.id.toLowerCase().includes(searchTerm) ||
@@ -147,12 +175,10 @@
             renderModels(filteredModels);
         }
 
-        /* Rendering function remains unchanged */
         function renderModels(filteredModels) {
-            const tbody = document.getElementById('modelTable');
-            const modelCount = document.getElementById('modelCount');
+            if (!modelTable || !modelCount) return;
             
-            tbody.innerHTML = filteredModels.map((model, index) => `
+            modelTable.innerHTML = filteredModels.map((model, index) => `
                 <tr class="${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}">
                     <td class="px-6 py-4 border-b font-medium">${model.id}</td>
                     <td class="px-6 py-4 border-b">${model.litellm_provider || 'N/A'}</td>
@@ -194,46 +220,68 @@
             filterAndSortModels();
         }
 
-        /* Initialize */
-        fetch('https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json')
-            .then(response => response.json())
-            .then(data => {
-                models = Object.entries(data).map(([id, details]) => ({
-                    id,
-                    ...details
-                }));
-                document.getElementById('loading').classList.add('hidden');
-                document.getElementById('content').classList.remove('hidden');
-                
-                /* Set initial search value from URL */
-                const initialSearch = getSearchFromUrl();
-                if (initialSearch) {
-                    document.getElementById('search').value = initialSearch;
+        /* Initialize App */
+        function initializeApp() {
+            /* Get DOM elements */
+            app = getElement('app');
+            searchInput = getElement('search');
+            modelTable = getElement('modelTable');
+            modelCount = getElement('modelCount');
+            loading = getElement('loading');
+            content = getElement('content');
+
+            if (!app || !searchInput || !modelTable || !modelCount || !loading || !content) {
+                console.error('Required elements not found');
+                return;
+            }
+
+            /* Set up event listeners */
+            searchInput.addEventListener('input', () => filterAndSortModels(true));
+            
+            window.addEventListener('hashchange', () => {
+                const searchTerm = getSearchFromUrl();
+                if (searchInput) {
+                    searchInput.value = searchTerm;
+                    filterAndSortModels(false);
                 }
-                filterAndSortModels(false);
-            })
-            .catch(error => {
-                document.getElementById('loading').innerHTML = 'Error loading model data. Please try again later.';
-                console.error('Error:', error);
             });
 
-        /* Event Listeners */
-        document.getElementById('search').addEventListener('input', () => filterAndSortModels(true));
-        
-        /* Handle URL changes */
-        window.addEventListener('hashchange', () => {
-            const searchTerm = getSearchFromUrl();
-            document.getElementById('search').value = searchTerm;
-            filterAndSortModels(false);
-        });
-
-        document.querySelectorAll('th[data-sort]').forEach(th => {
-            th.addEventListener('click', () => {
-                const key = th.dataset.sort;
-                const type = th.dataset.type;
-                handleSort(key, type);
+            document.querySelectorAll('th[data-sort]').forEach(th => {
+                th.addEventListener('click', () => {
+                    const key = th.dataset.sort;
+                    const type = th.dataset.type;
+                    handleSort(key, type);
+                });
             });
-        });
+
+            /* Load data */
+            fetch('https://raw.githubusercontent.com/BerriAI/litellm/main/model_prices_and_context_window.json')
+                .then(response => response.json())
+                .then(data => {
+                    models = Object.entries(data).map(([id, details]) => ({
+                        id,
+                        ...details
+                    }));
+                    
+                    loading.classList.add('hidden');
+                    content.classList.remove('hidden');
+                    
+                    const initialSearch = getSearchFromUrl();
+                    if (initialSearch) {
+                        searchInput.value = initialSearch;
+                    }
+                    filterAndSortModels(false);
+                })
+                .catch(error => {
+                    if (loading) {
+                        loading.innerHTML = 'Error loading model data. Please try again later.';
+                    }
+                    console.error('Error:', error);
+                });
+        }
+
+        /* Wait for DOM to be ready */
+        document.addEventListener('DOMContentLoaded', initializeApp);
     </script>
 </body>
 </html>
