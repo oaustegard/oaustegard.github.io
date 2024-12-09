@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CSV to Excel Converter</title>
+    <style>
+        /* Dark Theme Styles */
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #121212;
+            color: #e0e0e0;
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+        }
+        .container {
+            flex: 1;
+            max-width: 800px;
+            margin: auto;
+            padding: 30px;
+            background-color: #1e1e1e;
+            border-radius: 10px;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.7);
+            position: relative;
+        }
+        h1 {
+            text-align: center;
+            color: #ffffff;
+        }
+        .description {
+            margin: 20px 0;
+            color: #b0b0b0;
+            line-height: 1.6;
+        }
+        .file-info {
+            text-align: center;
+            margin: 20px 0;
+            color: #cfcfcf;
+            font-size: 1.1em;
+        }
+        #dropOverlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(40, 167, 69, 0.2);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+            color: #28a745;
+            font-size: 2em;
+        }
+        #message {
+            text-align: center;
+            color: #b0b0b0;
+            margin-top: 10px;
+        }
+        footer {
+            padding: 20px;
+            text-align: center;
+            color: #888;
+            font-size: 14px;
+            background-color: #1e1e1e;
+        }
+        a {
+            color: #28a745;
+            text-decoration: none;
+        }
+        a:hover {
+            text-decoration: underline;
+        }
+        
+        #uploadButtonContainer {
+            display: flex;
+            justify-content: center;
+        }
+        .upload-button {
+            padding: 12px 25px;
+            background-color: #28a745;
+            color: #fff;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            transition: background-color 0.3s;
+            margin-top: 20px;
+            text-align: center;   
+        }
+        .upload-button:hover {
+            background-color: #218838;
+        }
+
+        /* Hidden File Input */
+        #csvFileInput {
+            display: none;
+        }
+        /* Responsive Adjustments */
+        @media (max-width: 600px) {
+            .container {
+                padding: 20px;
+            }
+            h1 {
+                font-size: 1.8em;
+            }
+            .upload-button {
+                width: 100%;
+                text-align: center;
+            }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Drop Overlay -->
+    <div id="dropOverlay">Drop here to upload</div>
+
+    <div class="container">
+        <h1>CSV to Excel Converter</h1>
+
+        <!-- Description Section -->
+        <div class="description">
+            <p>Convert your comma-separated values (CSV) files into Excel spreadsheets (.xlsx) effortlessly.</p>
+            <p>Drag and drop a CSV file, paste CSV data directly, or use the upload button below. Your Excel file will be ready instantly!</p>
+            <p><strong>Privacy Guaranteed:</strong> All processing happens locally in your browser. Your data is never sent to any server, ensuring complete privacy and security.</p>
+        </div>
+
+        <!-- File Information Display -->
+        <div class="file-info" id="fileInfo">
+            No file or data loaded.
+        </div>
+
+        <!-- Upload Button -->
+         <div id="uploadButtonContainer">
+            <button class="upload-button">Upload CSV File</button>
+            <input type="file" id="csvFileInput" accept=".csv" style="display: none;" />
+        </div>
+
+        <!-- Message Display -->
+        <div id="message"></div>
+    </div>
+
+    <!-- Footer with Explanation -->
+    <footer>
+        <p>
+            This application runs entirely in your browser using JavaScript and the <a href="https://sheetjs.com/" target="_blank" rel="noopener noreferrer">SheetJS</a> library. No data is transmitted or stored externally.
+        </p>
+    </footer>
+
+    <!-- Include the Latest SheetJS Library -->
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.mini.min.js"></script>
+    <script>
+        // Get DOM Elements
+        const csvFileInput = document.getElementById('csvFileInput');
+        const fileInfo = document.getElementById('fileInfo');
+        const messageDiv = document.getElementById('message');
+        const dropOverlay = document.getElementById('dropOverlay');
+        const uploadButton = document.querySelector('.upload-button');
+
+        let csvData = '';
+
+        /**
+         * Function to handle CSV data input
+         * @param {string} data - The CSV data as a string
+         * @param {string} [filename] - Optional filename for downloaded Excel
+         */
+        function handleCSVData(data, filename = 'converted.xlsx') {
+            if (data.trim() !== '') {
+                csvData = data;
+                messageDiv.textContent = 'Converting to Excel...';
+                convertCSVToExcel(csvData, filename);
+            } else {
+                messageDiv.textContent = 'Invalid CSV data provided.';
+            }
+        }
+
+        /**
+         * Function to read file as text
+         * @param {File} file - The file to read
+         */
+        function readFile(file) {
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const content = e.target.result;
+                handleCSVData(content, file.name.replace(/\.csv$/i, '.xlsx'));
+                fileInfo.textContent = `Loaded file: ${file.name}`;
+            };
+            reader.onerror = function() {
+                messageDiv.textContent = 'Error reading file.';
+                fileInfo.textContent = 'No file or data loaded.';
+            };
+            reader.readAsText(file);
+        }
+
+        /**
+         * Function to read pasted text or file
+         * @param {ClipboardEvent} e - The paste event
+         */
+        function handlePaste(e) {
+            const items = (e.clipboardData || window.clipboardData).items;
+            let hasFile = false;
+
+            for (const element of items) {
+                if (element.kind === 'file') {
+                    const file = element.getAsFile();
+                    if (file && file.type === 'text/csv') {
+                        hasFile = true;
+                        readFile(file);
+                        break;
+                    }
+                }
+            }
+
+            if (!hasFile) {
+                const pastedData = (e.clipboardData || window.clipboardData).getData('text');
+                if (pastedData.trim() !== '') {
+                    handleCSVData(pastedData);
+                    fileInfo.textContent = 'CSV data pasted.';
+                } else {
+                    messageDiv.textContent = 'No valid data found in paste.';
+                }
+            }
+        }
+
+        /**
+         * Function to Convert CSV to Excel
+         * @param {string} csv - The CSV data as a string
+         * @param {string} filename - The desired filename for the Excel file
+         */
+        function convertCSVToExcel(csv, filename) {
+            try {
+                // Parse CSV data
+                const workbook = XLSX.read(csv, { type: 'string' });
+
+                // Generate Excel file
+                XLSX.writeFile(workbook, filename);
+
+                messageDiv.textContent = `Conversion successful! "${filename}" has been downloaded.`;
+            } catch (error) {
+                console.error(error);
+                messageDiv.textContent = 'An error occurred during conversion.';
+            }
+        }
+
+
+        /**
+         * Function to show the drop overlay
+         */
+        function showDropOverlay() {
+            dropOverlay.style.display = 'flex';
+        }
+
+        /**
+         * Function to hide the drop overlay
+         */
+        function hideDropOverlay() {
+            dropOverlay.style.display = 'none';
+        }
+
+        /**
+         * Handle Drag Events for Full Page Drop
+         */
+        ['dragenter', 'dragover'].forEach(eventName => {
+            window.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                showDropOverlay();
+            }, false);
+        });
+
+        ['dragleave', 'drop'].forEach(eventName => {
+            window.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                hideDropOverlay();
+            }, false);
+        });
+
+        /**
+         * Handle Drop Event
+         */
+        window.addEventListener('drop', (e) => {
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                const file = files[0];
+                if (file.type === 'text/csv') {
+                    readFile(file);
+                } else {
+                    messageDiv.textContent = 'Please drop a valid CSV file.';
+                    fileInfo.textContent = 'No file or data loaded.';
+                }
+            }
+        });
+
+        
+        /**
+         * Event Listener for Upload Button
+         */
+         uploadButton.addEventListener('click', () => {
+            csvFileInput.click();
+        });
+
+        /**
+         * Event Listener for File Input
+         */
+        csvFileInput.addEventListener('change', (event) => {
+            const file = event.target.files[0];
+            if (file && file.type === 'text/csv') {
+                readFile(file);
+            } else {
+                messageDiv.textContent = 'Please select a valid CSV file.';
+                fileInfo.textContent = 'No file or data loaded.';
+            }
+        });
+
+        /**
+         * Event Listener for Paste
+         */
+        window.addEventListener('paste', handlePaste);
+
+
+    </script>
+</body>
+</html>
