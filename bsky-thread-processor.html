@@ -6,8 +6,150 @@
     <title>Bluesky Thread Processor</title>
     <script async src="https://esm.sh/@atproto/api" type="module"></script>
     <style>
-        /* [Your existing styles here] */
-        /* ... */
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 1024px;
+            margin: 0 auto;
+            padding: 1rem;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 0.25rem;
+            font-weight: bold;
+        }
+
+        input {
+            flex: 1;
+            padding: 0.5rem;
+            border: 1px solid #ccc;
+            border-radius: 0.25rem;
+        }
+
+        button {
+            background-color: #3b82f6;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            cursor: pointer;
+        }
+
+        button:disabled {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        #error {
+            color: #ef4444;
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            border: 1px solid #ef4444;
+            border-radius: 0.25rem;
+            display: none;
+        }
+
+        .output-container {
+            position: relative;
+        }
+
+        .output-actions {
+            position: absolute;
+            top: 0.5rem;
+            right: 0.5rem;
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        .action-button {
+            background: #4b5563;
+            color: white;
+            border: none;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            cursor: pointer;
+        }
+
+        .action-button:hover {
+            background: #374151;
+        }
+
+        pre {
+            background-color: #f3f4f6;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            overflow: auto;
+            max-height: 600px;
+            white-space: pre-wrap;
+            margin-top: 0;
+        }
+
+        .copy-feedback {
+            position: fixed;
+            bottom: 1rem;
+            right: 1rem;
+            background: #059669;
+            color: white;
+            padding: 0.5rem 1rem;
+            border-radius: 0.25rem;
+            display: none;
+        }
+
+        .loading {
+            display: inline-block;
+            width: 1em;
+            height: 1em;
+            border: 2px solid #f3f3f3;
+            border-top: 2px solid #3b82f6;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-right: 0.5rem;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .login-section {
+            margin-bottom: 2rem;
+            padding: 1rem;
+            background-color: #f3f4f6;
+            border-radius: 0.25rem;
+        }
+
+        .success {
+            color: #10b981;
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            border: 1px solid #10b981;
+            border-radius: 0.25rem;
+            display: none;
+        }
+
+        #module-error {
+            background: #fee2e2;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        #debug {
+            margin-top: 1rem;
+            padding: 1rem;
+            background: #1f2937;
+            color: #d1d5db;
+            border-radius: 0.25rem;
+            display: none;
+        }
     </style>
 </head>
 <body>
@@ -121,7 +263,6 @@
                             document.getElementById('identifier').value = credential.id;
                             document.getElementById('password').value = credential.password;
                             // Optionally, prompt user to log in or automatically submit the form
-                            // For security, it's better to let the user initiate the login
                         }
                     }).catch(err => {
                         debugLog.add('credential_error', err);
@@ -197,30 +338,27 @@
             }
 
             function processPost(post, idCounter) {
-                debugLog.add('process_post', post);  // Log the full post for debugging
+                debugLog.add('process_post', post);
                 
                 if (!post?.record) return null;
                 
                 const result = {
                     id: idCounter,
                     author: post.author?.did || 'unknown',
-                    createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0) // Include createdAt
+                    createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0)
                 };
 
-                // Add text if present
                 if (post.record.text) {
                     result.content = post.record.text;
                 }
 
-                // Add image data if present
                 if (post.record?.embed?.$type === 'app.bsky.embed.images' && post.embed?.$type === 'app.bsky.embed.images#view') {
                     result.images = post.record.embed.images.map((img, i) => ({
                         url: post.embed.images[i].fullsize,
-                        alt: img.alt // Get alt from record.embed
-                    })).filter(img => img.url); // Only include if we have a URL
+                        alt: img.alt
+                    })).filter(img => img.url);
                 }
 
-                // Add engagement counts
                 if (post.likeCount > 0) {
                     result.likes = parseInt(post.likeCount);
                 }
@@ -283,12 +421,10 @@
                             content: post.content
                         };
 
-                        // Include images if present
                         if (post.images) {
                             result.images = post.images;
                         }
 
-                        // Correct property names for likes and reposts
                         if (post.likes > 0) {
                             result.likes = post.likes;
                         }
@@ -296,7 +432,6 @@
                             result.reposts = post.reposts;
                         }
 
-                        // Handle createdAt if available
                         if (post.createdAt && post.createdAt > rootTime) {
                             result.delay = getRelativeTime(rootTime, post.createdAt);
                         }
