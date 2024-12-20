@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bluesky Thread Processor</title>
+    <script async src="https://esm.sh/@atproto/api" type="module"></script>
+    <style>
+        /* [Your existing styles here] */
+        /* ... */
+    </style>
+</head>
+<body>
+    <div id="module-error">
+        Your browser doesn't support ES modules. Please use a modern browser.
+    </div>
+
+    <div id="app" style="display: none">
+        <h1>Bluesky Thread Processor</h1>
+        
+        <div id="login-section" class="login-section">
+            <h2>Login to Bluesky</h2>
+            <form id="login-form" autocomplete="on">
+                <div class="input-group">
+                    <div>
+                        <label for="identifier">Username or Email</label>
+                        <input
+                            type="text"
+                            id="identifier"
+                            name="username"
+                            placeholder="Handle or email"
+                            required
+                            autocomplete="username"
+                        >
+                    </div>
+                    <div>
+                        <label for="password">App Password</label>
+                        <input
+                            type="password"
+                            id="password"
+                            name="current-password"
+                            placeholder="App password"
+                            required
+                            autocomplete="current-password"
+                        >
+                    </div>
+                    <button type="submit">Login</button>
+                </div>
+            </form>
+            <div id="login-success" class="success">Logged in successfully!</div>
+            <div id="password-manager-instructions" style="display: none;">
+                <p>
+                    To streamline your login experience, please consider saving your credentials using your browser's password manager. This allows for automatic autofill during future logins.
+                </p>
+                <p>
+                    <strong>Chrome:</strong> Click the key icon in the address bar after entering your credentials and choose "Save."
+                </p>
+                <p>
+                    <strong>Firefox:</strong> Click the key icon in the address bar and select "Save Login."
+                </p>
+            </div>
+        </div>
+        
+        <form id="processor-form">
+            <div class="input-group">
+                <input type="url" id="url-input" placeholder="Enter Bluesky post URL" required>
+                <button type="submit" disabled>Process</button>
+            </div>
+        </form>
+        <div id="error"></div>
+        <div class="output-container">
+            <div class="output-actions" style="display: none">
+                <button class="action-button" id="copy-button">Copy Output</button>
+            </div>
+            <pre id="output"></pre>
+        </div>
+        <div id="copy-feedback" class="copy-feedback">Copied to clipboard!</div>
+    </div>
+
+    <script nomodule>
+        document.getElementById('module-error').style.display = 'block';
+    </script>
+
+    <script type="module">
+        try {
+            const { BskyAgent } = await import('https://esm.sh/@atproto/api');
+            document.getElementById('app').style.display = 'block';
+
+            const agent = new BskyAgent({
+                service: 'https://bsky.social'
+            });
+
+            const debugLog = {
+                add(type, data) {
+                    console.log(`[${new Date().toISOString()}] ${type}`, data);
+                },
+                clear() {
+                    console.clear();
+                }
+            };
+
+            const loginForm = document.getElementById('login-form');
+            const loginSuccess = document.getElementById('login-success');
+            const passwordManagerInstructions = document.getElementById('password-manager-instructions');
+            const form = document.getElementById('processor-form');
+            const input = document.getElementById('url-input');
+            const button = form.querySelector('button');
+            const error = document.getElementById('error');
+            const output = document.getElementById('output');
+            const copyButton = document.getElementById('copy-button');
+            const copyFeedback = document.getElementById('copy-feedback');
+            const outputActions = document.querySelector('.output-actions');
+            const debug = document.getElementById('debug');
+
+
+            // Credential Management API: Retrieve stored credentials on page load
+            window.addEventListener('load', () => {
+                if ('credentials' in navigator) {
+                    navigator.credentials.get({password: true, mediation: 'optional'}).then(credential => {
+                        if (credential) {
+                            document.getElementById('identifier').value = credential.id;
+                            document.getElementById('password').value = credential.password;
+                            // Optionally, prompt user to log in or automatically submit the form
+                            // For security, it's better to let the user initiate the login
+                        }
+                    }).catch(err => {
+                        debugLog.add('credential_error', err);
+                    });
+                }
+            });
+
+            loginForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                error.style.display = 'none';
+                const loginButton = loginForm.querySelector('button');
+                loginButton.disabled = true;
+                loginButton.textContent = 'Logging in...';
+
+                try {
+                    await agent.login({
+                        identifier: document.getElementById('identifier').value,
+                        password: document.getElementById('password').value,
+                    });
+                    loginSuccess.style.display = 'block';
+                    loginForm.style.display = 'none';
+                    button.disabled = false;
+                    debugLog.add('login', 'Login successful');
+
+                    // Store credentials using Credential Management API
+                    if ('credentials' in navigator) {
+                        const credential = new PasswordCredential({
+                            id: document.getElementById('identifier').value,
+                            password: document.getElementById('password').value,
+                            name: 'Bluesky Account',
+                            iconURL: 'https://bsky.app/favicon.ico' // Optional
+                        });
+                        navigator.credentials.store(credential).then(() => {
+                            console.log('Credentials stored successfully');
+                            passwordManagerInstructions.style.display = 'block';
+                        }).catch(err => {
+                            console.error('Failed to store credentials:', err);
+                            debugLog.add('credential_store_error', err);
+                        });
+                    } else {
+                        // Fallback instructions for users
+                        passwordManagerInstructions.style.display = 'block';
+                    }
+                } catch (err) {
+                    error.textContent = `Login failed: ${err.message}`;
+                    error.style.display = 'block';
+                    debugLog.add('login_error', err.message);
+                } finally {
+                    loginButton.disabled = false;
+                    loginButton.textContent = 'Login';
+                }
+            });
+
+            function getRelativeTime(baseTime, compareTime) {
+                const diff = compareTime - baseTime;
+                const minutes = Math.floor(diff / 60000);
+                const hours = Math.floor(minutes / 60);
+                const days = Math.floor(hours / 24);
+
+                if (days > 0) return `${days}d`;
+                if (hours > 0) return `${hours}h`;
+                if (minutes > 0) return `${minutes}m`;
+                return 'now';
+            }
+
+            function safeGetCreatedAt(post) {
+                try {
+                    return new Date(post?.record?.createdAt || 0);
+                } catch (e) {
+                    debugLog.add('date_error', { error: e.message, post });
+                    return new Date(0);
+                }
+            }
+
+            function processPost(post, idCounter) {
+                debugLog.add('process_post', post);  // Log the full post for debugging
+                
+                if (!post?.record) return null;
+                
+                const result = {
+                    id: idCounter,
+                    author: post.author?.did || 'unknown',
+                    createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0) // Include createdAt
+                };
+
+                // Add text if present
+                if (post.record.text) {
+                    result.content = post.record.text;
+                }
+
+                // Add image data if present
+                if (post.record?.embed?.$type === 'app.bsky.embed.images' && post.embed?.$type === 'app.bsky.embed.images#view') {
+                    result.images = post.record.embed.images.map((img, i) => ({
+                        url: post.embed.images[i].fullsize,
+                        alt: img.alt // Get alt from record.embed
+                    })).filter(img => img.url); // Only include if we have a URL
+                }
+
+                // Add engagement counts
+                if (post.likeCount > 0) {
+                    result.likes = parseInt(post.likeCount);
+                }
+                if (post.repostCount > 0) {
+                    result.reposts = parseInt(post.repostCount);
+                }
+
+                return result;
+            }
+
+            function extractPostInfo(url) {
+                const match = url.match(/bsky\.app\/profile\/([^/]+)\/post\/([^/?]+)/);
+                if (!match) throw new Error('Invalid Bluesky post URL');
+                return { handle: match[1], postId: match[2] };
+            }
+
+            async function processThread(postInfo) {
+                debugLog.clear();
+                debugLog.add('process_thread_start', postInfo);
+                
+                const userMap = new Map();
+                let userCounter = 0;
+                let postCounter = 0;
+
+                function anonymize(did) {
+                    if (!userMap.has(did)) {
+                        userMap.set(did, `p${++userCounter}`);
+                    }
+                    return userMap.get(did);
+                }
+
+                try {
+                    const threadData = await agent.getPostThread({
+                        uri: `at://${postInfo.handle}/app.bsky.feed.post/${postInfo.postId}`,
+                        depth: 100,
+                    });
+
+                    debugLog.add('thread_data', threadData);
+
+                    if (!threadData?.data?.thread?.post) {
+                        throw new Error('Invalid thread data received');
+                    }
+
+                    const rootTime = safeGetCreatedAt(threadData.data.thread.post);
+
+                    function processNode(node) {
+                        debugLog.add('process_node', node);
+                        
+                        if (!node?.post) {
+                            debugLog.add('invalid_node', node);
+                            return null;
+                        }
+
+                        const post = processPost(node.post, ++postCounter);
+                        if (!post) return null;
+
+                        const result = {
+                            id: post.id,
+                            author: anonymize(post.author),
+                            content: post.content
+                        };
+
+                        // Include images if present
+                        if (post.images) {
+                            result.images = post.images;
+                        }
+
+                        // Correct property names for likes and reposts
+                        if (post.likes > 0) {
+                            result.likes = post.likes;
+                        }
+                        if (post.reposts > 0) {
+                            result.reposts = post.reposts;
+                        }
+
+                        // Handle createdAt if available
+                        if (post.createdAt && post.createdAt > rootTime) {
+                            result.delay = getRelativeTime(rootTime, post.createdAt);
+                        }
+
+                        if (Array.isArray(node.replies) && node.replies.length > 0) {
+                            const validReplies = node.replies.filter(reply => {
+                                const hasContent = reply?.post?.record?.text || reply?.post?.record?.embed;
+                                const hasTime = reply?.post?.record?.createdAt;
+                                if (!hasContent || !hasTime) {
+                                    debugLog.add('invalid_reply', reply);
+                                }
+                                return hasContent && hasTime;
+                            });
+
+                            if (validReplies.length > 0) {
+                                validReplies.sort((a, b) => {
+                                    const timeA = safeGetCreatedAt(a.post);
+                                    const timeB = safeGetCreatedAt(b.post);
+                                    return timeA - timeB;
+                                });
+
+                                const replies = validReplies
+                                    .map(reply => processNode(reply))
+                                    .filter(Boolean);
+
+                                if (replies.length > 0) {
+                                    result.replies = replies;
+                                }
+                            }
+                        }
+                        return result;
+                    }
+
+                    const result = processNode(threadData.data.thread);
+                    debugLog.add('final_result', result);
+                    return result;
+
+                } catch (err) {
+                    debugLog.add('thread_error', err);
+                    console.error('Thread processing error:', err);
+                    throw new Error(`Failed to fetch thread: ${err.message}`);
+                }
+            }
+
+            copyButton.addEventListener('click', async () => {
+                try {
+                    await navigator.clipboard.writeText(output.textContent);
+                    copyFeedback.style.display = 'block';
+                    setTimeout(() => {
+                        copyFeedback.style.display = 'none';
+                    }, 2000);
+                } catch (err) {
+                    error.textContent = 'Failed to copy to clipboard';
+                    error.style.display = 'block';
+                    debugLog.add('copy_error', err);
+                }
+            });
+
+            form.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                error.style.display = 'none';
+                output.textContent = '';
+                outputActions.style.display = 'none';
+                button.disabled = true;
+                const originalText = button.textContent;
+                button.innerHTML = '<span class="loading"></span>Processing...';
+
+                try {
+                    const postInfo = extractPostInfo(input.value);
+                    const processedThread = await processThread(postInfo);
+                    output.textContent = JSON.stringify(processedThread, null, 2);
+                    outputActions.style.display = 'flex';
+                } catch (err) {
+                    error.textContent = err.message;
+                    error.style.display = 'block';
+                    debugLog.add('process_error', err);
+                } finally {
+                    button.disabled = false;
+                    button.innerHTML = originalText;
+                }
+            });
+        } catch (err) {
+            document.getElementById('module-error').style.display = 'block';
+            console.error('Failed to load application:', err);
+        }
+    </script>
+</body>
+</html>
