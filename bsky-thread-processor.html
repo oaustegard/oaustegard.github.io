@@ -163,8 +163,7 @@
         <div id="login-section" class="login-section">
             <h2>Login to Bluesky</h2>
             <p>There is no server-side processing for this page (other than at BlueSky). The credentials are sent directly to BlueSky. For convenience the 
-                <a href="https://developer.mozilla.org/en-US/docs/Web/API/Credential_Management_API" target="_blank">Credentials Manager API</a>a> 
-                is also used to speed up subsequent use. 
+                <a href="https://developer.mozilla.org/en-US/docs/Web/API/Credential_Management_API" target="_blank">Credentials Manager API</a> is also used to speed up subsequent use. 
                 <small><i>(You shouldn't trust me on this though: inspect the code!)</i></small></p>
             <form id="login-form" autocomplete="on">
                 <div class="input-group">
@@ -241,14 +240,56 @@
             const debug = document.getElementById('debug');
 
 
-            // Credential Management API: Retrieve stored credentials on page load
+            // === Query String Parameter Handling and History API Synchronization ===
+
+            // Helper function to get a query parameter by name
+            function getQueryParam(param) {
+                const urlParams = new URLSearchParams(window.location.search);
+                return urlParams.get(param);
+            }
+
+            // Helper function to update a query parameter without reloading the page
+            function updateQueryParam(param, value) {
+                const url = new URL(window.location);
+                if (value) {
+                    url.searchParams.set(param, value);
+                } else {
+                    url.searchParams.delete(param);
+                }
+                window.history.replaceState({}, '', url);
+            }
+
+            // Function to automatically process the thread if conditions are met
+            function autoProcessIfReady() {
+                const currentUrl = input.value.trim();
+                if (currentUrl && !button.disabled) {
+                    form.dispatchEvent(new Event('submit'));
+                }
+            }
+
+            // On page load, check for the 'url' query parameter and set the input field
             window.addEventListener('load', () => {
+                const qspUrl = getQueryParam('url');
+                if (qspUrl) {
+                    input.value = qspUrl;
+                    updateQueryParam('url', qspUrl); // Ensure the URL reflects the input
+
+                    // If the user is already logged in, automatically process the thread
+                    // This assumes that the login form is hidden upon successful login
+                    const isLoggedIn = loginForm.style.display === 'none';
+                    if (isLoggedIn) {
+                        autoProcessIfReady();
+                    }
+                }
+
+                // Attempt to retrieve stored credentials on page load
                 if ('credentials' in navigator) {
                     navigator.credentials.get({password: true, mediation: 'optional'}).then(credential => {
                         if (credential) {
                             document.getElementById('identifier').value = credential.id;
                             document.getElementById('password').value = credential.password;
-                            // Optionally, prompt user to log in or automatically submit the form
+                            // Automatically submit the login form
+                            loginForm.dispatchEvent(new Event('submit'));
                         }
                     }).catch(err => {
                         debugLog.add('credential_error', err);
@@ -256,6 +297,7 @@
                 }
             });
 
+            // Login Form Submission Handler
             loginForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 error.style.display = 'none';
@@ -288,6 +330,10 @@
                             debugLog.add('credential_store_error', err);
                         });
                     }
+
+                    // If there's a URL in the input, automatically process it
+                    autoProcessIfReady();
+
                 } catch (err) {
                     error.textContent = `Login failed: ${err.message}`;
                     error.style.display = 'block';
@@ -298,6 +344,7 @@
                 }
             });
 
+            // Helper Functions for Processing
             function getRelativeTime(baseTime, compareTime) {
                 const diff = compareTime - baseTime;
                 const minutes = Math.floor(diff / 60000);
@@ -458,6 +505,7 @@
                 }
             }
 
+            // Copy Button Handler
             copyButton.addEventListener('click', async () => {
                 try {
                     await navigator.clipboard.writeText(output.textContent);
@@ -472,6 +520,7 @@
                 }
             });
 
+            // Processor Form Submission Handler
             form.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 error.style.display = 'none';
@@ -481,8 +530,12 @@
                 const originalText = button.textContent;
                 button.innerHTML = '<span class="loading"></span>Processing...';
 
+                // Update the query parameter with the current input value
+                const currentInput = input.value.trim();
+                updateQueryParam('url', currentInput);
+
                 try {
-                    const postInfo = extractPostInfo(input.value);
+                    const postInfo = extractPostInfo(currentInput);
                     const processedThread = await processThread(postInfo);
                     output.textContent = JSON.stringify(processedThread, null, 2);
                     outputActions.style.display = 'flex';
@@ -495,6 +548,18 @@
                     button.innerHTML = originalText;
                 }
             });
+
+            // Handle browser back and forward navigation to keep the input and URL in sync
+            window.addEventListener('popstate', () => {
+                const qspUrl = getQueryParam('url');
+                if (qspUrl !== input.value) {
+                    input.value = qspUrl || '';
+                    if (qspUrl && !button.disabled) {
+                        autoProcessIfReady();
+                    }
+                }
+            });
+
         } catch (err) {
             document.getElementById('module-error').style.display = 'block';
             console.error('Failed to load application:', err);
