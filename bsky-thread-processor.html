@@ -366,20 +366,76 @@
                 }
             }
 
+            // Function to reconstruct text with full URLs from facets
+            function reconstructTextWithFacets(text, facets) {
+                if (!facets || facets.length === 0) {
+                    return text;
+                }
+
+                // Sort facets by byteStart
+                facets.sort((a, b) => a.index.byteStart - b.index.byteStart);
+
+                let reconstructedText = '';
+                let lastIndex = 0;
+
+                // Function to convert byte offset to character offset
+                function byteToCharOffset(str, byteOffset) {
+                    let currentByte = 0;
+                    for (let i = 0; i < str.length; i++) {
+                        const char = str[i];
+                        const charBytes = new TextEncoder().encode(char).length;
+                        if (currentByte + charBytes > byteOffset) {
+                            return i;
+                        }
+                        currentByte += charBytes;
+                    }
+                    return str.length;
+                }
+
+                facets.forEach(facet => {
+                    if (facet.features && facet.features.length > 0) {
+                        const linkFeature = facet.features.find(feature => feature['$type'] === 'app.bsky.richtext.facet#link');
+                        if (linkFeature) {
+                            const byteStart = facet.index.byteStart;
+                            const byteEnd = facet.index.byteEnd;
+                            const charStart = byteToCharOffset(text, byteStart);
+                            const charEnd = byteToCharOffset(text, byteEnd);
+                            
+                            // Append text before the link
+                            reconstructedText += text.substring(lastIndex, charStart);
+                            
+                            // Append the full URL
+                            reconstructedText += linkFeature.uri;
+                            
+                            lastIndex = charEnd;
+                        }
+                    }
+                });
+
+                // Append any remaining text after the last facet
+                reconstructedText += text.substring(lastIndex);
+
+                return reconstructedText;
+            }
+
             function processPost(post, idCounter) {
                 debugLog.add('process_post', post);
                 
                 if (!post?.record) return null;
                 
+                let content = post.record.text || '';
+
+                // Handle facets to replace truncated URLs
+                if (post.record.facets && Array.isArray(post.record.facets)) {
+                    content = reconstructTextWithFacets(content, post.record.facets);
+                }
+
                 const result = {
                     id: idCounter,
                     author: post.author?.did || 'unknown',
-                    createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0)
+                    createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0),
+                    content: content
                 };
-
-                if (post.record.text) {
-                    result.content = post.record.text;
-                }
 
                 if (post.record?.embed?.$type === 'app.bsky.embed.images' && post.embed?.$type === 'app.bsky.embed.images#view') {
                     result.images = post.record.embed.images.map((img, i) => ({
