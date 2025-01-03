@@ -74,6 +74,7 @@
             <option value="today">Today</option>
             <option value="tomorrow">Tomorrow</option>
             <option value="dayafter">Loading...</option>
+            <option value="week">Next 7 days</option>
         </select>
     </div>
 
@@ -106,6 +107,28 @@
     };
 
     function filterForecastData(data, dayOffset) {
+        // For weekly forecast, return all periods
+        if (dayOffset === 'week') {
+            return {
+                location: data.geometry,
+                validTime: data.properties.validTimes,
+                periods: data.properties.periods.map(period => ({
+                    time: period.startTime,
+                    endTime: period.endTime,
+                    name: period.name,
+                    temperature: period.temperature,
+                    temperatureUnit: period.temperatureUnit,
+                    windSpeed: period.windSpeed,
+                    windDirection: period.windDirection,
+                    shortForecast: period.shortForecast,
+                    detailedForecast: period.detailedForecast,
+                    precipitationChance: period.probabilityOfPrecipitation?.value || 0,
+                    relativeHumidity: period.relativeHumidity?.value
+                }))
+            };
+        }
+
+        // For hourly forecasts
         const targetDate = new Date();
         targetDate.setDate(targetDate.getDate() + dayOffset);
         const targetDateStr = targetDate.toISOString().split('T')[0];
@@ -125,8 +148,8 @@
                 windSpeed: period.windSpeed,
                 windDirection: period.windDirection,
                 shortForecast: period.shortForecast,
-                precipitationChance: period.probabilityOfPrecipitation.value || 0,
-                relativeHumidity: period.relativeHumidity.value
+                precipitationChance: period.probabilityOfPrecipitation?.value || 0,
+                relativeHumidity: period.relativeHumidity?.value
             }))
         };
     }
@@ -229,12 +252,17 @@
             state.locationData = locationData;
             locationInfo.textContent = `Weather station location: ${locationData.city}, ${locationData.state}`;
 
-            const forecastResponse = await axios.get(
-                pointResponse.data.properties.forecastHourly
-            );
-            
             const timeframe = document.getElementById('timeframe').value;
-            const dayOffset = timeframe === 'today' ? 0 : timeframe === 'tomorrow' ? 1 : 2;
+            // Use daily forecast for weekly view, hourly for specific days
+            const forecastUrl = timeframe === 'week' 
+                ? pointResponse.data.properties.forecast
+                : pointResponse.data.properties.forecastHourly;
+
+            const forecastResponse = await axios.get(forecastUrl);
+            
+            const dayOffset = timeframe === 'today' ? 0 
+                           : timeframe === 'tomorrow' ? 1 
+                           : timeframe === 'week' ? 'week' : 2;
             
             const filteredData = filterForecastData(forecastResponse.data, dayOffset);
             state.weatherData = filteredData;
@@ -269,9 +297,16 @@
         }
 
         const timeframe = document.getElementById('timeframe');
+        const selectedTimeframe = timeframe.value;
         const selectedDay = timeframe.options[timeframe.selectedIndex].text;
         const locationStr = state.locationData ? `in ${state.locationData.city}, ${state.locationData.state}` : '';
-        const prompt = `What would be the best time ${selectedDay.toLowerCase()} to ${activity} ${locationStr}?`;
+        
+        let prompt;
+        if (selectedTimeframe === 'week') {
+            prompt = `What would be the best day in the next week to ${activity} ${locationStr}?`;
+        } else {
+            prompt = `What would be the best time ${selectedDay.toLowerCase()} to ${activity} ${locationStr}?`;
+        }
             
         const weatherJson = encodeURIComponent(JSON.stringify(state.weatherData));
         const url = `https://claude.ai/new?q=${encodeURIComponent(prompt)}+Weather:+${weatherJson}`;
