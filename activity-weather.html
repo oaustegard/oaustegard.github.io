@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Weather Activity Advisor</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/ol@v10.3.1/ol.css">
+    <style>
+        body { max-width: 1200px; margin: 2rem auto; padding: 0 1rem; font-family: system-ui; }
+        .hidden { display: none; }
+        #map { width: 100%; height: 400px; margin: 1rem 0; }
+        .input-row { display: flex; gap: 1rem; align-items: center; margin: 1rem 0; }
+        .input-row input, .input-row select { padding: 0.5rem; font-size: 1rem; }
+        #activity { width: 300px; }
+        .status { margin: 1rem 0; }
+        .privacy-notice {
+            background: #f8f9fa;
+            padding: 1rem;
+            border-radius: 4px;
+            margin: 1rem 0;
+            font-size: 0.9rem;
+        }
+        .ai-buttons button {
+            padding: 0.5rem 1rem;
+            margin: 0 0.5rem;
+            font-size: 1rem;
+        }
+        #weather-data {
+            width: 100%;
+            height: 200px;
+            font-family: monospace;
+            margin: 1rem 0;
+            padding: 0.5rem;
+            white-space: pre;
+            overflow: auto;
+            background: #f8f9fa;
+            border: 1px solid #ddd;
+        }
+        .data-size {
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 0.5rem;
+        }
+        .location-info {
+            background: #e9ecef;
+            padding: 0.5rem;
+            border-radius: 4px;
+            margin: 0.5rem 0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Weather Activity Advisor</h1>
+    
+    <div class="privacy-notice">
+        📱 This application runs entirely in your browser. No personal data or location information is sent to any server
+        except directly to weather.gov for forecasts. Map interactions and location data remain local to your device.
+    </div>
+
+    <div class="input-row">
+        <label for="activity">I want to:</label>
+        <input type="text" id="activity" list="activities" placeholder="Type any activity...">
+        <datalist id="activities">
+            <option value="go for a walk">
+            <option value="ride my bike">
+            <option value="go hiking">
+            <option value="have a picnic">
+            <option value="go skiing">
+            <option value="play tennis">
+            <option value="go swimming">
+            <option value="do some gardening">
+        </datalist>
+
+        <label for="timeframe">When:</label>
+        <select id="timeframe">
+            <option value="today">Today</option>
+            <option value="tomorrow">Tomorrow</option>
+            <option value="dayafter">Loading...</option>
+        </select>
+    </div>
+
+    <div id="map"></div>
+    <div class="location-info" id="location-info"></div>
+    <div id="location-status" class="status"></div>
+    <div id="weather-status" class="status"></div>
+
+    <div id="forecast-display">
+        <h3>Filtered Weather Data:</h3>
+        <div class="data-size"></div>
+        <pre id="weather-data"></pre>
+    </div>
+
+    <div id="ai-links" class="hidden ai-buttons">
+        <button onclick="openAIAssistant()">Get Claude's Recommendation</button>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/axios/1.6.7/axios.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/ol@v10.3.1/dist/ol.js"></script>
+    
+    <script>
+    let state = {
+        lat: null,
+        lon: null,
+        weatherData: null,
+        locationData: null,
+        map: null,
+        locationMarker: null
+    };
+
+    function filterForecastData(data, dayOffset) {
+        const targetDate = new Date();
+        targetDate.setDate(targetDate.getDate() + dayOffset);
+        const targetDateStr = targetDate.toISOString().split('T')[0];
+        
+        const filteredPeriods = data.properties.periods.filter(period => {
+            const periodDate = new Date(period.startTime);
+            return periodDate.toISOString().split('T')[0] === targetDateStr;
+        });
+
+        return {
+            location: data.geometry,
+            validTime: data.properties.validTimes,
+            periods: filteredPeriods.map(period => ({
+                time: period.startTime,
+                temperature: period.temperature,
+                temperatureUnit: period.temperatureUnit,
+                windSpeed: period.windSpeed,
+                windDirection: period.windDirection,
+                shortForecast: period.shortForecast,
+                precipitationChance: period.probabilityOfPrecipitation.value || 0,
+                relativeHumidity: period.relativeHumidity.value
+            }))
+        };
+    }
+
+    function updateDayNames() {
+        const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+        const dayAfter = new Date();
+        dayAfter.setDate(dayAfter.getDate() + 2);
+        const dayName = days[dayAfter.getDay()];
+        
+        document.querySelector('#timeframe option[value="dayafter"]').text = dayName;
+    }
+
+    function initializeMap() {
+        const view = new ol.View({
+            center: ol.proj.fromLonLat([-98.5795, 39.8283]),
+            zoom: 4
+        });
+
+        const baseLayer = new ol.layer.Tile({
+            source: new ol.source.OSM()
+        });
+
+        const vectorLayer = new ol.layer.Vector({
+            source: new ol.source.Vector()
+        });
+
+        state.map = new ol.Map({
+            target: 'map',
+            layers: [baseLayer, vectorLayer],
+            view: view
+        });
+
+        state.map.on('click', function(evt) {
+            const coords = ol.proj.transform(evt.coordinate, 'EPSG:3857', 'EPSG:4326');
+            updateLocation(coords[1], coords[0]);
+        });
+
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                position => {
+                    updateLocation(position.coords.latitude, position.coords.longitude, true);
+                },
+                error => {
+                    document.getElementById('location-status').innerHTML = 
+                        'Using default location. Click the map to change location.';
+                }
+            );
+        }
+
+        updateDayNames();
+    }
+
+    function updateLocationMarker(lat, lon) {
+        const vectorLayer = state.map.getLayers().getArray()[1];
+        const vectorSource = vectorLayer.getSource();
+        vectorSource.clear();
+
+        const marker = new ol.Feature({
+            geometry: new ol.geom.Point(ol.proj.fromLonLat([lon, lat]))
+        });
+        vectorSource.addFeature(marker);
+    }
+
+    function updateLocation(lat, lon, zoom = false) {
+        state.lat = lat;
+        state.lon = lon;
+
+        updateLocationMarker(lat, lon);
+
+        if (zoom) {
+            state.map.getView().animate({
+                center: ol.proj.fromLonLat([lon, lat]),
+                zoom: 8,
+                duration: 1000
+            });
+        }
+
+        document.getElementById('location-status').textContent = 
+            `Selected location: ${lat.toFixed(4)}, ${lon.toFixed(4)}`;
+
+        fetchWeatherData();
+    }
+
+    async function fetchWeatherData() {
+        const status = document.getElementById('weather-status');
+        const aiLinks = document.getElementById('ai-links');
+        const weatherDisplay = document.getElementById('weather-data');
+        const dataSizeDisplay = document.querySelector('.data-size');
+        const locationInfo = document.getElementById('location-info');
+        
+        try {
+            status.textContent = 'Fetching weather data...';
+            
+            const pointResponse = await axios.get(
+                `https://api.weather.gov/points/${state.lat},${state.lon}`
+            );
+
+            const locationData = pointResponse.data.properties.relativeLocation.properties;
+            state.locationData = locationData;
+            locationInfo.textContent = `Weather station location: ${locationData.city}, ${locationData.state}`;
+
+            const forecastResponse = await axios.get(
+                pointResponse.data.properties.forecastHourly
+            );
+            
+            const timeframe = document.getElementById('timeframe').value;
+            const dayOffset = timeframe === 'today' ? 0 : timeframe === 'tomorrow' ? 1 : 2;
+            
+            const filteredData = filterForecastData(forecastResponse.data, dayOffset);
+            state.weatherData = filteredData;
+            
+            const weatherJson = JSON.stringify(filteredData, null, 2);
+            weatherDisplay.textContent = weatherJson;
+            
+            const dataSizeKB = (weatherJson.length / 1024).toFixed(2);
+            dataSizeDisplay.textContent = `Data size: ${dataSizeKB}KB`;
+            
+            status.textContent = 'Weather data ready!';
+            aiLinks.classList.remove('hidden');
+        } catch (error) {
+            status.innerHTML = `
+                <div class="error">
+                    Error fetching weather data: ${error.message}<br>
+                    <small>The weather.gov API may be temporarily unavailable</small>
+                </div>
+            `;
+            aiLinks.classList.add('hidden');
+            weatherDisplay.textContent = '';
+            dataSizeDisplay.textContent = '';
+            locationInfo.textContent = '';
+        }
+    }
+
+    function openAIAssistant() {
+        const activity = document.getElementById('activity').value.trim();
+        if (!activity) {
+            alert('Please enter an activity first');
+            return;
+        }
+
+        const timeframe = document.getElementById('timeframe');
+        const selectedDay = timeframe.options[timeframe.selectedIndex].text;
+        const locationStr = state.locationData ? `in ${state.locationData.city}, ${state.locationData.state}` : '';
+        const prompt = `What would be the best time ${selectedDay.toLowerCase()} to ${activity} ${locationStr}?`;
+            
+        const weatherJson = encodeURIComponent(JSON.stringify(state.weatherData));
+        const url = `https://claude.ai/new?q=${encodeURIComponent(prompt)}+Weather:+${weatherJson}`;
+        
+        window.open(url, '_blank');
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
+        setTimeout(initializeMap, 100);
+    });
+
+    document.getElementById('timeframe').addEventListener('change', () => {
+        if (state.lat && state.lon) {
+            fetchWeatherData();
+        }
+    });
+    </script>
+</body>
+</html>
