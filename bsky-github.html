@@ -335,10 +335,11 @@
                     feedContainer.innerHTML = '<p>No GitHub links found for the given search criteria.</p>';
                 } else {
                     data.posts.forEach(post => {
-                        // Only display posts that contain GitHub links
-                        if (post.record && post.record.text && extractLinks(post.record.text).length > 0) {
+                        // Extract GitHub links from facets
+                        const githubLinks = extractLinksFromFacets(post.record?.facets);
+                        if (githubLinks.length > 0) {
                             console.log(`Displaying post: ${post.uri}`);
-                            displayPost(post);
+                            displayPost(post, githubLinks);
                         }
                     });
                     lastFetchTime.textContent = `Last Updated: ${new Date().toLocaleString()}`;
@@ -360,23 +361,31 @@
         return now.toISOString();
     }
 
-    // Utility function to extract GitHub links from text
-    function extractLinks(text) {
-        // This regex matches GitHub URLs with or without the http(s) protocol
-        const urlRegex = /(?:https?:\/\/)?github\.com\/[^\s]+/g;
-        return text.match(urlRegex) || [];
+    // Utility function to extract GitHub links from facets
+    function extractLinksFromFacets(facets) {
+        if (!facets || !Array.isArray(facets)) return [];
+        const githubLinks = [];
+        facets.forEach(facet => {
+            if (facet.features && Array.isArray(facet.features)) {
+                facet.features.forEach(feature => {
+                    if (feature.$type === 'app.bsky.richtext.facet#link' && feature.uri && feature.uri.includes('github.com')) {
+                        githubLinks.push(feature.uri);
+                    }
+                });
+            }
+        });
+        return githubLinks;
     }
 
     // Function to display a post in the feed
-    function displayPost(post) {
+    function displayPost(post, githubLinks) {
         const postElement = document.createElement('div');
         postElement.className = 'link';
 
         // Extract relevant information from the post
         const author = post.author?.handle || 'Unknown';
         const content = post.record?.text || 'No content';
-        const links = extractLinks(content);
-
+        
         // Format the creation time
         const createdAt = post.record?.createdAt ? new Date(post.record.createdAt).toLocaleString() : 'Unknown time';
 
@@ -390,18 +399,18 @@
         }
 
         // Construct the links HTML with proper URLs
-        const linksHTML = links.map(link => {
+        const linksHTML = githubLinks.map(link => {
             const cleanLink = link.trim();
-            // Prepend 'https://' if the link doesn't start with 'http://' or 'https://'
+            // Ensure the link starts with 'http://' or 'https://'
             const href = /^https?:\/\//i.test(cleanLink) ? cleanLink : `https://${cleanLink}`;
-            return `<a href="${sanitizeHTML(href)}" target="_blank" rel="noopener noreferrer">${sanitizeHTML(cleanLink)}</a>`;
+            return `<a href="${sanitizeHTML(href)}" target="_blank" rel="noopener noreferrer">${sanitizeHTML(href)}</a>`;
         }).join('<br>');
 
         // Construct the post HTML with clickable links and full post text
         postElement.innerHTML = `
             <div class="author">${sanitizeHTML(author)} <span class="timestamp">(${sanitizeHTML(createdAt)})</span></div>
             <div class="content">${sanitizeHTML(content)}</div>
-            ${links.length > 0 ? `<div class="links">${linksHTML}</div>` : ''}
+            ${githubLinks.length > 0 ? `<div class="links"><strong>GitHub Links:</strong><br>${linksHTML}</div>` : ''}
             <div class="title"><a href="${sanitizeHTML(postWebUrl)}" target="_blank" rel="noopener noreferrer">View Original Post</a></div>
         `;
 
@@ -420,5 +429,6 @@
         searchError.textContent = '';
     });
 </script>
+
 </body>
 </html>
