@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>BlueSky/atproto Search SPA</title>
+    <title>BlueSky/atproto GitHub Link Search SPA</title>
     <style>
         /* Embedded CSS */
 
@@ -84,6 +84,7 @@
             display: flex;
             gap: 10px;
             margin-bottom: 20px;
+            flex-wrap: wrap;
         }
 
         #search-input {
@@ -91,6 +92,7 @@
             padding: 10px;
             border: 1px solid #ccc;
             border-radius: 4px;
+            min-width: 200px;
         }
 
         #search-button {
@@ -159,7 +161,7 @@
 </head>
 <body>
     <div id="app">
-        <h1>BlueSky/atproto Search</h1>
+        <h1>BlueSky/atproto GitHub Link Search</h1>
 
         <!-- Login Section -->
         <div id="login-section" class="section">
@@ -180,9 +182,9 @@
 
         <!-- Search Section -->
         <div id="search-section" class="section hidden">
-            <h2>Search Links from the Past 24 Hours</h2>
+            <h2>Search GitHub Links from the Past 24 Hours</h2>
             <form id="search-form">
-                <input type="text" id="search-input" name="search" placeholder="Enter keywords to search..." required>
+                <input type="text" id="search-input" name="search" placeholder="Enter additional keywords (optional)" aria-label="Search Keywords">
                 <button type="submit" id="search-button">Search</button>
             </form>
             <div id="search-error" class="error-message"></div>
@@ -274,56 +276,50 @@
             searchError.textContent = ''; // Clear previous errors
             feedContainer.innerHTML = ''; // Clear previous search results
 
-            const query = searchInput.value.trim();
+            const keyword = searchInput.value.trim();
 
-            if (!query) {
-                searchError.textContent = 'Please enter a search keyword.';
-                return;
+            // Build the 'q' parameter with 'site:github.com' to target GitHub links
+            let query = 'site:github.com';
+            if (keyword) {
+                // Escape special characters in keyword to prevent query injection
+                const escapedKeyword = keyword.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+                query += ` ${escapedKeyword}`;
             }
 
             try {
                 console.log(`Searching for: ${query}`);
-                // Perform search via REST API
-                const response = await fetch('https://bsky.social/xrpc/app.bsky.feed.searchPosts', {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                    },
-                    // Construct query parameters
-                    // Using URLSearchParams for proper encoding
-                });
-
-                // Since it's a GET request with query parameters, build the URL accordingly
+                // Construct query parameters using URLSearchParams
                 const params = new URLSearchParams({
                     q: query,
-                    sort: 'latest', // or 'top'
+                    sort: 'latest', // or 'top' based on preference
                     since: get24HoursAgoISO(),
-                    limit: 50, // Maximum number of posts to fetch
+                    limit: 50, // Adjust as needed (max 100)
                 });
 
-                // Reconstruct the fetch with query parameters
                 const searchUrl = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?${params.toString()}`;
 
-                const searchResponse = await fetch(searchUrl, {
+                // Perform search via REST API
+                const response = await fetch(searchUrl, {
                     method: 'GET',
                     headers: {
                         'Authorization': `Bearer ${accessToken}`,
+                        'Content-Type': 'application/json',
                     },
                 });
 
-                if (!searchResponse.ok) {
-                    const errorData = await searchResponse.json();
+                if (!response.ok) {
+                    const errorData = await response.json();
                     console.error('Search failed:', errorData);
                     throw new Error(errorData.error || 'Search failed');
                 }
 
-                const searchData = await searchResponse.json();
+                const data = await response.json();
 
-                if (searchData.posts && Array.isArray(searchData.posts)) {
-                    if (searchData.posts.length === 0) {
-                        feedContainer.innerHTML = '<p>No posts found for the given search criteria.</p>';
+                if (data.posts && Array.isArray(data.posts)) {
+                    if (data.posts.length === 0) {
+                        feedContainer.innerHTML = '<p>No GitHub links found for the given search criteria.</p>';
                     } else {
-                        searchData.posts.forEach(post => {
+                        data.posts.forEach(post => {
                             // Only display posts that contain links
                             if (post.text && extractLinks(post.text).length > 0) {
                                 displayPost(post);
@@ -332,8 +328,8 @@
                         lastFetchTime.textContent = `Last Updated: ${new Date().toLocaleString()}`;
                     }
                 } else {
-                    console.warn('No posts data received:', searchData);
-                    feedContainer.innerHTML = '<p>No posts found for the given search criteria.</p>';
+                    console.warn('No posts data received:', data);
+                    feedContainer.innerHTML = '<p>No GitHub links found for the given search criteria.</p>';
                 }
             } catch (error) {
                 console.error('Error during search:', error);
