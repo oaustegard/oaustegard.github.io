@@ -214,212 +214,211 @@
         <p>Your browser doesn't support ES modules. Please use a modern browser.</p>
     </div>
 
-    <script type="module">
-        // Utility function to sanitize HTML to prevent XSS
-        function sanitizeHTML(str) {
-            const temp = document.createElement('div');
-            temp.textContent = str;
-            return temp.innerHTML;
+<script type="module">
+    // Utility function to sanitize HTML to prevent XSS
+    function sanitizeHTML(str) {
+        const temp = document.createElement('div');
+        temp.textContent = str;
+        return temp.innerHTML;
+    }
+
+    // Select DOM elements
+    const loginSection = document.getElementById('login-section');
+    const loginForm = document.getElementById('login-form');
+    const identifierInput = document.getElementById('identifier');
+    const passwordInput = document.getElementById('password');
+    const loginError = document.getElementById('login-error');
+
+    const searchSection = document.getElementById('search-section');
+    const searchForm = document.getElementById('search-form');
+    const searchInput = document.getElementById('search-input');
+    const searchButton = document.getElementById('search-button');
+    const searchError = document.getElementById('search-error');
+    const lastFetchTime = document.getElementById('last-fetch-time');
+    const feedContainer = document.getElementById('feed');
+
+    let accessToken = null;
+
+    // Handle Login Form Submission
+    loginForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        loginError.textContent = ''; // Clear previous errors
+
+        const identifier = identifierInput.value.trim();
+        const password = passwordInput.value.trim();
+
+        if (!identifier || !password) {
+            loginError.textContent = 'Please enter both identifier and password.';
+            return;
         }
 
-        // Select DOM elements
-        const loginSection = document.getElementById('login-section');
-        const loginForm = document.getElementById('login-form');
-        const identifierInput = document.getElementById('identifier');
-        const passwordInput = document.getElementById('password');
-        const loginError = document.getElementById('login-error');
+        try {
+            console.log('Attempting to log in...');
+            // Perform login via REST API
+            const response = await fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    identifier,
+                    password,
+                }),
+            });
 
-        const searchSection = document.getElementById('search-section');
-        const searchForm = document.getElementById('search-form');
-        const searchInput = document.getElementById('search-input');
-        const searchButton = document.getElementById('search-button');
-        const searchError = document.getElementById('search-error');
-        const lastFetchTime = document.getElementById('last-fetch-time');
-        const feedContainer = document.getElementById('feed');
-
-        let accessToken = null;
-
-        // Handle Login Form Submission
-        loginForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            loginError.textContent = ''; // Clear previous errors
-
-            const identifier = identifierInput.value.trim();
-            const password = passwordInput.value.trim();
-
-            if (!identifier || !password) {
-                loginError.textContent = 'Please enter both identifier and password.';
-                return;
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Login failed:', errorData);
+                throw new Error(errorData.message || 'Login failed');
             }
 
-            try {
-                console.log('Attempting to log in...');
-                // Perform login via REST API
-                const response = await fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        identifier,
-                        password,
-                    }),
-                });
+            const data = await response.json();
 
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error('Login failed:', errorData);
-                    throw new Error(errorData.message || 'Login failed');
-                }
+            accessToken = data.accessJwt; // Store access token securely in memory
+            console.log('Login successful. Access Token received.');
 
-                const data = await response.json();
+            // Hide login section and show search section
+            loginSection.classList.add('hidden');
+            searchSection.classList.remove('hidden');
+        } catch (error) {
+            console.error('Login failed:', error);
+            loginError.textContent = 'Login failed. Please check your credentials.';
+        }
+    });
 
-                accessToken = data.accessJwt; // Store access token securely in memory
-                console.log('Login successful. Access Token received.');
+    // Handle Search Form Submission
+    searchForm.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        searchError.textContent = ''; // Clear previous errors
+        feedContainer.innerHTML = ''; // Clear previous search results
 
-                // Hide login section and show search section
-                loginSection.classList.add('hidden');
-                searchSection.classList.remove('hidden');
-            } catch (error) {
-                console.error('Login failed:', error);
-                loginError.textContent = 'Login failed. Please check your credentials.';
+        const keyword = searchInput.value.trim();
+
+        let query = 'github.com';
+        if (keyword) {
+            // Escape special characters in keyword to prevent query injection
+            const escapedKeyword = keyword.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+            query += ` ${escapedKeyword}`;
+        }
+        try {
+            console.log(`Searching for: "${query}"`);
+            // Construct query parameters using URLSearchParams
+            const params = new URLSearchParams({
+                q: query,
+                sort: 'top', // Sort by popularity
+                since: get3DaysAgoISO(),
+                limit: 50, // Adjust as needed (max 100)
+            });
+
+            const searchUrl = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?${params.toString()}`;
+
+            // Perform search via REST API
+            const response = await fetch(searchUrl, {
+                method: 'GET',
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`,
+                    'Content-Type': 'application/json',
+                },
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                console.error('Search failed:', errorData);
+                throw new Error(errorData.message || 'Search failed');
             }
-        });
 
-        // Handle Search Form Submission
-        searchForm.addEventListener('submit', async (event) => {
-            event.preventDefault();
-            searchError.textContent = ''; // Clear previous errors
-            feedContainer.innerHTML = ''; // Clear previous search results
+            const data = await response.json();
 
-            const keyword = searchInput.value.trim();
-
-            let query = 'github.com';
-            if (keyword) {
-                // Escape special characters in keyword to prevent query injection
-                const escapedKeyword = keyword.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
-                query += ` ${escapedKeyword}`;
-            }
-            try {
-                console.log(`Searching for: "${query}"`);
-                // Construct query parameters using URLSearchParams
-                const params = new URLSearchParams({
-                    q: query,
-                    sort: 'top', // Sort by popularity
-                    since: get3DaysAgoISO(),
-                    limit: 50, // Adjust as needed (max 100)
-                });
-
-                const searchUrl = `https://bsky.social/xrpc/app.bsky.feed.searchPosts?${params.toString()}`;
-
-                // Perform search via REST API
-                const response = await fetch(searchUrl, {
-                    method: 'GET',
-                    headers: {
-                        'Authorization': `Bearer ${accessToken}`,
-                        'Content-Type': 'application/json',
-                    },
-                });
-
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    console.error('Search failed:', errorData);
-                    throw new Error(errorData.message || 'Search failed');
-                }
-
-                const data = await response.json();
-
-                if (data.posts && Array.isArray(data.posts)) {
-                    if (data.posts.length === 0) {
-                        feedContainer.innerHTML = '<p>No GitHub links found for the given search criteria.</p>';
-                    } else {
-                        data.posts.forEach(post => {
-                            // Only display posts that contain links
-                            if (post.record && post.record.text && extractLinks(post.record.text).length > 0) {
-                                displayPost(post);
-                            }
-                        });
-                        lastFetchTime.textContent = `Last Updated: ${new Date().toLocaleString()}`;
-                    }
-                } else {
-                    console.warn('No posts data received:', data);
+            if (data.posts && Array.isArray(data.posts)) {
+                console.log(`Number of posts fetched: ${data.posts.length}`);
+                if (data.posts.length === 0) {
                     feedContainer.innerHTML = '<p>No GitHub links found for the given search criteria.</p>';
+                } else {
+                    data.posts.forEach(post => {
+                        // Only display posts that contain GitHub links
+                        if (post.record && post.record.text && extractLinks(post.record.text).length > 0) {
+                            console.log(`Displaying post: ${post.uri}`);
+                            displayPost(post);
+                        }
+                    });
+                    lastFetchTime.textContent = `Last Updated: ${new Date().toLocaleString()}`;
                 }
-            } catch (error) {
-                console.error('Error during search:', error);
-                searchError.textContent = 'An error occurred while performing the search. Please try again later.';
+            } else {
+                console.warn('No posts data received:', data);
+                feedContainer.innerHTML = '<p>No GitHub links found for the given search criteria.</p>';
             }
-        });
+        } catch (error) {
+            console.error('Error during search:', error);
+            searchError.textContent = 'An error occurred while performing the search. Please try again later.';
+        }
+    });
 
-        // Utility function to get ISO string for 3 days ago
-        function get3DaysAgoISO() {
-            const now = new Date();
-            now.setDate(now.getDate() - 3);
-            return now.toISOString();
+    // Utility function to get ISO string for 3 days ago
+    function get3DaysAgoISO() {
+        const now = new Date();
+        now.setDate(now.getDate() - 3);
+        return now.toISOString();
+    }
+
+    // Utility function to extract GitHub links from text
+    function extractLinks(text) {
+        // This regex matches GitHub URLs with or without the http(s) protocol
+        const urlRegex = /(?:https?:\/\/)?github\.com\/[^\s]+/g;
+        return text.match(urlRegex) || [];
+    }
+
+    // Function to display a post in the feed
+    function displayPost(post) {
+        const postElement = document.createElement('div');
+        postElement.className = 'link';
+
+        // Extract relevant information from the post
+        const author = post.author?.handle || 'Unknown';
+        const content = post.record?.text || 'No content';
+        const links = extractLinks(content);
+
+        // Format the creation time
+        const createdAt = post.record?.createdAt ? new Date(post.record.createdAt).toLocaleString() : 'Unknown time';
+
+        // Attempt to construct a web URL for the post
+        let postWebUrl = '#'; // Default to '#' if unable to construct
+        if (post.uri) {
+            const uriParts = post.uri.split('/');
+            const postId = uriParts[uriParts.length - 1];
+            const authorHandle = post.author?.handle || 'unknown';
+            postWebUrl = `https://bsky.app/profile/${authorHandle}/post/${postId}`;
         }
 
-        // Utility function to extract links from text
-        function extractLinks(text) {
-            const urlRegex = /(https?:\/\/[^\s]+)/g;
-            return text.match(urlRegex) || [];
-        }
+        // Construct the links HTML with proper URLs
+        const linksHTML = links.map(link => {
+            const cleanLink = link.trim();
+            // Prepend 'https://' if the link doesn't start with 'http://' or 'https://'
+            const href = /^https?:\/\//i.test(cleanLink) ? cleanLink : `https://${cleanLink}`;
+            return `<a href="${sanitizeHTML(href)}" target="_blank" rel="noopener noreferrer">${sanitizeHTML(cleanLink)}</a>`;
+        }).join('<br>');
 
-        // Function to display a post in the feed
-        function displayPost(post) {
-            const postElement = document.createElement('div');
-            postElement.className = 'link';
+        // Construct the post HTML with clickable links and full post text
+        postElement.innerHTML = `
+            <div class="author">${sanitizeHTML(author)} <span class="timestamp">(${sanitizeHTML(createdAt)})</span></div>
+            <div class="content">${sanitizeHTML(content)}</div>
+            ${links.length > 0 ? `<div class="links">${linksHTML}</div>` : ''}
+            <div class="title"><a href="${sanitizeHTML(postWebUrl)}" target="_blank" rel="noopener noreferrer">View Original Post</a></div>
+        `;
 
-            // Extract relevant information from the post
-            const author = post.author?.handle || 'Unknown';
-            const content = post.record?.text || 'No content';
-            const links = extractLinks(content);
+        // Append the new post to the feed
+        feedContainer.appendChild(postElement);
+    }
 
-            // Format the creation time
-            const createdAt = post.record?.createdAt ? new Date(post.record.createdAt).toLocaleString() : 'Unknown time';
+    // Optional: Handle network disconnections and visibility changes
+    window.addEventListener('offline', () => {
+        console.log('Offline detected.');
+        searchError.textContent = 'You are offline. Please check your internet connection.';
+    });
 
-            // Attempt to construct a web URL for the post
-            // Note: Replace 'https://bsky.app/profile/' with the actual base URL of your BlueSky instance if different
-            // The URI format is 'at://did:plc:.../app.bsky.feed.post/...' so we need to extract the post ID
-            let postWebUrl = '#'; // Default to '#' if unable to construct
-            if (post.uri) {
-                const uriParts = post.uri.split('/');
-                const postId = uriParts[uriParts.length - 1];
-                const authorHandle = post.author?.handle || 'unknown';
-                postWebUrl = `https://bsky.app/profile/${authorHandle}/post/${postId}`;
-            }
-
-            // Construct the links HTML with title linked back to the post
-            const linksHTML = links.map(link => {
-                // Extract the URL without any trailing characters
-                const cleanLink = link.trim();
-                return `<a href="${sanitizeHTML(cleanLink)}" target="_blank" rel="noopener noreferrer">${sanitizeHTML(cleanLink)}</a>`;
-            }).join('<br>');
-
-            // Construct the post HTML with a clickable title linking back to the original post
-            postElement.innerHTML = `
-                <div class="author">${sanitizeHTML(author)} <span class="timestamp">(${sanitizeHTML(createdAt)})</span></div>
-                <div class="content">${linksHTML}</div>
-                <div class="title"><a href="${sanitizeHTML(postWebUrl)}" target="_blank" rel="noopener noreferrer">View Original Post</a></div>
-            `;
-
-            // Append the new post to the feed
-            feedContainer.appendChild(postElement);
-        }
-
-        // Optional: Handle network disconnections and visibility changes
-        window.addEventListener('offline', () => {
-            console.log('Offline detected.');
-            searchError.textContent = 'You are offline. Please check your internet connection.';
-        });
-
-        window.addEventListener('online', () => {
-            console.log('Online detected.');
-            searchError.textContent = '';
-        });
-    </script>
-
-    <script nomodule>
-        document.getElementById('module-error').classList.remove('hidden');
-    </script>
+    window.addEventListener('online', () => {
+        console.log('Online detected.');
+        searchError.textContent = '';
+    });
+</script>
 </body>
 </html>
