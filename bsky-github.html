@@ -129,6 +129,22 @@
 
         .link .content {
             white-space: pre-wrap;
+            margin-bottom: 10px;
+            color: #333;
+        }
+
+        .link .title {
+            font-size: 1.1em;
+            margin-bottom: 5px;
+        }
+
+        .link .title a {
+            color: #0077ff;
+            text-decoration: none;
+        }
+
+        .link .title a:hover {
+            text-decoration: underline;
         }
 
         .link a {
@@ -182,7 +198,7 @@
 
         <!-- Search Section -->
         <div id="search-section" class="section hidden">
-            <h2>Search GitHub Links from the Past 24 Hours</h2>
+            <h2>Search GitHub Links from the Past 3 Days</h2>
             <form id="search-form">
                 <input type="text" id="search-input" name="search" placeholder="Enter additional keywords (optional)" aria-label="Search Keywords">
                 <button type="submit" id="search-button">Search</button>
@@ -278,21 +294,19 @@
 
             const keyword = searchInput.value.trim();
 
-            // Build the 'q' parameter with GitHub links
             let query = 'github.com';
             if (keyword) {
                 // Escape special characters in keyword to prevent query injection
                 const escapedKeyword = keyword.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
                 query += ` ${escapedKeyword}`;
             }
-
             try {
-                console.log(`Searching for: ${query}`);
+                console.log(`Searching for: "${query}"`);
                 // Construct query parameters using URLSearchParams
                 const params = new URLSearchParams({
                     q: query,
-                    sort: 'latest', // or 'top' based on preference
-                    since: get24HoursAgoISO(),
+                    sort: 'top', // Sort by popularity
+                    since: get3DaysAgoISO(),
                     limit: 50, // Adjust as needed (max 100)
                 });
 
@@ -337,10 +351,10 @@
             }
         });
 
-        // Utility function to get ISO string for 24 hours ago
-        function get24HoursAgoISO() {
+        // Utility function to get ISO string for 3 days ago
+        function get3DaysAgoISO() {
             const now = new Date();
-            now.setHours(now.getHours() - 24);
+            now.setDate(now.getDate() - 3);
             return now.toISOString();
         }
 
@@ -363,13 +377,29 @@
             // Format the creation time
             const createdAt = post.record?.createdAt ? new Date(post.record.createdAt).toLocaleString() : 'Unknown time';
 
-            // Construct the links HTML
-            const linksHTML = links.map(link => `<a href="${sanitizeHTML(link)}" target="_blank" rel="noopener noreferrer">${sanitizeHTML(link)}</a>`).join('<br>');
+            // Attempt to construct a web URL for the post
+            // Note: Replace 'https://bsky.app/profile/' with the actual base URL of your BlueSky instance if different
+            // The URI format is 'at://did:plc:.../app.bsky.feed.post/...' so we need to extract the post ID
+            let postWebUrl = '#'; // Default to '#' if unable to construct
+            if (post.uri) {
+                const uriParts = post.uri.split('/');
+                const postId = uriParts[uriParts.length - 1];
+                const authorHandle = post.author?.handle || 'unknown';
+                postWebUrl = `https://bsky.app/profile/${authorHandle}/post/${postId}`;
+            }
 
-            // Construct the post HTML
+            // Construct the links HTML with title linked back to the post
+            const linksHTML = links.map(link => {
+                // Extract the URL without any trailing characters
+                const cleanLink = link.trim();
+                return `<a href="${sanitizeHTML(cleanLink)}" target="_blank" rel="noopener noreferrer">${sanitizeHTML(cleanLink)}</a>`;
+            }).join('<br>');
+
+            // Construct the post HTML with a clickable title linking back to the original post
             postElement.innerHTML = `
                 <div class="author">${sanitizeHTML(author)} <span class="timestamp">(${sanitizeHTML(createdAt)})</span></div>
                 <div class="content">${linksHTML}</div>
+                <div class="title"><a href="${sanitizeHTML(postWebUrl)}" target="_blank" rel="noopener noreferrer">View Original Post</a></div>
             `;
 
             // Append the new post to the feed
