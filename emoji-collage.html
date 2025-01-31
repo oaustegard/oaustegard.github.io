@@ -61,6 +61,21 @@
         .zoom-button:hover {
             background-color: #cbd5e1;
         }
+        /* Progress Bar Styling */
+        .progress-bar {
+            width: 100%;
+            background-color: #e2e8f0;
+            border-radius: 4px;
+            overflow: hidden;
+            height: 20px;
+            margin-top: 4px;
+        }
+        .progress-fill {
+            height: 100%;
+            background-color: #3b82f6;
+            width: 0%;
+            transition: width 0.2s;
+        }
     </style>
 </head>
 <body class="bg-gray-100">
@@ -70,13 +85,11 @@
         const { useState, useEffect, useRef } = window.preactHooks;
 
         /* Optimized Emoji Palette Generation Including Skin Tone Variations */
-        const BASE_EMOJI_PALETTE = (() => {
+        const BASE_EMOJI_PALETTE_GENERATOR = (maxPerRange = 500) => {
             const ranges = [
-                [0x1F300, 0x1F5FF],  /* Miscellaneous Symbols and Pictographs */
                 [0x1F600, 0x1F64F],  /* Emoticons */
+                [0x1F300, 0x1F5FF],  /* Miscellaneous Symbols and Pictographs */
                 [0x1F680, 0x1F6FF],  /* Transport and Map Symbols */
-                [0x2600, 0x26FF],    /* Miscellaneous Symbols */
-                [0x2700, 0x27BF],    /* Dingbats */
                 [0x1F900, 0x1F9FF],  /* Supplemental Symbols and Pictographs */
                 [0x1FA70, 0x1FAFF],  /* Symbols and Pictographs Extended-A */
             ];
@@ -91,7 +104,9 @@
 
             const emoji = new Set();
             for (const [start, end] of ranges) {
+                let count = 0;
                 for (let codePoint = start; codePoint <= end; codePoint++) {
+                    if (count >= maxPerRange) break;
                     const baseChar = String.fromCodePoint(codePoint);
                     // Basic Emoji inclusion using Unicode property escapes
                     if (/^\p{Emoji}$/u.test(baseChar)) {
@@ -102,30 +117,43 @@
                             // Some emojis do not support skin tones; this will include only valid combinations
                             emoji.add(combined);
                         }
+                        count++;
                     }
                 }
             }
 
             return Array.from(emoji);
-        })();
+        };
 
         /* Function to get cached emoji colors or process and cache them */
-        const getCachedEmojiColors = async () => {
+        const getCachedEmojiColors = async (setProgress, isCancelledRef) => {
             const cached = localStorage.getItem('emojiColors');
             if (cached) {
                 console.log('Emoji colors loaded from cache.');
+                setProgress(100);
                 return JSON.parse(cached);
             } else {
                 console.log('No cached emoji colors found. Processing emojis...');
+                const palette = BASE_EMOJI_PALETTE_GENERATOR();
+                const total = palette.length;
                 const colors = {};
-                for (const [index, emoji] of BASE_EMOJI_PALETTE.entries()) {
-                    if (index % 100 === 0) { // Log progress every 100 emojis
-                        console.log(`Processing emoji ${index + 1}/${BASE_EMOJI_PALETTE.length}: ${emoji}`);
+                for (const [index, emoji] of palette.entries()) {
+                    if (isCancelledRef.current) {
+                        console.log('Palette generation cancelled by user.');
+                        break;
+                    }
+                    if (index % 50 === 0) { // Log progress every 50 emojis
+                        console.log(`Processing emoji ${index + 1}/${total}: ${emoji}`);
+                        setProgress(Math.round(((index + 1) / total) * 100));
+                        await new Promise(resolve => setTimeout(resolve, 10)); // Yield to UI
                     }
                     colors[emoji] = await extractEmojiColor(emoji);
                 }
-                localStorage.setItem('emojiColors', JSON.stringify(colors));
-                console.log('Emoji colors cached successfully.');
+                // Save only if not cancelled
+                if (!isCancelledRef.current) {
+                    localStorage.setItem('emojiColors', JSON.stringify(colors));
+                    console.log('Emoji colors cached successfully.');
+                }
                 return colors;
             }
         };
@@ -184,14 +212,25 @@
             const [copySuccess, setCopySuccess] = useState('');
             const [processing, setProcessing] = useState(false); // To indicate processing state
             const [zoomLevel, setZoomLevel] = useState(1); // For CSS zoom
+            const [paletteProgress, setPaletteProgress] = useState(0); // Progress percentage
+            const [isGeneratingPalette, setIsGeneratingPalette] = useState(false);
+            const isCancelledRef = useRef(false);
 
             useEffect(() => {
                 const fetchEmojiColors = async () => {
-                    const colors = await getCachedEmojiColors();
-                    setEmojiColors(colors);
-                    setReadyToRender(true);
+                    setIsGeneratingPalette(true);
+                    const colors = await getCachedEmojiColors(setPaletteProgress, isCancelledRef);
+                    if (!isCancelledRef.current) {
+                        setEmojiColors(colors);
+                        setReadyToRender(true);
+                    }
+                    setIsGeneratingPalette(false);
                 };
                 fetchEmojiColors();
+                // Cleanup function to cancel palette generation if component unmounts
+                return () => {
+                    isCancelledRef.current = true;
+                };
             }, []);
 
             const calculateResolution = (width, height) => {
@@ -263,7 +302,7 @@
                         canvas.height = newResolution.height;
                         ctx.drawImage(img, 0, 0, newResolution.width, newResolution.height);
 
-                        setImageData(ctx.getImageData(0, 0, newResolution.width, newResolution.height));
+                        setImageData(ctx.getImageData(0, 0, canvas.width, canvas.height));
                         setCollage([]);
                         setReadyToRender(true);
                     };
@@ -300,10 +339,10 @@
                         const i = (y * resolution.width + x) * 4;
                         const pixelColor = [data[i], data[i + 1], data[i + 2]];
 
-                        let bestEmoji = BASE_EMOJI_PALETTE[0];
+                        let bestEmoji = BASE_EMOJI_PALETTE_GENERATOR()[0];
                         let minDiff = Infinity;
 
-                        for (const emoji of BASE_EMOJI_PALETTE) {
+                        for (const emoji of Object.keys(emojiColors)) {
                             const color = emojiColors[emoji];
                             if (!color) continue;
                             const diff = Math.sqrt(
@@ -327,7 +366,7 @@
                 setProcessing(false); // End processing
             };
 
-            /* Enhanced Copy Function to Include HTML with CSS */
+            /* Enhanced Copy Function to Include HTML */
             const copyToClipboard = async () => {
                 if (collage.length === 0) return;
 
@@ -353,7 +392,7 @@
                     const blob = new Blob([htmlContent], { type: 'text/html;charset=utf-8' });
                     const clipboardItem = new ClipboardItem({ 'text/html': blob });
                     await navigator.clipboard.write([clipboardItem]);
-                    setCopySuccess('Collage copied to clipboard!');
+                    setCopySuccess('Collage copied to clipboard as HTML!');
                     console.log('Collage copied to clipboard as HTML.');
                 } catch (err) {
                     console.error('Failed to copy as HTML using ClipboardItem:', err);
@@ -373,7 +412,7 @@
 
                         const successful = document.execCommand('copy');
                         if (successful) {
-                            setCopySuccess('Collage copied to clipboard!');
+                            setCopySuccess('Collage copied to clipboard as HTML!');
                             console.log('Collage copied to clipboard using execCommand.');
                         } else {
                             throw new Error('execCommand unsuccessful');
@@ -538,6 +577,34 @@
                 setZoomLevel(1);
             };
 
+            /* Function to cancel palette generation */
+            const cancelPaletteGeneration = () => {
+                if (isGeneratingPalette) {
+                    isCancelledRef.current = true;
+                    console.log('Palette generation cancellation requested.');
+                }
+            };
+
+            /* Function to regenerate palette cache */
+            const regeneratePaletteCache = async () => {
+                if (isGeneratingPalette) return;
+                // Clear existing cache
+                localStorage.removeItem('emojiColors');
+                console.log('Existing emojiColors cache cleared.');
+                // Reset state
+                isCancelledRef.current = false;
+                setPaletteProgress(0);
+                setReadyToRender(false);
+                // Start regeneration
+                setIsGeneratingPalette(true);
+                const colors = await getCachedEmojiColors(setPaletteProgress, isCancelledRef);
+                if (!isCancelledRef.current) {
+                    setEmojiColors(colors);
+                    setReadyToRender(true);
+                }
+                setIsGeneratingPalette(false);
+            };
+
             return h('div', { className: 'p-6 max-w-6xl mx-auto' }, [
                 h('h1', { className: 'text-4xl font-bold mb-6 text-center' }, 'Emoji Collage Maker'),
 
@@ -583,6 +650,26 @@
                                     className: 'border rounded',
                                     style: { maxWidth: '100%' }
                                 })
+                            ]),
+                            /* Palette Generation Status */
+                            h('div', { className: 'space-y-2' }, [
+                                isGeneratingPalette ? h('div', { className: 'space-y-1' }, [
+                                    h('h2', { className: 'text-lg font-medium' }, 'Generating Emoji Palette:'),
+                                    h('div', { className: 'progress-bar' }, [
+                                        h('div', { className: 'progress-fill', style: { width: `${paletteProgress}%` } })
+                                    ]),
+                                    h('span', { className: 'text-sm text-gray-600' }, `Progress: ${paletteProgress}%`),
+                                    h('button', {
+                                        onClick: cancelPaletteGeneration,
+                                        className: 'mt-2 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600'
+                                    }, 'Cancel Generation')
+                                ]) : h('div', { className: 'flex items-center gap-2' }, [
+                                    h('span', { className: 'text-sm text-gray-600' }, `Palette ready with ${Object.keys(emojiColors).length} emojis.`),
+                                    h('button', {
+                                        onClick: regeneratePaletteCache,
+                                        className: 'px-4 py-2 bg-orange-500 text-white rounded hover:bg-orange-600'
+                                    }, 'Regenerate Palette')
+                                ])
                             ])
                         ])
                     ]),
@@ -593,7 +680,7 @@
                         originalImage && h('button', {
                             onClick: generateCollage,
                             className: 'mb-4 px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600',
-                            disabled: processing
+                            disabled: processing || !readyToRender
                         }, processing ? 'Generating...' : 'Generate Collage'),
 
                         /* Collage Actions: Copy, Download PNG, Download SVG, Open Full Page */
