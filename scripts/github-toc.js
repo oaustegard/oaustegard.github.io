@@ -1,4 +1,4 @@
-/* GitHub Table of Contents Web Component */
+/* GitHub Table of Contents Web Component with Exclusion Support */
 class GitHubToc extends HTMLElement {
     constructor() {
         super();
@@ -7,7 +7,7 @@ class GitHubToc extends HTMLElement {
 
     /* Define observed attributes for the component */
     static get observedAttributes() {
-        return ['repo-path', 'link-prefix'];
+        return ['repo-path', 'link-prefix', 'exclude'];
     }
 
     /* Initialize the component when connected */
@@ -22,6 +22,30 @@ class GitHubToc extends HTMLElement {
             this.render();
             this.loadContent();
         }
+    }
+
+    /* Convert wildcard pattern to regex */
+    wildcardToRegex(pattern) {
+        return new RegExp('^' + pattern
+            .split('*').map(s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))
+            .join('.*') + '$');
+    }
+
+    /* Check if a filename matches any exclude pattern */
+    shouldExclude(filename) {
+        const excludeStr = this.getAttribute('exclude');
+        if (!excludeStr) return false;
+
+        /* Split by commas, trim whitespace, and filter empty strings */
+        const patterns = excludeStr
+            .split(',')
+            .map(p => p.trim())
+            .filter(p => p);
+
+        /* Convert patterns to RegExp and check for matches */
+        return patterns.some(pattern => 
+            this.wildcardToRegex(pattern).test(filename)
+        );
     }
 
     /* Render the basic structure */
@@ -101,7 +125,11 @@ class GitHubToc extends HTMLElement {
 
             /* Generate list items */
             list.innerHTML = sortedData
-                .filter(item => !item.name.startsWith('.') && !item.name.startsWith('_'))
+                .filter(item => 
+                    !item.name.startsWith('.') && 
+                    !item.name.startsWith('_') &&
+                    !this.shouldExclude(item.name)
+                )
                 .map(item => {
                     const displayName = item.name
                         .replace(/\.[^/.]+$/, '')  /* Remove file extension */
