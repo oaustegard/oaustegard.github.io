@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Merge BSky Lists</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            line-height: 1.5;
+        }
+        .form-group {
+            margin-bottom: 1rem;
+        }
+        label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 500;
+        }
+        input {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            box-sizing: border-box;
+            font-size: 1rem;
+        }
+        input:focus {
+            outline: none;
+            border-color: #0070f3;
+            box-shadow: 0 0 0 3px rgba(0,112,243,0.1);
+        }
+        .input-section {
+            display: none;
+        }
+        .input-section.active {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+        .dropdown-container {
+            position: relative;
+            margin-bottom: 1rem;
+        }
+        .dropdown {
+            width: 100%;
+            padding: 0.75rem;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            background: white;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .dropdown:after {
+            content: '▼';
+            font-size: 0.8em;
+            color: #666;
+        }
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: white;
+            border: 1px solid #ddd;
+            border-radius: 0 0 6px 6px;
+            margin-top: -1px;
+            max-height: 300px;
+            overflow-y: auto;
+            display: none;
+            z-index: 1000;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .dropdown-menu.show {
+            display: block;
+        }
+        .dropdown-item {
+            padding: 0.75rem;
+            cursor: pointer;
+        }
+        .dropdown-item:hover {
+            background: #f5f5f5;
+        }
+        button {
+            background: #0070f3;
+            color: white;
+            border: none;
+            padding: 0.75rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            width: 100%;
+            font-size: 1rem;
+            font-weight: 500;
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: wait;
+        }
+        .alert {
+            padding: 1rem;
+            border-radius: 6px;
+            margin-bottom: 1rem;
+            animation: fadeIn 0.3s ease-out;
+        }
+        .alert-error {
+            background: #fee2e2;
+            border: 1px solid #ef4444;
+            color: #dc2626;
+        }
+        .alert-success {
+            background: #dcfce7;
+            border: 1px solid #22c55e;
+            color: #16a34a;
+        }
+        .alert-info {
+            background: #dbeafe;
+            border: 1px solid #2563eb;
+            color: #1d4ed8;
+        }
+        .progress {
+            margin-top: 1rem;
+            display: none;
+        }
+        .progress.visible {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+    </style>
+</head>
+<body>
+    <h1>Merge BSky Lists</h1>
+    <div id="status"></div>
+
+    <div id="authSection" class="input-section active">
+        <h2>Step 1: Login</h2>
+        <div class="form-group">
+            <label>Your BSky Handle:</label>
+            <input type="text" id="handle" placeholder="user.bsky.social" required>
+        </div>
+        <div class="form-group">
+            <label>Your BSky <a href="https://bsky.app/settings/app-passwords" target="_blank">App Password</a>:</label>
+            <input type="password" id="apppassword" placeholder="abcd-1234-fghi-5678" required>
+        </div>
+        <button id="loginBtn">Login</button>
+    </div>
+
+    <div id="listSection" class="input-section">
+        <h2>Step 2: Select Lists to Merge</h2>
+        <div class="form-group">
+            <label>Source List (list to merge from):</label>
+            <div class="dropdown-container">
+                <div class="dropdown" id="sourceListDropdown">
+                    <span id="selectedSourceList">Select source list</span>
+                </div>
+                <div class="dropdown-menu" id="sourceDropdownMenu"></div>
+            </div>
+        </div>
+        
+        <div class="form-group">
+            <label>Target List (list to merge into):</label>
+            <div class="dropdown-container">
+                <div class="dropdown" id="targetListDropdown">
+                    <span id="selectedTargetList">Select target list</span>
+                </div>
+                <div class="dropdown-menu" id="targetDropdownMenu"></div>
+            </div>
+        </div>
+
+        <div class="progress">
+            <div id="progressText" class="alert alert-info"></div>
+        </div>
+        <button id="mergeBtn">Merge Lists</button>
+    </div>
+
+    <script>
+        class BlueskyApi {
+            constructor() {
+                this.apiUri = 'https://bsky.social/xrpc/';
+                this.accountDid = null;
+                this.apiKey = null;
+            }
+
+            async login(handle, password) {
+                const response = await fetch(`${this.apiUri}com.atproto.server.createSession`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ identifier: handle, password })
+                });
+
+                if (!response.ok) {
+                    throw new Error('Login failed - check your credentials');
+                }
+
+                const data = await response.json();
+                this.accountDid = data.did;
+                this.apiKey = data.accessJwt;
+                return data;
+            }
+
+            async request(endpoint, method = 'GET', body = null) {
+                const headers = {
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json'
+                };
+
+                const response = await fetch(`${this.apiUri}${endpoint}`, {
+                    method,
+                    headers,
+                    body: body ? JSON.stringify(body) : null
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Request failed: ${response.statusText}`);
+                }
+
+                return response.json();
+            }
+
+            async getUserLists() {
+                return this.request(`app.bsky.graph.getLists?actor=${this.accountDid}&limit=100`);
+            }
+
+            async getListMembers(listUri) {
+                let members = [];
+                let cursor = null;
+                
+                do {
+                    const params = new URLSearchParams({ list: listUri, limit: '100' });
+                    if (cursor) params.append('cursor', cursor);
+                    
+                    const data = await this.request(`app.bsky.graph.getList?${params}`);
+                    members = members.concat(data.items);
+                    cursor = data.cursor;
+                } while (cursor);
+
+                return members;
+            }
+
+            async addMemberToList(listUri, memberDid) {
+                return this.request('com.atproto.repo.createRecord', 'POST', {
+                    collection: 'app.bsky.graph.listitem',
+                    repo: this.accountDid,
+                    record: {
+                        subject: memberDid,
+                        list: listUri,
+                        createdAt: new Date().toISOString(),
+                        '$type': 'app.bsky.graph.listitem'
+                    }
+                });
+            }
+        }
+
+        const api = new BlueskyApi();
+        let selectedSourceListUri = null;
+        let selectedTargetListUri = null;
+
+        function showStatus(message, isError = false) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.className = `alert ${isError ? 'alert-error' : 'alert-success'}`;
+            statusDiv.textContent = message;
+            window.scrollTo(0, 0);
+        }
+
+        function showSection(sectionId) {
+            document.querySelectorAll('.input-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            document.getElementById(sectionId).classList.add('active');
+        }
+
+        function updateProgress(message) {
+            const progress = document.querySelector('.progress');
+            progress.classList.add('visible');
+            document.getElementById('progressText').textContent = message;
+        }
+
+        function toggleDropdown(id) {
+            document.getElementById(id).classList.toggle('show');
+        }
+
+        function selectSourceList(uri, name) {
+            document.getElementById('selectedSourceList').textContent = name;
+            document.getElementById('sourceDropdownMenu').classList.remove('show');
+            selectedSourceListUri = uri;
+        }
+
+        function selectTargetList(uri, name) {
+            document.getElementById('selectedTargetList').textContent = name;
+            document.getElementById('targetDropdownMenu').classList.remove('show');
+            selectedTargetListUri = uri;
+        }
+
+        // Setup event listeners
+        document.getElementById('sourceListDropdown').addEventListener('click', () => toggleDropdown('sourceDropdownMenu'));
+        document.getElementById('targetListDropdown').addEventListener('click', () => toggleDropdown('targetDropdownMenu'));
+
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.dropdown-container')) {
+                document.querySelectorAll('.dropdown-menu').forEach(menu => menu.classList.remove('show'));
+            }
+        });
+
+        // Login handling
+        document.getElementById('loginBtn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            const btn = e.target;
+            btn.disabled = true;
+            btn.textContent = 'Logging in...';
+
+            try {
+                const handle = document.getElementById('handle').value.trim()
+                    .replace('@', '')
+                    .replace('bsky.app', 'bsky.social');
+                const password = document.getElementById('apppassword').value;
+
+                await api.login(handle, password);
+                showStatus('Login successful!');
+
+                // Load user's lists
+                const listsData = await api.getUserLists();
+                const lists = listsData.lists;
+
+                // Populate both dropdowns
+                const sourceDropdown = document.getElementById('sourceDropdownMenu');
+                const targetDropdown = document.getElementById('targetDropdownMenu');
+                
+                const listItems = lists.map(list => `
+                    <div class="dropdown-item" onclick="selectSourceList('${list.uri}', '${list.name}')">${list.name}</div>
+                `).join('');
+                
+                const targetListItems = lists.map(list => `
+                    <div class="dropdown-item" onclick="selectTargetList('${list.uri}', '${list.name}')">${list.name}</div>
+                `).join('');
+
+                sourceDropdown.innerHTML = listItems;
+                targetDropdown.innerHTML = targetListItems;
+
+                showSection('listSection');
+            } catch (error) {
+                showStatus(error.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Login';
+            }
+        });
+
+        // Merge button handling
+        document.getElementById('mergeBtn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            const btn = e.target;
+            btn.disabled = true;
+            btn.textContent = 'Merging...';
+
+            try {
+                if (!selectedSourceListUri) throw new Error('Please select a source list');
+                if (!selectedTargetListUri) throw new Error('Please select a target list');
+                if (selectedSourceListUri === selectedTargetListUri) throw new Error('Source and target lists must be different');
+
+                updateProgress('Loading source list members...');
+                const sourceMembers = await api.getListMembers(selectedSourceListUri);
+                
+                updateProgress('Loading target list members...');
+                const targetMembers = await api.getListMembers(selectedTargetListUri);
+                
+                // Find members that are in source but not in target
+                const targetMemberDids = new Set(targetMembers.map(m => m.subject.did));
+                const newMembers = sourceMembers.filter(m => !targetMemberDids.has(m.subject.did));
+
+                updateProgress(`Adding ${newMembers.length} new members to target list...`);
+                for (let i = 0; i < newMembers.length; i++) {
+                    await api.addMemberToList(selectedTargetListUri, newMembers[i].subject.did);
+                    updateProgress(`Added ${i + 1} of ${newMembers.length} members...`);
+                }
+
+                const rkey = selectedTargetListUri.split('/').pop();
+                const listUrl = `https://bsky.app/profile/${api.accountDid}/lists/${rkey}`;
+                
+                showStatus(`Successfully merged ${newMembers.length} new members into the target list. View your updated list here: ${listUrl}`);
+
+            } catch (error) {
+                showStatus(error.message, true);
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Merge Lists';
+            }
+        });
+    </script>
+</body>
+</html>
