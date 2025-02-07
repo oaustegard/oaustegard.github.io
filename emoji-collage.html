@@ -159,13 +159,17 @@
     return Array.from(emoji);
   })();
 
-  /* Function to extract the dominant color of an emoji using a larger canvas,
-     a transparent background, and a quantized histogram approach.
+  /* 
+    Modified extractEmojiColor: 
+    - Draws the emoji on a larger, transparent canvas.
+    - Computes the average alpha over all pixels as an “effective opacity.”
+    - Uses a quantized histogram (over pixels with alpha > 50) to pick a dominant color.
+    Returns an object: { color: [r, g, b], opacity: effectiveOpacity }.
   */
   const extractEmojiColor = (emoji) => {
     return new Promise((resolve) => {
       const canvas = document.createElement('canvas');
-      const size = 100; // increased canvas size
+      const size = 100;
       canvas.width = size;
       canvas.height = size;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
@@ -174,27 +178,31 @@
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       ctx.fillText(emoji, size / 2, size / 2);
-      // Give it a slight delay to ensure rendering
+      // Slight delay to ensure rendering
       setTimeout(() => {
         try {
           const imageData = ctx.getImageData(0, 0, size, size);
           const data = imageData.data;
+          let totalAlpha = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            totalAlpha += data[i + 3];
+          }
+          // Effective opacity is the average alpha over all pixels
+          const effectiveOpacity = totalAlpha / (255 * (size * size));
+
+          // Build a histogram over pixels with alpha > 50
           const histogram = {};
-          // Process every pixel
           for (let i = 0; i < data.length; i += 4) {
             const alpha = data[i + 3];
-            if (alpha < 250) continue; // ignore semi-transparent pixels
+            if (alpha < 50) continue; // skip very transparent pixels
             const r = data[i], g = data[i + 1], b = data[i + 2];
-            // Ignore near-white pixels (background/anti-aliasing)
-            if (r > 240 && g > 240 && b > 240) continue;
-            // Quantize colors (round to nearest 16)
+            // Quantize colors to reduce noise (round to nearest 16)
             const qr = Math.round(r / 16) * 16;
             const qg = Math.round(g / 16) * 16;
             const qb = Math.round(b / 16) * 16;
             const key = `${qr},${qg},${qb}`;
             histogram[key] = (histogram[key] || 0) + 1;
           }
-          // Pick the most frequent color from the histogram
           let dominantKey = null, maxCount = 0;
           for (const key in histogram) {
             if (histogram[key] > maxCount) {
@@ -202,22 +210,23 @@
               dominantKey = key;
             }
           }
+          let dominantColor;
           if (dominantKey) {
-            const [r, g, b] = dominantKey.split(',').map(Number);
-            resolve([r, g, b]);
+            dominantColor = dominantKey.split(',').map(Number);
           } else {
-            resolve([128, 128, 128]);
+            dominantColor = [128, 128, 128];
           }
+          resolve({ color: dominantColor, opacity: effectiveOpacity });
         } catch (error) {
           console.error('Error analyzing emoji:', error);
-          resolve([128, 128, 128]);
+          resolve({ color: [128, 128, 128], opacity: 1 });
         }
       }, 20);
     });
   };
 
   /* Function to get cached emoji colors or process and cache them.
-     Updates progress callbacks every 10 emojis.
+     Each emoji is now cached as an object with { color, opacity }.
   */
   const getCachedEmojiColors = async (updateProgress, updatePartial) => {
     const cached = localStorage.getItem('emojiColors');
@@ -242,14 +251,14 @@
     }
   };
 
-  /* Suggest a background color from the border pixels of the image.
-     This function samples a thin border along the image edges.
+  /* 
+    Suggest a background color from the border pixels of the uploaded image.
+    Samples a thin border along the edges and returns the average color.
   */
   const suggestBackgroundColor = (imageData) => {
     const data = imageData.data;
     const { width, height } = imageData;
     let totalR = 0, totalG = 0, totalB = 0, count = 0;
-    // Use a border width that is 5% of the smallest dimension (up to 10 pixels)
     const borderWidth = Math.min(10, Math.floor(width * 0.05), Math.floor(height * 0.05));
     
     // Top border
@@ -272,7 +281,7 @@
         count++;
       }
     }
-    // Left and right borders (excluding corners already processed)
+    // Left and right borders (excluding already processed corners)
     for (let y = borderWidth; y < height - borderWidth; y++) {
       for (let x = 0; x < borderWidth; x++) {
         const idx = (y * width + x) * 4;
@@ -393,9 +402,11 @@
       reader.readAsDataURL(file);
     };
 
-    /* Generate Collage:
-       For each pixel, blend the emoji's raw color with the background.
-       Color differences are computed in LAB space for a perceptual match.
+    /* 
+      Generate Collage:
+      - For each pixel, compare the target color (converted to LAB) against every emoji’s
+        effective color. The effective color is computed using the emoji’s dominant color
+        blended with the background color based on the emoji’s effective opacity.
     */
     const generateCollage = () => {
       if (!imageData) {
@@ -410,7 +421,6 @@
       const data = imageData.data;
       const newCollage = [];
       const bgRgb = hexToRgb(bgColor);
-      const blendFactor = 0.8; // 80% raw emoji color, 20% background 
       for (let y = 0; y < resolution.height; y++) {
         const row = [];
         for (let x = 0; x < resolution.width; x++) {
@@ -420,12 +430,15 @@
           let bestDiff = Infinity;
           let candidates = [];
           for (const emoji of BASE_EMOJI_PALETTE) {
-            const rawColor = emojiColors[emoji];
-            if (!rawColor) continue;
+            const emojiData = emojiColors[emoji];
+            if (!emojiData) continue;
+            const rawColor = emojiData.color;
+            const effectiveOpacity = emojiData.opacity;
+            // Compute effective emoji color by blending with the background according to its effective opacity
             const effectiveColor = [
-              Math.round(rawColor[0] * blendFactor + bgRgb[0] * (1 - blendFactor)),
-              Math.round(rawColor[1] * blendFactor + bgRgb[1] * (1 - blendFactor)),
-              Math.round(rawColor[2] * blendFactor + bgRgb[2] * (1 - blendFactor))
+              Math.round(rawColor[0] * effectiveOpacity + bgRgb[0] * (1 - effectiveOpacity)),
+              Math.round(rawColor[1] * effectiveOpacity + bgRgb[1] * (1 - effectiveOpacity)),
+              Math.round(rawColor[2] * effectiveOpacity + bgRgb[2] * (1 - effectiveOpacity))
             ];
             const effectiveLab = rgbToLab(...effectiveColor);
             const diff = Math.sqrt(
@@ -598,7 +611,7 @@
     }
 
     /* Palette Processing Preview:
-       When the palette is still being built, show a preview of up to 50 emojis sampled from the *last* processed.
+       When the palette is still being built, show a preview of up to 50 emojis sampled from the last processed.
     */
     let palettePreview = null;
     if (paletteProgress < 100) {
@@ -743,6 +756,7 @@
 
   render(h(App), document.getElementById('app'));
 </script>
+
 
 </body>
 </html>
