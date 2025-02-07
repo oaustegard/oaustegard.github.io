@@ -71,6 +71,7 @@
 </head>
 <body class="bg-gray-100">
   <div id="app"></div>
+
 <script>
   const { h, render } = window.preact;
   const { useState, useEffect, useRef } = window.preactHooks;
@@ -87,7 +88,6 @@
 
   // Helper functions for LAB color conversion
 
-  // Convert RGB to XYZ
   function rgbToXyz(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
@@ -99,9 +99,7 @@
     return [x, y, z];
   }
 
-  // Convert XYZ to LAB
   function xyzToLab(x, y, z) {
-    // Reference white D65
     const refX = 0.95047, refY = 1.000, refZ = 1.08883;
     x /= refX; y /= refY; z /= refZ;
     x = x > 0.008856 ? Math.cbrt(x) : (7.787 * x) + (16 / 116);
@@ -113,7 +111,6 @@
     return [L, a, b_];
   }
 
-  // Direct conversion from RGB to LAB
   function rgbToLab(r, g, b) {
     return xyzToLab(...rgbToXyz(r, g, b));
   }
@@ -124,34 +121,30 @@
   */
   const BASE_EMOJI_PALETTE = (() => {
     const ranges = [
-      [0x1F300, 0x1F5FF],  // Miscellaneous Symbols and Pictographs
-      [0x1F600, 0x1F64F],  // Emoticons
-      [0x1F680, 0x1F6FF],  // Transport and Map Symbols
-      [0x2600, 0x26FF],    // Miscellaneous Symbols
-      [0x2700, 0x27BF],    // Dingbats
-      [0x1F900, 0x1F9FF],  // Supplemental Symbols and Pictographs
-      [0x1FA70, 0x1FAFF],  // Symbols and Pictographs Extended-A
+      [0x1F300, 0x1F5FF],  
+      [0x1F600, 0x1F64F],  
+      [0x1F680, 0x1F6FF],  
+      [0x2600, 0x26FF],    
+      [0x2700, 0x27BF],    
+      [0x1F900, 0x1F9FF],  
+      [0x1FA70, 0x1FAFF],  
     ];
     const skinTones = [
-      '\u{1F3FB}', // Light Skin Tone
-      '\u{1F3FC}', // Medium-Light Skin Tone
-      '\u{1F3FD}', // Medium Skin Tone
-      '\u{1F3FE}', // Medium-Dark Skin Tone
-      '\u{1F3FF}', // Dark Skin Tone
+      '\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'
     ];
     const emoji = new Set();
     for (const [start, end] of ranges) {
-      for (let codePoint = start; codePoint <= end; codePoint++) {
-        const baseChar = String.fromCodePoint(codePoint);
-        if (baseChar === "🔳") continue;
-        if (/^\p{Emoji}$/u.test(baseChar)) {
-          if (/\p{Emoji_Modifier_Base}/u.test(baseChar)) {
-            emoji.add(baseChar);
+      for (let cp = start; cp <= end; cp++) {
+        const base = String.fromCodePoint(cp);
+        if (base === "🔳") continue;
+        if (/^\p{Emoji}$/u.test(base)) {
+          if (/\p{Emoji_Modifier_Base}/u.test(base)) {
+            emoji.add(base);
             for (const tone of skinTones) {
-              emoji.add(baseChar + tone);
+              emoji.add(base + tone);
             }
           } else {
-            emoji.add(baseChar);
+            emoji.add(base);
           }
         }
       }
@@ -160,43 +153,43 @@
   })();
 
   /* 
-    Modified extractEmojiColor: 
-    - Draws the emoji on a larger, transparent canvas.
-    - Computes the average alpha over all pixels as an “effective opacity.”
+    Modified extractEmojiColor:
+    - Draws the emoji on a 100×100 transparent canvas at 80px.
+    - Computes the coverage as the fraction of pixels with alpha > 50.
+    - If coverage is below 50%, we set effective opacity to 1.
     - Uses a quantized histogram (over pixels with alpha > 50) to pick a dominant color.
     Returns an object: { color: [r, g, b], opacity: effectiveOpacity }.
   */
   const extractEmojiColor = (emoji) => {
     return new Promise((resolve) => {
-      const canvas = document.createElement('canvas');
       const size = 100;
+      const canvas = document.createElement('canvas');
       canvas.width = size;
       canvas.height = size;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.clearRect(0, 0, size, size); // transparent background
+      ctx.clearRect(0, 0, size, size);
       ctx.font = '80px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"';
       ctx.textBaseline = 'middle';
       ctx.textAlign = 'center';
       ctx.fillText(emoji, size / 2, size / 2);
-      // Slight delay to ensure rendering
       setTimeout(() => {
         try {
           const imageData = ctx.getImageData(0, 0, size, size);
           const data = imageData.data;
-          let totalAlpha = 0;
+          let nonTransparentCount = 0;
           for (let i = 0; i < data.length; i += 4) {
-            totalAlpha += data[i + 3];
+            if (data[i + 3] > 50) nonTransparentCount++;
           }
-          // Effective opacity is the average alpha over all pixels
-          const effectiveOpacity = totalAlpha / (255 * (size * size));
+          const coverage = nonTransparentCount / (size * size);
+          // If coverage is low (e.g. sparse outline or lots of white) use full opacity.
+          const effectiveOpacity = coverage < 0.5 ? 1 : coverage;
 
-          // Build a histogram over pixels with alpha > 50
           const histogram = {};
           for (let i = 0; i < data.length; i += 4) {
             const alpha = data[i + 3];
-            if (alpha < 50) continue; // skip very transparent pixels
+            if (alpha < 50) continue;
             const r = data[i], g = data[i + 1], b = data[i + 2];
-            // Quantize colors to reduce noise (round to nearest 16)
+            // Quantize (round to nearest 16)
             const qr = Math.round(r / 16) * 16;
             const qg = Math.round(g / 16) * 16;
             const qb = Math.round(b / 16) * 16;
@@ -210,12 +203,7 @@
               dominantKey = key;
             }
           }
-          let dominantColor;
-          if (dominantKey) {
-            dominantColor = dominantKey.split(',').map(Number);
-          } else {
-            dominantColor = [128, 128, 128];
-          }
+          let dominantColor = dominantKey ? dominantKey.split(',').map(Number) : [128, 128, 128];
           resolve({ color: dominantColor, opacity: effectiveOpacity });
         } catch (error) {
           console.error('Error analyzing emoji:', error);
@@ -225,9 +213,7 @@
     });
   };
 
-  /* Function to get cached emoji colors or process and cache them.
-     Each emoji is now cached as an object with { color, opacity }.
-  */
+  /* Cache or compute emoji colors (each as {color, opacity}) */
   const getCachedEmojiColors = async (updateProgress, updatePartial) => {
     const cached = localStorage.getItem('emojiColors');
     if (cached) {
@@ -251,59 +237,41 @@
     }
   };
 
-  /* 
-    Suggest a background color from the border pixels of the uploaded image.
-    Samples a thin border along the edges and returns the average color.
-  */
+  /* Suggest a background color by averaging border pixels from the image */
   const suggestBackgroundColor = (imageData) => {
     const data = imageData.data;
     const { width, height } = imageData;
     let totalR = 0, totalG = 0, totalB = 0, count = 0;
     const borderWidth = Math.min(10, Math.floor(width * 0.05), Math.floor(height * 0.05));
-    
-    // Top border
     for (let y = 0; y < borderWidth; y++) {
       for (let x = 0; x < width; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx];
-        totalG += data[idx + 1];
-        totalB += data[idx + 2];
+        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
         count++;
       }
     }
-    // Bottom border
     for (let y = height - borderWidth; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx];
-        totalG += data[idx + 1];
-        totalB += data[idx + 2];
+        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
         count++;
       }
     }
-    // Left and right borders (excluding already processed corners)
     for (let y = borderWidth; y < height - borderWidth; y++) {
       for (let x = 0; x < borderWidth; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx];
-        totalG += data[idx + 1];
-        totalB += data[idx + 2];
+        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
         count++;
       }
       for (let x = width - borderWidth; x < width; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx];
-        totalG += data[idx + 1];
-        totalB += data[idx + 2];
+        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
         count++;
       }
     }
-    if (count === 0) return "#ffffff";
-    const avgR = Math.round(totalR / count);
-    const avgG = Math.round(totalG / count);
-    const avgB = Math.round(totalB / count);
-    const toHex = (c) => c.toString(16).padStart(2, '0');
-    return `#${toHex(avgR)}${toHex(avgG)}${toHex(avgB)}`;
+    if (!count) return "#ffffff";
+    const toHex = c => c.toString(16).padStart(2, '0');
+    return `#${toHex(Math.round(totalR/count))}${toHex(Math.round(totalG/count))}${toHex(Math.round(totalB/count))}`;
   };
 
   const App = () => {
@@ -329,40 +297,32 @@
       fetchEmojiColors();
     }, []);
 
-    const calculateResolution = (width, height) => {
+    const calculateResolution = (w, h) => {
       const minDimension = 32;
-      const aspectRatio = width / height;
-      if (width < height) {
-        return {
-          width: minDimension,
-          height: Math.round(minDimension / aspectRatio)
-        };
-      } else {
-        return {
-          width: Math.round(minDimension * aspectRatio),
-          height: minDimension
-        };
-      }
+      const aspectRatio = w / h;
+      return w < h 
+        ? { width: minDimension, height: Math.round(minDimension / aspectRatio) }
+        : { width: Math.round(minDimension * aspectRatio), height: minDimension };
     };
 
-    const updateResolution = (newWidth, newHeight, isWidthUpdate) => {
+    const updateResolution = (newW, newH, isWidth) => {
       if (!originalImage || !canvasRef.current) return;
-      const aspectRatio = originalImage.width / originalImage.height;
-      let updatedWidth, updatedHeight;
-      if (isWidthUpdate) {
-        updatedWidth = newWidth;
-        updatedHeight = Math.round(newWidth / aspectRatio);
+      const aspect = originalImage.width / originalImage.height;
+      let updatedW, updatedH;
+      if (isWidth) {
+        updatedW = newW;
+        updatedH = Math.round(newW / aspect);
       } else {
-        updatedHeight = newHeight;
-        updatedWidth = Math.round(newHeight * aspectRatio);
+        updatedH = newH;
+        updatedW = Math.round(newH * aspect);
       }
-      setResolution({ width: updatedWidth, height: updatedHeight });
+      setResolution({ width: updatedW, height: updatedH });
       const canvas = canvasRef.current;
       const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      canvas.width = updatedWidth;
-      canvas.height = updatedHeight;
-      ctx.drawImage(originalImage, 0, 0, updatedWidth, updatedHeight);
-      setImageData(ctx.getImageData(0, 0, updatedWidth, updatedHeight));
+      canvas.width = updatedW;
+      canvas.height = updatedH;
+      ctx.drawImage(originalImage, 0, 0, updatedW, updatedH);
+      setImageData(ctx.getImageData(0, 0, updatedW, updatedH));
       setCollage([]);
       setReadyToRender(true);
     };
@@ -371,52 +331,40 @@
       const file = e.target.files[0];
       if (!file) return;
       const reader = new FileReader();
-      reader.onload = (event) => {
+      reader.onload = (evt) => {
         const img = new Image();
         img.onload = () => {
           setOriginalImage(img);
-          const newResolution = calculateResolution(img.width, img.height);
-          setResolution(newResolution);
+          const newRes = calculateResolution(img.width, img.height);
+          setResolution(newRes);
           const canvas = canvasRef.current;
           if (!canvas) return;
           const ctx = canvas.getContext('2d', { willReadFrequently: true });
-          canvas.width = newResolution.width;
-          canvas.height = newResolution.height;
-          ctx.drawImage(img, 0, 0, newResolution.width, newResolution.height);
-          const imgData = ctx.getImageData(0, 0, newResolution.width, newResolution.height);
+          canvas.width = newRes.width;
+          canvas.height = newRes.height;
+          ctx.drawImage(img, 0, 0, newRes.width, newRes.height);
+          const imgData = ctx.getImageData(0, 0, newRes.width, newRes.height);
           setImageData(imgData);
-          // Suggest a background color from the image's borders
-          const suggestedBg = suggestBackgroundColor(imgData);
-          setBgColor(suggestedBg);
+          const suggested = suggestBackgroundColor(imgData);
+          setBgColor(suggested);
           setCollage([]);
           setReadyToRender(true);
         };
-        img.onerror = (error) => {
-          console.error('Image failed to load:', error);
-        };
-        img.src = event.target.result;
+        img.onerror = (err) => console.error('Image load error:', err);
+        img.src = evt.target.result;
       };
-      reader.onerror = (error) => {
-        console.error('File reading failed:', error);
-      };
+      reader.onerror = (err) => console.error('File read error:', err);
       reader.readAsDataURL(file);
     };
 
     /* 
-      Generate Collage:
-      - For each pixel, compare the target color (converted to LAB) against every emoji’s
-        effective color. The effective color is computed using the emoji’s dominant color
-        blended with the background color based on the emoji’s effective opacity.
+      Generate the collage by matching each pixel’s LAB value to the effective (blended)
+      color of each emoji. For each emoji we blend its dominant color with the background color
+      using its computed effective opacity.
     */
     const generateCollage = () => {
-      if (!imageData) {
-        console.warn('No image data available to generate collage.');
-        return;
-      }
-      if (paletteProgress < 100) {
-        console.warn('Emoji palette is not ready yet.');
-        return;
-      }
+      if (!imageData) { console.warn('No image data available.'); return; }
+      if (paletteProgress < 100) { console.warn('Emoji palette not ready yet.'); return; }
       setProcessing(true);
       const data = imageData.data;
       const newCollage = [];
@@ -425,20 +373,18 @@
         const row = [];
         for (let x = 0; x < resolution.width; x++) {
           const i = (y * resolution.width + x) * 4;
-          const pixelColor = [data[i], data[i + 1], data[i + 2]];
+          const pixelColor = [data[i], data[i+1], data[i+2]];
           const pixelLab = rgbToLab(...pixelColor);
-          let bestDiff = Infinity;
-          let candidates = [];
+          let bestDiff = Infinity, candidates = [];
           for (const emoji of BASE_EMOJI_PALETTE) {
-            const emojiData = emojiColors[emoji];
-            if (!emojiData) continue;
-            const rawColor = emojiData.color;
-            const effectiveOpacity = emojiData.opacity;
-            // Compute effective emoji color by blending with the background according to its effective opacity
+            const eData = emojiColors[emoji];
+            if (!eData) continue;
+            const raw = eData.color;
+            const effOpacity = eData.opacity;
             const effectiveColor = [
-              Math.round(rawColor[0] * effectiveOpacity + bgRgb[0] * (1 - effectiveOpacity)),
-              Math.round(rawColor[1] * effectiveOpacity + bgRgb[1] * (1 - effectiveOpacity)),
-              Math.round(rawColor[2] * effectiveOpacity + bgRgb[2] * (1 - effectiveOpacity))
+              Math.round(raw[0] * effOpacity + bgRgb[0] * (1 - effOpacity)),
+              Math.round(raw[1] * effOpacity + bgRgb[1] * (1 - effOpacity)),
+              Math.round(raw[2] * effOpacity + bgRgb[2] * (1 - effOpacity))
             ];
             const effectiveLab = rgbToLab(...effectiveColor);
             const diff = Math.sqrt(
@@ -446,12 +392,8 @@
               Math.pow(effectiveLab[1] - pixelLab[1], 2) +
               Math.pow(effectiveLab[2] - pixelLab[2], 2)
             );
-            if (diff < bestDiff) {
-              bestDiff = diff;
-              candidates = [emoji];
-            } else if (diff <= bestDiff * 1.05) {
-              candidates.push(emoji);
-            }
+            if (diff < bestDiff) { bestDiff = diff; candidates = [emoji]; }
+            else if (diff <= bestDiff * 1.05) { candidates.push(emoji); }
           }
           const bestEmoji = candidates[Math.floor(Math.random() * candidates.length)] || BASE_EMOJI_PALETTE[0];
           row.push(bestEmoji);
@@ -462,9 +404,8 @@
       setProcessing(false);
     };
 
-    /* Download as high-definition PNG with the chosen background color */
     const downloadPNG = () => {
-      if (collage.length === 0) return;
+      if (!collage.length) return;
       const tempCanvas = document.createElement('canvas');
       const scale = 20;
       tempCanvas.width = resolution.width * scale;
@@ -476,51 +417,41 @@
       ctx.textBaseline = 'top';
       for (let y = 0; y < resolution.height; y++) {
         for (let x = 0; x < resolution.width; x++) {
-          const emoji = collage[y][x];
-          ctx.fillText(emoji, x * scale, y * scale);
+          ctx.fillText(collage[y][x], x * scale, y * scale);
         }
       }
       tempCanvas.toBlob((blob) => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.href = url;
-        link.download = 'emoji_collage.png';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-        URL.revokeObjectURL(url);
+        link.href = url; link.download = 'emoji_collage.png';
+        document.body.appendChild(link); link.click();
+        document.body.removeChild(link); URL.revokeObjectURL(url);
       }, 'image/png');
     };
 
-    /* Download as SVG with the chosen background color */
     const downloadSVG = () => {
-      if (collage.length === 0) return;
+      if (!collage.length) return;
       const emojiSize = 20;
-      const svgWidth = resolution.width * emojiSize;
-      const svgHeight = resolution.height * emojiSize;
-      let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgWidth}" height="${svgHeight}">`;
+      const svgW = resolution.width * emojiSize;
+      const svgH = resolution.height * emojiSize;
+      let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}">`;
       svgContent += `<rect width="100%" height="100%" fill="${bgColor}"/>`;
       for (let y = 0; y < resolution.height; y++) {
         for (let x = 0; x < resolution.width; x++) {
-          const emoji = collage[y][x];
-          svgContent += `<text x="${x * emojiSize}" y="${(y + 1) * emojiSize}" font-size="${emojiSize}" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Android Emoji">${emoji}</text>`;
+          svgContent += `<text x="${x * emojiSize}" y="${(y + 1) * emojiSize}" font-size="${emojiSize}" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Android Emoji">${collage[y][x]}</text>`;
         }
       }
       svgContent += '</svg>';
       const blob = new Blob([svgContent], { type: 'image/svg+xml' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url;
-      link.download = 'emoji_collage.svg';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
+      link.href = url; link.download = 'emoji_collage.svg';
+      document.body.appendChild(link); link.click();
+      document.body.removeChild(link); URL.revokeObjectURL(url);
     };
 
-    /* Open collage as a full-page document with corrected emoji spacing using <e> */
     const openFullPage = () => {
-      if (collage.length === 0) return;
+      if (!collage.length) return;
       const baseFontSize = Math.max(8, Math.min(32, 800 / resolution.width));
       const effectiveFontSize = baseFontSize * zoomLevel;
       const htmlContent = `
@@ -530,33 +461,9 @@
           <meta charset="UTF-8">
           <title>Emoji Collage</title>
           <style>
-            body {
-              margin: 0;
-              padding: 0;
-              display: flex;
-              justify-content: center;
-              align-items: center;
-              height: 100vh;
-              background-color: ${bgColor};
-            }
-            .emoji-grid {
-              display: grid;
-              grid-template-columns: repeat(${resolution.width}, 1em);
-              gap: 1px;
-              font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji';
-              letter-spacing: 0;
-              word-spacing: 0;
-              font-size: ${effectiveFontSize}px;
-            }
-            e {
-              display: inline-flex;
-              align-items: center;
-              justify-content: center;
-              line-height: 1;
-              width: 1em;
-              height: 1em;
-              padding: 0;
-            }
+            body { margin: 0; padding: 0; display: flex; justify-content: center; align-items: center; height: 100vh; background-color: ${bgColor}; }
+            .emoji-grid { display: grid; grid-template-columns: repeat(${resolution.width}, 1em); gap: 1px; font-family: 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji', 'Android Emoji'; letter-spacing: 0; word-spacing: 0; font-size: ${effectiveFontSize}px; }
+            e { display: inline-flex; align-items: center; justify-content: center; line-height: 1; width: 1em; height: 1em; padding: 0; }
           </style>
         </head>
         <body>
@@ -567,21 +474,14 @@
         </html>
       `;
       const newWindow = window.open('', '_blank');
-      if (newWindow) {
-        newWindow.document.open();
-        newWindow.document.write(htmlContent);
-        newWindow.document.close();
-      } else {
-        alert('Failed to open a new window. Please allow pop-ups for this website.');
-      }
+      if (newWindow) { newWindow.document.open(); newWindow.document.write(htmlContent); newWindow.document.close(); }
+      else { alert('Pop-up blocked. Please allow pop-ups for this website.'); }
     };
 
-    /* Zoom Controls */
     const increaseZoom = () => setZoomLevel(prev => Math.min(prev + 0.1, 3));
     const decreaseZoom = () => setZoomLevel(prev => Math.max(prev - 0.1, 0.5));
     const resetZoom = () => setZoomLevel(1);
 
-    /* Compute the effective font size and container dimensions for the collage preview */
     let collagePreview = null;
     if (collage.length > 0) {
       const baseFontSize = Math.max(8, Math.min(32, 800 / resolution.width));
@@ -590,29 +490,15 @@
       const collageHeight = resolution.height * effectiveFontSize;
       collagePreview = h('div', {
         className: 'collage-container',
-        style: {
-          width: collageWidth + 'px',
-          height: collageHeight + 'px',
-          backgroundColor: bgColor
-        }
+        style: { width: collageWidth + 'px', height: collageHeight + 'px', backgroundColor: bgColor }
       }, [
         h('div', {
           className: 'emoji-grid',
-          style: {
-            gridTemplateColumns: `repeat(${resolution.width}, 1em)`,
-            fontSize: effectiveFontSize + 'px'
-          }
-        },
-          collage.flat().map((emoji, i) =>
-            h('e', { key: i }, emoji)
-          )
-        )
+          style: { gridTemplateColumns: `repeat(${resolution.width}, 1em)`, fontSize: effectiveFontSize + 'px' }
+        }, collage.flat().map((emoji, i) => h('e', { key: i }, emoji)))
       ]);
     }
 
-    /* Palette Processing Preview:
-       When the palette is still being built, show a preview of up to 50 emojis sampled from the last processed.
-    */
     let palettePreview = null;
     if (paletteProgress < 100) {
       const keys = Object.keys(processedPalette);
@@ -639,9 +525,6 @@
       ]);
     }
 
-    /* Lower Section: full-width container with bgColor for everything below the input area.
-       The white control box is separate from the collage preview.
-    */
     const lowerSection = h('div', { style: { backgroundColor: bgColor, width: '100%' } }, [
       h('div', { className: 'p-6 max-w-6xl mx-auto' }, [
         h('div', { className: 'bg-white p-4 rounded shadow mt-4 flex flex-col gap-4' }, [
@@ -649,41 +532,16 @@
             onClick: generateCollage,
             className: 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50',
             disabled: processing || paletteProgress < 100
-          }, paletteProgress < 100
-              ? 'Building Emoji Palette...'
-              : processing ? 'Generating...' : 'Generate Collage'
-          ),
+          }, paletteProgress < 100 ? 'Building Emoji Palette...' : (processing ? 'Generating...' : 'Generate Collage')),
           collage.length > 0 && h('div', { className: 'controls-row' }, [
-            h('button', {
-              onClick: downloadPNG,
-              className: 'px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600'
-            }, 'Download as PNG'),
-            h('button', {
-              onClick: downloadSVG,
-              className: 'px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600'
-            }, 'Download as SVG'),
-            h('button', {
-              onClick: openFullPage,
-              className: 'px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600'
-            }, 'Open as Full Page'),
-            h('button', {
-              onClick: decreaseZoom,
-              className: 'zoom-button',
-              title: 'Zoom Out'
-            }, '-'),
-            h('button', {
-              onClick: resetZoom,
-              className: 'zoom-button',
-              title: 'Reset'
-            }, 'Reset'),
-            h('button', {
-              onClick: increaseZoom,
-              className: 'zoom-button',
-              title: 'Zoom In'
-            }, '+')
+            h('button', { onClick: downloadPNG, className: 'px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600' }, 'Download as PNG'),
+            h('button', { onClick: downloadSVG, className: 'px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600' }, 'Download as SVG'),
+            h('button', { onClick: openFullPage, className: 'px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600' }, 'Open as Full Page'),
+            h('button', { onClick: decreaseZoom, className: 'zoom-button', title: 'Zoom Out' }, '-'),
+            h('button', { onClick: resetZoom, className: 'zoom-button', title: 'Reset' }, 'Reset'),
+            h('button', { onClick: increaseZoom, className: 'zoom-button', title: 'Zoom In' }, '+')
           ])
         ]),
-        // Collage Preview appears outside the white control box.
         collagePreview,
         h('div', { className: 'mt-6 text-center text-sm text-gray-500' }, '© 2025 Emoji Collage Maker')
       ])
@@ -691,7 +549,6 @@
 
     return h('div', { className: 'p-6 max-w-6xl mx-auto' }, [
       h('h1', { className: 'text-4xl font-bold mb-6 text-center' }, 'Emoji Collage Maker'),
-      // Input Area (White box with controls and original image)
       h('div', { className: 'bg-white p-4 rounded shadow' }, [
         h('div', { className: 'flex flex-wrap gap-4' }, [
           h('div', { className: 'flex-1 min-w-[250px]' }, [
@@ -731,10 +588,9 @@
                 className: 'w-12 h-12 p-0 border rounded'
               })
             ]),
-            // Processing Canvas (for image analysis)
             h('canvas', { ref: canvasRef, id: 'processingCanvas' }),
             h('div', { className: 'text-sm text-gray-600 mb-4' },
-              paletteProgress < 100
+              paletteProgress < 100 
                 ? `Building emoji palette: ${paletteProgress}% complete (cached for future collage generations)...`
                 : 'Emoji palette ready!'
             ),
