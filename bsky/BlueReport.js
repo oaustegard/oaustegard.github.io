@@ -143,7 +143,7 @@ class BlueReportStore {
         const params = new URLSearchParams({
             q: 'https*',
             limit: '100',
-            sort: 'latest',
+            sort: 'top',
             lang: this.language
         });
 
