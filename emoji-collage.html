@@ -76,7 +76,7 @@
   const { h, render } = window.preact;
   const { useState, useEffect, useRef } = window.preactHooks;
 
-  // Helper: Convert hex color to RGB array
+  // Helper: Convert a hex color (e.g. "#ffffff") to an RGB array.
   const hexToRgb = (hex) => {
     hex = hex.replace(/^#/, '');
     if (hex.length === 3) {
@@ -86,7 +86,7 @@
     return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
   };
 
-  // Helper functions for LAB color conversion
+  // LAB conversion functions (for perceptual matching)
   function rgbToXyz(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
@@ -106,39 +106,62 @@
     z = z > 0.008856 ? Math.cbrt(z) : (7.787 * z) + (16 / 116);
     const L = (116 * y) - 16;
     const a = 500 * (x - y);
-    const b_ = 200 * (y - z);
-    return [L, a, b_];
+    const b = 200 * (y - z);
+    return [L, a, b];
   }
 
   function rgbToLab(r, g, b) {
     return xyzToLab(...rgbToXyz(r, g, b));
   }
 
-  // Helper: Convert RGB to HSL
-  function rgbToHsl(r, g, b) {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b), min = Math.min(r, g, b);
-    let h, s, l = (max + min) / 2;
-    if (max === min) { 
-      h = s = 0; 
-    } else {
-      const d = max - min;
-      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
-      if (max === r) {
-        h = (g - b) / d + (g < b ? 6 : 0);
-      } else if (max === g) {
-        h = (b - r) / d + 2;
-      } else {
-        h = (r - g) / d + 4;
-      }
-      h /= 6;
-    }
-    return { h, s, l };
-  }
+  /*  
+    Extract the representative (dominant) color of an emoji.
+    This function creates a 50×50 canvas with a white background, draws the emoji
+    at 40px, and averages the colors of those pixels that are fully opaque and not white.
+  */
+  const extractEmojiColor = (emoji) => {
+    return new Promise((resolve) => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 50;
+      canvas.height = 50;
+      const ctx = canvas.getContext('2d', { willReadFrequently: true });
+      // Fill with white
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.font = '40px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign = 'center';
+      ctx.fillText(emoji, canvas.width / 2, canvas.height / 2);
+      setTimeout(() => {
+        try {
+          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+          const data = imageData.data;
+          let r = 0, g = 0, b = 0, count = 0;
+          for (let i = 0; i < data.length; i += 4) {
+            // Consider only fully opaque pixels that aren’t near white (to ignore the background)
+            if (data[i + 3] > 250 && !(data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250)) {
+              r += data[i];
+              g += data[i + 1];
+              b += data[i + 2];
+              count++;
+            }
+          }
+          if (count > 0) {
+            resolve([Math.round(r / count), Math.round(g / count), Math.round(b / count)]);
+          } else {
+            resolve([128, 128, 128]);
+          }
+        } catch (error) {
+          console.error('Error analyzing emoji:', error);
+          resolve([128, 128, 128]);
+        }
+      }, 10);
+    });
+  };
 
-  /* Optimized Emoji Palette Generation:
-     Only add skin tone variations for modifier-capable emojis.
-     Also filter out the unwanted 🔳 emoji.
+  /* Optimized Emoji Palette Generation.
+     We iterate over a set of Unicode ranges and add skin tone variations for modifier-capable emojis.
+     The unwanted 🔳 emoji is filtered out.
   */
   const BASE_EMOJI_PALETTE = (() => {
     const ranges = [
@@ -173,67 +196,10 @@
     return Array.from(emoji);
   })();
 
-  /* 
-    Modified extractEmojiColor:
-    - Draws the emoji on a 100×100 transparent canvas at 80px.
-    - Computes the "coverage" as the fraction of pixels with alpha > 50.
-    - If coverage is below 50% (indicating a sparse/mostly white emoji), we force effective opacity to 1.
-    - Uses a quantized histogram (over pixels with alpha > 50) to pick a dominant color.
-    Returns an object: { color: [r, g, b], opacity: effectiveOpacity }.
+  /*  
+    Cache (or compute) emoji colors.
+    Each emoji is processed via extractEmojiColor and the result is cached in localStorage.
   */
-  const extractEmojiColor = (emoji) => {
-    return new Promise((resolve) => {
-      const size = 100;
-      const canvas = document.createElement('canvas');
-      canvas.width = size;
-      canvas.height = size;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      ctx.clearRect(0, 0, size, size);
-      ctx.font = '80px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"';
-      ctx.textBaseline = 'middle';
-      ctx.textAlign = 'center';
-      ctx.fillText(emoji, size / 2, size / 2);
-      setTimeout(() => {
-        try {
-          const imageData = ctx.getImageData(0, 0, size, size);
-          const data = imageData.data;
-          let nonTransparentCount = 0;
-          for (let i = 0; i < data.length; i += 4) {
-            if (data[i + 3] > 50) nonTransparentCount++;
-          }
-          const coverage = nonTransparentCount / (size * size);
-          // If coverage is low, force effective opacity to 1
-          const effectiveOpacity = coverage < 0.5 ? 1 : coverage;
-
-          const histogram = {};
-          for (let i = 0; i < data.length; i += 4) {
-            const alpha = data[i + 3];
-            if (alpha < 50) continue;
-            const r = data[i], g = data[i + 1], b = data[i + 2];
-            const qr = Math.round(r / 16) * 16;
-            const qg = Math.round(g / 16) * 16;
-            const qb = Math.round(b / 16) * 16;
-            const key = `${qr},${qg},${qb}`;
-            histogram[key] = (histogram[key] || 0) + 1;
-          }
-          let dominantKey = null, maxCount = 0;
-          for (const key in histogram) {
-            if (histogram[key] > maxCount) {
-              maxCount = histogram[key];
-              dominantKey = key;
-            }
-          }
-          const dominantColor = dominantKey ? dominantKey.split(',').map(Number) : [128, 128, 128];
-          resolve({ color: dominantColor, opacity: effectiveOpacity });
-        } catch (error) {
-          console.error('Error analyzing emoji:', error);
-          resolve({ color: [128, 128, 128], opacity: 1 });
-        }
-      }, 20);
-    });
-  };
-
-  /* Cache or compute emoji colors (each as {color, opacity}) */
   const getCachedEmojiColors = async (updateProgress, updatePartial) => {
     const cached = localStorage.getItem('emojiColors');
     if (cached) {
@@ -257,7 +223,9 @@
     }
   };
 
-  /* Suggest a background color by averaging border pixels from the image */
+  /*  
+    Suggest a background color by averaging the pixels along the image's borders.
+  */
   const suggestBackgroundColor = (imageData) => {
     const data = imageData.data;
     const { width, height } = imageData;
@@ -266,32 +234,40 @@
     for (let y = 0; y < borderWidth; y++) {
       for (let x = 0; x < width; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
+        totalR += data[idx];
+        totalG += data[idx + 1];
+        totalB += data[idx + 2];
         count++;
       }
     }
     for (let y = height - borderWidth; y < height; y++) {
       for (let x = 0; x < width; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
+        totalR += data[idx];
+        totalG += data[idx + 1];
+        totalB += data[idx + 2];
         count++;
       }
     }
     for (let y = borderWidth; y < height - borderWidth; y++) {
       for (let x = 0; x < borderWidth; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
+        totalR += data[idx];
+        totalG += data[idx + 1];
+        totalB += data[idx + 2];
         count++;
       }
       for (let x = width - borderWidth; x < width; x++) {
         const idx = (y * width + x) * 4;
-        totalR += data[idx]; totalG += data[idx+1]; totalB += data[idx+2];
+        totalR += data[idx];
+        totalG += data[idx + 1];
+        totalB += data[idx + 2];
         count++;
       }
     }
-    if (!count) return "#ffffff";
+    if (count === 0) return "#ffffff";
     const toHex = c => c.toString(16).padStart(2, '0');
-    return `#${toHex(Math.round(totalR/count))}${toHex(Math.round(totalG/count))}${toHex(Math.round(totalB/count))}`;
+    return `#${toHex(Math.round(totalR / count))}${toHex(Math.round(totalG / count))}${toHex(Math.round(totalB / count))}`;
   };
 
   const App = () => {
@@ -377,12 +353,9 @@
       reader.readAsDataURL(file);
     };
 
-    /* 
-      Generate the collage by matching each pixel’s LAB value and HSL saturation
-      to the effective (blended) color of each emoji.
-      For each emoji, the effective color is computed by blending its dominant color 
-      (from extraction) with the background color using its computed effective opacity.
-      We then add a penalty term for saturation difference.
+    /*  
+      Generate the collage by comparing each pixel’s LAB color to every emoji’s extracted color.
+      For each pixel we convert its RGB value and each emoji’s representative color to LAB space and pick the emoji with the smallest difference.
     */
     const generateCollage = () => {
       if (!imageData) { console.warn('No image data available.'); return; }
@@ -390,39 +363,25 @@
       setProcessing(true);
       const data = imageData.data;
       const newCollage = [];
-      const bgRgb = hexToRgb(bgColor);
-      // Weight factor for saturation difference – adjust as needed.
-      const satLambda = 20;
       for (let y = 0; y < resolution.height; y++) {
         const row = [];
         for (let x = 0; x < resolution.width; x++) {
           const idx = (y * resolution.width + x) * 4;
-          const pixelColor = [data[idx], data[idx+1], data[idx+2]];
+          const pixelColor = [data[idx], data[idx + 1], data[idx + 2]];
           const pixelLab = rgbToLab(...pixelColor);
-          const targetHsl = rgbToHsl(...pixelColor);
           let bestDiff = Infinity;
           let bestEmoji = BASE_EMOJI_PALETTE[0];
           for (const emoji of BASE_EMOJI_PALETTE) {
-            const eData = emojiColors[emoji];
-            if (!eData) continue;
-            const raw = eData.color;
-            const effOpacity = eData.opacity;
-            const effectiveColor = [
-              Math.round(raw[0] * effOpacity + bgRgb[0] * (1 - effOpacity)),
-              Math.round(raw[1] * effOpacity + bgRgb[1] * (1 - effOpacity)),
-              Math.round(raw[2] * effOpacity + bgRgb[2] * (1 - effOpacity))
-            ];
-            const effectiveLab = rgbToLab(...effectiveColor);
-            const labDiff = Math.sqrt(
-              Math.pow(effectiveLab[0] - pixelLab[0], 2) +
-              Math.pow(effectiveLab[1] - pixelLab[1], 2) +
-              Math.pow(effectiveLab[2] - pixelLab[2], 2)
+            const rawColor = emojiColors[emoji];
+            if (!rawColor) continue;
+            const emojiLab = rgbToLab(...rawColor);
+            const diff = Math.sqrt(
+              Math.pow(emojiLab[0] - pixelLab[0], 2) +
+              Math.pow(emojiLab[1] - pixelLab[1], 2) +
+              Math.pow(emojiLab[2] - pixelLab[2], 2)
             );
-            const emojiHsl = rgbToHsl(...effectiveColor);
-            const satDiff = Math.abs(emojiHsl.s - targetHsl.s);
-            const totalDiff = labDiff + satLambda * satDiff;
-            if (totalDiff < bestDiff) {
-              bestDiff = totalDiff;
+            if (diff < bestDiff) {
+              bestDiff = diff;
               bestEmoji = emoji;
             }
           }
@@ -510,8 +469,13 @@
         </html>
       `;
       const newWindow = window.open('', '_blank');
-      if (newWindow) { newWindow.document.open(); newWindow.document.write(htmlContent); newWindow.document.close(); }
-      else { alert('Pop-up blocked. Please allow pop-ups for this website.'); }
+      if (newWindow) {
+        newWindow.document.open();
+        newWindow.document.write(htmlContent);
+        newWindow.document.close();
+      } else {
+        alert('Pop-up blocked. Please allow pop-ups for this website.');
+      }
     };
 
     const increaseZoom = () => setZoomLevel(prev => Math.min(prev + 0.1, 3));
@@ -649,5 +613,6 @@
   render(h(App), document.getElementById('app'));
 </script>
 
+  
 </body>
 </html>
