@@ -87,7 +87,6 @@
   };
 
   // Helper functions for LAB color conversion
-
   function rgbToXyz(r, g, b) {
     r /= 255; g /= 255; b /= 255;
     r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
@@ -115,19 +114,41 @@
     return xyzToLab(...rgbToXyz(r, g, b));
   }
 
+  // Helper: Convert RGB to HSL
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h, s, l = (max + min) / 2;
+    if (max === min) { 
+      h = s = 0; 
+    } else {
+      const d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) {
+        h = (g - b) / d + (g < b ? 6 : 0);
+      } else if (max === g) {
+        h = (b - r) / d + 2;
+      } else {
+        h = (r - g) / d + 4;
+      }
+      h /= 6;
+    }
+    return { h, s, l };
+  }
+
   /* Optimized Emoji Palette Generation:
      Only add skin tone variations for modifier-capable emojis.
      Also filter out the unwanted 🔳 emoji.
   */
   const BASE_EMOJI_PALETTE = (() => {
     const ranges = [
-      [0x1F300, 0x1F5FF],  
-      [0x1F600, 0x1F64F],  
-      [0x1F680, 0x1F6FF],  
-      [0x2600, 0x26FF],    
-      [0x2700, 0x27BF],    
-      [0x1F900, 0x1F9FF],  
-      [0x1FA70, 0x1FAFF],  
+      [0x1F300, 0x1F5FF],
+      [0x1F600, 0x1F64F],
+      [0x1F680, 0x1F6FF],
+      [0x2600, 0x26FF],
+      [0x2700, 0x27BF],
+      [0x1F900, 0x1F9FF],
+      [0x1FA70, 0x1FAFF],
     ];
     const skinTones = [
       '\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'
@@ -155,8 +176,8 @@
   /* 
     Modified extractEmojiColor:
     - Draws the emoji on a 100×100 transparent canvas at 80px.
-    - Computes the coverage as the fraction of pixels with alpha > 50.
-    - If coverage is below 50%, we set effective opacity to 1.
+    - Computes the "coverage" as the fraction of pixels with alpha > 50.
+    - If coverage is below 50% (indicating a sparse/mostly white emoji), we force effective opacity to 1.
     - Uses a quantized histogram (over pixels with alpha > 50) to pick a dominant color.
     Returns an object: { color: [r, g, b], opacity: effectiveOpacity }.
   */
@@ -181,7 +202,7 @@
             if (data[i + 3] > 50) nonTransparentCount++;
           }
           const coverage = nonTransparentCount / (size * size);
-          // If coverage is low (e.g. sparse outline or lots of white) use full opacity.
+          // If coverage is low, force effective opacity to 1
           const effectiveOpacity = coverage < 0.5 ? 1 : coverage;
 
           const histogram = {};
@@ -189,7 +210,6 @@
             const alpha = data[i + 3];
             if (alpha < 50) continue;
             const r = data[i], g = data[i + 1], b = data[i + 2];
-            // Quantize (round to nearest 16)
             const qr = Math.round(r / 16) * 16;
             const qg = Math.round(g / 16) * 16;
             const qb = Math.round(b / 16) * 16;
@@ -203,7 +223,7 @@
               dominantKey = key;
             }
           }
-          let dominantColor = dominantKey ? dominantKey.split(',').map(Number) : [128, 128, 128];
+          const dominantColor = dominantKey ? dominantKey.split(',').map(Number) : [128, 128, 128];
           resolve({ color: dominantColor, opacity: effectiveOpacity });
         } catch (error) {
           console.error('Error analyzing emoji:', error);
@@ -358,9 +378,11 @@
     };
 
     /* 
-      Generate the collage by matching each pixel’s LAB value to the effective (blended)
-      color of each emoji. For each emoji we blend its dominant color with the background color
-      using its computed effective opacity.
+      Generate the collage by matching each pixel’s LAB value and HSL saturation
+      to the effective (blended) color of each emoji.
+      For each emoji, the effective color is computed by blending its dominant color 
+      (from extraction) with the background color using its computed effective opacity.
+      We then add a penalty term for saturation difference.
     */
     const generateCollage = () => {
       if (!imageData) { console.warn('No image data available.'); return; }
@@ -369,13 +391,17 @@
       const data = imageData.data;
       const newCollage = [];
       const bgRgb = hexToRgb(bgColor);
+      // Weight factor for saturation difference – adjust as needed.
+      const satLambda = 20;
       for (let y = 0; y < resolution.height; y++) {
         const row = [];
         for (let x = 0; x < resolution.width; x++) {
-          const i = (y * resolution.width + x) * 4;
-          const pixelColor = [data[i], data[i+1], data[i+2]];
+          const idx = (y * resolution.width + x) * 4;
+          const pixelColor = [data[idx], data[idx+1], data[idx+2]];
           const pixelLab = rgbToLab(...pixelColor);
-          let bestDiff = Infinity, candidates = [];
+          const targetHsl = rgbToHsl(...pixelColor);
+          let bestDiff = Infinity;
+          let bestEmoji = BASE_EMOJI_PALETTE[0];
           for (const emoji of BASE_EMOJI_PALETTE) {
             const eData = emojiColors[emoji];
             if (!eData) continue;
@@ -387,15 +413,19 @@
               Math.round(raw[2] * effOpacity + bgRgb[2] * (1 - effOpacity))
             ];
             const effectiveLab = rgbToLab(...effectiveColor);
-            const diff = Math.sqrt(
+            const labDiff = Math.sqrt(
               Math.pow(effectiveLab[0] - pixelLab[0], 2) +
               Math.pow(effectiveLab[1] - pixelLab[1], 2) +
               Math.pow(effectiveLab[2] - pixelLab[2], 2)
             );
-            if (diff < bestDiff) { bestDiff = diff; candidates = [emoji]; }
-            else if (diff <= bestDiff * 1.05) { candidates.push(emoji); }
+            const emojiHsl = rgbToHsl(...effectiveColor);
+            const satDiff = Math.abs(emojiHsl.s - targetHsl.s);
+            const totalDiff = labDiff + satLambda * satDiff;
+            if (totalDiff < bestDiff) {
+              bestDiff = totalDiff;
+              bestEmoji = emoji;
+            }
           }
-          const bestEmoji = candidates[Math.floor(Math.random() * candidates.length)] || BASE_EMOJI_PALETTE[0];
           row.push(bestEmoji);
         }
         newCollage.push(row);
@@ -423,9 +453,12 @@
       tempCanvas.toBlob((blob) => {
         const url = URL.createObjectURL(blob);
         const link = document.createElement('a');
-        link.href = url; link.download = 'emoji_collage.png';
-        document.body.appendChild(link); link.click();
-        document.body.removeChild(link); URL.revokeObjectURL(url);
+        link.href = url;
+        link.download = 'emoji_collage.png';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
       }, 'image/png');
     };
 
@@ -445,9 +478,12 @@
       const blob = new Blob([svgContent], { type: 'image/svg+xml' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
-      link.href = url; link.download = 'emoji_collage.svg';
-      document.body.appendChild(link); link.click();
-      document.body.removeChild(link); URL.revokeObjectURL(url);
+      link.href = url;
+      link.download = 'emoji_collage.svg';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
     };
 
     const openFullPage = () => {
@@ -612,7 +648,6 @@
 
   render(h(App), document.getElementById('app'));
 </script>
-
 
 </body>
 </html>
