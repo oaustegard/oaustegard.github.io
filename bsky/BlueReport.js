@@ -181,8 +181,6 @@ class BlueReportStore {
     }
 
     async refreshLanguage() {
-        // Forces a refresh for the current language by deleting all stored events and links
-        // and resetting the last fetch time so that the next fetch retrieves top stories from the past 24 hrs.
         console.log(`Refreshing data for language: ${this.language}`);
         // Purge events for the current language
         await new Promise((resolve, reject) => {
@@ -222,11 +220,15 @@ class BlueReportStore {
 
         // Remove the last fetch time for this language so that the next fetch is initial.
         delete this.lastFetchTimes[this.language];
+
+        // Clear seenPosts and seenPostTimes so that posts for this language can be re-processed.
+        this.seenPosts = new Set();
+        this.seenPostTimes = new Map();
+
         console.log(`Data for language ${this.language} has been refreshed.`);
-        // Optionally trigger an immediate ingest to re-seed with top stories.
+        // Trigger an immediate ingest to re-seed with top stories.
         await this.ingestData();
     }
-
 
     async fetchPreviewsForTopLinks() {
         if (this.lastPreviewUpdate && Date.now() - this.lastPreviewUpdate < this.previewUpdateInterval) {
@@ -263,16 +265,19 @@ class BlueReportStore {
         });
     }
     
-
     async fetchPreview(url) {
         try {
             const response = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(url)}&format=json&no_html=1&skip_disambig=1`);
             const data = await response.json();
             
             if (data.Image || data.AbstractURL) {
+                let description = data.Abstract || '';
+                if (description && description.length > 300) {
+                    description = description.substring(0, 300).trim() + '...';
+                }
                 return {
                     title: data.Heading || url,
-                    description: data.Abstract,
+                    description: description,
                     thumb: data.Image || null,
                     url: url
                 };
@@ -283,6 +288,7 @@ class BlueReportStore {
             return null;
         }
     }
+
 
     extractUrl(post) {
         let url = null;
