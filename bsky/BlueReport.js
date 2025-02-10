@@ -16,18 +16,15 @@ class BlueReportStore {
             'de': 'German'
         };
         
-        // Parse update interval from URL (in seconds) or saved settings (in ms)
         const urlInterval = urlParams.get('interval');
         this.updateInterval = urlInterval ? 
             parseInt(urlInterval) * 1000 : 
             (savedSettings.updateInterval || 60000);
         
-        // Parse language from URL or saved settings
         this.language = urlParams.get('lang') || 
-                       savedSettings.language || 
-                       'en';
+                    savedSettings.language || 
+                    'en';
         
-        // Validate and potentially correct settings
         if (!this.supportedLanguages[this.language]) {
             this.language = 'en';
         }
@@ -37,7 +34,6 @@ class BlueReportStore {
             this.updateInterval = 60000;
         }
         
-        // Initialize other properties
         this.retentionPeriod = 24 * 60 * 60 * 1000;
         this.seenPosts = new Set();
         this.seenPostTimes = new Map();
@@ -51,9 +47,12 @@ class BlueReportStore {
             };
         });
         
-        // Ensure URL reflects actual settings
+        // Initialize per‑language last fetch times.
+        this.lastFetchTimes = {};  // e.g. { en: "2025-02-10T...", no: null, ... }
+        
         this.updateURL();
     }
+
 
     updateURL() {
         const url = new URL(window.location);
@@ -139,17 +138,18 @@ class BlueReportStore {
         }
     }
 
+
     async fetchPosts() {
         const now = new Date();
         let sort, since;
-        if (!this.lastFetchTime) {
-            // Initial fetch: get top posts from the past 24 hrs
+        if (!this.lastFetchTimes[this.language]) {
+            // Initial fetch for this language: get top posts from the past 24 hrs
             sort = 'top';
             since = new Date(now.getTime() - this.retentionPeriod).toISOString();
         } else {
-            // Subsequent fetches: get latest posts since the last fetch time
+            // Subsequent fetches for this language: get latest posts since the last fetch time
             sort = 'latest';
-            since = this.lastFetchTime;
+            since = this.lastFetchTimes[this.language];
         }
         console.log(`Fetching posts for language: ${this.language} with sort: ${sort} and since: ${since}`);
         const params = new URLSearchParams({
@@ -159,7 +159,7 @@ class BlueReportStore {
             lang: this.language,
             since: since
         });
-    
+
         try {
             const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?${params}`);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -168,69 +168,62 @@ class BlueReportStore {
             const posts = data.posts || [];
             
             console.log(`Fetched ${posts.length} posts`);
-            // Update lastFetchTime for the next fetch
-            this.lastFetchTime = now.toISOString();
+            // Update the last fetch time for the current language
+            this.lastFetchTimes[this.language] = now.toISOString();
             return posts;
         } catch (error) {
             console.error('Error fetching posts:', error);
             return [];
         }
     }
-    
-    /* Add these methods to BlueReportStore */
-    calculateSamplingWindows() {
-        const now = new Date().toISOString();
-        const windows = [];
-    
-        // Language-specific window sizes (in milliseconds)
-        const windowSizes = {
-            en: 10000,      // 10 seconds for English
-            default: 60000  // 1 minute for other languages
-        };
-    
-        const windowSize = windowSizes[this.language] || windowSizes.default;
-    
-        // Never sample more than updateInterval span
-        const maxSpan = Math.min(this.updateInterval, windowSize * 3);
-    
-        // Calculate windows based on mode and language
-        switch (this.samplingMode) {
-            case 'high':
-                // Only available if we have enough time for 3 windows
-                if (maxSpan >= windowSize * 3) {
-                    windows.push(
-                        { until: now },
-                        { until: new Date(Date.now() - windowSize).toISOString() },
-                        { until: new Date(Date.now() - (windowSize * 2)).toISOString() }
-                    );
-                } else {
-                    console.log('Falling back to medium sampling - interval too short for high');
-                    this.samplingMode = 'medium';
+
+    async refreshLanguage() {
+        // Forces a refresh for the current language by deleting all stored events and links
+        // and resetting the last fetch time so that the next fetch retrieves top stories from the past 24 hrs.
+        console.log(`Refreshing data for language: ${this.language}`);
+        // Purge events for the current language
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction('events', 'readwrite');
+            const store = tx.objectStore('events');
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (cursor.value.language === this.language) {
+                        cursor.delete();
+                    }
+                    cursor.continue();
                 }
-                break;
-    
-            case 'medium':
-                // Only available if we have enough time for 2 windows
-                if (maxSpan >= windowSize * 2) {
-                    windows.push(
-                        { until: now },
-                        { until: new Date(Date.now() - windowSize).toISOString() }
-                    );
-                } else {
-                    console.log('Falling back to low sampling - interval too short for medium');
-                    this.samplingMode = 'low';
+            };
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+
+        // Purge links for the current language
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction('links', 'readwrite');
+            const store = tx.objectStore('links');
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (cursor.value.language === this.language) {
+                        cursor.delete();
+                    }
+                    cursor.continue();
                 }
-                break;
-    
-            case 'low':
-            default:
-                windows.push({ until: now });
-                break;
-        }
-    
-        console.log(`Created ${windows.length} sampling windows for ${this.samplingMode} mode`);
-        return windows;
+            };
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+
+        // Reset the last fetch time for this language so that the next fetch is initial.
+        this.lastFetchTimes[this.language] = null;
+        console.log(`Data for language ${this.language} has been refreshed.`);
+        // Optionally trigger an immediate ingest to re-seed with top stories.
+        await this.ingestData();
     }
+
 
     async fetchPreviewsForTopLinks() {
         if (this.lastPreviewUpdate && Date.now() - this.lastPreviewUpdate < this.previewUpdateInterval) {
@@ -710,89 +703,83 @@ class BlueReport {
         // Language selector initialization
         const langSelect = document.getElementById('language-select');
         if (langSelect) {
-            // Populate language options
-            Object.entries(this.store.supportedLanguages).forEach(([code, name]) => {
-                const option = document.createElement('option');
-                option.value = code;
-                option.textContent = name;
-                langSelect.appendChild(option);
-            });
-    
-            // Set saved value
-            langSelect.value = this.store.language;
-    
-            langSelect.addEventListener('change', (e) => {
-                this.store.language = e.target.value;
-                this.store.saveSettings();
-                this.store.updateURL();
-                
-                // Force immediate update
-                if (this.running) {
-                    clearTimeout(this.updateTimer);
-                    this.updateTimer = null;
-                    this.updateInProgress = false;
-                    this.scheduleUpdate();
-                }
-            });
+          Object.entries(this.store.supportedLanguages).forEach(([code, name]) => {
+            const option = document.createElement('option');
+            option.value = code;
+            option.textContent = name;
+            langSelect.appendChild(option);
+          });
+          langSelect.value = this.store.language;
+          langSelect.addEventListener('change', (e) => {
+            this.store.language = e.target.value;
+            this.store.saveSettings();
+            this.store.updateURL();
+            // Force immediate update when switching languages
+            clearTimeout(this.updateTimer);
+            this.updateTimer = null;
+            this.updateInProgress = false;
+            this.scheduleUpdate();
+          });
         }
-    
+      
         // Interval selector initialization
         const intervalSelect = document.getElementById('update-interval');
         if (intervalSelect) {
-            // Clear any existing options
-            intervalSelect.innerHTML = '';
-            
-            // Add options with consistent short format
-            const intervals = [
-                { value: 10000, label: '10s' },
-                { value: 30000, label: '30s' },
-                { value: 60000, label: '1m' },
-                { value: 120000, label: '2m' },
-                { value: 300000, label: '5m' },
-                { value: 600000, label: '10m' }
-            ];
-            
-            intervals.forEach(({ value, label }) => {
-                const option = document.createElement('option');
-                option.value = value;
-                option.textContent = label;
-                intervalSelect.appendChild(option);
-            });
-            
-            // Set saved value
-            intervalSelect.value = this.store.updateInterval.toString();
-            
-            intervalSelect.addEventListener('change', (e) => {
-                const newInterval = parseInt(e.target.value);
-                console.log(`Changing update interval to ${newInterval}ms`);
-                this.store.updateInterval = newInterval;
-                this.store.saveSettings();
-                this.store.updateURL();
-                
-                // Force immediate update
-                if (this.running) {
-                    clearTimeout(this.updateTimer);
-                    this.updateTimer = null;
-                    this.updateInProgress = false;
-                    this.scheduleUpdate();
-                }
-            });
+          intervalSelect.innerHTML = '';
+          const intervals = [
+            { value: 10000, label: '10s' },
+            { value: 30000, label: '30s' },
+            { value: 60000, label: '1m' },
+            { value: 120000, label: '2m' },
+            { value: 300000, label: '5m' },
+            { value: 600000, label: '10m' }
+          ];
+          intervals.forEach(({ value, label }) => {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            intervalSelect.appendChild(option);
+          });
+          intervalSelect.value = this.store.updateInterval.toString();
+          intervalSelect.addEventListener('change', (e) => {
+            const newInterval = parseInt(e.target.value);
+            console.log(`Changing update interval to ${newInterval}ms`);
+            this.store.updateInterval = newInterval;
+            this.store.saveSettings();
+            this.store.updateURL();
+            clearTimeout(this.updateTimer);
+            this.updateTimer = null;
+            this.updateInProgress = false;
+            this.scheduleUpdate();
+          });
         }
-    
-        // Initialize pause button
+      
+        // Bind the Refresh button event listener (assumes the button exists in the HTML)
+        const refreshBtn = document.getElementById('refresh-language');
+        if (refreshBtn) {
+          refreshBtn.addEventListener('click', async () => {
+            console.log('Refresh button clicked');
+            await this.store.refreshLanguage();
+            await this.updateUI();
+          });
+        }
+      
+        // Pause/resume toggle button initialization
         const toggleBtn = document.getElementById('toggle-updates');
-        toggleBtn?.addEventListener('click', () => {
+        if (toggleBtn) {
+          toggleBtn.addEventListener('click', () => {
             if (this.running) {
-                this.pause();
-                toggleBtn.textContent = 'Resume Updates';
-                toggleBtn.classList.add('paused');
+              this.pause();
+              toggleBtn.textContent = 'Resume Updates';
+              toggleBtn.classList.add('paused');
             } else {
-                this.start();
-                toggleBtn.textContent = 'Pause Updates';
-                toggleBtn.classList.remove('paused');
+              this.start();
+              toggleBtn.textContent = 'Pause Updates';
+              toggleBtn.classList.remove('paused');
             }
-        });
-    }
+          });
+        }
+      }
 
     schedulePreviewUpdates() {
         if (!this.running) return;
