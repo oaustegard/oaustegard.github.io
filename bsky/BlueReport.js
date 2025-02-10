@@ -163,13 +163,14 @@ class BlueReportStore {
         });
 
         try {
-            const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?${params}`);
+            const uri = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?${params}`;
+            const response = await fetch(uri);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
             
             const data = await response.json();
             const posts = data.posts || [];
             
-            console.log(`Fetched ${posts.length} posts`);
+            console.log(`Fetched ${posts.length} posts from ${uri}`);
             // Update the last fetch time for the current language
             this.lastFetchTimes[this.language] = now.toISOString();
             return posts;
@@ -219,8 +220,8 @@ class BlueReportStore {
             tx.onerror = () => reject(tx.error);
         });
 
-        // Reset the last fetch time for this language so that the next fetch is initial.
-        this.lastFetchTimes[this.language] = null;
+        // Remove the last fetch time for this language so that the next fetch is initial.
+        delete this.lastFetchTimes[this.language];
         console.log(`Data for language ${this.language} has been refreshed.`);
         // Optionally trigger an immediate ingest to re-seed with top stories.
         await this.ingestData();
