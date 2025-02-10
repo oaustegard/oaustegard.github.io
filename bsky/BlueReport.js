@@ -108,6 +108,7 @@ class BlueReportStore {
         });
     }
 
+
     async ingestData() {
         if (this.processingLock) {
             console.log('Ingestion already in progress, skipping...');
@@ -139,14 +140,26 @@ class BlueReportStore {
     }
 
     async fetchPosts() {
-        console.log(`Fetching posts for language: ${this.language}`);
+        const now = new Date();
+        let sort, since;
+        if (!this.lastFetchTime) {
+            // Initial fetch: get top posts from the past 24 hrs
+            sort = 'top';
+            since = new Date(now.getTime() - this.retentionPeriod).toISOString();
+        } else {
+            // Subsequent fetches: get latest posts since the last fetch time
+            sort = 'latest';
+            since = this.lastFetchTime;
+        }
+        console.log(`Fetching posts for language: ${this.language} with sort: ${sort} and since: ${since}`);
         const params = new URLSearchParams({
             q: 'https*',
             limit: '100',
-            sort: 'top',
-            lang: this.language
+            sort: sort,
+            lang: this.language,
+            since: since
         });
-
+    
         try {
             const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?${params}`);
             if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -155,8 +168,9 @@ class BlueReportStore {
             const posts = data.posts || [];
             
             console.log(`Fetched ${posts.length} posts`);
+            // Update lastFetchTime for the next fetch
+            this.lastFetchTime = now.toISOString();
             return posts;
-            
         } catch (error) {
             console.error('Error fetching posts:', error);
             return [];
@@ -325,12 +339,30 @@ class BlueReportStore {
         }
     }
 
+    isValidLanguagePost(post) {
+    // Assumes that the post's text is in post.text.
+        const text = post.text || '';
+        if (!text) return true; // If there is no text, do not filter out
+        // Remove whitespace and calculate total characters.
+        const cleanedText = text.replace(/\s/g, '');
+        const totalChars = cleanedText.length;
+        if (totalChars === 0) return true;
+        // Count alphabetic characters (including common Norwegian letters Æ, Ø, Å)
+        const alphaMatches = cleanedText.match(/[A-Za-zÆØÅæøå]/g) || [];
+        const alphaRatio = alphaMatches.length / totalChars;
+        // If less than 80% of the characters are alphabetic, filter out the post.
+        return alphaRatio >= 0.8;
+    }
+
+
+
     async processEvents(posts) {
         if (!Array.isArray(posts)) {
             console.error('Invalid posts data:', posts);
             return [];
         }
-
+    
+        // Deduplicate posts based on their cid
         const newPosts = posts.filter(post => !this.seenPosts.has(post.cid));
         const currentStats = this.stats[this.language];
         if (!currentStats) {
@@ -346,27 +378,32 @@ class BlueReportStore {
                 this.seenPostTimes.delete(cid);
             }
         }
-
+    
         newPosts.forEach(post => {
             if (post && post.cid) {
                 this.seenPosts.add(post.cid);
                 this.seenPostTimes.set(post.cid, now);
             }
         });
-
+    
         currentStats.processedPosts += newPosts.length;
-
+    
         const events = [];
         for (const post of newPosts) {
             try {
                 if (!post) continue;
+                // For language "no", filter out posts with too many non-alpha characters.
+                if (this.language === 'no' && !this.isValidLanguagePost(post)) {
+                    console.log(`Post ${post.cid} filtered out due to non-alpha content`);
+                    continue;
+                }
                 const urlData = this.extractUrl(post);
                 if (!urlData) continue;
                 
                 const { url, preview } = urlData;
                 currentStats.uniqueUrls.add(url);
                 
-                // Add post event with preview data
+                // Add the main post event (type 0) with the post's timestamp.
                 events.push({
                     timestamp: new Date(post.indexedAt).getTime(),
                     did: post.author.did,
@@ -375,7 +412,7 @@ class BlueReportStore {
                     preview: preview,
                     language: this.language
                 });
-
+    
                 if (post.likeCount > 0) {
                     events.push({
                         timestamp: new Date(post.indexedAt).getTime(),
@@ -386,7 +423,7 @@ class BlueReportStore {
                         language: this.language
                     });
                 }
-
+    
                 if (post.repostCount > 0) {
                     events.push({
                         timestamp: new Date(post.indexedAt).getTime(),
@@ -401,7 +438,7 @@ class BlueReportStore {
                 console.error('Error processing post:', error, post);
             }
         }
-
+    
         return events;
     }
 
@@ -449,8 +486,52 @@ class BlueReportStore {
         });
     }
 
+    
+    async purgeOldData() {
+        // Purges events and aggregated link records older than the retention period (24 hrs).
+        const cutoff = Date.now() - this.retentionPeriod;
+        // Purge old events.
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction('events', 'readwrite');
+            const store = tx.objectStore('events');
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    if (cursor.value.timestamp < cutoff) {
+                        cursor.delete();
+                    }
+                    cursor.continue();
+                }
+            };
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+        // Purge old links (if they have a lastUpdated timestamp older than the cutoff).
+        await new Promise((resolve, reject) => {
+            const tx = this.db.transaction('links', 'readwrite');
+            const store = tx.objectStore('links');
+            const request = store.openCursor();
+            request.onsuccess = (event) => {
+                const cursor = event.target.result;
+                if (cursor) {
+                    const record = cursor.value;
+                    if (record.lastUpdated && record.lastUpdated < cutoff) {
+                        cursor.delete();
+                    }
+                    cursor.continue();
+                }
+            };
+            tx.oncomplete = resolve;
+            tx.onerror = () => reject(tx.error);
+        });
+    }
+
     async aggregateData() {
         console.log('Aggregating data...');
+        // Purge any events/links older than 24 hrs.
+        await this.purgeOldData();
+
         const tx = this.db.transaction(['events', 'links'], 'readwrite');
         const eventStore = tx.objectStore('events');
         const linkStore = tx.objectStore('links');
@@ -464,7 +545,7 @@ class BlueReportStore {
 
             console.log(`Aggregating ${events.length} events...`);
 
-            // Aggregate by URL and language
+            // Aggregate events by URL and language, while tracking the most recent event timestamp.
             const aggregated = {};
             for (const event of events) {
                 const key = `${event.url}-${event.language}`;
@@ -475,8 +556,11 @@ class BlueReportStore {
                         posts: 0,
                         reposts: 0,
                         likes: 0,
-                        preview: event.preview
+                        preview: event.preview,
+                        lastEventTime: event.timestamp
                     };
+                } else {
+                    aggregated[key].lastEventTime = Math.max(aggregated[key].lastEventTime, event.timestamp);
                 }
 
                 if (event.type === 0) aggregated[key].posts++;
@@ -484,10 +568,12 @@ class BlueReportStore {
                 if (event.type === 2) aggregated[key].likes += (event.count || 1);
             }
 
-            // Store aggregated data
+            // Store aggregated records with an updated timestamp and a freshness-boosted score.
+            const now = Date.now();
             for (const data of Object.values(aggregated)) {
                 const record = {
                     ...data,
+                    lastUpdated: now,
                     score: this.calculateScore(data)
                 };
 
@@ -503,7 +589,7 @@ class BlueReportStore {
                 tx.onerror = () => reject(tx.error);
             });
 
-            this.lastUpdate = Date.now();
+            this.lastUpdate = now;
             console.log('Data aggregation complete');
         } catch (error) {
             console.error('Error during aggregation:', error);
@@ -512,12 +598,34 @@ class BlueReportStore {
         }
     }
 
+
     calculateScore(data) {
-        return (data.posts * 10) + (data.reposts * 10) + data.likes;
+        const now = Date.now();
+        const ageMs = now - data.lastEventTime;
+        // Convert age from milliseconds to hours for a more interpretable decay.
+        const ageHours = ageMs / 3600000;
+        
+        // Weighted engagement:
+        // - posts count as 1 point,
+        // - reposts count as 2 points,
+        // - likes count as 1 point.
+        const engagement = data.posts + (data.reposts * 2) + data.likes;
+        
+        // Apply logarithmic scaling to dampen extreme engagement values.
+        const logEngagement = Math.log(engagement + 1);
+        
+        // Time decay factor:
+        // Adding 1 hr ensures very new posts don't get an extreme boost,
+        // and an exponent (1.5) controls the steepness of decay.
+        const decayExponent = 1.5;
+        const timeDecay = Math.pow(ageHours + 1, decayExponent);
+        
+        // Final score: high when engagement is high and age is low.
+        return logEngagement / timeDecay;
     }
     
 
-    async getTopLinks(n = 15) {
+    async getTopLinks(n = 20) {
         console.log(`Getting top links for language: ${this.language}`);
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction('links', 'readonly');
