@@ -230,51 +230,66 @@ class BlueReportStore {
         await this.ingestData();
     }
 
+    trimDescription(text, maxLength = 300) {
+        if (!text) return text;
+        return text.length > maxLength ? text.substring(0, maxLength).trim() + '...' : text;
+    }
+
+
     async fetchPreviewsForTopLinks() {
         if (this.lastPreviewUpdate && Date.now() - this.lastPreviewUpdate < this.previewUpdateInterval) {
-            return;
+          return;
         }
+      
         console.log('Fetching previews for top links...');
         const links = await this.getTopLinks();
         const tx = this.db.transaction('links', 'readwrite');
         const store = tx.objectStore('links');
-    
+      
         for (const link of links) {
-            // Only fetch preview if the link doesn't already have one.
-            if (!link.preview?.thumb) {
-                try {
-                    const preview = await this.fetchPreview(link.url);
-                    if (preview) {
-                        link.preview = preview;
-                        await new Promise((resolve, reject) => {
-                            const request = store.put(link);
-                            request.onsuccess = () => resolve();
-                            request.onerror = () => reject(request.error);
-                        });
-                    }
-                } catch (error) {
-                    console.error('Error fetching preview for', link.url, error);
+          try {
+            const ddgPreview = await this.fetchPreview(link.url);
+            if (ddgPreview?.description) {
+              // If a preview from the bsky call already exists, update its description.
+              if (link.preview) {
+                link.preview.description = ddgPreview.description;
+                // Optionally, update title and thumb if not already set.
+                if (!link.preview.title && ddgPreview.title) {
+                  link.preview.title = ddgPreview.title;
                 }
+                if (!link.preview.thumb && ddgPreview.thumb) {
+                  link.preview.thumb = ddgPreview.thumb;
+                }
+              } else {
+                // Otherwise, simply use the DuckDuckGo preview.
+                link.preview = ddgPreview;
+              }
+              await new Promise((resolve, reject) => {
+                const request = store.put(link);
+                request.onsuccess = () => resolve();
+                request.onerror = () => reject(request.error);
+              });
             }
+          } catch (error) {
+            console.error('Error fetching preview for', link.url, error);
+          }
         }
-    
+      
         this.lastPreviewUpdate = Date.now();
         return new Promise((resolve, reject) => {
-            tx.oncomplete = () => resolve();
-            tx.onerror = () => reject(tx.error);
+          tx.oncomplete = () => resolve();
+          tx.onerror = () => reject(tx.error);
         });
-    }
+      }
+      
     
-    async fetchPreview(url) {
+      async fetchPreview(url) {
         try {
             const response = await fetch(`https://api.duckduckgo.com/?q=${encodeURIComponent(url)}&format=json&no_html=1&skip_disambig=1`);
             const data = await response.json();
             
             if (data.Image || data.AbstractURL) {
-                let description = data.Abstract || '';
-                if (description && description.length > 300) {
-                    description = description.substring(0, 300).trim() + '...';
-                }
+                let description = this.trimDescription(data.Abstract);
                 return {
                     title: data.Heading || url,
                     description: description,
@@ -288,19 +303,18 @@ class BlueReportStore {
             return null;
         }
     }
-
-
+    
     extractUrl(post) {
         let url = null;
         let preview = null;
-
-        // Check embeds
+    
+        // Check embeds from the post.
         if (post.embed?.external) {
             url = this.normalizeUrl(post.embed.external.uri);
             if (url) {
                 preview = {
                     title: post.embed.external.title,
-                    description: post.embed.external.description,
+                    description: this.trimDescription(post.embed.external.description),
                     thumb: post.embed.external.thumb,
                     uri: url
                 };
@@ -308,22 +322,26 @@ class BlueReportStore {
                 return { url, preview };
             }
         }
-
-        // Check facets
+    
+        // Check facets (if applicable) for a link.
         if (post.facets) {
-            for (const facet of facet.features) {
-                if (feature.$type === 'app.bsky.richtext.facet#link') {
-                    url = this.normalizeUrl(feature.uri);
-                    if (url) {
-                        console.log('Found URL in facet:', url);
-                        return { url, preview: null };
+            for (const facet of post.facets) {
+                for (const feature of facet.features) {
+                    if (feature.$type === 'app.bsky.richtext.facet#link') {
+                        url = this.normalizeUrl(feature.uri);
+                        if (url) {
+                            console.log('Found URL in facet:', url);
+                            return { url, preview: null };
+                        }
                     }
                 }
             }
         }
-
+    
         return null;
     }
+    
+    
 
     async expandUrl(url) {
         if (this.urlCache.has(url)) {
