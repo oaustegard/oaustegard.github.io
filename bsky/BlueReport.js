@@ -9,11 +9,13 @@ class BlueReportStore {
         
         // Define supported languages first
         this.supportedLanguages = {
-            'en': 'English',
-            'no': 'Norwegian',
-            'sv': 'Swedish',
             'da': 'Danish',
-            'de': 'German'
+            'en': 'English',
+            'fr': 'French',
+            'de': 'German',
+            'no': 'Norwegian',
+            'es': 'Spanish',
+            'sv': 'Swedish'
         };
         
         const urlInterval = urlParams.get('interval');
