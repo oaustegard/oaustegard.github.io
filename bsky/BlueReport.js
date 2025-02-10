@@ -229,34 +229,37 @@ class BlueReportStore {
         if (this.lastPreviewUpdate && Date.now() - this.lastPreviewUpdate < this.previewUpdateInterval) {
             return;
         }
-
         console.log('Fetching previews for top links...');
         const links = await this.getTopLinks();
         const tx = this.db.transaction('links', 'readwrite');
         const store = tx.objectStore('links');
-
+    
         for (const link of links) {
-            try {
-                const preview = await this.fetchPreview(link.url);
-                if (preview) {
-                    link.preview = preview;
-                    await new Promise((resolve, reject) => {
-                        const request = store.put(link);
-                        request.onsuccess = () => resolve();
-                        request.onerror = () => reject(request.error);
-                    });
+            // Only fetch preview if the link doesn't already have one.
+            if (!link.preview?.thumb) {
+                try {
+                    const preview = await this.fetchPreview(link.url);
+                    if (preview) {
+                        link.preview = preview;
+                        await new Promise((resolve, reject) => {
+                            const request = store.put(link);
+                            request.onsuccess = () => resolve();
+                            request.onerror = () => reject(request.error);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Error fetching preview for', link.url, error);
                 }
-            } catch (error) {
-                console.error('Error fetching preview for', link.url, error);
             }
         }
-
+    
         this.lastPreviewUpdate = Date.now();
         return new Promise((resolve, reject) => {
             tx.oncomplete = () => resolve();
             tx.onerror = () => reject(tx.error);
         });
     }
+    
 
     async fetchPreview(url) {
         try {
