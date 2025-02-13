@@ -10,11 +10,11 @@
   <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
   <style>
     .emoji-grid {
-        display: block;
-        font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji";
-        line-height: 1em; 
-        letter-spacing: -0.4em;
-        -webkit-text-size-adjust: none;
+      display: block;
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji";
+      line-height: 1em;
+      letter-spacing: -0.4em;
+      -webkit-text-size-adjust: none;
     }
 
     .color-swatch {
@@ -171,7 +171,7 @@
         if (!canvas) {
           return debug.error('Failed to create canvas');
         }
-        
+
         const ctx = canvas.getContext('2d', { willReadFrequently: true });
         if (!ctx) {
           return debug.error('Failed to get canvas context');
@@ -181,9 +181,9 @@
         const metrics = ctx.measureText(emoji);
         const expectedWidth = 54.921875;
         const actualWidth = metrics.width;
-        
+
         debug.log(`Emoji ${emoji} width: ${actualWidth}px`);
-        
+
         return Math.abs(actualWidth - expectedWidth) <= (expectedWidth * 0.05);
       } catch (err) {
         return debug.error(`Error measuring emoji ${emoji}:`, err);
@@ -196,7 +196,7 @@
       We iterate over a set of Unicode ranges and add skin tone variations for modifier-capable emojis.
       (The unwanted 🔳 emoji is filtered out.)
     */
-    const BASE_EMOJI_PALETTE = (() => {
+    const initializeEmojiPalette = (() => {
       try {
         const ranges = [
           [0x1F300, 0x1F5FF],
@@ -210,7 +210,8 @@
         const skinTones = [
           '\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'
         ];
-        const emoji = new Set();
+
+        const palette = new Set();
         let totalChecked = 0;
         let totalAccepted = 0;
 
@@ -219,23 +220,23 @@
             try {
               const base = String.fromCodePoint(cp);
               if (base === "🔳") continue;
-              
+
               totalChecked++;
               if (/^\p{Emoji}$/u.test(base)) {
                 if (checkEmojiWidth(base)) {
                   if (/\p{Emoji_Modifier_Base}/u.test(base)) {
-                    emoji.add(base);
+                    palette.add(base);
                     totalAccepted++;
-                    
+
                     for (const tone of skinTones) {
                       const withTone = base + tone;
                       if (checkEmojiWidth(withTone)) {
-                        emoji.add(withTone);
+                        palette.add(withTone);
                         totalAccepted++;
                       }
                     }
                   } else {
-                    emoji.add(base);
+                    palette.add(base);
                     totalAccepted++;
                   }
                 }
@@ -247,19 +248,103 @@
         }
 
         debug.log(`Palette generation complete. Checked ${totalChecked} emojis, accepted ${totalAccepted}`);
-        
-        const result = Array.from(emoji);
-        if (result.length === 0) {
-          throw new Error('No valid emojis found');
-        }
-        
-        return result;
+
+        return Array.from(palette);
       } catch (err) {
         debug.error('Failed to generate emoji palette:', err);
         // Return a minimal fallback palette
         return ['⚪', '⚫', '🔴', '🔵', '🟡', '🟢', '🟣', '🟤'];
       }
     })();
+
+    const ColorIndex = {
+      createIndex(emojiColors, backgroundColor) {
+        const bgRgb = hexToRgb(backgroundColor);
+        const blendFactor = 0.8;
+
+        const index = {
+          lab: new Map(),
+          sorted: []
+        };
+
+        /* Pre-compute blended LAB values */
+        Object.entries(emojiColors).forEach(([emoji, rawRgb]) => {
+          const blendedRgb = [
+            Math.round(rawRgb[0] * blendFactor + bgRgb[0] * (1 - blendFactor)),
+            Math.round(rawRgb[1] * blendFactor + bgRgb[1] * (1 - blendFactor)),
+            Math.round(rawRgb[2] * blendFactor + bgRgb[2] * (1 - blendFactor))
+          ];
+
+          const labColor = rgbToLab(...blendedRgb);
+          index.lab.set(emoji, labColor);
+          index.sorted.push([emoji, labColor]);
+        });
+
+        /* Sort by all LAB components for better matching */
+        index.sorted.sort(([, lab1], [, lab2]) => {
+          const [l1, a1, b1] = lab1;
+          const [l2, a2, b2] = lab2;
+          return l1 - l2 || a1 - a2 || b1 - b2;
+        });
+
+        return index;
+      },
+
+      findSimilar(index, targetLab, threshold = 5) {
+        const [l] = targetLab;
+
+        /* Binary search for starting position */
+        let pos = index.sorted.findIndex(([, lab]) => lab[0] >= l);
+        if (pos < 0) pos = index.sorted.length - 1;
+
+        /* Collect candidates within threshold */
+        const matches = [];
+
+        /* Scan in both directions */
+        for (let i = pos; i >= 0 && matches.length < 50; i--) {
+          const [emoji, lab] = index.sorted[i];
+          const diff = Math.sqrt(
+            Math.pow(lab[0] - targetLab[0], 2) +
+            Math.pow(lab[1] - targetLab[1], 2) +
+            Math.pow(lab[2] - targetLab[2], 2)
+          );
+          if (diff > threshold * 3) break;
+          matches.push([emoji, diff]);
+        }
+
+        for (let i = pos + 1; i < index.sorted.length && matches.length < 50; i++) {
+          const [emoji, lab] = index.sorted[i];
+          const diff = Math.sqrt(
+            Math.pow(lab[0] - targetLab[0], 2) +
+            Math.pow(lab[1] - targetLab[1], 2) +
+            Math.pow(lab[2] - targetLab[2], 2)
+          );
+          if (diff > threshold * 3) break;
+          matches.push([emoji, diff]);
+        }
+
+        /* Handle no matches */
+        if (matches.length === 0) {
+          // Find single closest emoji
+          const [emoji] = index.sorted.reduce((best, current) => {
+            const [, lab] = current;
+            const diff = Math.sqrt(
+              Math.pow(lab[0] - targetLab[0], 2) +
+              Math.pow(lab[1] - targetLab[1], 2) +
+              Math.pow(lab[2] - targetLab[2], 2)
+            );
+            return diff < best[1] ? [current[0], diff] : best;
+          }, [null, Infinity]);
+          return emoji;
+        }
+
+        /* Return random emoji from best matches */
+        matches.sort((a, b) => a[1] - b[1]);
+        const bestDiff = matches[0][1];
+        const candidates = matches.filter(m => m[1] <= bestDiff * 1.05);
+        return candidates[Math.floor(Math.random() * candidates.length)][0];
+      }
+    };
 
     /*  
       Cache (or compute) emoji colors.
@@ -269,22 +354,22 @@
       const cached = localStorage.getItem('emojiColors');
       if (cached) {
         updateProgress(100);
-        return JSON.parse(cached);
+        return JSON.parse(cached); // Return raw colors
       } else {
         const colors = {};
         let partial = {};
-        for (const [index, emoji] of BASE_EMOJI_PALETTE.entries()) {
+        for (const [index, emoji] of initializeEmojiPalette.entries()) {
           const result = await extractEmojiColor(emoji);
           colors[emoji] = result;
           partial[emoji] = result;
           if (updatePartial && index % 10 === 0) {
             updatePartial({ ...partial });
           }
-          updateProgress(Math.floor(((index + 1) / BASE_EMOJI_PALETTE.length) * 100));
+          updateProgress(Math.floor(((index + 1) / initializeEmojiPalette.length) * 100));
         }
         if (updatePartial) updatePartial(partial);
         localStorage.setItem('emojiColors', JSON.stringify(colors));
-        return colors;
+        return colors; // Return raw colors
       }
     };
 
@@ -335,6 +420,8 @@
       return `#${toHex(Math.round(totalR / count))}${toHex(Math.round(totalG / count))}${toHex(Math.round(totalB / count))}`;
     };
 
+    /************************* App component *************************/
+
     const App = () => {
       const [imageData, setImageData] = useState(null);
       const [resolution, setResolution] = useState({ width: 32, height: 32 });
@@ -343,6 +430,7 @@
       const [collage, setCollage] = useState([]);
       const [originalImage, setOriginalImage] = useState(null);
       const [paletteProgress, setPaletteProgress] = useState(0);
+      const [colorIndex, setColorIndex] = useState(null);
       const [readyToRender, setReadyToRender] = useState(false); //NOSONAR
       const canvasRef = useRef(null);
       const [processing, setProcessing] = useState(false);
@@ -350,16 +438,16 @@
       const [bgColor, setBgColor] = useState('#ffffff');
 
       useEffect(() => {
-        debug.log('Initial palette size:', BASE_EMOJI_PALETTE.length);
-        if (BASE_EMOJI_PALETTE.length < 10) {
-          console.warn('[Emoji Collage] Warning: Very small emoji palette detected');
-        }
-      }, []);
-
-      useEffect(() => {
         const fetchEmojiColors = async () => {
-          const colors = await getCachedEmojiColors(setPaletteProgress, setProcessedPalette);
-          setEmojiColors(colors);
+          const rawColors = await getCachedEmojiColors(setPaletteProgress, setProcessedPalette);
+          console.log('Got raw colors:', Object.keys(rawColors).length);
+          const index = ColorIndex.createIndex(rawColors, bgColor);
+          if (!index || index.sorted.length === 0) {
+            console.error('Failed to create valid index');
+            return;
+          }
+          console.log('Setting color index with', index.sorted.length, 'entries');
+          setColorIndex(index);
           setReadyToRender(true);
         };
         fetchEmojiColors();
@@ -374,6 +462,17 @@
         window.addEventListener('resize', handleResize);
         return () => window.removeEventListener('resize', handleResize);
       }, [collage, resolution, zoomLevel]);
+
+      // Update when background color changes
+      useEffect(() => {
+        if (emojiColors && Object.keys(emojiColors).length > 0) {
+          console.log('Updating index for new background color:', bgColor);
+          const index = ColorIndex.createIndex(emojiColors, bgColor);
+          if (index && index.sorted.length > 0) {
+            setColorIndex(index);
+          }
+        }
+      }, [bgColor, emojiColors]);
 
       const calculateResolution = (w, h) => {
         const minDimension = 32;
@@ -439,55 +538,38 @@
         Generate the collage.
         For each image pixel, we:
         1. Convert the pixel’s color to LAB.
-        2. For every emoji in the palette, compute an “effective emoji color” by blending its extracted color with the current background color.
-           (Here we use a blend factor of 0.8 — 80% emoji color, 20% background.)
-        3. Convert the effective emoji color to LAB and compute the Euclidean distance to the pixel’s LAB color.
-        4. Collect all emojis whose difference is within 5% of the best difference, then choose one at random.
+        2. Find the closest emoji in the Color Index based on LAB distance. 
       */
       const generateCollage = () => {
-        if (!imageData) { console.warn('No image data available.'); return; }
-        if (paletteProgress < 100) { console.warn('Emoji palette not ready yet.'); return; }
+        if (!imageData || !colorIndex) {
+          console.error('Missing data:', { hasImageData: !!imageData, colorIndex });
+          return;
+        }
+        console.log('Starting generation with colorIndex:', colorIndex);
+
         setProcessing(true);
         const data = imageData.data;
         const newCollage = [];
-        const bgRgb = hexToRgb(bgColor);
-        const blendFactor = 0.8; // 80% emoji color, 20% background
+
         for (let y = 0; y < resolution.height; y++) {
           const row = [];
           for (let x = 0; x < resolution.width; x++) {
             const i = (y * resolution.width + x) * 4;
-            const pixelColor = [data[i], data[i + 1], data[i + 2]];
-            const pixelLab = rgbToLab(...pixelColor);
-            let bestDiff = Infinity;
-            let candidates = [];
-            for (const emoji of BASE_EMOJI_PALETTE) {
-              const rawColor = emojiColors[emoji];
-              if (!rawColor) continue;
-              // Blend the extracted emoji color with the background.
-              const effectiveColor = [
-                Math.round(rawColor[0] * blendFactor + bgRgb[0] * (1 - blendFactor)),
-                Math.round(rawColor[1] * blendFactor + bgRgb[1] * (1 - blendFactor)),
-                Math.round(rawColor[2] * blendFactor + bgRgb[2] * (1 - blendFactor))
-              ];
-              const effectiveLab = rgbToLab(...effectiveColor);
-              const diff = Math.sqrt(
-                Math.pow(effectiveLab[0] - pixelLab[0], 2) +
-                Math.pow(effectiveLab[1] - pixelLab[1], 2) +
-                Math.pow(effectiveLab[2] - pixelLab[2], 2)
-              );
-              if (diff < bestDiff) {
-                bestDiff = diff;
-                candidates = [emoji];
-              } else if (diff <= bestDiff * 1.05) {
-                candidates.push(emoji);
-              }
+            const labColor = rgbToLab(data[i], data[i + 1], data[i + 2]);
+            // Add debug log for first pixel
+            if (x === 0 && y === 0) {
+              console.log('First pixel:', {
+                rgb: [data[i], data[i + 1], data[i + 2]],
+                lab: labColor,
+                colorIndex: colorIndex
+              });
             }
-            // Choose one candidate at random to introduce variety.
-            const chosen = candidates[Math.floor(Math.random() * candidates.length)] || BASE_EMOJI_PALETTE[0];
-            row.push(chosen);
+            const emoji = ColorIndex.findSimilar(colorIndex, labColor);
+            row.push(emoji);
           }
           newCollage.push(row);
         }
+
         setCollage(newCollage);
         setProcessing(false);
       };
@@ -525,17 +607,17 @@
         const emojiSize = 20;
         const svgW = resolution.width * emojiSize;
         const svgH = resolution.height * emojiSize;
-        
+
         let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}">`;
         svgContent += `<rect width="100%" height="100%" fill="${bgColor}"/>`;
         svgContent += `<text font-size="${emojiSize}" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Android Emoji">`;
-        
+
         for (let y = 0; y < resolution.height; y++) {
           for (let x = 0; x < resolution.width; x++) {
             svgContent += `<tspan x="${x * emojiSize}" y="${(y + 1) * emojiSize}">${collage[y][x]}</tspan>`;
           }
         }
-        
+
         svgContent += '</text></svg>';
         const blob = new Blob([svgContent], { type: 'image/svg+xml' });
         const url = URL.createObjectURL(blob);
