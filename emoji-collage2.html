@@ -1,0 +1,1052 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Emoji Collage Maker</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.25.4/preact.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.25.4/hooks.umd.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    .emoji-grid {
+      display: block;
+      font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji";
+      line-height: 1em;
+      letter-spacing: -0.4em;
+      -webkit-text-size-adjust: none;
+    }
+
+    .color-swatch {
+      width: 24px;
+      height: 24px;
+      border-radius: 4px;
+      border: 1px solid #ccc;
+      transition: background-color 0.3s;
+      margin-left: 8px;
+    }
+
+    .collage-container {
+      overflow: visible;
+      position: relative;
+      margin-top: 1rem;
+    }
+
+    .controls-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .zoom-button {
+      padding: 4px 8px;
+      background-color: #e2e8f0;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+
+    .zoom-button:hover {
+      background-color: #cbd5e1;
+    }
+
+    #processingCanvas {
+      display: block;
+      margin-top: 1rem;
+      border: 1px solid #ccc;
+      max-width: 100%;
+    }
+  </style>
+</head>
+
+<body class="bg-gray-100">
+  <div id="app"></div>
+
+  <script>
+    const { h, render } = window.preact;
+    const { useState, useEffect, useRef } = window.preactHooks;
+
+    // Helper: Convert hex (e.g. "#ffffff") to an RGB array.
+    const hexToRgb = (hex) => {
+      hex = hex.replace(/^#/, '');
+      if (hex.length === 3) {
+        hex = hex.split('').map(c => c + c).join('');
+      }
+      const num = parseInt(hex, 16);
+      return [(num >> 16) & 255, (num >> 8) & 255, num & 255];
+    };
+
+    // LAB conversion functions for perceptual matching.
+    function rgbToXyz(r, g, b) {
+      r /= 255; g /= 255; b /= 255;
+      r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+      g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+      b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+      const x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+      const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+      const z = r * 0.0193 + g * 0.1192 + b * 0.9505;
+      return [x, y, z];
+    }
+
+    function xyzToLab(x, y, z) {
+      const refX = 0.95047, refY = 1.000, refZ = 1.08883;
+      x /= refX; y /= refY; z /= refZ;
+      x = x > 0.008856 ? Math.cbrt(x) : (7.787 * x) + (16 / 116);
+      y = y > 0.008856 ? Math.cbrt(y) : (7.787 * y) + (16 / 116);
+      z = z > 0.008856 ? Math.cbrt(z) : (7.787 * z) + (16 / 116);
+      const L = (116 * y) - 16;
+      const a = 500 * (x - y);
+      const b = 200 * (y - z);
+      return [L, a, b];
+    }
+
+    function rgbToLab(r, g, b) {
+      return xyzToLab(...rgbToXyz(r, g, b));
+    }
+
+    /*  
+      Extract the representative color for an emoji.
+      We create a 50×50 canvas with a white background, draw the emoji at 40px,
+      then average the colors of fully opaque (non-white) pixels.
+    */
+    const extractEmojiColor = (emoji) => {
+      return new Promise((resolve) => {
+        const canvas = document.createElement('canvas');
+        canvas.width = 50;
+        canvas.height = 50;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = '#FF00FF'; // Hot pink - very uncommon in emojis
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.font = '40px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"';
+        ctx.textBaseline = 'middle';
+        ctx.textAlign = 'center';
+        ctx.fillText(emoji, canvas.width / 2, canvas.height / 2);
+        // Slight delay to ensure rendering.
+        setTimeout(() => {
+          try {
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = imageData.data;
+            let r = 0, g = 0, b = 0, count = 0;
+            for (let i = 0; i < data.length; i += 4) {
+              // Only count pixels that are fully opaque and not nearly hot-pink.
+              if (data[i + 3] > 250 && !(data[i] > 250 && data[i + 1] < 5 && data[i + 2] > 250)) {
+                r += data[i];
+                g += data[i + 1];
+                b += data[i + 2];
+                count++;
+              }
+            }
+            if (count > 0) {
+              resolve([Math.round(r / count), Math.round(g / count), Math.round(b / count)]);
+            } else {
+              resolve([128, 128, 128]);
+            }
+          } catch (error) {
+            console.error('Error analyzing emoji:', error);
+            resolve([128, 128, 128]);
+          }
+        }, 10);
+      });
+    };
+
+
+    /* Debug logging helper */
+    const debug = {
+      error: (msg, err) => {
+        console.error(`[Emoji Collage] ${msg}`, err);
+        return false;
+      },
+      log: (msg, ...args) => console.log(`[Emoji Collage] ${msg}`, ...args)
+    };
+
+
+    /* 
+      Measure emoji width consistency.
+      Returns true if the emoji renders at the expected width.
+    */
+    const checkEmojiWidth = (emoji) => {
+      try {
+        const canvas = document.createElement('canvas');
+        if (!canvas) {
+          return debug.error('Failed to create canvas');
+        }
+
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        if (!ctx) {
+          return debug.error('Failed to get canvas context');
+        }
+
+        ctx.font = '40px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"';
+        const metrics = ctx.measureText(emoji);
+        const expectedWidth = 54.921875;
+        const actualWidth = metrics.width;
+
+        debug.log(`Emoji ${emoji} width: ${actualWidth}px`);
+
+        return Math.abs(actualWidth - expectedWidth) <= (expectedWidth * 0.05);
+      } catch (err) {
+        return debug.error(`Error measuring emoji ${emoji}:`, err);
+      }
+    };
+
+
+    const EMOJI_CATEGORIES = {
+      ALL: {
+        name: 'All Emojis'
+      },
+      FACES_AND_PEOPLE: {
+        name: 'Faces & People',
+        /* No skin tone variations */
+        base: '😀😃😄😁😅😂🤣☺️😊😇🙂🙃😉😌😍🥰😘😗😙😚😋😛😝😜🤪🤨🧐🤓😎🥸🤩🥳😏😒😞😔😟😕🙁☹️😣😖😫😩🥺😢😭😤😠😡🤬🤯😳🥵🥶😱😨😰😥😓🫣🤗🫡🤔🫢🤭🤫🤥😶😶‍🌫️😐😑😬🫨🫠🙄😯😦😧😮😲🥱😴🤤😪😵😵‍💫🫥🤐🥴🤢🤮🤧😷🤒🤕🤑🤠😈👿👹👺🤡💩👻💀☠️👽👾🤖🎃😺😸😹😻😼😽🙀😿😾',
+        /* Support skin tone variations */
+        toneSupport: '👶👧🧒👦👩🧑👨👩‍🦱🧑‍🦱👨‍🦱👩‍🦰🧑‍🦰👨‍🦰👱‍♀️👱👱‍♂️👩‍🦳🧑‍🦳👨‍🦳👩‍🦲🧑‍🦲👨‍🦲🧔‍♀️🧔🧔‍♂️👵🧓👴👲👳‍♀️👳👳‍♂️🧕👮‍♀️👮👮‍♂️👷‍♀️👷👷‍♂️💂‍♀️💂💂‍♂️🕵️‍♀️🕵️🕵️‍♂️👩‍⚕️🧑‍⚕️👨‍⚕️👩‍🌾🧑‍🌾👨‍🌾👩‍🍳🧑‍🍳👨‍🍳👩‍🎓🧑‍🎓👨‍🎓👩‍🎤🧑‍🎤👨‍🎤👩‍🏫🧑‍🏫👨‍🏫👩‍🏭🧑‍🏭👨‍🏭👩‍💻🧑‍💻👨‍💻👩‍💼🧑‍💼👨‍💼👩‍🔧🧑‍🔧👨‍🔧👩‍🔬🧑‍🔬👨‍🔬👩‍🎨🧑‍🎨👨‍🎨👩‍🚒🧑‍🚒👨‍🚒👩‍✈️🧑‍✈️👨‍✈️👩‍🚀🧑‍🚀👨‍🚀👩‍⚖️🧑‍⚖️👨‍⚖️👰‍♀️👰👰‍♂️🤵‍♀️🤵🤵‍♂️👸🫅🤴🙇‍♀️🙇🙇‍♂️💁‍♀️💁💁‍♂️🙅‍♀️🙅🙅‍♂️🙆‍♀️🙆🙆‍♂️🙋‍♀️🙋🙋‍♂️🧏‍♀️🧏🧏‍♂️🤦‍♀️🤦🤦‍♂️🤷‍♀️🤷🤷‍♂️🙎‍♀️🙎🙎‍♂️🙍‍♀️🙍🙍‍♂️💇‍♀️💇💇‍♂️💆‍♀️💆💆‍♂️🧖‍♀️🧖🧖‍♂️💅🤳💃🕺👯‍♀️👯👯‍♂️🕴👩‍🦽🧑‍🦽👨‍🦽👩‍🦼🧑‍🦼👨‍🦼🚶‍♀️🚶🚶‍♂️👩‍🦯🧑‍🦯👨‍🦯🧎‍♀️🧎🧎‍♂️🏃‍♀️🏃🏃‍♂️🧍‍♀️🧍🧍‍♂️🤲👐🙌👏🤝👍👎👊✊🤛🤜🤞✌️🤟🤘👌🤌🤏👈👉👆👇☝️✋🤚🖐️🖖👋🤙💪🦾✍️🙏🦶🦵'
+      },
+      NATURE: {
+        name: 'Nature',
+        animals: '🐶🐱🐭🐹🐰🦊🐻🐼🐻‍❄️🐨🐯🦁🐮🐷🐽🐸🐵🙈🙉🙊🐒🐔🐧🐦🐤🐣🐥🦆🦅🦉🦇🐺🐗🐴🦄🐝🪱🐛🦋🐌🐞🐜🪰🪲🪳🦟🦗🕷🕸🦂🐢🐍🦎🦖🦕🐙🦑🦐🦞🦀🐡🐠🐟🐬🐳🐋🦈🐊🐅🐆🦓🦍🦧🦣🐘🦛🦏🐪🐫🦒🦘🦬🐃🐂🐄🐎🐖🐏🐑🦙🐐🦌🐕🐩🦮🐕‍🦺🐈🐈‍⬛🪶🐓🦃🦤🦚🦜🦢🦩🕊🐇🦝🦨🦡🦫🦦🦥🐁🐀🐿🦔',
+        plants: '🌵🎄🌲🌳🌴🪹🪺🪵🌱🌿☘️🍀🎍🪴🎋🍃🍂🍁🍄🌾💐🌷🌹🥀🌺🌸🌼🌻',
+        weather: '🌞🌝🌛🌜🌚🌕🌖🌗🌘🌑🌒🌓🌔🌙🌎🌍🌏🪐💫⭐️🌟✨⚡️☄️💥🔥🌪🌈☀️🌤⛅️🌥☁️🌦🌧⛈🌩🌨❄️☃️⛄️🌬💨💧💦☔️☂️'
+      },
+      FOOD: {
+        name: 'Food & Drink',
+        all: '🍏🍎🍐🍊🍋🍌🍉🍇🍓🫐🍈🍒🍑🥭🍍🥥🥝🍅🍆🥑🥦🥬🥒🌶🫑🌽🥕🫒🧄🧅🥔🍠🥐🥯🍞🥖🥨🧀🥚🍳🧈🥞🧇🥓🥩🍗🍖🦴🌭🍔🍟🍕🫓🥪🥙🧆🌮🌯🫔🥗🥘🫕🥫🍝🍜🍲🍛🍣🍱🥟🦪🍤🍙🍚🍘🍥🥠🥮🍢🍡🍧🍨🍦🥧🧁🍰🎂🍮🍭🍬🍫🍿🍪🌰🥜🫘🍯🥛☕️🫖🍵🧃🥤🧋🍶🍺🍻🥂🍷🥃🍸🍹🧉🍾🧊🥄🍴🍽🥣🥡🥢🧂'
+      },
+      ACTIVITIES: {
+        name: 'Activities',
+        all: '⚽️🏀🏈⚾️🥎🎾🏐🏉🥏🎱🪀🏓🏸🏒🏑🥍🏏🪃🥅⛳️🪁🏹🎣🤿🥊🥋🎽🛹🛼🛷⛸🥌🎿⛷🏂🪂🏋️‍♀️🏋️🏋️‍♂️🤼‍♀️🤼🤼‍♂️🤸‍♀️🤸🤸‍♂️⛹️‍♀️⛹️⛹️‍♂️🤺🤾‍♀️🤾🤾‍♂️🏌️‍♀️🏌️🏌️‍♂️🏇🧘‍♀️🧘🧘‍♂️🏄‍♀️🏄🏄‍♂️🏊‍♀️🏊🏊‍♂️🤽‍♀️🤽🤽‍♂️🚣‍♀️🚣🚣‍♂️🧗‍♀️🧗🧗‍♂️🚵‍♀️🚵🚵‍♂️🚴‍♀️🚴🚴‍♂️🎪🤹‍♀️🤹🤹‍♂️🎭🎨🎬🎤🎧🎼🎹🥁🪘🎷🎺🪗🎸🪕🎻🎲♟🎯🎳🎮🎰🧩'
+      },
+      TRAVEL: {
+        name: 'Travel & Places',
+        all: '🚗🚕🚙🚌🚎🚓🚑🚒🚐🛻🚚🚛🚜🦯🦽🦼🛴🚲🛵🏍🛺🚨🚔🚍🚘🚖🚡🚠🚟🚃🚋🚞🚝🚄🚅🚈🚂🚆🚇🚊🚉✈️🛫🛬🛩💺🛰🚀🛸🚁🛶⛵️🚤🛥🛳⛴🚢⚓️🪝⛽️🚧🚦🚥🚏🗺🗿🗽🗼🏰🏯🏟🎡🎢🎠⛲️⛱🏖🏝🏜🌋⛰🏔🗻🏕⛺️🏠🏡🏘🏚🏗🏭🏢🏬🏣🏤🏥🏦🏨🏪🏫🏩💒🏛⛪️🕌🕍🛕🕋⛩🛤🛣🗾🎑🏞🌅🌄🌠🎇🎆🌇🌆🏙🌃🌌🌉🌁'
+      },
+      OBJECTS: {
+        name: 'Objects',
+        tech: '⌚️📱📲💻⌨️🖥🖨🖱🖲🕹🗜💽💾💿📀📼📷📸📹🎥📽🎞📞☎️📟📠📺📻🎙🎚🎛🧭⏱⏲⏰🕰⌛️⏳📡',
+        household: '🔋🔌💡🔦🕯🪔🧯🛢💸💵💴💶💷🪙💰💳💎⚖️🪜🧰🪛🔧🔨⚒🛠⛏🪚🔩⚙️🪤🧱⛓🧲🔫💣🧨🪓🔪🗡⚔️🛡',
+        personal: '💈⚗️🔭🔬🕳🩹🩺💊💉🩸🧬🦠🧫🧪🌡🧹🪠🧺🧻🚽🚰🚿🛁🛀🧼🪥🪒🧽🪣🧴💄💍💅',
+        furniture: '🛎🔑🗝🚪🪑🛋🛏🛌🧸🪆🖼🪞🪟🛍🛒',
+        celebration: '🎁🎈🎏🎀🪄🪅🎊🎉🎎🏮🎐🧧',
+        stationery: '✉️📩📨📧💌📥📤📦🏷🪧📪📫📬📭📮📯📜📃📄📑🧾📊📈📉🗒🗓📆📅🗑📇🗃🗳🗄📋📁📂🗂🗞📰📓📔📒📕📗📘📙📚📖🔖🧷🔗📎🖇📐📏✂️🖊🖋✒️🖌🖍📝'
+      },
+
+      SYMBOLS: {
+        name: 'Symbols',
+        hearts: '❤️🧡💛💚💙💜🖤🤍🤎💔❣️💕💞💓💗💖💘💝💟',
+        spiritual: '☮️✝️☪️🕉☸️✡️🔯🕎☯️☦️🛐⛎♈️♉️♊️♋️♌️♍️♎️♏️♐️♑️♒️♓️',
+        warning: '⚠️🚸⛔️🚫🚭🚯🚳🚱🔞📵❌✖️❗️❕❓❔‼️⁉️〽️',
+        numbers: '0️⃣1️⃣2️⃣3️⃣4️⃣5️⃣6️⃣7️⃣8️⃣9️⃣🔟💯',
+        info: '🆔ℹ️Ⓜ️🅿️🔰♻️✅❎🌐💠🔅🔆🈁🈂️🈷️🈶🈯️🈚️🈸🈺㊗️㊙️🈴🈵🈹🈲🅰️🅱️🆎🆑🅾️🆘',
+        geometric: '⬛️⬜️🟥🟧🟨🟩🟦🟪🟫⚫️⚪️🔴🔵🟡🟢🔶🔷◼️◻️',
+        sound: '🔈🔇🔉🔊🔔🔕📣📢💬💭🗯',
+        misc: '♠️♣️♥️♦️🃏🎴🀄️🕐🕑🕒🕓🕔🕕🕖🕗🕘🕙🕚🕛🏳️🏴🏁🚩🏳️‍🌈🏳️‍⚧️🏴‍☠️',
+        indicators: '#️⃣*️⃣©️®️™️〰️✳️✴️➕➖➗✖️♾💲💱↗️↘️↙️↖️↕️↔️⤴️⤵️🔄🔃'
+      }
+    };
+
+    const initializeEmojiPalette = {
+      generatePalette: (selectedCategories = ['ALL']) => {
+        const palette = new Set();
+
+        const addToSet = (emoji) => {
+          if (checkEmojiWidth(emoji)) {
+            palette.add(emoji);
+          }
+        };
+
+        // If no categories selected, return empty set
+        if (selectedCategories.length === 0) {
+          return [];
+        }
+
+        // Get categories to process
+        const categoriesToProcess = selectedCategories.includes('ALL')
+          ? Object.keys(EMOJI_CATEGORIES).filter(key => key !== 'ALL')
+          : selectedCategories;
+
+        // Process selected categories
+        categoriesToProcess.forEach(categoryKey => {
+          const category = EMOJI_CATEGORIES[categoryKey];
+          if (category) {
+            Object.entries(category).forEach(([subKey, content]) => {
+              if (typeof content === 'string' && subKey !== 'name') {
+                const emojis = Array.from(content);
+                if (subKey === 'toneSupport') {
+                  emojis.forEach(emoji => {
+                    addToSet(emoji);
+                    ['🏻', '🏼', '🏽', '🏾', '🏿'].forEach(tone => {
+                      addToSet(emoji + tone);
+                    });
+                  });
+                } else {
+                  emojis.forEach(emoji => addToSet(emoji));
+                }
+              }
+            });
+          }
+        });
+
+        return Array.from(palette);
+      }
+    };
+
+    /* Simplified EmojiControls component */
+    const EmojiControls = ({ onRegeneratePalette, selectedCategories, onCategoryChange }) => {
+      return h('div', { className: 'space-y-2 mb-4' }, [
+        h('label', { className: 'block text-sm font-medium' }, 'Emoji Categories:'),
+        h('div', { className: 'flex flex-wrap gap-2' },
+          Object.entries(EMOJI_CATEGORIES).map(([key, category]) =>
+            h('label', { className: 'inline-flex items-center', key }, [
+              h('input', {
+                type: 'checkbox',
+                checked: selectedCategories.includes(key),
+                onChange: (e) => {
+                  let newCategories;
+                  if (key === 'ALL') {
+                    newCategories = e.target.checked ? ['ALL'] : [];
+                  } else {
+                    if (e.target.checked) {
+                      // Remove ALL if present and add the new category
+                      newCategories = [
+                        ...selectedCategories.filter(c => c !== 'ALL'),
+                        key
+                      ];
+                    } else {
+                      newCategories = selectedCategories.filter(c => c !== key);
+                    }
+                  }
+                  localStorage.removeItem('emojiColors');
+                  onCategoryChange(newCategories);
+                },
+                className: 'mr-2'
+              }),
+              category.name
+            ])
+          )
+        ),
+        h('button', {
+          onClick: onRegeneratePalette,
+          className: 'mt-4 px-4 py-2 bg-red-500 text-white rounded hover:bg-red-600'
+        }, 'Reset Emoji Palette')
+      ]);
+    };
+
+    /* Helper function to apply skin tones to supported emojis */
+    const applySkinTones = (emoji) => {
+      const tones = ['🏻', '🏼', '🏽', '🏾', '🏿'];
+      return [emoji, ...tones.map(tone => emoji + tone)];
+    };
+
+    /* Get all emojis for a category, applying skin tones where supported */
+    const getEmojisForCategory = (category) => {
+      if (category === EMOJI_CATEGORIES.FACES_AND_PEOPLE) {
+        const baseEmojis = category.base.split('');
+        const toneSupportEmojis = category.toneSupport.split('').flatMap(applySkinTones);
+        return [...baseEmojis, ...toneSupportEmojis];
+      }
+
+      return Object.values(category)
+        .filter(value => typeof value === 'string' && value !== category.name)
+        .flatMap(str => str.split(''));
+    };
+
+
+
+    const ColorIndex = {
+      createIndex(emojiColors, backgroundColor) {
+        const bgRgb = hexToRgb(backgroundColor);
+        const blendFactor = 0.8;
+
+        const index = {
+          lab: new Map(),
+          sorted: []
+        };
+
+        /* Pre-compute blended LAB values */
+        Object.entries(emojiColors).forEach(([emoji, rawRgb]) => {
+          const blendedRgb = [
+            Math.round(rawRgb[0] * blendFactor + bgRgb[0] * (1 - blendFactor)),
+            Math.round(rawRgb[1] * blendFactor + bgRgb[1] * (1 - blendFactor)),
+            Math.round(rawRgb[2] * blendFactor + bgRgb[2] * (1 - blendFactor))
+          ];
+
+          const labColor = rgbToLab(...blendedRgb);
+          index.lab.set(emoji, labColor);
+          index.sorted.push([emoji, labColor]);
+        });
+
+        /* Sort by all LAB components for better matching */
+        index.sorted.sort(([, lab1], [, lab2]) => {
+          const [l1, a1, b1] = lab1;
+          const [l2, a2, b2] = lab2;
+          return l1 - l2 || a1 - a2 || b1 - b2;
+        });
+
+        return index;
+      },
+
+      findSimilar(index, targetLab, threshold = 5) {
+  const [l] = targetLab;
+  let pos = index.sorted.findIndex(([, lab]) => lab[0] >= l);
+  if (pos < 0) pos = index.sorted.length - 1;
+
+  /* Single scan collecting all matches and their scores */
+  const matches = [];
+  let bestMatch = [null, Infinity];
+
+  /* Scan in both directions, tracking both threshold matches and overall best */
+  for (let i = pos; i >= 0 && matches.length < 50; i--) {
+    const [emoji, lab] = index.sorted[i];
+    const diff = Math.sqrt(
+      Math.pow(lab[0] - targetLab[0], 2) +
+      Math.pow(lab[1] - targetLab[1], 2) +
+      Math.pow(lab[2] - targetLab[2], 2)
+    );
+    if (diff <= threshold * 3) {
+      matches.push([emoji, diff]);
+    }
+    if (diff < bestMatch[1]) {
+      bestMatch = [emoji, diff];
+    }
+  }
+
+  for (let i = pos + 1; i < index.sorted.length && matches.length < 50; i++) {
+    const [emoji, lab] = index.sorted[i];
+    const diff = Math.sqrt(
+      Math.pow(lab[0] - targetLab[0], 2) +
+      Math.pow(lab[1] - targetLab[1], 2) +
+      Math.pow(lab[2] - targetLab[2], 2)
+    );
+    if (diff <= threshold * 3) {
+      matches.push([emoji, diff]);
+    }
+    if (diff < bestMatch[1]) {
+      bestMatch = [emoji, diff];
+    }
+  }
+
+  /* If we found matches within threshold, randomly select from best matches */
+  if (matches.length > 0) {
+    matches.sort((a, b) => a[1] - b[1]);
+    const bestDiff = matches[0][1];
+    const candidates = matches.filter(m => m[1] <= bestDiff * 1.05);
+    return candidates[Math.floor(Math.random() * candidates.length)][0];
+  }
+
+  /* Otherwise return the single best match we found during our scan */
+  return bestMatch[0];
+}};
+
+    /* Singleton for managing the emoji palette and color index */
+    const EmojiPaletteManager = {
+      _palette: null,
+      _colorIndices: new Map(), // Cache color indices by background color
+      _loadingPromise: null,
+
+      /* Initialize or return cached palette */
+      async getPalette() {
+        if (this._palette) return this._palette;
+        if (this._loadingPromise) return this._loadingPromise;
+
+        const cached = localStorage.getItem('emojiPalette');
+        if (cached) {
+          this._palette = JSON.parse(cached);
+          return this._palette;
+        }
+
+        this._loadingPromise = this._generatePalette();
+        this._palette = await this._loadingPromise;
+        this._loadingPromise = null;
+        return this._palette;
+      },
+
+      /* Generate the complete emoji palette once */
+      async _generatePalette() {
+        const allEmojis = new Set();
+
+        // Process all categories
+        Object.entries(EMOJI_CATEGORIES).forEach(([key, category]) => {
+          if (key === 'ALL') return;
+
+          Object.entries(category).forEach(([subKey, content]) => {
+            if (typeof content === 'string' && subKey !== 'name') {
+              const emojis = Array.from(content);
+              if (subKey === 'toneSupport') {
+                emojis.forEach(emoji => {
+                  if (checkEmojiWidth(emoji)) {
+                    allEmojis.add(emoji);
+                    ['🏻', '🏼', '🏽', '🏾', '🏿'].forEach(tone => {
+                      const tonedEmoji = emoji + tone;
+                      if (checkEmojiWidth(tonedEmoji)) {
+                        allEmojis.add(tonedEmoji);
+                      }
+                    });
+                  }
+                });
+              } else {
+                emojis.forEach(emoji => {
+                  if (checkEmojiWidth(emoji)) {
+                    allEmojis.add(emoji);
+                  }
+                });
+              }
+            }
+          });
+        });
+
+        // Extract colors for all emojis
+        const palette = {};
+        let processed = 0;
+        const total = allEmojis.size;
+
+        for (const emoji of allEmojis) {
+          palette[emoji] = await extractEmojiColor(emoji);
+          processed++;
+          if (this.onProgress) {
+            this.onProgress(Math.floor((processed / total) * 100));
+          }
+        }
+
+        localStorage.setItem('emojiPalette', JSON.stringify(palette));
+        return palette;
+      },
+
+      /* Get or create color index for specific categories and background */
+      async getColorIndex(selectedCategories, backgroundColor) {
+        const key = `${selectedCategories.sort().join(',')}:${backgroundColor}`;
+        if (this._colorIndices.has(key)) {
+          return this._colorIndices.get(key);
+        }
+
+        const fullPalette = await this.getPalette();
+        const filteredPalette = {};
+
+        // Filter palette based on selected categories
+        const allowedEmojis = new Set();
+        if (selectedCategories.includes('ALL')) {
+          Object.keys(fullPalette).forEach(emoji => allowedEmojis.add(emoji));
+        } else {
+          selectedCategories.forEach(categoryKey => {
+            const category = EMOJI_CATEGORIES[categoryKey];
+            if (category) {
+              Object.entries(category).forEach(([subKey, content]) => {
+                if (typeof content === 'string' && subKey !== 'name') {
+                  Array.from(content).forEach(emoji => {
+                    if (allowedEmojis.has(emoji)) return;
+                    allowedEmojis.add(emoji);
+                    if (subKey === 'toneSupport') {
+                      ['🏻', '🏼', '🏽', '🏾', '🏿'].forEach(tone => {
+                        allowedEmojis.add(emoji + tone);
+                      });
+                    }
+                  });
+                }
+              });
+            }
+          });
+        }
+
+        // Create filtered palette
+        for (const emoji of allowedEmojis) {
+          if (fullPalette[emoji]) {
+            filteredPalette[emoji] = fullPalette[emoji];
+          }
+        }
+
+        const index = ColorIndex.createIndex(filteredPalette, backgroundColor);
+        this._colorIndices.set(key, index);
+        return index;
+      },
+
+      /* Clear all cached data */
+      clearCache() {
+        localStorage.removeItem('emojiPalette');
+        this._palette = null;
+        this._colorIndices.clear();
+      },
+
+      onProgress: null // Progress callback
+    };
+
+    /*  
+      Suggest a background color by averaging the pixels along the image’s borders.
+    */
+    const suggestBackgroundColor = (imageData) => {
+      const data = imageData.data;
+      const { width, height } = imageData;
+      let totalR = 0, totalG = 0, totalB = 0, count = 0;
+      const borderWidth = Math.min(10, Math.floor(width * 0.05), Math.floor(height * 0.05));
+      for (let y = 0; y < borderWidth; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          totalR += data[idx];
+          totalG += data[idx + 1];
+          totalB += data[idx + 2];
+          count++;
+        }
+      }
+      for (let y = height - borderWidth; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          totalR += data[idx];
+          totalG += data[idx + 1];
+          totalB += data[idx + 2];
+          count++;
+        }
+      }
+      for (let y = borderWidth; y < height - borderWidth; y++) {
+        for (let x = 0; x < borderWidth; x++) {
+          const idx = (y * width + x) * 4;
+          totalR += data[idx];
+          totalG += data[idx + 1];
+          totalB += data[idx + 2];
+          count++;
+        }
+        for (let x = width - borderWidth; x < width; x++) {
+          const idx = (y * width + x) * 4;
+          totalR += data[idx];
+          totalG += data[idx + 1];
+          totalB += data[idx + 2];
+          count++;
+        }
+      }
+      if (!count) return "#ffffff";
+      const toHex = c => c.toString(16).padStart(2, '0');
+      return `#${toHex(Math.round(totalR / count))}${toHex(Math.round(totalG / count))}${toHex(Math.round(totalB / count))}`;
+    };
+
+
+    /************************* App component *************************/
+
+    const App = () => {
+      const [imageData, setImageData] = useState(null);
+      const [resolution, setResolution] = useState({ width: 32, height: 32 });
+      const [selectedCategories, setSelectedCategories] = useState(['ALL']);
+      const [processedPalette, setProcessedPalette] = useState({});
+      const [collage, setCollage] = useState([]);
+      const [originalImage, setOriginalImage] = useState(null);
+      const [paletteProgress, setPaletteProgress] = useState(0);
+      const [colorIndex, setColorIndex] = useState(null);
+      const [readyToRender, setReadyToRender] = useState(false);
+      const canvasRef = useRef(null);
+      const [processing, setProcessing] = useState(false);
+      const [zoomLevel, setZoomLevel] = useState(1);
+      const [bgColor, setBgColor] = useState('#ffffff');
+
+
+      useEffect(() => {
+        if (selectedCategories.length === 0) {
+          setColorIndex(null);
+          return;
+        }
+
+        EmojiPaletteManager.onProgress = setPaletteProgress;
+        EmojiPaletteManager.getColorIndex(selectedCategories, bgColor)
+          .then(index => {
+            setColorIndex(index);
+            // Update processed palette for preview
+            const filteredPalette = {};
+            index.sorted.forEach(([emoji]) => {
+              filteredPalette[emoji] = EmojiPaletteManager._palette[emoji];
+            });
+            setProcessedPalette(filteredPalette);
+          });
+      }, [selectedCategories, bgColor]);
+
+
+      useEffect(() => {
+        const handleResize = () => {
+          if (zoomLevel > calculateMaxZoom()) {
+            setZoomLevel(calculateMaxZoom());
+          }
+        };
+        window.addEventListener('resize', handleResize);
+        return () => window.removeEventListener('resize', handleResize);
+      }, [collage, resolution, zoomLevel]);
+
+
+
+      const calculateResolution = (w, h) => {
+        const minDimension = 32;
+        const aspectRatio = w / h;
+        return w < h
+          ? { width: minDimension, height: Math.round(minDimension / aspectRatio) }
+          : { width: Math.round(minDimension * aspectRatio), height: minDimension };
+      };
+
+      const updateResolution = (newW, newH, isWidth) => {
+        if (!originalImage || !canvasRef.current) return;
+        const aspect = originalImage.width / originalImage.height;
+        let updatedW, updatedH;
+        if (isWidth) {
+          updatedW = newW;
+          updatedH = Math.round(newW / aspect);
+        } else {
+          updatedH = newH;
+          updatedW = Math.round(newH * aspect);
+        }
+        setResolution({ width: updatedW, height: updatedH });
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        canvas.width = updatedW;
+        canvas.height = updatedH;
+        ctx.drawImage(originalImage, 0, 0, updatedW, updatedH);
+        setImageData(ctx.getImageData(0, 0, updatedW, updatedH));
+        setCollage([]);
+        setReadyToRender(true);
+      };
+
+      const handleImageUpload = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        const reader = new FileReader();
+        reader.onload = (evt) => {
+          const img = new Image();
+          img.onload = () => {
+            setOriginalImage(img);
+            const newRes = calculateResolution(img.width, img.height);
+            setResolution(newRes);
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            canvas.width = newRes.width;
+            canvas.height = newRes.height;
+            ctx.drawImage(img, 0, 0, newRes.width, newRes.height);
+            const imgData = ctx.getImageData(0, 0, newRes.width, newRes.height);
+            setImageData(imgData);
+            const suggested = suggestBackgroundColor(imgData);
+            setBgColor(suggested);
+            setCollage([]);
+            setReadyToRender(true);
+          };
+          img.onerror = (err) => console.error('Image load error:', err);
+          img.src = evt.target.result;
+        };
+        reader.onerror = (err) => console.error('File read error:', err);
+        reader.readAsDataURL(file);
+      };
+
+      /*  
+        Generate the collage.
+        For each image pixel, we:
+        1. Convert the pixel’s color to LAB.
+        2. Find the closest emoji in the Color Index based on LAB distance. 
+      */
+      const generateCollage = () => {
+        if (!imageData || !colorIndex) {
+          console.error('Missing data:', { hasImageData: !!imageData, colorIndex });
+          return;
+        }
+        console.log('Starting generation with colorIndex:', colorIndex);
+
+        setProcessing(true);
+        const data = imageData.data;
+        const newCollage = [];
+
+        for (let y = 0; y < resolution.height; y++) {
+          const row = [];
+          for (let x = 0; x < resolution.width; x++) {
+            const i = (y * resolution.width + x) * 4;
+            const labColor = rgbToLab(data[i], data[i + 1], data[i + 2]);
+            // Add debug log for first pixel
+            if (x === 0 && y === 0) {
+              console.log('First pixel:', {
+                rgb: [data[i], data[i + 1], data[i + 2]],
+                lab: labColor,
+                colorIndex: colorIndex
+              });
+            }
+            const emoji = ColorIndex.findSimilar(colorIndex, labColor);
+            row.push(emoji);
+          }
+          newCollage.push(row);
+        }
+
+        setCollage(newCollage);
+        setProcessing(false);
+      };
+
+      const downloadPNG = () => {
+        if (!collage.length) return;
+        const tempCanvas = document.createElement('canvas');
+        const scale = 30;
+        tempCanvas.width = resolution.width * scale;
+        tempCanvas.height = resolution.height * scale;
+        const ctx = tempCanvas.getContext('2d', { willReadFrequently: true });
+        ctx.fillStyle = bgColor;
+        ctx.fillRect(0, 0, tempCanvas.width, tempCanvas.height);
+        ctx.font = `${scale}px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"`;
+        ctx.textBaseline = 'top';
+        for (let y = 0; y < resolution.height; y++) {
+          for (let x = 0; x < resolution.width; x++) {
+            ctx.fillText(collage[y][x], x * scale, y * scale);
+          }
+        }
+        tempCanvas.toBlob((blob) => {
+          const url = URL.createObjectURL(blob);
+          const link = document.createElement('a');
+          link.href = url;
+          link.download = 'emoji_collage.png';
+          document.body.appendChild(link);
+          link.click();
+          document.body.removeChild(link);
+          URL.revokeObjectURL(url);
+        }, 'image/png');
+      };
+
+      const downloadSVG = () => {
+        if (!collage.length) return;
+        const emojiSize = 20;
+        const svgW = resolution.width * emojiSize;
+        const svgH = resolution.height * emojiSize;
+
+        let svgContent = `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}">`;
+        svgContent += `<rect width="100%" height="100%" fill="${bgColor}"/>`;
+        svgContent += `<text font-size="${emojiSize}" font-family="Apple Color Emoji, Segoe UI Emoji, Noto Color Emoji, Android Emoji">`;
+
+        for (let y = 0; y < resolution.height; y++) {
+          for (let x = 0; x < resolution.width; x++) {
+            svgContent += `<tspan x="${x * emojiSize}" y="${(y + 1) * emojiSize}">${collage[y][x]}</tspan>`;
+          }
+        }
+
+        svgContent += '</text></svg>';
+        const blob = new Blob([svgContent], { type: 'image/svg+xml' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = 'emoji_collage.svg';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+      };
+
+      const openFullPage = () => {
+        if (!collage.length) return;
+        const baseFontSize = Math.max(6, Math.min(32, 800 / resolution.width));
+        const effectiveFontSize = baseFontSize * zoomLevel;
+        const htmlContent = `
+      <!DOCTYPE html>
+      <html lang="en">
+      <head>
+        <meta charset="UTF-8">
+        <title>Emoji Collage</title>
+        <style>
+          body { 
+            margin: 0; 
+            padding: 0; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            height: 100vh; 
+            background-color: ${bgColor}; 
+          }
+          .emoji-grid {
+              display: block;
+              font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji";
+              line-height: 1em; 
+              letter-spacing: -0.4em;
+          }
+
+        </style>
+      </head>
+      <body>
+        <div class="emoji-grid">
+          ${collage.map(row => `<div class="emoji-row">${row.join('')}</div>`).join('\n')}
+        </div>
+      </body>
+      </html>
+    `;
+        const newWindow = window.open('', '_blank');
+        if (newWindow) {
+          newWindow.document.open();
+          newWindow.document.write(htmlContent);
+          newWindow.document.close();
+        } else {
+          alert('Pop-up blocked. Please allow pop-ups for this website.');
+        }
+      };
+
+      const calculateMaxZoom = () => {
+        if (!collage.length || !resolution) return 3;
+        const viewportWidth = window.innerWidth;
+        const viewportHeight = window.innerHeight * 0.8; // 70% of viewport height to account for controls
+        const baseFontSize = Math.max(8, Math.min(64, 1000 / resolution.width));
+        const maxWidthZoom = viewportWidth / (resolution.width * baseFontSize);
+        const maxHeightZoom = viewportHeight / (resolution.height * baseFontSize);
+        return Math.max(1, Math.min(maxWidthZoom, maxHeightZoom, 4));
+      };
+
+      const increaseZoom = () => {
+        const maxZoom = calculateMaxZoom();
+        setZoomLevel(prev => Math.min(prev + 0.1, maxZoom));
+      };
+
+      const decreaseZoom = () => setZoomLevel(prev => Math.max(prev - 0.1, 0.2));
+
+      const resetZoom = () => {
+        const maxZoom = calculateMaxZoom();
+        setZoomLevel(Math.min(1, maxZoom));
+      };
+      // Render the collage preview
+      const renderCollagePreview = () => {
+        if (collage.length > 0) {
+          const baseFontSize = Math.max(8, Math.min(32, 800 / resolution.width));
+          const effectiveFontSize = baseFontSize * zoomLevel;
+          return h('div', {
+            className: 'collage-container',
+            style: {
+              width: (resolution.width * effectiveFontSize) + 'px',
+              height: (resolution.height * effectiveFontSize) + 'px',
+              backgroundColor: bgColor
+            }
+          }, [
+            h('div', {
+              className: 'emoji-grid',
+              style: { fontSize: effectiveFontSize + 'px' }
+            },
+              collage.map((row, rowIndex) =>
+                h('div', {
+                  key: rowIndex,
+                  className: 'emoji-row'
+                }, row.join(''))
+              )
+            )
+          ]);
+        }
+        return null;
+      };
+
+      // Render the palette preview
+      const renderPalettePreview = () => {
+        if (paletteProgress < 100) {
+          const keys = Object.keys(processedPalette);
+          const sample = keys.length <= 50 ? keys : keys.slice(-50);
+          return h('div', { className: 'mt-4' }, [
+            h('h2', { className: 'text-md font-medium mb-2' }, 'Palette Processing Preview:'),
+            h('div', { className: 'grid grid-cols-10 gap-1' },
+              sample.map(emoji => {
+                const color = processedPalette[emoji];
+                return h('div', {
+                  key: emoji,
+                  style: {
+                    backgroundColor: color ? `rgb(${color[0]}, ${color[1]}, ${color[2]})` : '#fff',
+                    border: '1px solid #ccc',
+                    width: '2em',
+                    height: '2em',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center'
+                  }
+                }, emoji);
+              })
+            )
+          ]);
+        }
+        return null;
+      };
+
+      // Render the lower section
+      const renderLowerSection = () => {
+        return h('div', { style: { backgroundColor: bgColor, width: '100%' } }, [
+          h('div', { className: 'p-6 max-w-6xl mx-auto' }, [
+            h('div', { className: 'bg-white p-4 rounded shadow mt-4 flex flex-col gap-4' }, [
+              originalImage && h('button', {
+                onClick: generateCollage,
+                className: 'px-4 py-2 bg-blue-500 text-white rounded hover:bg-blue-600 disabled:opacity-50',
+                disabled: processing || paletteProgress < 100
+              }, paletteProgress < 100 ? 'Building Emoji Palette...' : (processing ? 'Generating...' : 'Generate Collage')),
+              collage.length > 0 && h('div', { className: 'controls-row' }, [
+                h('button', { onClick: downloadPNG, className: 'px-4 py-2 bg-purple-500 text-white rounded hover:bg-purple-600' }, 'Download as PNG'),
+                h('button', { onClick: downloadSVG, className: 'px-4 py-2 bg-indigo-500 text-white rounded hover:bg-indigo-600' }, 'Download as SVG'),
+                h('button', { onClick: openFullPage, className: 'px-4 py-2 bg-yellow-500 text-white rounded hover:bg-yellow-600' }, 'Open as Full Page'),
+                h('button', { onClick: decreaseZoom, className: 'zoom-button', title: 'Zoom Out' }, '-'),
+                h('button', { onClick: resetZoom, className: 'zoom-button', title: 'Reset' }, 'Reset'),
+                h('button', { onClick: increaseZoom, className: 'zoom-button', title: 'Zoom In' }, '+')
+              ])
+            ]),
+            renderCollagePreview(),
+            h('div', { className: 'mt-6 text-center text-sm text-gray-500' }, '© 2025 Emoji Collage Maker')
+          ])
+        ]);
+      };
+
+      // Main return statement for the App component
+      return h('div', { className: 'p-6 max-w-6xl mx-auto' }, [
+        h('h1', { className: 'text-4xl font-bold mb-6 text-center' }, 'Emoji Collage Maker'),
+        h('div', { className: 'bg-white p-4 rounded shadow' }, [
+          h('div', { className: 'flex flex-wrap gap-4' }, [
+            h('div', { className: 'flex-1 min-w-[250px]' }, [
+              h('div', { className: 'space-y-2 mb-4' }, [
+                h('label', { className: 'block text-sm font-medium' }, 'Upload Image:'),
+                h('input', {
+                  type: 'file',
+                  accept: 'image/*',
+                  onChange: handleImageUpload,
+                  className: 'block w-full text-sm text-gray-500'
+                })
+              ]),
+              originalImage && h('div', { className: 'space-y-2 mb-4' }, [
+                h('label', { className: 'block text-sm font-medium' }, 'Resolution:'),
+                h('div', { className: 'flex gap-2 items-center' }, [
+                  h('input', {
+                    type: 'number',
+                    value: resolution.width,
+                    onChange: (e) => updateResolution(+e.target.value, resolution.height, true),
+                    className: 'w-20 px-2 py-1 border rounded'
+                  }),
+                  h('span', null, '×'),
+                  h('input', {
+                    type: 'number',
+                    value: resolution.height,
+                    onChange: (e) => updateResolution(resolution.width, +e.target.value, false),
+                    className: 'w-20 px-2 py-1 border rounded'
+                  })
+                ])
+              ]),
+              originalImage && h('div', { className: 'space-y-2 mb-4' }, [
+                h('label', { className: 'block text-sm font-medium' }, 'Background Color:'),
+                h('input', {
+                  type: 'color',
+                  value: bgColor,
+                  onChange: (e) => setBgColor(e.target.value),
+                  className: 'w-12 h-12 p-0 border rounded'
+                })
+              ]),
+              h(EmojiControls, {
+                onRegeneratePalette: () => {
+                  EmojiPaletteManager.clearCache();
+                  window.location.reload();
+                },
+                selectedCategories,
+                onCategoryChange: setSelectedCategories
+              }),
+              h('canvas', { ref: canvasRef, id: 'processingCanvas' }),
+              h('div', { className: 'text-sm text-gray-600 mb-4' },
+                paletteProgress < 100
+                  ? `Building emoji palette: ${paletteProgress}% complete (cached for future collage generations)...`
+                  : 'Emoji palette ready!'
+              ),
+              renderPalettePreview()
+            ]),
+            originalImage && h('div', { className: 'flex-shrink-0' }, [
+              h('h2', { className: 'text-lg font-medium mb-2' }, 'Original Image:'),
+              h('img', {
+                src: originalImage.src,
+                className: 'border rounded',
+                style: { maxHeight: '500px', maxWidth: '100%' }
+              })
+            ])
+          ])
+        ]),
+        renderLowerSection()
+      ]);
+    };
+
+    /* Render the App component */
+    render(h(App), document.getElementById('app'));
+  </script>
+</body>
+
+</html>
