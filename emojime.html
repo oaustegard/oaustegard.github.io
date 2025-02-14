@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Webcam Emoji Converter</title>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.19.6/preact.umd.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/preact/10.19.6/hooks.umd.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+
+    <style>
+        body {
+            margin: 0;
+            font-family: system-ui, -apple-system, sans-serif;
+            background: #1a1a1a;
+            /* Soft black background */
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            /* For better contrast on dark background */
+        }
+
+        .p-4 {
+            padding: 1rem;
+            width: 100%;
+            max-width: 100vw;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .emoji-output {
+            line-height: 1em;
+            letter-spacing: -0.4em;
+            font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji";
+            -webkit-text-size-adjust: none;
+            background: #222;
+            /* Slightly lighter than background for contrast */
+            aspect-ratio: 1;
+            width: min(90vw, 90vh);
+            /* Use viewport height too for better scaling */
+            margin: 0 auto;
+            font-size: 1em;
+            border: 1px solid #333;
+            /* Subtle border */
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            /* Subtle depth */
+        }
+
+        .space-y-4>*+* {
+            margin-top: 1rem;
+        }
+
+        .flex {
+            display: flex;
+        }
+
+        .gap-2>*+* {
+            margin-left: 0.5rem;
+        }
+
+        .justify-center {
+            justify-content: center;
+        }
+
+        .items-center {
+            align-items: center;
+        }
+
+        .w-4 {
+            width: 1rem;
+        }
+
+        .h-4 {
+            height: 1rem;
+        }
+
+        .text-center {
+            text-align: center;
+        }
+
+        .text-sm {
+            font-size: 0.875rem;
+        }
+
+        .rounded {
+            border-radius: 0.25rem;
+        }
+
+        .relative {
+            position: relative;
+        }
+
+        .w-full {
+            width: 100%;
+        }
+
+        .h-auto {
+            height: auto;
+        }
+
+        .border {
+            border: 1px solid #e5e7eb;
+        }
+
+        button {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            padding: 0.5rem 1rem;
+            border: none;
+            border-radius: 0.25rem;
+            cursor: pointer;
+            color: white;
+            font-size: 0.875rem;
+        }
+
+        button:disabled {
+            background-color: #d1d5db;
+            cursor: not-allowed;
+        }
+
+        button[class*="bg-blue"] {
+            background-color: #3b82f6;
+        }
+
+        button[class*="bg-red"] {
+            background-color: #ef4444;
+        }
+
+        .text-red-500 {
+            color: #ef4444;
+        }
+
+        .bg-red-50 {
+            background-color: #fef2f2;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="app"></div>
+
+    <script>
+        const { h, render } = preact;
+        const { useState, useEffect, useRef } = preactHooks;
+        const { createIcons } = lucide;
+
+        createIcons();
+
+        /* Color conversion utilities */
+        /******************************/
+
+/* Adjust color conversion to better handle blues and reduce contrast */
+const rgbToXyz = (r, g, b) => {
+    /* Boost blue channel more aggressively */
+    const blueBoost = 1.25;
+    b = Math.min(255, b * blueBoost);
+    
+    /* Reduce red channel more to counter sepia */
+    const redDamp = 0.85;
+    r = r * redDamp;
+
+    /* Slightly boost green to help with blues */
+    const greenBoost = 1.1;
+    g = Math.min(255, g * greenBoost);
+
+    r /= 255; g /= 255; b /= 255;
+    r = r > 0.04045 ? Math.pow((r + 0.055) / 1.055, 2.4) : r / 12.92;
+    g = g > 0.04045 ? Math.pow((g + 0.055) / 1.055, 2.4) : g / 12.92;
+    b = b > 0.04045 ? Math.pow((b + 0.055) / 1.055, 2.4) : b / 12.92;
+    
+    const x = r * 0.4124 + g * 0.3576 + b * 0.1805;
+    const y = r * 0.2126 + g * 0.7152 + b * 0.0722;
+    const z = r * 0.0193 + g * 0.1192 + b * 0.9505;
+    return [x, y, z];
+};
+
+
+
+        const xyzToLab = (x, y, z) => {
+            const refX = 0.95047, refY = 1.000, refZ = 1.08883;
+            x /= refX; y /= refY; z /= refZ;
+            x = x > 0.008856 ? Math.cbrt(x) : (7.787 * x) + (16 / 116);
+            y = y > 0.008856 ? Math.cbrt(y) : (7.787 * y) + (16 / 116);
+            z = z > 0.008856 ? Math.cbrt(z) : (7.787 * z) + (16 / 116);
+            const L = (116 * y) - 16;
+            const a = 500 * (x - y);
+            const b = 200 * (y - z);
+            return [L, a, b];
+        };
+
+        const rgbToLab = (r, g, b) => xyzToLab(...rgbToXyz(r, g, b));
+
+        /************ Color Index ************/
+        /*************************************/
+
+        /* Base emoji set with guaranteed fallbacks */
+        const createColorIndex = async () => {
+            /* Base emojis as a simple string */
+            const humanEmojis = '👶👧🧒👦👩🧑👨👱👵🧓👴🧔';
+
+            /* Skin tone modifiers */
+            const skinTones = [
+                '', '\u{1F3FB}', '\u{1F3FC}', '\u{1F3FD}', '\u{1F3FE}', '\u{1F3FF}'
+            ];
+
+            /* Color emojis focusing on non-skin colors */
+            const colorEmojis =
+                /* Blues */
+                '🌊💠🌐🌀' +
+                /* Greens */
+                '🌲🌿🌱' +
+                /* Reds - removed problematic red emojis */
+                '🍎🍅' +
+                /* Purples */
+                '🟣🔮' +
+                /* Orange */
+                '🟠🍊' +
+                /* Guaranteed fallbacks */
+                '⚫⚪⬜';
+
+            const index = {
+                lab: new Map(),
+                sorted: [],
+                fallbacks: {
+                    dark: '⚫',
+                    medium: '💩',
+                    light: '😶‍🌫️',
+                    veryLight: '⬜'
+                }
+            };
+
+            /* Process all emojis */
+            const processEmoji = async (emoji) => {
+                try {
+                    const color = await extractEmojiColor(emoji);
+                    const labColor = rgbToLab(...color);
+                    index.lab.set(emoji, labColor);
+                    index.sorted.push([emoji, labColor]);
+                    return true;
+                } catch (error) {
+                    console.error(`Failed to process emoji: ${emoji}`, error);
+                    return false;
+                }
+            };
+
+            /* Process human emojis with skin tones */
+            for (const emoji of Array.from(humanEmojis)) {
+                for (const tone of skinTones) {
+                    await processEmoji(emoji + tone);
+                }
+            }
+
+            /* Process color emojis */
+            for (const emoji of Array.from(colorEmojis)) {
+                await processEmoji(emoji);
+            }
+
+            /* Sort by LAB components */
+            index.sorted.sort(([, lab1], [, lab2]) => {
+                const [l1, a1, b1] = lab1;
+                const [l2, a2, b2] = lab2;
+                return l1 - l2 || a1 - a2 || b1 - b2;
+            });
+
+            /* Ensure we have at least some emojis */
+            if (index.sorted.length === 0) {
+                /* Emergency fallback */
+                const fallbackEmoji = '⬜';
+                const fallbackLab = [100, 0, 0];
+                index.lab.set(fallbackEmoji, fallbackLab);
+                index.sorted.push([fallbackEmoji, fallbackLab]);
+            }
+
+            return index;
+        };
+
+        /******** End Color Index ********/
+        /********************************/
+
+
+
+        const extractEmojiColor = (emoji) => {
+            return new Promise((resolve) => {
+                const canvas = document.createElement('canvas');
+                canvas.width = 50;
+                canvas.height = 50;
+                const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                ctx.font = '40px "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", "Android Emoji"';
+                ctx.textBaseline = 'middle';
+                ctx.textAlign = 'center';
+                ctx.fillText(emoji, canvas.width / 2, canvas.height / 2);
+
+                setTimeout(() => {
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const data = imageData.data;
+                    let r = 0, g = 0, b = 0, count = 0;
+
+                    for (let i = 0; i < data.length; i += 4) {
+                        /* Skip white background and transparent pixels */
+                        if (data[i + 3] > 250 && !(data[i] > 250 && data[i + 1] > 250 && data[i + 2] > 250)) {
+                            r += data[i];
+                            g += data[i + 1];
+                            b += data[i + 2];
+                            count++;
+                        }
+                    }
+
+                    if (count > 0) {
+                        resolve([Math.round(r / count), Math.round(g / count), Math.round(b / count)]);
+                    } else {
+                        resolve([128, 128, 128]); /* Fallback to gray */
+                    }
+                }, 10);
+            });
+        };
+
+
+        /********** Find Similar Emoji **********/
+        /***************************************/
+
+        const findSimilarEmoji = (index, targetLab, threshold = 5) => {
+            if (!index?.sorted?.length) return index?.fallbacks?.medium;
+
+            const [l, a, b] = targetLab;
+
+            try {
+                const matches = [];
+                let bestMatch = [index.fallbacks.medium, Infinity];
+
+                /* Scan all emojis */
+                for (const [emoji, lab] of index.sorted) {
+                    if (!emoji || !lab) continue;
+
+                    /* Adjusted color difference calculation */
+                    const diff = Math.sqrt(
+                        Math.pow(lab[0] - l, 2) * 1.5 +    /* Luminance weight */
+                        Math.pow(lab[1] - a, 2) * 0.6 +    /* Reduced 'a' channel weight */
+                        Math.pow(lab[2] - b, 2) * 0.8      /* Moderate 'b' channel weight */
+                    );
+
+                    if (diff <= threshold * 2.5) {
+                        matches.push([emoji, diff]);
+                    }
+                    if (diff < bestMatch[1]) {
+                        bestMatch = [emoji, diff];
+                    }
+                }
+
+                if (matches.length > 0) {
+                    matches.sort((a, b) => a[1] - b[1]);
+                    return matches[0][0];
+                }
+
+                /* More granular fallback selection */
+                if (l < 15) return index.fallbacks.veryDark;
+                if (l < 30) return index.fallbacks.dark;
+                if (l < 45) return index.fallbacks.mediumDark;
+                if (l < 60) return index.fallbacks.medium;
+                if (l < 75) return index.fallbacks.mediumLight;
+                if (l < 90) return index.fallbacks.light;
+                return index.fallbacks.veryLight;
+            } catch (error) {
+                console.error('Error in findSimilarEmoji:', error);
+                return index.fallbacks.medium;
+            }
+        };
+
+
+        /****** End Find Similar Emoji *******/
+        /*************************************/
+
+        function WebcamEmoji() {
+            const videoRef = useRef(null);
+            const canvasRef = useRef(null);
+            const outputRef = useRef(null);
+            const animationRef = useRef(null);
+            const [isStreaming, setIsStreaming] = useState(false);
+            const [error, setError] = useState('');
+            const [colorIndex, setColorIndex] = useState(null);
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                createColorIndex().then(index => {
+                    setColorIndex(index);
+                    setLoading(false);
+                });
+            }, []);
+
+            const startStream = async () => {
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: { ideal: 1280 },  /* Increased resolution */
+                            height: { ideal: 1280 }  /* Make it square */
+                        }
+                    });
+
+                    if (videoRef.current) {
+                        videoRef.current.srcObject = stream;
+                        await videoRef.current.play();
+                        setIsStreaming(true);
+                        setError('');
+                        processFrame();
+                    }
+                } catch (err) {
+                    setError(err.name === 'NotAllowedError' ?
+                        'Camera access denied. Please allow camera access and try again.' :
+                        err.name === 'NotFoundError' ?
+                            'No camera found' :
+                            'Camera error: ' + err.message);
+                }
+            };
+
+            const stopStream = () => {
+                if (animationRef.current) {
+                    cancelAnimationFrame(animationRef.current);
+                    animationRef.current = null;
+                }
+
+                if (videoRef.current?.srcObject) {
+                    videoRef.current.srcObject.getTracks().forEach(track => track.stop());
+                    videoRef.current.srcObject = null;
+                }
+
+                setIsStreaming(false);
+            };
+
+
+            /********** Process Frame **********/
+            /***********************************/
+
+
+            const processFrame = () => {
+                if (!videoRef.current || !canvasRef.current || !colorIndex) return;
+
+                const ctx = canvasRef.current.getContext('2d', { willReadFrequently: true });
+                if (!ctx) return;
+
+                const blockSize = 12;
+                const size = Math.min(videoRef.current.videoWidth, videoRef.current.videoHeight);
+                const outputSize = Math.floor(size / blockSize);
+
+                canvasRef.current.width = size;
+                canvasRef.current.height = size;
+
+                /* Mirror the image */
+                ctx.save();
+                ctx.scale(-1, 1);
+                ctx.drawImage(
+                    videoRef.current,
+                    (videoRef.current.videoWidth - size) / 2,
+                    (videoRef.current.videoHeight - size) / 2,
+                    size, size,
+                    -size, 0, size, size
+                );
+                ctx.restore();
+
+                /* Enhance contrast */
+                const imageData = ctx.getImageData(0, 0, size, size);
+                const data = imageData.data;
+
+                for (let i = 0; i < data.length; i += 4) {
+                    const factor = 1.25;
+                    data[i] = Math.min(255, Math.max(0, ((data[i] / 255 - 0.5) * factor + 0.5) * 255));
+                    data[i + 1] = Math.min(255, Math.max(0, ((data[i + 1] / 255 - 0.5) * factor + 0.5) * 255));
+                    data[i + 2] = Math.min(255, Math.max(0, ((data[i + 2] / 255 - 0.5) * factor + 0.5) * 255));
+                }
+                ctx.putImageData(imageData, 0, 0);
+
+                /* Initialize output grid with guaranteed fallback */
+                const outputGrid = Array(outputSize).fill().map(() => Array(outputSize).fill('⬜'));
+
+                try {
+                    for (let y = 0; y < outputSize; y++) {
+                        for (let x = 0; x < outputSize; x++) {
+                            let r = 0, g = 0, b = 0, count = 0;
+
+                            /* Sample pixels in block with bounds checking */
+                            for (let by = 0; by < blockSize; by++) {
+                                for (let bx = 0; bx < blockSize; bx++) {
+                                    const i = ((y * blockSize + by) * size + (x * blockSize + bx)) * 4;
+                                    if (i >= 0 && i < data.length - 3) {
+                                        r += data[i];
+                                        g += data[i + 1];
+                                        b += data[i + 2];
+                                        count++;
+                                    }
+                                }
+                            }
+
+                            let emoji;
+                            if (count > 0) {
+                                try {
+                                    r = Math.round(r / count);
+                                    g = Math.round(g / count);
+                                    b = Math.round(b / count);
+
+                                    const labColor = rgbToLab(r, g, b);
+                                    emoji = findSimilarEmoji(colorIndex, labColor);
+                                } catch (error) {
+                                    /* Fallback based on approximate brightness if color conversion fails */
+                                    const brightness = (r + g + b) / (3 * count);
+                                    emoji = brightness < 128 ? '⚫' : '⚪';
+                                }
+                            } else {
+                                /* Explicit fallback for empty blocks */
+                                emoji = '⬜';
+                            }
+
+                            /* Guarantee we never have undefined or null */
+                            outputGrid[y][x] = emoji || '⬜';
+                        }
+                    }
+
+                    /* Convert grid to string with strict row length checking */
+                    const output = outputGrid.map(row => {
+                        /* Ensure each row has exactly outputSize emojis */
+                        while (row.length < outputSize) {
+                            row.push('⬜');
+                        }
+                        return row.slice(0, outputSize).join('');
+                    }).join('\n');
+
+                    if (outputRef.current) {
+                        outputRef.current.textContent = output;
+                    }
+                } catch (error) {
+                    console.error('Error in frame processing:', error);
+                    /* Completely uniform fallback grid if everything fails */
+                    const fallbackOutput = Array(outputSize).fill('⬜'.repeat(outputSize)).join('\n');
+                    if (outputRef.current) {
+                        outputRef.current.textContent = fallbackOutput;
+                    }
+                }
+
+                animationRef.current = requestAnimationFrame(processFrame);
+            };
+
+
+            /********** End Process Frame **********/
+            /***************************************/
+
+
+
+            useEffect(() => {
+                return () => {
+                    if (isStreaming) {
+                        stopStream();
+                    }
+                };
+            }, []);
+
+            return h('div', { className: 'p-4' },
+                h('div', { className: 'space-y-4' }, [
+                    h('div', { className: 'text-center text-2xl font-bold mb-4' }, 'Webcam Emoji Mirror'),
+                    h('div', { className: 'flex gap-2 justify-center' }, [
+                        h('button', {
+                            onClick: startStream,
+                            disabled: isStreaming || loading,
+                            className: 'bg-blue-500'
+                        }, [
+                            h('i', { 'data-lucide': 'camera', className: 'w-4 h-4' }),
+                            loading ? 'Loading Emojis...' : 'Start Camera'
+                        ]),
+                        h('button', {
+                            onClick: stopStream,
+                            disabled: !isStreaming,
+                            className: 'bg-red-500'
+                        }, [
+                            h('i', { 'data-lucide': 'stop-circle', className: 'w-4 h-4' }),
+                            'Stop Camera'
+                        ])
+                    ]),
+                    error && h('div', {
+                        className: 'text-red-500 text-center text-sm p-2 bg-red-50 rounded'
+                    }, error),
+                    h('div', { className: 'relative mx-auto' }, [
+                        h('video', {
+                            ref: videoRef,
+                            autoPlay: true,
+                            playsInline: true,
+                            className: 'w-full h-auto',
+                            style: { display: 'none' }
+                        }),
+                        h('canvas', {
+                            ref: canvasRef,
+                            className: 'w-full h-auto',
+                            style: { display: 'none' }
+                        }),
+                        h('pre', {
+                            ref: outputRef,
+                            className: 'emoji-output border rounded p-2 text-center overflow-hidden whitespace-pre'
+                        })
+                    ])
+                ])
+            );
+        }
+
+        render(h(WebcamEmoji), document.getElementById('app'));
+    </script>
+</body>
+
+</html>
