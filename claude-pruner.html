@@ -54,107 +54,235 @@
         }
     </style>
     <script>
-        function processMessageContent(content) {
-            if (!content) return '';
-            const textParts = content
-                .filter(part => part.type === 'text')
-                .map(part => part.text.trim())
-                .join('\n');
-            return textParts;
+/* Utility functions */
+function estimateTokens(text) {
+    const words = text.trim().split(/\s+/).length;
+    return Math.round(words * 1.35);
+}
+
+function formatTimestamp(isoString) {
+    return new Date(isoString).toLocaleString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: true
+    });
+}
+
+function processMessageContent(message) {
+    if (!message.content) return message.text || '';
+    
+    const elements = [];
+    message.content.forEach(part => {
+        if (part.type === 'text') {
+            const text = part.text.trim();
+            if (text && !text.startsWith('<antArtifact')) {
+                elements.push(`<div class="text-content">${text}</div>`);
+            }
         }
+    });
 
-        function updateStats() {
-            const selected = document.querySelectorAll('.message.selected').length;
-            const total = document.querySelectorAll('.message').length;
-            const words = Array.from(document.querySelectorAll('.message.selected'))
-                .reduce((sum, msg) => sum + msg.textContent.trim().split(/\s+/).length, 0);
-            const tokens = Math.round(words * 1.35);
-            
-            document.querySelector('.stats').textContent = 
-                `Selected: ${selected}/${total} | Words: ${words} | Tokens: ~${tokens}`;
+    /* Process artifacts separately */
+    message.content.forEach(part => {
+        if (part.type === 'text' && part.text.includes('<antArtifact')) {
+            part.text.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/g)
+                ?.forEach(match => {
+                    const [, , title, content] = match.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/);
+                    const cleanContent = content
+                        .trim()
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+
+                    elements.push(`<div class="artifact selected" data-title="${title}">
+                        <div class="message-header">
+                            <h2>${title}</h2>
+                        </div>
+                        <pre><code>${cleanContent}</code></pre>
+                    </div>`);
+                });
         }
+    });
 
-        window.addEventListener('message', (event) => {
-            if (event.origin !== "https://claude.ai") return;
-            
-            if (event.data.type === 'claude-conversation') {
-                const data = event.data.data;
-                
-                // Create controls
-                const controls = document.createElement('div');
-                controls.className = 'controls';
-                controls.innerHTML = `
-                    <button id="toggle-all">Toggle All</button>
-                    <button id="toggle-human">Toggle Human</button>
-                    <button id="toggle-assistant">Toggle Assistant</button>
-                    <button id="export-selected">Export Selected</button>
-                    <div class="stats">Selected: 0/0 | Words: 0 | Tokens: ~0</div>
-                `;
-                document.body.appendChild(controls);
+    return elements.join('\n');
+}
 
-                // Create message container
-                const container = document.createElement('div');
-                container.id = 'messages';
-                document.body.appendChild(container);
+function formatSelectedContent() {
+    /* Get all messages and artifacts with their timestamps */
+    const selectedContent = [];
+    
+    /* Add selected messages */
+    document.querySelectorAll('.message.selected').forEach(el => {
+        const role = el.classList.contains('human') ? 'Human' : 'Assistant';
+        const timestamp = el.querySelector('.timestamp').textContent;
+        const textElements = Array.from(el.querySelector('.content').querySelectorAll('.text-content'))
+            .map(textEl => textEl.textContent.trim())
+            .filter(text => text)
+            .join('\n');
+        
+        if (textElements) {
+            selectedContent.push({
+                timestamp: new Date(timestamp).getTime(),
+                content: `<${role}>${textElements}</${role}>`,
+                type: 'message'
+            });
+        }
+    });
 
-                // Render messages
-                data.chat_messages.forEach(msg => {
-                    const div = document.createElement('div');
-                    div.className = `message ${msg.sender} selected`;
-                    div.innerHTML = `
-                        <strong>${msg.sender}</strong>
-                        <div class="content">${processMessageContent(msg.content)}</div>
-                    `;
-                    div.addEventListener('click', () => {
-                        div.classList.toggle('selected');
-                        updateStats();
-                    });
-                    container.appendChild(div);
-                });
+    /* Add selected artifacts */
+    document.querySelectorAll('.artifact.selected').forEach(artifact => {
+        const title = artifact.getAttribute('data-title');
+        const code = artifact.querySelector('code').textContent.trim();
+        const message = artifact.closest('.message');
+        const timestamp = message.querySelector('.timestamp').textContent;
+        
+        selectedContent.push({
+            timestamp: new Date(timestamp).getTime(),
+            content: `<Artifact title="${title}">${code}</Artifact>`,
+            type: 'artifact'
+        });
+    });
+    
+    /* Sort by timestamp */
+    selectedContent.sort((a, b) => a.timestamp - b.timestamp);
+    
+    return selectedContent.map(item => item.content).join('\n\n');
+}
 
-                // Add control event listeners
-                document.getElementById('toggle-all').addEventListener('click', () => {
-                    const msgs = document.querySelectorAll('.message');
-                    const allSelected = Array.from(msgs).every(m => m.classList.contains('selected'));
-                    msgs.forEach(m => m.classList.toggle('selected', !allSelected));
-                    updateStats();
-                });
+function updateStats() {
+    const selectedMessages = document.querySelectorAll('.message.selected').length;
+    const totalMessages = document.querySelectorAll('.message').length;
+    const selectedArtifacts = document.querySelectorAll('.artifact.selected').length;
+    const totalArtifacts = document.querySelectorAll('.artifact').length;
+    
+    const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .artifact.selected'))
+        .map(el => el.textContent)
+        .join(' ');
+    const words = selectedText.trim().split(/\s+/).length;
+    const tokens = estimateTokens(selectedText);
+    
+    document.querySelector('.stats').textContent = 
+        `Messages: ${selectedMessages}/${totalMessages} | Artifacts: ${selectedArtifacts}/${totalArtifacts} | Words: ${words} | Tokens: ~${tokens}`;
+}
 
-                document.getElementById('toggle-human').addEventListener('click', () => {
-                    document.querySelectorAll('.message.human').forEach(m => {
-                        m.classList.toggle('selected');
-                    });
-                    updateStats();
-                });
-
-                document.getElementById('toggle-assistant').addEventListener('click', () => {
-                    document.querySelectorAll('.message.assistant').forEach(m => {
-                        m.classList.toggle('selected');
-                    });
-                    updateStats();
-                });
-
-                document.getElementById('export-selected').addEventListener('click', () => {
-                    const selected = Array.from(document.querySelectorAll('.message.selected'))
-                        .map(msg => {
-                            const role = msg.classList.contains('human') ? 'Human' : 'Assistant';
-                            const content = msg.querySelector('.content').textContent;
-                            return `<${role}>${content}</${role}>`;
-                        })
-                        .join('\n\n');
-                    
-                    const blob = new Blob([selected], { type: 'text/plain' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'claude-conversation.txt';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                });
-
+/* Event handler setup */
+function setupEventListeners() {
+    /* Message selection */
+    document.querySelectorAll('.message').forEach(el => {
+        el.addEventListener('click', (e) => {
+            if (!e.target.closest('.artifact')) {
+                el.classList.toggle('selected');
                 updateStats();
             }
         });
+    });
+
+    /* Artifact selection */
+    document.querySelectorAll('.artifact').forEach(el => {
+        el.addEventListener('click', (e) => {
+            e.stopPropagation();
+            el.classList.toggle('selected');
+            updateStats();
+        });
+    });
+
+    /* Control buttons */
+    document.getElementById('toggle-all').onclick = () => {
+        const allElements = document.querySelectorAll('.message, .artifact');
+        const allSelected = Array.from(allElements).every(el => el.classList.contains('selected'));
+        allElements.forEach(el => el.classList.toggle('selected', !allSelected));
+        updateStats();
+    };
+
+    document.getElementById('toggle-human').onclick = () => {
+        document.querySelectorAll('.message.human').forEach(el => {
+            el.classList.toggle('selected');
+        });
+        updateStats();
+    };
+
+    document.getElementById('toggle-assistant').onclick = () => {
+        document.querySelectorAll('.message.assistant').forEach(el => {
+            el.classList.toggle('selected');
+        });
+        updateStats();
+    };
+
+    document.getElementById('toggle-artifacts').onclick = () => {
+        document.querySelectorAll('.artifact').forEach(el => {
+            el.classList.toggle('selected');
+        });
+        updateStats();
+    };
+
+    document.getElementById('copy-selected').onclick = () => {
+        const text = formatSelectedContent();
+        navigator.clipboard.writeText(text);
+        const btn = document.getElementById('copy-selected');
+        btn.textContent = 'Copied!';
+        setTimeout(() => {
+            btn.textContent = 'Copy';
+        }, 2000);
+    };
+
+    document.getElementById('download-selected').onclick = () => {
+        const text = formatSelectedContent();
+        const blob = new Blob([text], { type: 'text/plain' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = 'claude-conversation.txt';
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+}
+
+/* Main message handler */
+window.addEventListener('message', (event) => {
+    if (event.origin !== "https://claude.ai") return;
+    
+    if (event.data.type === 'claude-conversation') {
+        const data = event.data.data;
+        
+        /* Create controls */
+        const controls = document.createElement('div');
+        controls.className = 'controls';
+        controls.innerHTML = `
+            <button id="toggle-all">Toggle All</button>
+            <button id="toggle-human">Toggle Human</button>
+            <button id="toggle-assistant">Toggle Assistant</button>
+            <button id="toggle-artifacts">Toggle Artifacts</button>
+            <button id="copy-selected">Copy</button>
+            <button id="download-selected">Download</button>
+            <div class="stats">Messages: 0/0 | Artifacts: 0/0 | Words: 0 | Tokens: ~0</div>
+        `;
+        document.body.appendChild(controls);
+
+        /* Create message container */
+        const container = document.createElement('div');
+        container.id = 'messages';
+        document.body.appendChild(container);
+
+        /* Render messages */
+        data.chat_messages.forEach(msg => {
+            const div = document.createElement('div');
+            div.className = `message ${msg.sender} selected`;
+            div.innerHTML = `
+                <div class="message-header">
+                    <strong>${msg.sender}</strong>
+                    <span class="timestamp">${formatTimestamp(msg.created_at)}</span>
+                </div>
+                <div class="content">${processMessageContent(msg)}</div>
+            `;
+            container.appendChild(div);
+        });
+
+        setupEventListeners();
+        updateStats();
+    }
+});
     </script>
 </head>
 <body>
