@@ -1,14 +1,14 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Claude Export</title>
+    <title>Claude Pruner</title>
     <meta charset="utf-8">
     <style>
         body {
             font-family: system-ui, -apple-system, sans-serif;
-            max-width: 1200px;
-            margin: 0 auto;
+            margin: 0;
             padding: 20px;
+            min-height: 100vh;
         }
 
         .controls {
@@ -40,6 +40,24 @@
             margin-left: auto;
             font-size: 14px;
             color: #666;
+        }
+
+        /* Two-column layout */
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            gap: 20px;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+
+        .messages-column, .artifacts-column {
+            min-width: 0; /* Prevent overflow in grid */
+        }
+
+        .artifacts-column {
+            border-left: 1px solid #ddd;
+            padding-left: 20px;
         }
 
         /* Message Styling */
@@ -75,14 +93,9 @@
         }
 
         /* Artifact Styling */
-        .artifact-container {
-            pointer-events: none;
-            margin: 15px 0;
-        }
-
         .artifact {
-            pointer-events: auto;
             padding: 15px;
+            margin: 15px 0;
             border: 2px solid #2196F3;
             border-radius: 4px;
             background: #E3F2FD;
@@ -139,6 +152,15 @@
         .content {
             width: 100%;
         }
+
+        /* Column headers */
+        .column-header {
+            font-size: 1.2em;
+            font-weight: 500;
+            margin-bottom: 15px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #ddd;
+        }
     </style>
     <script>
         /* Utility functions */
@@ -159,9 +181,11 @@
         }
 
         function processMessageContent(message) {
-            if (!message.content) return message.text || '';
+            if (!message.content) return { text: message.text || '', artifacts: [] };
             
             const elements = [];
+            const artifacts = [];
+            
             message.content.forEach(part => {
                 if (part.type === 'text') {
                     const text = part.text.trim();
@@ -183,50 +207,48 @@
                                 .replace(/</g, '&lt;')
                                 .replace(/>/g, '&gt;');
 
-                            elements.push(`<div class="artifact-container"><div class="artifact selected" data-title="${title}">
-                                <div class="message-header">
-                                    <h2>${title}</h2>
-                                </div>
-                                <pre><code>${cleanContent}</code></pre>
-                            </div></div>`);
+                            artifacts.push({
+                                title,
+                                content: cleanContent,
+                                timestamp: message.created_at
+                            });
                         });
                 }
             });
 
-            return elements.join('\n');
+            return { text: elements.join('\n'), artifacts };
         }
 
         function formatSelectedContent() {
-            /* Get all messages and artifacts with their timestamps */
             const selectedContent = [];
             
             /* Add selected messages */
             document.querySelectorAll('.message.selected').forEach(el => {
                 const role = el.classList.contains('human') ? 'Human' : 'Assistant';
-                const timestamp = el.querySelector('.timestamp').textContent;
-                const textElements = Array.from(el.querySelector('.content').querySelectorAll('.text-content'))
+                const textElements = Array.from(el.querySelectorAll('.text-content'))
                     .map(textEl => textEl.textContent.trim())
                     .filter(text => text)
                     .join('\n');
                 
                 if (textElements) {
                     selectedContent.push({
-                        timestamp: new Date(timestamp).getTime(),
+                        timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
                         content: `<${role}>${textElements}</${role}>`,
                         type: 'message'
                     });
                 }
+            });
 
-                /* Get artifacts from selected messages */
-                el.querySelectorAll('.artifact.selected').forEach(artifact => {
-                    const title = artifact.getAttribute('data-title');
-                    const code = artifact.querySelector('code').textContent.trim();
-                    
-                    selectedContent.push({
-                        timestamp: new Date(timestamp).getTime(),
-                        content: `<Artifact title="${title}">${code}</Artifact>`,
-                        type: 'artifact'
-                    });
+            /* Add selected artifacts independently */
+            document.querySelectorAll('.artifact.selected').forEach(artifact => {
+                const title = artifact.getAttribute('data-title');
+                const code = artifact.querySelector('code').textContent.trim();
+                const timestamp = new Date(artifact.getAttribute('data-timestamp')).getTime();
+                
+                selectedContent.push({
+                    timestamp,
+                    content: `<Artifact title="${title}">${code}</Artifact>`,
+                    type: 'artifact'
                 });
             });
             
@@ -256,18 +278,15 @@
         function setupEventListeners() {
             /* Message selection */
             document.querySelectorAll('.message').forEach(el => {
-                el.addEventListener('click', (e) => {
-                    if (!e.target.closest('.artifact-container')) {
-                        el.classList.toggle('selected');
-                        updateStats();
-                    }
+                el.addEventListener('click', () => {
+                    el.classList.toggle('selected');
+                    updateStats();
                 });
             });
 
             /* Artifact selection */
             document.querySelectorAll('.artifact').forEach(el => {
-                el.addEventListener('click', (e) => {
-                    e.stopPropagation();
+                el.addEventListener('click', () => {
                     el.classList.toggle('selected');
                     updateStats();
                 });
@@ -293,7 +312,6 @@
             };
 
             document.getElementById('toggle-assistant').onclick = () => {
-                /* Only toggle the message, not its artifacts */
                 document.querySelectorAll('.message.assistant').forEach(el => {
                     el.classList.toggle('selected');
                 });
@@ -350,23 +368,56 @@
                 `;
                 document.body.appendChild(controls);
 
-                /* Create message container */
+                /* Create two-column container */
                 const container = document.createElement('div');
-                container.id = 'messages';
+                container.className = 'container';
+                
+                /* Create messages column */
+                const messagesColumn = document.createElement('div');
+                messagesColumn.className = 'messages-column';
+                messagesColumn.innerHTML = '<div class="column-header">Messages</div>';
+                
+                /* Create artifacts column */
+                const artifactsColumn = document.createElement('div');
+                artifactsColumn.className = 'artifacts-column';
+                artifactsColumn.innerHTML = '<div class="column-header">Artifacts</div>';
+                
+                container.appendChild(messagesColumn);
+                container.appendChild(artifactsColumn);
                 document.body.appendChild(container);
 
-                /* Render messages */
+                /* Process and render messages */
                 data.chat_messages.forEach(msg => {
-                    const div = document.createElement('div');
-                    div.className = `message ${msg.sender} selected`;
-                    div.innerHTML = `
+                    const { text, artifacts } = processMessageContent(msg);
+                    
+                    /* Create message element */
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = `message ${msg.sender} selected`;
+                    messageDiv.setAttribute('data-timestamp', msg.created_at);
+                    messageDiv.innerHTML = `
                         <div class="message-header">
                             <strong>${msg.sender}</strong>
                             <span class="timestamp">${formatTimestamp(msg.created_at)}</span>
                         </div>
-                        <div class="content">${processMessageContent(msg)}</div>
+                        <div class="content">${text}</div>
                     `;
-                    container.appendChild(div);
+                    messagesColumn.appendChild(messageDiv);
+
+                    /* Create artifact elements */
+                    artifacts.forEach(({ title, content, timestamp }) => {
+                        const artifactDiv = document.createElement('div');
+                        artifactDiv.className = 'artifact selected';
+                        artifactDiv.setAttribute('data-title', title);
+                        artifactDiv.setAttribute('data-timestamp', timestamp);
+                        artifactDiv.innerHTML = `
+                            <div class="message-header">
+                                <h2>${title}</h2>
+                                <span class="timestamp">${formatTimestamp(timestamp)}</span>
+                            </div>
+                            <pre><code>${content}</code></pre>
+                        `;
+                        artifactsColumn.appendChild(artifactDiv);
+                    });
                 });
 
                 setupEventListeners();
@@ -376,6 +427,6 @@
     </script>
 </head>
 <body>
-    <h1>Waiting for conversation data from Claude.ai...</h1>
+    <h1>Waiting for Claude.ai conversation data...</h1>
 </body>
 </html>
