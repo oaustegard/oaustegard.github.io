@@ -1,20 +1,158 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Claude Pruner</title>
+    <title>Claude Export</title>
     <meta charset="utf-8">
+    <style>
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .message {
+            padding: 15px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .message.selected {
+            border-color: #4CAF50;
+            background: #E8F5E9;
+        }
+        .message:not(.selected) {
+            border-color: #ff4444;
+            background: #fff0f0;
+            opacity: 0.7;
+        }
+        .controls {
+            position: sticky;
+            top: 0;
+            background: white;
+            padding: 10px;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+        button {
+            padding: 8px 16px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background: #f5f5f5;
+        }
+        .stats {
+            margin-left: auto;
+            font-size: 14px;
+            color: #666;
+        }
+    </style>
     <script>
+        function processMessageContent(content) {
+            if (!content) return '';
+            const textParts = content
+                .filter(part => part.type === 'text')
+                .map(part => part.text.trim())
+                .join('\n');
+            return textParts;
+        }
+
+        function updateStats() {
+            const selected = document.querySelectorAll('.message.selected').length;
+            const total = document.querySelectorAll('.message').length;
+            const words = Array.from(document.querySelectorAll('.message.selected'))
+                .reduce((sum, msg) => sum + msg.textContent.trim().split(/\s+/).length, 0);
+            const tokens = Math.round(words * 1.35);
+            
+            document.querySelector('.stats').textContent = 
+                `Selected: ${selected}/${total} | Words: ${words} | Tokens: ~${tokens}`;
+        }
+
         window.addEventListener('message', (event) => {
-            // Verify the sender origin
             if (event.origin !== "https://claude.ai") return;
             
             if (event.data.type === 'claude-conversation') {
-                console.log('Received conversation data:', event.data.data);
-                // Once this works, we can add the full export functionality
-                document.body.innerHTML = `
-                    <div>Received ${event.data.data.chat_messages.length} messages</div>
-                    <pre>${JSON.stringify(event.data.data.chat_messages[0], null, 2)}</pre>
+                const data = event.data.data;
+                
+                // Create controls
+                const controls = document.createElement('div');
+                controls.className = 'controls';
+                controls.innerHTML = `
+                    <button id="toggle-all">Toggle All</button>
+                    <button id="toggle-human">Toggle Human</button>
+                    <button id="toggle-assistant">Toggle Assistant</button>
+                    <button id="export-selected">Export Selected</button>
+                    <div class="stats">Selected: 0/0 | Words: 0 | Tokens: ~0</div>
                 `;
+                document.body.appendChild(controls);
+
+                // Create message container
+                const container = document.createElement('div');
+                container.id = 'messages';
+                document.body.appendChild(container);
+
+                // Render messages
+                data.chat_messages.forEach(msg => {
+                    const div = document.createElement('div');
+                    div.className = `message ${msg.sender} selected`;
+                    div.innerHTML = `
+                        <strong>${msg.sender}</strong>
+                        <div class="content">${processMessageContent(msg.content)}</div>
+                    `;
+                    div.addEventListener('click', () => {
+                        div.classList.toggle('selected');
+                        updateStats();
+                    });
+                    container.appendChild(div);
+                });
+
+                // Add control event listeners
+                document.getElementById('toggle-all').addEventListener('click', () => {
+                    const msgs = document.querySelectorAll('.message');
+                    const allSelected = Array.from(msgs).every(m => m.classList.contains('selected'));
+                    msgs.forEach(m => m.classList.toggle('selected', !allSelected));
+                    updateStats();
+                });
+
+                document.getElementById('toggle-human').addEventListener('click', () => {
+                    document.querySelectorAll('.message.human').forEach(m => {
+                        m.classList.toggle('selected');
+                    });
+                    updateStats();
+                });
+
+                document.getElementById('toggle-assistant').addEventListener('click', () => {
+                    document.querySelectorAll('.message.assistant').forEach(m => {
+                        m.classList.toggle('selected');
+                    });
+                    updateStats();
+                });
+
+                document.getElementById('export-selected').addEventListener('click', () => {
+                    const selected = Array.from(document.querySelectorAll('.message.selected'))
+                        .map(msg => {
+                            const role = msg.classList.contains('human') ? 'Human' : 'Assistant';
+                            const content = msg.querySelector('.content').textContent;
+                            return `<${role}>${content}</${role}>`;
+                        })
+                        .join('\n\n');
+                    
+                    const blob = new Blob([selected], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'claude-conversation.txt';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                });
+
+                updateStats();
             }
         });
     </script>
