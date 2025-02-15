@@ -45,14 +45,17 @@
         /* Two-column layout */
         .container {
             display: grid;
-            grid-template-columns: 1fr 400px;
+            grid-template-columns: 1fr 1fr; /* Equal width columns */
             gap: 20px;
-            max-width: 1600px;
+            max-width: 1800px;
             margin: 0 auto;
         }
 
         .messages-column, .artifacts-column {
-            min-width: 0; /* Prevent overflow in grid */
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
         }
 
         .artifacts-column {
@@ -63,7 +66,6 @@
         /* Message Styling */
         .message {
             padding: 15px;
-            margin: 10px 0;
             border: 2px solid #ddd;
             border-radius: 4px;
             cursor: pointer;
@@ -86,6 +88,12 @@
             align-items: center;
             margin-bottom: 10px;
         }
+        
+        .message-pair {
+            display: grid;
+            grid-template-columns: 1fr;
+            min-height: min-content;
+        }
 
         .timestamp {
             font-size: 0.85em;
@@ -95,7 +103,6 @@
         /* Artifact Styling */
         .artifact {
             padding: 15px;
-            margin: 15px 0;
             border: 2px solid #2196F3;
             border-radius: 4px;
             background: #E3F2FD;
@@ -127,6 +134,14 @@
             color: #1565C0;
         }
 
+        /* Message and Artifact common styles */
+        .message, .artifact {
+            max-height: 400px;
+            overflow-y: auto;
+            margin: 0; 
+        }
+
+
         /* Code Block Styling */
         pre {
             margin: 0;
@@ -135,6 +150,8 @@
             border: 1px solid #e2e8f0;
             border-radius: 4px;
             overflow-x: auto;
+            white-space: pre-wrap;
+            word-break: break-word;
         }
 
         code {
@@ -151,15 +168,17 @@
 
         .content {
             width: 100%;
+            overflow-x: auto;
         }
 
         /* Column headers */
         .column-header {
-            font-size: 1.2em;
-            font-weight: 500;
-            margin-bottom: 15px;
-            padding-bottom: 10px;
-            border-bottom: 2px solid #ddd;
+            position: sticky;
+            top: 0;
+            background: white;
+            z-index: 1;
+            padding: 10px 0;
+            margin: 0;
         }
     </style>
     <script>
@@ -347,6 +366,47 @@
             };
         }
 
+        
+        function renderMessagePair(msg, { text, artifacts }, messagesColumn, artifactsColumn) {
+            const timestamp = msg.created_at;
+            const formattedTime = formatTimestamp(timestamp);
+
+            /* Calculate the height of artifacts for this message */
+            const artifactElements = artifacts.map(({ title, content }) => {
+                const artifactDiv = document.createElement('div');
+                artifactDiv.className = 'artifact selected';
+                artifactDiv.setAttribute('data-title', title);
+                artifactDiv.setAttribute('data-timestamp', timestamp);
+                artifactDiv.innerHTML = `
+                    <div class="message-header">
+                        <h2>${title}</h2>
+                        <span class="timestamp">${formattedTime}</span>
+                    </div>
+                    <pre><code>${content}</code></pre>
+                `;
+                return artifactDiv;
+            });
+
+            /* Create message element */
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${msg.sender} selected`;
+            messageDiv.setAttribute('data-timestamp', timestamp);
+            messageDiv.innerHTML = `
+                <div class="message-header">
+                    <strong>${msg.sender}</strong>
+                    <span class="timestamp">${formattedTime}</span>
+                </div>
+                <div class="content">${text}</div>
+            `;
+
+            /* Add elements to their respective columns */
+            messagesColumn.appendChild(messageDiv);
+            artifactElements.forEach(artifact => artifactsColumn.appendChild(artifact));
+
+            /* Return the message div and artifact elements for potential height synchronization */
+            return { messageDiv, artifactElements };
+        }
+
         /* Main message handler */
         window.addEventListener('message', (event) => {
             if (event.origin !== "https://claude.ai") return;
@@ -354,7 +414,7 @@
             if (event.data.type === 'claude-conversation') {
                 const data = event.data.data;
                 
-                /* Create controls */
+                /* Create controls - Same as before */
                 const controls = document.createElement('div');
                 controls.className = 'controls';
                 controls.innerHTML = `
@@ -372,12 +432,11 @@
                 const container = document.createElement('div');
                 container.className = 'container';
                 
-                /* Create messages column */
+                /* Create columns */
                 const messagesColumn = document.createElement('div');
                 messagesColumn.className = 'messages-column';
                 messagesColumn.innerHTML = '<div class="column-header">Messages</div>';
                 
-                /* Create artifacts column */
                 const artifactsColumn = document.createElement('div');
                 artifactsColumn.className = 'artifacts-column';
                 artifactsColumn.innerHTML = '<div class="column-header">Artifacts</div>';
@@ -388,38 +447,11 @@
 
                 /* Process and render messages */
                 data.chat_messages.forEach(msg => {
-                    const { text, artifacts } = processMessageContent(msg);
-                    
-                    /* Create message element */
-                    const messageDiv = document.createElement('div');
-                    messageDiv.className = `message ${msg.sender} selected`;
-                    messageDiv.setAttribute('data-timestamp', msg.created_at);
-                    messageDiv.innerHTML = `
-                        <div class="message-header">
-                            <strong>${msg.sender}</strong>
-                            <span class="timestamp">${formatTimestamp(msg.created_at)}</span>
-                        </div>
-                        <div class="content">${text}</div>
-                    `;
-                    messagesColumn.appendChild(messageDiv);
-
-                    /* Create artifact elements */
-                    artifacts.forEach(({ title, content, timestamp }) => {
-                        const artifactDiv = document.createElement('div');
-                        artifactDiv.className = 'artifact selected';
-                        artifactDiv.setAttribute('data-title', title);
-                        artifactDiv.setAttribute('data-timestamp', timestamp);
-                        artifactDiv.innerHTML = `
-                            <div class="message-header">
-                                <h2>${title}</h2>
-                                <span class="timestamp">${formatTimestamp(timestamp)}</span>
-                            </div>
-                            <pre><code>${content}</code></pre>
-                        `;
-                        artifactsColumn.appendChild(artifactDiv);
-                    });
+                    const processedContent = processMessageContent(msg);
+                    renderMessagePair(msg, processedContent, messagesColumn, artifactsColumn);
                 });
 
+                /* Set up event listeners and update stats */
                 setupEventListeners();
                 updateStats();
             }
