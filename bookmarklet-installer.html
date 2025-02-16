@@ -67,6 +67,12 @@
       border-radius: 4px;
       margin: 1rem 0;
     }
+    .source {
+      margin-top: 2rem; 
+      padding-top: 1rem; 
+      border-top: 1px solid #ddd; 
+      color: #666;
+    }
   </style>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/js-beautify/1.15.1/beautify.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/terser/dist/bundle.min.js"></script>
@@ -108,6 +114,10 @@
     <strong>Installation:</strong>
     <p>Drag the link above to your bookmarks bar. Click it on any webpage to run the bookmarklet.</p>
   </div>
+
+  <div class="source">
+    Source code available on <a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/bookmarklet-installer.html">GitHub</a>
+  </div>
   
   <script>
     (async function() {
@@ -119,7 +129,8 @@
         beautify: document.getElementById('beautifyButton'),
         link: document.getElementById('bookmarkletLink'),
         error: document.getElementById('error'),
-        readme: document.getElementById('readmeLink')
+        readme: document.getElementById('readmeLink'),
+        readmeFiles: new Set() /* Store README files for quick lookup */
       };
 
       /* URL State Management */
@@ -138,7 +149,7 @@
         return params.get('bookmarklet');
       }
 
-      /* Fetch bookmarklets from GitHub */
+      /* Fetch bookmarklets (and whether they have a README) from GitHub */
       async function fetchBookmarklets() {
         try {
           const response = await fetch('https://api.github.com/repos/oaustegard/bookmarklets/contents/');
@@ -147,16 +158,23 @@
           }
           const data = await response.json();
           
+          /* Store README files in Set for O(1) lookup */
+          elements.readmeFiles = new Set(
+            data
+              .filter(file => file.name.endsWith('_README.md'))
+              .map(file => file.name.replace('_README.md', '.js'))
+          );
+          
           data
             .filter(file => !file.name.startsWith('_') && file.name.endsWith('.js'))
             .forEach(file => {
               const option = document.createElement('option');
               option.value = file.name;
-              option.textContent = file.name.replace('.js', '');
+              option.textContent = file.name.replace('.js', '') + 
+                (elements.readmeFiles.has(file.name) ? ' (has README)' : '');
               elements.select.appendChild(option);
             });
-
-          /* After loading, check for bookmarklet in URL */
+      
           const urlBookmarklet = getBookmarkletFromURL();
           if (urlBookmarklet) {
             const matchingOption = Array.from(elements.select.options)
@@ -173,31 +191,16 @@
       }
 
       /* Update the README link if available */
-      async function updateReadmeLink(selectedBookmarklet) {
-        if (!selectedBookmarklet) {
+      function updateReadmeLink(selectedBookmarklet) {
+        if (!selectedBookmarklet || !elements.readmeFiles.has(selectedBookmarklet)) {
           elements.readme.style.display = 'none';
           elements.readme.innerHTML = '';
           return;
         }
-        // Construct the README filename using the naming convention.
-        const readmeFilename = selectedBookmarklet.replace('.js', '_README.md');
-        // Use the raw URL to check if the file exists...
-        const rawReadmeUrl = `https://raw.githubusercontent.com/oaustegard/bookmarklets/main/${readmeFilename}`;
-        // ...but link to the GitHub rendered version.
-        const githubReadmeUrl = `https://github.com/oaustegard/bookmarklets/blob/main/${readmeFilename}`;
-        try {
-          const response = await fetch(rawReadmeUrl);
-          if (response.ok) {
-            elements.readme.style.display = 'block';
-            elements.readme.innerHTML = `<a href="${githubReadmeUrl}" target="_blank">View README</a>`;
-          } else {
-            elements.readme.style.display = 'none';
-            elements.readme.innerHTML = '';
-          }
-        } catch (error) {
-          elements.readme.style.display = 'none';
-          elements.readme.innerHTML = '';
-        }
+        
+        const githubReadmeUrl = `https://github.com/oaustegard/bookmarklets/blob/main/${selectedBookmarklet.replace('.js', '_README.md')}`;
+        elements.readme.style.display = 'block';
+        elements.readme.innerHTML = `<a href="${githubReadmeUrl}" target="_blank">View README</a>`;
       }
 
       /* Handle bookmarklet selection */
