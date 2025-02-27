@@ -141,9 +141,57 @@
             display: none;
         }
 
-        /* New style for the quote toggle option */
         .quote-option {
             margin-bottom: 1rem;
+        }
+
+        .auth-section {
+            background-color: #f3f4f6;
+            padding: 1rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+        }
+        
+        .auth-toggle {
+            display: flex;
+            align-items: center;
+            margin-bottom: 1rem;
+            cursor: pointer;
+        }
+        
+        .auth-toggle input {
+            margin-right: 0.5rem;
+        }
+        
+        .auth-fields {
+            display: none;
+        }
+        
+        .auth-fields.visible {
+            display: block;
+            animation: fadeIn 0.3s ease-out;
+        }
+        
+        .tab-container {
+            display: flex;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid #ccc;
+        }
+        
+        .tab {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+        
+        .tab.active {
+            border-bottom: 2px solid #3b82f6;
+            font-weight: bold;
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
         }
     </style>
 </head>
@@ -155,18 +203,61 @@
 
     <div id="app" style="display: none">
         <h1>🦋 BlueSky Post Engagement Processor 🧵</h1>
-        <p>Given the url of a post will extract the responses or (max 100) quote posts to the original post from the public Bluesky API.<br>
-            Data is deidentified and reduced, then made available in JSON for further analysis.</p>
+        <p>Extract replies, quote posts, and search for posts using the Bluesky API.<br>
+          Data is deidentified and reduced, then made available in JSON for further analysis.</p>
 
-        <form id="processor-form">
-            <div class="input-group">
-              <input type="url" id="url-input" placeholder="Enter Bluesky post URL" required />
+        <div class="auth-section">
+            <div class="auth-toggle">
+                <input type="checkbox" id="auth-checkbox">
+                <label for="auth-checkbox">Use authentication (required for search and some operations)</label>
             </div>
-            <div class="input-group" style="gap: 0.5rem;">
-              <button type="submit" id="process-replies">Process Replies</button>
-              <button type="submit" id="process-quotes">Process Quotes</button>
+            <div class="auth-fields">
+                <div class="input-group">
+                    <input type="text" id="handle-input" placeholder="Your Bluesky handle (e.g., user.bsky.social)" />
+                </div>
+                <div class="input-group">
+                    <input type="password" id="app-password-input" placeholder="App password (create one in Bluesky settings)" />
+                </div>
+                <button id="login-button">Login</button>
+                <div id="auth-status"></div>
             </div>
-          </form>
+        </div>
+
+        <div class="tab-container">
+            <div class="tab active" data-tab="engagement">Engagement</div>
+            <div class="tab" data-tab="search">Search</div>
+        </div>
+
+        <div id="engagement-tab" class="tab-content">
+            <form id="processor-form">
+                <div class="input-group">
+                  <input type="url" id="url-input" placeholder="Enter Bluesky post URL" required />
+                </div>
+                <div class="input-group" style="gap: 0.5rem;">
+                  <button type="submit" id="process-replies">Process Replies</button>
+                  <button type="submit" id="process-quotes">Process Quotes</button>
+                </div>
+            </form>
+        </div>
+        
+        <div id="search-tab" class="tab-content" style="display: none;">
+            <form id="search-form">
+                <div class="input-group">
+                  <input type="text" id="search-input" placeholder="Search query" required />
+                </div>
+                <div class="input-group">
+                    <select id="sort-select">
+                        <option value="latest">Latest</option>
+                        <option value="top">Top</option>
+                    </select>
+                    <input type="text" id="author-input" placeholder="Filter by author (handle)" />
+                    <input type="number" id="limit-input" placeholder="Limit (max 100)" min="1" max="100" value="25" />
+                </div>
+                <div class="input-group">
+                  <button type="submit" id="search-button">Search Posts</button>
+                </div>
+            </form>
+        </div>
           
         <div id="error"></div>
         <div class="output-container">
@@ -187,10 +278,12 @@
             const { BskyAgent } = await import('https://esm.sh/@atproto/api');
             document.getElementById('app').style.display = 'block';
 
-            // Create the agent using the public endpoint – no authentication required.
-            const agent = new BskyAgent({
+            // Create the agent using the public endpoint initially
+            let agent = new BskyAgent({
                 service: 'https://public.api.bsky.app'
             });
+            
+            let isAuthenticated = false;
 
             const debugLog = {
                 add(type, data) {
@@ -201,13 +294,98 @@
                 }
             };
 
-            const form = document.getElementById('processor-form');
-            const input = document.getElementById('url-input');
-            const button = form.querySelector('button');
+            /* Tab Navigation */
+            const tabs = document.querySelectorAll('.tab');
+            tabs.forEach(tab => {
+                tab.addEventListener('click', () => {
+                    tabs.forEach(t => t.classList.remove('active'));
+                    tab.classList.add('active');
+                    const tabName = tab.getAttribute('data-tab');
+                    document.querySelectorAll('.tab-content').forEach(content => {
+                        content.style.display = 'none';
+                    });
+                    document.getElementById(`${tabName}-tab`).style.display = 'block';
+                    // Clear output when changing tabs
+                    document.getElementById('output').textContent = '';
+                    document.querySelector('.output-actions').style.display = 'none';
+                    document.getElementById('error').style.display = 'none';
+                });
+            });
+
+            /* Authentication handling */
+            const authCheckbox = document.getElementById('auth-checkbox');
+            const authFields = document.querySelector('.auth-fields');
+            const loginButton = document.getElementById('login-button');
+            const handleInput = document.getElementById('handle-input');
+            const appPasswordInput = document.getElementById('app-password-input');
+            const authStatus = document.getElementById('auth-status');
+            
+            authCheckbox.addEventListener('change', () => {
+                authFields.classList.toggle('visible', authCheckbox.checked);
+                if (!authCheckbox.checked) {
+                    // Switch back to public agent if auth is disabled
+                    agent = new BskyAgent({
+                        service: 'https://public.api.bsky.app'
+                    });
+                    isAuthenticated = false;
+                    authStatus.textContent = '';
+                }
+            });
+            
+            loginButton.addEventListener('click', async () => {
+                const handle = handleInput.value.trim();
+                const appPassword = appPasswordInput.value.trim();
+                
+                if (!handle || !appPassword) {
+                    authStatus.textContent = 'Please enter both handle and app password';
+                    authStatus.style.color = '#ef4444';
+                    return;
+                }
+                
+                loginButton.disabled = true;
+                loginButton.innerHTML = '<span class="loading"></span>Logging in...';
+                authStatus.textContent = '';
+                
+                try {
+                    // Create a new agent with bsky.social as the service
+                    agent = new BskyAgent({
+                        service: 'https://bsky.social'
+                    });
+                    
+                    await agent.login({
+                        identifier: handle,
+                        password: appPassword
+                    });
+                    
+                    isAuthenticated = true;
+                    authStatus.textContent = 'Successfully authenticated!';
+                    authStatus.style.color = '#16a34a';
+                    debugLog.add('login_success', { handle });
+                } catch (err) {
+                    authStatus.textContent = `Authentication failed: ${err.message}`;
+                    authStatus.style.color = '#ef4444';
+                    isAuthenticated = false;
+                    debugLog.add('login_error', err);
+                } finally {
+                    loginButton.disabled = false;
+                    loginButton.textContent = 'Login';
+                }
+            });
+
+            /* Existing code for processor form and engagement functionality */
+            const processorForm = document.getElementById('processor-form');
+            const urlInput = document.getElementById('url-input');
             const error = document.getElementById('error');
             const output = document.getElementById('output');
             const copyButton = document.getElementById('copy-button');
             const copyFeedback = document.getElementById('copy-feedback');
+
+            /* Search form setup */
+            const searchForm = document.getElementById('search-form');
+            const searchInput = document.getElementById('search-input');
+            const sortSelect = document.getElementById('sort-select');
+            const authorInput = document.getElementById('author-input');
+            const limitInput = document.getElementById('limit-input');
 
             // === Query String Parameter Handling ===
 
@@ -227,9 +405,9 @@
             }
 
             function autoProcessIfReady() {
-                const currentUrl = input.value.trim();
-                if (currentUrl && !button.disabled) {
-                    form.dispatchEvent(new Event('submit'));
+                const currentUrl = urlInput.value.trim();
+                if (currentUrl) {
+                    processorForm.dispatchEvent(new Event('submit'));
                 }
             }
 
@@ -237,13 +415,17 @@
                 const qspUrl = getQueryParam('url');
                 const qspQuotes = getQueryParam('quotes');
                 if (qspUrl) {
-                    input.value = qspUrl;
+                    urlInput.value = qspUrl;
                     updateQueryParam('url', qspUrl);
                     autoProcessIfReady();
                 }
+                
+                const qspSearch = getQueryParam('search');
+                if (qspSearch) {
+                    searchInput.value = qspSearch;
+                    document.querySelector('[data-tab="search"]').click();
+                }
             });
-
-
 
             // Helper Functions
 
@@ -307,36 +489,36 @@
 
             // Process a post to extract key fields.
             function processPost(post, idCounter) {
-            debugLog.add('process_post', post);
-            if (!post?.record) return null;
-            let content = post.record.text || '';
-            if (post.record.facets && Array.isArray(post.record.facets)) {
-                content = reconstructTextWithFacets(content, post.record.facets);
-            }
-            const result = {
-                id: idCounter,
-                author: post.author?.did || 'unknown',
-                createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0),
-                content: content
-            };
-            // Handle image embeds.
-            if (post.record?.embed?.$type === 'app.bsky.embed.images' && post.embed?.$type === 'app.bsky.embed.images#view') {
-                result.images = post.record.embed.images.map((img, i) => ({
-                url: post.embed.images[i].fullsize,
-                alt: img.alt
-                })).filter(img => img.url);
-            }
-            // Handle record embeds.
-            if (post.record?.embed?.$type === 'app.bsky.embed.record' && post.embed?.$type === 'app.bsky.embed.record#view') {
-                result.embed = post.embed;
-            }
-            if (post.likeCount > 0) {
-                result.likes = parseInt(post.likeCount);
-            }
-            if (post.repostCount > 0) {
-                result.reposts = parseInt(post.repostCount);
-            }
-            return result;
+                debugLog.add('process_post', post);
+                if (!post?.record) return null;
+                let content = post.record.text || '';
+                if (post.record.facets && Array.isArray(post.record.facets)) {
+                    content = reconstructTextWithFacets(content, post.record.facets);
+                }
+                const result = {
+                    id: idCounter,
+                    author: post.author?.did || 'unknown',
+                    createdAt: post.record?.createdAt ? new Date(post.record.createdAt) : new Date(0),
+                    content: content
+                };
+                // Handle image embeds.
+                if (post.record?.embed?.$type === 'app.bsky.embed.images' && post.embed?.$type === 'app.bsky.embed.images#view') {
+                    result.images = post.record.embed.images.map((img, i) => ({
+                    url: post.embed.images[i].fullsize,
+                    alt: img.alt
+                    })).filter(img => img.url);
+                }
+                // Handle record embeds.
+                if (post.record?.embed?.$type === 'app.bsky.embed.record' && post.embed?.$type === 'app.bsky.embed.record#view') {
+                    result.embed = post.embed;
+                }
+                if (post.likeCount > 0) {
+                    result.likes = parseInt(post.likeCount);
+                }
+                if (post.repostCount > 0) {
+                    result.reposts = parseInt(post.repostCount);
+                }
+                return result;
             }
 
 
@@ -431,49 +613,110 @@
             // Process quotes by first fetching the actor's profile to get its DID,
             // then building the correct post URI and calling getQuotes with a limit of 100.
             async function processQuotes(postInfo) {
-            debugLog.clear();
-            // Fetch the actor profile using the web handle.
-            const profileRes = await agent.api.app.bsky.actor.getProfile({
-                actor: postInfo.handle
-            });
-            // Updated check: use profileRes.data.did directly.
-            if (!profileRes.data || !profileRes.data.did) {
-                throw new Error('Failed to fetch actor profile');
-            }
-            const did = profileRes.data.did;
-            // Construct the root post URI using the actor's DID.
-            const rootURI = `at://${did}/app.bsky.feed.post/${postInfo.postId}`;
+                debugLog.clear();
+                // Fetch the actor profile using the web handle.
+                const profileRes = await agent.api.app.bsky.actor.getProfile({
+                    actor: postInfo.handle
+                });
+                // Updated check: use profileRes.data.did directly.
+                if (!profileRes.data || !profileRes.data.did) {
+                    throw new Error('Failed to fetch actor profile');
+                }
+                const did = profileRes.data.did;
+                // Construct the root post URI using the actor's DID.
+                const rootURI = `at://${did}/app.bsky.feed.post/${postInfo.postId}`;
 
-            // Fetch the root post (shallow fetch).
-            const threadData = await agent.getPostThread({ uri: rootURI, depth: 1 });
-            if (!threadData?.data?.thread?.post) {
-                throw new Error('Failed to fetch root post');
-            }
-            let postCounter = 1;
-            const rootPost = processPost(threadData.data.thread.post, postCounter);
+                // Fetch the root post (shallow fetch).
+                const threadData = await agent.getPostThread({ uri: rootURI, depth: 1 });
+                if (!threadData?.data?.thread?.post) {
+                    throw new Error('Failed to fetch root post');
+                }
+                let postCounter = 1;
+                const rootPost = processPost(threadData.data.thread.post, postCounter);
 
-            // Fetch quotes using the public getQuotes API endpoint with limit 100.
-            const quotesData = await agent.api.app.bsky.feed.getQuotes({
-                uri: rootURI,
-                limit: 100
-            });
-            debugLog.add('quotes_data', quotesData);
-            let quotePosts = [];
-            if (quotesData.data && quotesData.data.posts) {
-                for (const post of quotesData.data.posts) {
-                const processed = processPost(post, ++postCounter);
-                if (processed && processed.content) {
-                    // Remove the embed if it quotes the original post.
-                    if (processed.embed && processed.embed.record && processed.embed.record.uri === rootURI) {
-                    delete processed.embed;
+                // Fetch quotes using the public getQuotes API endpoint with limit 100.
+                const quotesData = await agent.api.app.bsky.feed.getQuotes({
+                    uri: rootURI,
+                    limit: 100
+                });
+                debugLog.add('quotes_data', quotesData);
+                let quotePosts = [];
+                if (quotesData.data && quotesData.data.posts) {
+                    for (const post of quotesData.data.posts) {
+                    const processed = processPost(post, ++postCounter);
+                    if (processed && processed.content) {
+                        // Remove the embed if it quotes the original post.
+                        if (processed.embed && processed.embed.record && processed.embed.record.uri === rootURI) {
+                        delete processed.embed;
+                        }
+                        quotePosts.push(processed);
                     }
-                    quotePosts.push(processed);
+                    }
                 }
+                return { root: rootPost, quotePosts: quotePosts };
+            }
+            
+            // Search posts with authenticated API
+            async function searchPosts(query, options = {}) {
+                if (!isAuthenticated) {
+                    throw new Error('Authentication required for search. Please login first.');
                 }
-            }
-            return { root: rootPost, quotePosts: quotePosts };
-            }
 
+                debugLog.clear();
+                debugLog.add('search_start', { query, options });
+                
+                try {
+                    const params = {
+                        q: query,
+                        limit: options.limit || 25
+                    };
+                    
+                    if (options.sort) {
+                        params.sort = options.sort;
+                    }
+                    
+                    if (options.author) {
+                        params.author = options.author;
+                    }
+                    
+                    const searchResults = await agent.api.app.bsky.feed.searchPosts(params);
+                    debugLog.add('search_results', searchResults);
+                    
+                    if (!searchResults.data || !searchResults.data.posts) {
+                        throw new Error('Invalid search results received');
+                    }
+
+                    // Process the search results
+                    let postCounter = 0;
+                    const processedPosts = searchResults.data.posts.map(post => {
+                        const processed = processPost(post, ++postCounter);
+                        if (processed && processed.content) {
+                            return {
+                                id: processed.id,
+                                author: processed.author,
+                                createdAt: processed.createdAt,
+                                content: processed.content,
+                                ...(processed.images ? { images: processed.images } : {}),
+                                ...(processed.likes ? { likes: processed.likes } : {}),
+                                ...(processed.reposts ? { reposts: processed.reposts } : {})
+                            };
+                        }
+                        return null;
+                    }).filter(Boolean);
+                    
+                    return {
+                        query,
+                        hitsTotal: searchResults.data.hitsTotal || processedPosts.length,
+                        posts: processedPosts,
+                        cursor: searchResults.data.cursor
+                    };
+                    
+                } catch (err) {
+                    debugLog.add('search_error', err);
+                    console.error('Search error:', err);
+                    throw new Error(`Failed to search posts: ${err.message}`);
+                }
+            }
 
             // Copy Button Handler
             copyButton.addEventListener('click', async () => {
@@ -489,8 +732,56 @@
                     debugLog.add('copy_error', err);
                 }
             });
+            
+            // Search Form Handler
+            searchForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                error.style.display = 'none';
+                output.textContent = '';
+                document.querySelector('.output-actions').style.display = 'none';
+                
+                // Require authentication for search
+                if (!isAuthenticated) {
+                    error.textContent = 'Authentication required for search. Please login first.';
+                    error.style.display = 'block';
+                    // Scroll to auth section for visibility
+                    document.querySelector('.auth-section').scrollIntoView({ behavior: 'smooth' });
+                    return;
+                }
+                
+                const searchBtn = document.getElementById('search-button');
+                const originalText = searchBtn.textContent;
+                searchBtn.disabled = true;
+                searchBtn.innerHTML = '<span class="loading"></span>Searching...';
+                
+                const query = searchInput.value.trim();
+                updateQueryParam('search', query);
+                
+                try {
+                    const options = {
+                        sort: sortSelect.value,
+                        limit: parseInt(limitInput.value) || 25
+                    };
+                    
+                    const authorValue = authorInput.value.trim();
+                    if (authorValue) {
+                        options.author = authorValue;
+                    }
+                    
+                    const searchResults = await searchPosts(query, options);
+                    output.textContent = JSON.stringify(searchResults, null, 2);
+                    document.querySelector('.output-actions').style.display = 'flex';
+                } catch (err) {
+                    error.textContent = err.message;
+                    error.style.display = 'block';
+                    debugLog.add('search_error', err);
+                } finally {
+                    searchBtn.disabled = false;
+                    searchBtn.textContent = originalText;
+                }
+            });
 
-            form.addEventListener('submit', async (e) => {
+            processorForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
                 error.style.display = 'none';
                 output.textContent = '';
@@ -505,7 +796,7 @@
                     btn.innerHTML = '<span class="loading"></span>Processing...'; 
                 });
                 
-                const currentInput = input.value.trim();
+                const currentInput = urlInput.value.trim();
                 updateQueryParam('url', currentInput);
                 
                 let useQuotePosts;
@@ -543,11 +834,17 @@
             // Handle browser back and forward navigation.
             window.addEventListener('popstate', () => {
                 const qspUrl = getQueryParam('url');
-                if (qspUrl !== input.value) {
-                    input.value = qspUrl || '';
-                    if (qspUrl && !button.disabled) {
+                if (qspUrl !== urlInput.value) {
+                    urlInput.value = qspUrl || '';
+                    if (qspUrl) {
                         autoProcessIfReady();
                     }
+                }
+                
+                const qspSearch = getQueryParam('search');
+                if (qspSearch && qspSearch !== searchInput.value) {
+                    searchInput.value = qspSearch || '';
+                    document.querySelector('[data-tab="search"]').click();
                 }
             });
         } catch (err) {
