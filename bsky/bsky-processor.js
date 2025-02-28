@@ -1,4 +1,4 @@
-/* bsky-processor.js - External module for Bluesky Data Processing */
+/* bsky-processor.js - External module for Bluesky Data Processing in engagement-data.html */
 
 try {
     const { BskyAgent } = await import('https://esm.sh/@atproto/api');
@@ -407,7 +407,7 @@ try {
         }
     }
 
-    /* Process search results */
+    /* Process search results with standard approach (up to 100 results) */
     async function processSearch(query, limit, sort) {
         debugLog.clear();
         debugLog.add('process_search_start', { query, limit, sort });
@@ -451,6 +451,140 @@ try {
                 count: posts.length,
                 posts: posts
             };
+        } catch (err) {
+            debugLog.add('search_error', err);
+            console.error('Search processing error:', err);
+            throw new Error(`Failed to fetch search results: ${err.message}`);
+        }
+    }
+
+    /* Process search results with time-based pagination and optimized batch sizing */
+    async function processSearchWithPagination(query, maxResults, sort) {
+        debugLog.clear();
+        debugLog.add('process_search_pagination_start', { query, maxResults, sort });
+        
+        /* Reset processing state */
+        resetProcessing();
+        
+        if (!authAgent) {
+            throw new Error('Authentication required for search');
+        }
+        
+        try {
+            let allPosts = [];
+            let untilParam = null;
+            
+            /* Dynamic batch sizing based on sort order */
+            const batchSize = sort === 'top' ? 25 : 100; // Smaller batches for 'top' sort
+            
+            let hasMore = true;
+            let attempts = 0;
+            const maxAttempts = Math.ceil(maxResults / batchSize) * 2; // Allow more attempts with smaller batches
+            
+            /* Update UI for pagination progress */
+            const processButton = document.getElementById('process-search');
+            const originalText = processButton.textContent;
+            
+            while (hasMore && allPosts.length < maxResults && attempts < maxAttempts) {
+                attempts++;
+                
+                /* Update processing button to show progress */
+                processButton.innerHTML = `<span class="loading"></span>Processing batch ${attempts}...`;
+                
+                /* Prepare search parameters */
+                const searchParams = {
+                    q: query,
+                    limit: Math.min(batchSize, maxResults - allPosts.length),
+                    sort: sort
+                };
+                
+                /* Add time-based pagination parameter if we have an until timestamp */
+                if (untilParam) {
+                    searchParams.until = untilParam;
+                }
+                
+                debugLog.add('search_batch_params', searchParams);
+                
+                /* Call the searchPosts API endpoint with authenticated agent */
+                const searchData = await authAgent.api.app.bsky.feed.searchPosts(searchParams);
+                
+                debugLog.add('search_batch_data', searchData);
+                
+                /* If no posts are returned, we're done */
+                if (!searchData?.data?.posts || searchData.data.posts.length === 0) {
+                    hasMore = false;
+                    break;
+                }
+                
+                /* Process posts in this batch */
+                const batchPosts = [];
+                for (const post of searchData.data.posts) {
+                    const rawProcessed = processPost(post);
+                    
+                    if (rawProcessed) {
+                        const processed = formatPostForOutput(rawProcessed);
+                        
+                        // Add batch information for transparency
+                        processed.batch = attempts;
+                        
+                        batchPosts.push(processed);
+                    }
+                }
+                
+                /* Add this batch to our collection */
+                allPosts = allPosts.concat(batchPosts);
+                
+                /* Check if we should continue fetching more */
+                if (searchData.data.posts.length < searchParams.limit) {
+                    /* Got fewer posts than requested, so we've reached the end */
+                    hasMore = false;
+                } else {
+                    /* Find the oldest post's timestamp to use as 'until' for next batch */
+                    let oldestPost = searchData.data.posts[searchData.data.posts.length - 1];
+                    
+                    /* Use indexedAt or createdAt for the timestamp */
+                    const timestamp = oldestPost.indexedAt || 
+                                    (oldestPost.record && oldestPost.record.createdAt) || 
+                                    null;
+                    
+                    if (timestamp) {
+                        /* Subtract 1 millisecond to avoid getting the same post again */
+                        const date = new Date(timestamp);
+                        date.setMilliseconds(date.getMilliseconds() - 1);
+                        untilParam = date.toISOString();
+                    } else {
+                        /* If we can't determine a timestamp, stop pagination */
+                        hasMore = false;
+                    }
+                }
+                
+                /* Small delay to avoid API rate limits */
+                if (hasMore && allPosts.length < maxResults) {
+                    await new Promise(resolve => setTimeout(resolve, 100));
+                }
+            }
+            
+            /* Restore original button text */
+            processButton.innerHTML = originalText;
+            
+            // Prepare result with pagination notes
+            const result = {
+                query: query,
+                sort: sort,
+                count: allPosts.length,
+                posts: allPosts,
+                batches: attempts,
+                batchSize: batchSize
+            };
+            
+            // Add note about pagination method for transparency
+            if (sort === 'top') {
+                result.paginationNote = `Results used optimized time-based pagination with 'top' sort order and smaller batch size (${batchSize}) to improve result quality.`;
+            } else {
+                result.paginationNote = `Results used time-based pagination with 'latest' sort order and standard batch size (${batchSize}).`;
+            }
+            
+            return result;
         } catch (err) {
             debugLog.add('search_error', err);
             console.error('Search processing error:', err);
@@ -526,6 +660,23 @@ try {
             
             /* Clear any stored session data */
             localStorage.removeItem('bsky_session');
+        }
+    }
+
+    /* ==========================
+       UI Helper Functions
+    ========================== */
+    
+    /* Show/hide pagination warning based on sort and limit settings */
+    function updatePaginationWarning() {
+        const sortTop = document.getElementById('sort-top').checked;
+        const limit = parseInt(document.getElementById('limit-input').value) || 100;
+        const warningElement = document.getElementById('pagination-warning');
+        
+        if (sortTop && limit > 100) {
+            warningElement.style.display = 'block';
+        } else {
+            warningElement.style.display = 'none';
         }
     }
 
@@ -684,7 +835,7 @@ try {
         authError.style.display = 'none';
     });
 
-    /* Search Form Submit Handler */
+    /* Updated Search Form Submit Handler with automatic pagination */
     searchForm.addEventListener('submit', async (e) => {
         e.preventDefault();
         error.style.display = 'none';
@@ -698,8 +849,11 @@ try {
         processButton.innerHTML = '<span class="loading"></span>Processing...';
         
         const query = searchInput.value.trim();
-        const limit = parseInt(limitInput.value) || 25;
+        const limit = parseInt(limitInput.value) || 100;
         const sort = document.querySelector('input[name="sort"]:checked').value;
+        
+        /* Determine if pagination is needed based on limit */
+        const needsPagination = limit > 100;
         
         /* Update URL parameters */
         updateQueryParam('q', query);
@@ -707,7 +861,16 @@ try {
         updateQueryParam('sort', sort);
         
         try {
-            const processedData = await processSearch(query, limit, sort);
+            let processedData;
+            
+            if (needsPagination) {
+                /* Use pagination for results > 100 */
+                processedData = await processSearchWithPagination(query, limit, sort);
+            } else {
+                /* Use standard search for smaller requests */
+                processedData = await processSearch(query, limit, sort);
+            }
+            
             output.textContent = JSON.stringify(processedData, null, 2);
             document.querySelector('.output-actions').style.display = 'flex';
         } catch (err) {
@@ -719,6 +882,11 @@ try {
             processButton.innerHTML = originalText;
         }
     });
+
+    /* Sort and limit change handlers for pagination warning */
+    document.getElementById('sort-top').addEventListener('change', updatePaginationWarning);
+    document.getElementById('sort-latest').addEventListener('change', updatePaginationWarning);
+    document.getElementById('limit-input').addEventListener('change', updatePaginationWarning);
 
     /* Handle browser back and forward navigation. */
     window.addEventListener('popstate', () => {
@@ -741,7 +909,26 @@ try {
             
             const qspLimit = getQueryParam('limit');
             if (qspLimit) {
-                limitInput.value = qspLimit;
+                const option = document.querySelector(`#limit-input option[value="${qspLimit}"]`);
+                if (option) {
+                    option.selected = true;
+                } else {
+                    // Handle non-preset values
+                    const limitValue = parseInt(qspLimit);
+                    const presets = [25, 50, 100, 250, 500, 1000];
+                    let closestPreset = 100; // Default
+                    
+                    for (const preset of presets) {
+                        if (preset >= limitValue) {
+                            closestPreset = preset;
+                            break;
+                        }
+                    }
+                    
+                    document.querySelector(`#limit-input option[value="${closestPreset}"]`).selected = true;
+                }
+                
+                updateQueryParam('limit', document.getElementById('limit-input').value);
             }
             
             const qspSort = getQueryParam('sort');
@@ -751,6 +938,9 @@ try {
                     sortRadio.checked = true;
                 }
             }
+            
+            // Update pagination warning after setting values
+            updatePaginationWarning();
         }
         
         autoProcessIfReady();
@@ -787,8 +977,11 @@ try {
         /* Set limit from URL params */
         const qspLimit = getQueryParam('limit');
         if (qspLimit) {
-            limitInput.value = qspLimit;
-            updateQueryParam('limit', qspLimit);
+            const option = document.querySelector(`#limit-input option[value="${qspLimit}"]`);
+            if (option) {
+                option.selected = true;
+            }
+            updateQueryParam('limit', document.getElementById('limit-input').value);
         }
 
         /* Set sort option from URL params */
@@ -803,6 +996,9 @@ try {
 
         /* Check for stored auth session */
         checkStoredSession();
+
+        /* Initialize the pagination warning */
+        updatePaginationWarning();
 
         autoProcessIfReady();
     });
