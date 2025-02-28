@@ -187,6 +187,76 @@
             align-items: center;
             gap: 0.25rem;
         }
+
+        /* Auth section styles */
+        .auth-section {
+            background-color: #f9fafb;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+
+        .auth-notice {
+            margin-bottom: 1rem;
+            color: #4b5563;
+            font-size: 0.875rem;
+            line-height: 1.5;
+        }
+
+        .auth-success {
+            background-color: #d1fae5;
+            color: #065f46;
+            padding: 0.75rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .auth-error {
+            background-color: #fee2e2;
+            color: #b91c1c;
+            padding: 0.75rem;
+            border-radius: 0.25rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        .auth-info {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 1rem;
+            padding: 0.5rem;
+            background-color: #eff6ff;
+            border-radius: 0.25rem;
+        }
+
+        .auth-avatar {
+            width: 2rem;
+            height: 2rem;
+            border-radius: 9999px;
+            object-fit: cover;
+        }
+
+        .auth-handle {
+            font-weight: bold;
+        }
+
+        .logout-button {
+            margin-left: auto;
+            background-color: #e5e7eb;
+            color: #1f2937;
+        }
+
+        small a {
+            color: #3b82f6;
+            text-decoration: none;
+        }
+
+        small a:hover {
+            text-decoration: underline;
+        }
     </style>
 </head>
 
@@ -221,9 +291,43 @@
 
             <div id="search-tab" class="tab-content">
                 <p>Search for posts with a specific query and get the results in JSON format.<br>
-                    Data is reduced and made available for further analysis.</p>
+                    Data is deidentified and made available for further analysis.</p>
 
-                <form id="search-form">
+                <div id="search-auth-section" class="auth-section">
+                    <h3>Authentication Required</h3>
+                    <div class="auth-notice">
+                        The Bluesky search API requires authentication. Please enter your Bluesky credentials to proceed.
+                        Your credentials are only used to authenticate with the Bluesky API and are never stored.
+                    </div>
+                    <div id="auth-success" class="auth-success">
+                        Successfully authenticated! You can now search for posts.
+                    </div>
+                    <div id="auth-error" class="auth-error"></div>
+                    <div class="input-group">
+                        <div style="display: flex; flex-direction: column; flex: 1;">
+                            <label for="handle-input">Bluesky Handle:</label>
+                            <input type="text" id="handle-input" placeholder="username.bsky.social" required />
+                        </div>
+                    </div>
+                    <div class="input-group">
+                        <div style="display: flex; flex-direction: column; flex: 1;">
+                            <label for="password-input">App Password:</label>
+                            <input type="password" id="password-input" placeholder="xxxx-xxxx-xxxx-xxxx" required />
+                            <small style="margin-top: 0.25rem; color: #6b7280;">
+                                <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener noreferrer">Create an app password</a> in your Bluesky settings
+                            </small>
+                        </div>
+                    </div>
+                    <button type="button" id="auth-button">Authenticate</button>
+                </div>
+
+                <div id="auth-info" class="auth-info" style="display: none;">
+                    <img id="auth-avatar" src="" alt="Avatar" class="auth-avatar">
+                    <span id="auth-handle" class="auth-handle"></span>
+                    <button type="button" id="logout-button" class="logout-button">Logout</button>
+                </div>
+
+                <form id="search-form" style="display: none;">
                     <div class="input-group">
                         <input type="text" id="search-input" placeholder="Enter search query" required />
                     </div>
@@ -295,6 +399,9 @@
                 service: 'https://public.api.bsky.app'
             });
 
+            /* Agent for authenticated calls */
+            let authAgent = null;
+
             const debugLog = {
                 add(type, data) {
                     console.log(`[${new Date().toISOString()}] ${type}`, data);
@@ -313,6 +420,18 @@
             const output = document.getElementById('output');
             const copyButton = document.getElementById('copy-button');
             const copyFeedback = document.getElementById('copy-feedback');
+
+            /* Auth elements */
+            const searchAuthSection = document.getElementById('search-auth-section');
+            const authButton = document.getElementById('auth-button');
+            const handleInput = document.getElementById('handle-input');
+            const passwordInput = document.getElementById('password-input');
+            const authSuccess = document.getElementById('auth-success');
+            const authError = document.getElementById('auth-error');
+            const authInfo = document.getElementById('auth-info');
+            const authAvatar = document.getElementById('auth-avatar');
+            const authHandle = document.getElementById('auth-handle');
+            const logoutButton = document.getElementById('logout-button');
 
             /* === Query String Parameter Handling === */
 
@@ -394,6 +513,9 @@
                         updateQueryParam('sort', qspSort);
                     }
                 }
+
+                /* Check for stored auth session */
+                checkStoredSession();
 
                 autoProcessIfReady();
             });
@@ -631,9 +753,13 @@
                 debugLog.clear();
                 debugLog.add('process_search_start', { query, limit, sort });
                 
+                if (!authAgent) {
+                    throw new Error('Authentication required for search');
+                }
+                
                 try {
-                    /* Call the searchPosts API endpoint */
-                    const searchData = await agent.api.app.bsky.feed.searchPosts({
+                    /* Call the searchPosts API endpoint with authenticated agent */
+                    const searchData = await authAgent.api.app.bsky.feed.searchPosts({
                         q: query,
                         limit: limit,
                         sort: sort
@@ -645,6 +771,17 @@
                         throw new Error('No search results found');
                     }
                     
+                    /* Create user map for anonymization */
+                    let userMap = new Map();
+                    let userCounter = 0;
+                    
+                    function anonymize(did) {
+                        if (!userMap.has(did)) {
+                            userMap.set(did, `p${++userCounter}`);
+                        }
+                        return userMap.get(did);
+                    }
+                    
                     let postCounter = 0;
                     const posts = [];
                     
@@ -652,14 +789,12 @@
                     for (const post of searchData.data.posts) {
                         const processed = processPost(post, ++postCounter);
                         if (processed) {
+                            /* Anonymize author */
+                            processed.author = anonymize(processed.author);
+                            
                             /* Add post URI for reference */
                             if (post.uri) {
                                 processed.uri = post.uri;
-                            }
-                            
-                            /* Add handle for easier identification */
-                            if (post.author?.handle) {
-                                processed.handle = post.author.handle;
                             }
                             
                             posts.push(processed);
@@ -744,6 +879,92 @@
                 }
             });
 
+            /* Auth Button Handler */
+            authButton.addEventListener('click', async () => {
+                const handle = handleInput.value.trim();
+                const password = passwordInput.value.trim();
+                
+                if (!handle || !password) {
+                    showAuthError('Please enter both handle and app password');
+                    return;
+                }
+                
+                authButton.disabled = true;
+                authButton.innerHTML = '<span class="loading"></span>Authenticating...';
+                authError.style.display = 'none';
+                
+                try {
+                    /* Create new authenticated agent */
+                    const newAuthAgent = new BskyAgent({
+                        service: 'https://bsky.social'  /* Use main API for authentication */
+                    });
+                    
+                    /* Attempt to login */
+                    const loginResult = await newAuthAgent.login({
+                        identifier: handle,
+                        password: password
+                    });
+                    
+                    debugLog.add('login_result', loginResult);
+                    
+                    if (!loginResult.success) {
+                        throw new Error('Authentication failed');
+                    }
+                    
+                    /* Store authentication data */
+                    authAgent = newAuthAgent;
+                    const sessionData = {
+                        did: loginResult.data.did,
+                        handle: loginResult.data.handle,
+                        accessJwt: loginResult.data.accessJwt,
+                        refreshJwt: loginResult.data.refreshJwt,
+                    };
+                    
+                    /* Save session data to localStorage */
+                    try {
+                        localStorage.setItem('bsky_session', JSON.stringify(sessionData));
+                    } catch (err) {
+                        console.error('Failed to store session:', err);
+                    }
+                    
+                    /* Fetch and display profile */
+                    const profile = await authAgent.getProfile({
+                        actor: loginResult.data.did
+                    });
+                    
+                    debugLog.add('profile', profile);
+                    
+                    /* Show success state */
+                    showAuthSuccess(profile.data);
+                    
+                    /* Clear inputs */
+                    handleInput.value = '';
+                    passwordInput.value = '';
+                    
+                } catch (err) {
+                    debugLog.add('auth_error', err);
+                    showAuthError(`Authentication failed: ${err.message}`);
+                    authAgent = null;
+                } finally {
+                    authButton.disabled = false;
+                    authButton.innerHTML = 'Authenticate';
+                }
+            });
+
+            /* Logout Button Handler */
+            logoutButton.addEventListener('click', () => {
+                /* Clear auth session */
+                authAgent = null;
+                localStorage.removeItem('bsky_session');
+                
+                /* Reset UI */
+                searchAuthSection.style.display = 'block';
+                authInfo.style.display = 'none';
+                searchForm.style.display = 'none';
+                authSuccess.style.display = 'none';
+                authError.style.display = 'none';
+            });
+
             /* Search Form Submit Handler */
             searchForm.addEventListener('submit', async (e) => {
                 e.preventDefault();
@@ -779,6 +1000,71 @@
                     processButton.innerHTML = originalText;
                 }
             });
+
+            /* Auth helper functions */
+            function showAuthSuccess(profile) {
+                /* Hide auth section */
+                searchAuthSection.style.display = 'none';
+                
+                /* Show auth info */
+                authInfo.style.display = 'flex';
+                authHandle.textContent = profile.handle;
+                
+                /* Set avatar if available */
+                if (profile.avatar) {
+                    authAvatar.src = profile.avatar;
+                } else {
+                    authAvatar.src = 'data:image/svg+xml;charset=UTF-8,%3csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 20 20\'%3e%3ccircle cx=\'10\' cy=\'10\' r=\'10\' fill=\'%23e5e7eb\'/%3e%3c/svg%3e';
+                }
+                
+                /* Show search form */
+                searchForm.style.display = 'block';
+                
+                /* Show success message temporarily */
+                authSuccess.style.display = 'block';
+                setTimeout(() => {
+                    authSuccess.style.display = 'none';
+                }, 3000);
+            }
+            
+            function showAuthError(message) {
+                authError.textContent = message;
+                authError.style.display = 'block';
+            }
+            
+            async function checkStoredSession() {
+                try {
+                    const storedSession = localStorage.getItem('bsky_session');
+                    if (storedSession) {
+                        const sessionData = JSON.parse(storedSession);
+                        
+                        /* Create new authenticated agent */
+                        const newAuthAgent = new BskyAgent({
+                            service: 'https://bsky.social'
+                        });
+                        
+                        /* Resume session */
+                        await newAuthAgent.resumeSession(sessionData);
+                        
+                        /* Fetch profile to verify auth works */
+                        const profile = await newAuthAgent.getProfile({
+                            actor: sessionData.did
+                        });
+                        
+                        /* Set authenticated agent */
+                        authAgent = newAuthAgent;
+                        
+                        /* Show authenticated state */
+                        showAuthSuccess(profile.data);
+                    }
+                } catch (err) {
+                    debugLog.add('session_resume_error', err);
+                    console.error('Failed to resume session:', err);
+                    
+                    /* Clear any stored session data */
+                    localStorage.removeItem('bsky_session');
+                }
+            }
 
             /* Handle browser back and forward navigation. */
             window.addEventListener('popstate', () => {
