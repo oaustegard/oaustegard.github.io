@@ -80,7 +80,7 @@
             display: block;
         }
 
-        #error, .auth-error {
+        #error {
             color: #ef4444;
             margin-bottom: 1rem;
             padding: 0.5rem;
@@ -187,39 +187,6 @@
             align-items: center;
             gap: 0.25rem;
         }
-
-        /* Auth sections */
-        .auth-section {
-            margin-bottom: 1rem;
-            padding: 1rem;
-            border: 1px solid #e5e7eb;
-            border-radius: 0.25rem;
-            background-color: #f9fafb;
-        }
-
-        .auth-section h3 {
-            margin-top: 0;
-            margin-bottom: 1rem;
-        }
-
-        .auth-notice {
-            background-color: #fffbeb;
-            border: 1px solid #fbbf24;
-            color: #92400e;
-            padding: 0.75rem;
-            border-radius: 0.25rem;
-            margin-bottom: 1rem;
-        }
-
-        .auth-success {
-            background-color: #dcfce7;
-            border: 1px solid #22c55e;
-            color: #166534;
-            padding: 0.75rem;
-            border-radius: 0.25rem;
-            margin-bottom: 1rem;
-            display: none;
-        }
     </style>
 </head>
 
@@ -256,56 +223,26 @@
                 <p>Search for posts with a specific query and get the results in JSON format.<br>
                     Data is reduced and made available for further analysis.</p>
 
-                <div id="search-auth-section" class="auth-section">
-                    <h3>Authentication Required</h3>
-                    <div class="auth-notice">
-                        The Bluesky search API now requires authentication. Please enter your Bluesky credentials to proceed.
-                        Your credentials are only used to authenticate with the Bluesky API and are never stored.
-                    </div>
-                    <div id="auth-success" class="auth-success">
-                        Successfully authenticated! You can now search for posts.
-                    </div>
-                    <div id="auth-error" class="auth-error"></div>
+                <form id="search-form">
                     <div class="input-group">
-                        <div style="display: flex; flex-direction: column; flex: 1;">
-                            <label for="handle-input">Bluesky Handle:</label>
-                            <input type="text" id="handle-input" placeholder="username.bsky.social" required />
-                        </div>
+                        <input type="text" id="search-input" placeholder="Enter search query" required />
+                    </div>
+                    <div class="search-options">
+                        <label>
+                            <input type="radio" name="sort" value="top" checked /> Top results
+                        </label>
+                        <label>
+                            <input type="radio" name="sort" value="latest" /> Latest
+                        </label>
+                        <label>
+                            <input type="number" id="limit-input" value="25" min="1" max="100" style="width: 4rem;" />
+                            Max results
+                        </label>
                     </div>
                     <div class="input-group">
-                        <div style="display: flex; flex-direction: column; flex: 1;">
-                            <label for="password-input">App Password:</label>
-                            <input type="password" id="password-input" placeholder="xxxx-xxxx-xxxx-xxxx" required />
-                            <small style="margin-top: 0.25rem; color: #6b7280;">
-                                <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener noreferrer">Create an app password</a> in your Bluesky settings
-                            </small>
-                        </div>
+                        <button type="submit" id="process-search">Process Search</button>
                     </div>
-                    <button type="button" id="auth-button">Authenticate</button>
-                </div>
-
-                <div id="search-form-container" style="display: none;">
-                    <form id="search-form">
-                        <div class="input-group">
-                            <input type="text" id="search-input" placeholder="Enter search query" required />
-                        </div>
-                        <div class="search-options">
-                            <label>
-                                <input type="radio" name="sort" value="top" checked /> Top results
-                            </label>
-                            <label>
-                                <input type="radio" name="sort" value="latest" /> Latest
-                            </label>
-                            <label>
-                                <input type="number" id="limit-input" value="25" min="1" max="100" style="width: 4rem;" />
-                                Max results
-                            </label>
-                        </div>
-                        <div class="input-group">
-                            <button type="submit" id="process-search">Process Search</button>
-                        </div>
-                    </form>
-                </div>
+                </form>
             </div>
         </div>
 
@@ -353,16 +290,10 @@
                 });
             });
 
-            /* Create the agent using the public endpoint – no authentication required for post processing. */
+            /* Create the agent using the public endpoint – no authentication required. */
             const agent = new BskyAgent({
-                service: 'https://bsky.social'
+                service: 'https://public.api.bsky.app'
             });
-
-            /* Create a separate agent for authenticated search requests */
-            const searchAgent = new BskyAgent({
-                service: 'https://bsky.social'
-            });
-            let isAuthenticated = false;
 
             const debugLog = {
                 add(type, data) {
@@ -382,66 +313,6 @@
             const output = document.getElementById('output');
             const copyButton = document.getElementById('copy-button');
             const copyFeedback = document.getElementById('copy-feedback');
-
-            /* Authentication elements */
-            const authButton = document.getElementById('auth-button');
-            const handleInput = document.getElementById('handle-input');
-            const passwordInput = document.getElementById('password-input');
-            const authError = document.getElementById('auth-error');
-            const authSuccess = document.getElementById('auth-success');
-            const searchFormContainer = document.getElementById('search-form-container');
-            const searchAuthSection = document.getElementById('search-auth-section');
-
-            /* === Authentication Handling === */
-            
-            authButton.addEventListener('click', async () => {
-                authError.style.display = 'none';
-                authSuccess.style.display = 'none';
-                
-                const handle = handleInput.value.trim();
-                const password = passwordInput.value.trim();
-                
-                if (!handle || !password) {
-                    authError.textContent = 'Please enter both handle and password';
-                    authError.style.display = 'block';
-                    return;
-                }
-                
-                authButton.disabled = true;
-                authButton.innerHTML = '<span class="loading"></span>Authenticating...';
-                
-                try {
-                    await searchAgent.login({
-                        identifier: handle,
-                        password: password
-                    });
-                    
-                    isAuthenticated = true;
-                    authSuccess.style.display = 'block';
-                    searchAuthSection.style.display = 'none';
-                    searchFormContainer.style.display = 'block';
-                    
-                    /* Save login status in session storage */
-                    sessionStorage.setItem('bsky_authenticated', 'true');
-                    
-                    /* Auto-process if query parameters exist */
-                    autoProcessIfReady();
-                } catch (err) {
-                    authError.textContent = `Authentication failed: ${err.message || 'Invalid credentials'}`;
-                    authError.style.display = 'block';
-                    console.error('Auth error:', err);
-                } finally {
-                    authButton.disabled = false;
-                    authButton.textContent = 'Authenticate';
-                }
-            });
-
-            /* Check if already authenticated in this session */
-            if (sessionStorage.getItem('bsky_authenticated') === 'true') {
-                isAuthenticated = true;
-                searchAuthSection.style.display = 'none';
-                searchFormContainer.style.display = 'block';
-            }
 
             /* === Query String Parameter Handling === */
 
@@ -472,7 +343,7 @@
                             postForm.dispatchEvent(new Event('submit'));
                         }
                     }
-                } else if (currentTab === 'search-tab' && isAuthenticated) {
+                } else if (currentTab === 'search-tab') {
                     const currentQuery = searchInput.value.trim();
                     if (currentQuery) {
                         const button = document.getElementById('process-search');
@@ -760,13 +631,9 @@
                 debugLog.clear();
                 debugLog.add('process_search_start', { query, limit, sort });
                 
-                if (!isAuthenticated) {
-                    throw new Error('Authentication required for search');
-                }
-                
                 try {
-                    /* Call the searchPosts API endpoint with authentication */
-                    const searchData = await searchAgent.api.app.bsky.feed.searchPosts({
+                    /* Call the searchPosts API endpoint */
+                    const searchData = await agent.api.app.bsky.feed.searchPosts({
                         q: query,
                         limit: limit,
                         sort: sort
