@@ -427,6 +427,12 @@ try {
                 sort: sort
             });
             
+            /* Log the cursor if available */
+            if (searchData.data.cursor) {
+                console.log('Search cursor:', searchData.data.cursor);
+                debugLog.add('search_cursor', searchData.data.cursor);
+            }
+            
             debugLog.add('search_data', searchData);
             
             if (!searchData?.data?.posts) {
@@ -445,20 +451,27 @@ try {
                 }
             }
             
-            return {
+            const result = {
                 query: query,
                 sort: sort,
                 count: posts.length,
                 posts: posts
             };
+            
+            /* Include cursor in result for reference */
+            if (searchData.data.cursor) {
+                result.cursor = searchData.data.cursor;
+            }
+            
+            return result;
         } catch (err) {
             debugLog.add('search_error', err);
             console.error('Search processing error:', err);
             throw new Error(`Failed to fetch search results: ${err.message}`);
         }
     }
-
-    /* Process search results with time-based pagination and optimized batch sizing */
+    
+    /* Process search results with cursor-based pagination when available */
     async function processSearchWithPagination(query, maxResults, sort) {
         debugLog.clear();
         debugLog.add('process_search_pagination_start', { query, maxResults, sort });
@@ -472,6 +485,7 @@ try {
         
         try {
             let allPosts = [];
+            let cursor = null;
             let untilParam = null;
             
             /* Dynamic batch sizing based on sort order */
@@ -480,6 +494,13 @@ try {
             let hasMore = true;
             let attempts = 0;
             const maxAttempts = Math.ceil(maxResults / batchSize) * 2; // Allow more attempts with smaller batches
+            
+            /* Rate limit tracking */
+            let consecutiveEmptyResults = 0;
+            let possibleRateLimit = false;
+            
+            /* Store cursors for debugging */
+            let cursors = [];
             
             /* Update UI for pagination progress */
             const processButton = document.getElementById('process-search');
@@ -498,76 +519,134 @@ try {
                     sort: sort
                 };
                 
-                /* Add time-based pagination parameter if we have an until timestamp */
-                if (untilParam) {
+                /* Try cursor-based pagination first if available */
+                if (cursor) {
+                    searchParams.cursor = cursor;
+                    console.log(`Using cursor for batch ${attempts}:`, cursor);
+                } 
+                /* Fall back to time-based pagination if no cursor */
+                else if (untilParam) {
                     searchParams.until = untilParam;
+                    console.log(`Using until param for batch ${attempts}:`, untilParam);
                 }
                 
                 debugLog.add('search_batch_params', searchParams);
                 
-                /* Call the searchPosts API endpoint with authenticated agent */
-                const searchData = await authAgent.api.app.bsky.feed.searchPosts(searchParams);
-                
-                debugLog.add('search_batch_data', searchData);
-                
-                /* If no posts are returned, we're done */
-                if (!searchData?.data?.posts || searchData.data.posts.length === 0) {
-                    hasMore = false;
-                    break;
-                }
-                
-                /* Process posts in this batch */
-                const batchPosts = [];
-                for (const post of searchData.data.posts) {
-                    const rawProcessed = processPost(post);
+                try {
+                    /* Call the searchPosts API endpoint with authenticated agent */
+                    const searchData = await authAgent.api.app.bsky.feed.searchPosts(searchParams);
                     
-                    if (rawProcessed) {
-                        const processed = formatPostForOutput(rawProcessed);
-                        
-                        // Add batch information for transparency
-                        processed.batch = attempts;
-                        
-                        batchPosts.push(processed);
-                    }
-                }
-                
-                /* Add this batch to our collection */
-                allPosts = allPosts.concat(batchPosts);
-                
-                /* Check if we should continue fetching more */
-                if (searchData.data.posts.length < searchParams.limit) {
-                    /* Got fewer posts than requested, so we've reached the end */
-                    hasMore = false;
-                } else {
-                    /* Find the oldest post's timestamp to use as 'until' for next batch */
-                    let oldestPost = searchData.data.posts[searchData.data.posts.length - 1];
-                    
-                    /* Use indexedAt or createdAt for the timestamp */
-                    const timestamp = oldestPost.indexedAt || 
-                                    (oldestPost.record && oldestPost.record.createdAt) || 
-                                    null;
-                    
-                    if (timestamp) {
-                        /* Subtract 1 millisecond to avoid getting the same post again */
-                        const date = new Date(timestamp);
-                        date.setMilliseconds(date.getMilliseconds() - 1);
-                        untilParam = date.toISOString();
+                    /* Log and store the cursor if available */
+                    if (searchData.data.cursor) {
+                        cursor = searchData.data.cursor;
+                        cursors.push(cursor);
+                        console.log(`Batch ${attempts} cursor:`, cursor);
+                        debugLog.add('batch_cursor', { batch: attempts, cursor: cursor });
                     } else {
-                        /* If we can't determine a timestamp, stop pagination */
-                        hasMore = false;
+                        cursor = null;
+                        console.log(`Batch ${attempts}: No cursor returned`);
                     }
-                }
-                
-                /* Small delay to avoid API rate limits */
-                if (hasMore && allPosts.length < maxResults) {
-                    await new Promise(resolve => setTimeout(resolve, 100));
+                    
+                    debugLog.add('search_batch_data', searchData);
+                    
+                    /* If no posts are returned, we might be rate limited */
+                    if (!searchData?.data?.posts || searchData.data.posts.length === 0) {
+                        consecutiveEmptyResults++;
+                        debugLog.add('empty_results', { consecutive: consecutiveEmptyResults });
+                        
+                        /* If we get multiple empty results in a row, it might be rate limiting */
+                        if (consecutiveEmptyResults >= 2) {
+                            possibleRateLimit = true;
+                            debugLog.add('possible_rate_limit', { attempts, allPosts: allPosts.length });
+                            break;
+                        }
+                        
+                        /* Try with a longer backoff */
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        continue;
+                    }
+                    
+                    /* Reset counter since we got results */
+                    consecutiveEmptyResults = 0;
+                    
+                    /* Process posts in this batch */
+                    const batchPosts = [];
+                    for (const post of searchData.data.posts) {
+                        const rawProcessed = processPost(post);
+                        
+                        if (rawProcessed) {
+                            const processed = formatPostForOutput(rawProcessed);
+                            
+                            // Add batch information for transparency
+                            processed.batch = attempts;
+                            
+                            batchPosts.push(processed);
+                        }
+                    }
+                    
+                    /* Add this batch to our collection */
+                    allPosts = allPosts.concat(batchPosts);
+                    
+                    /* Check if we should continue fetching more */
+                    if (searchData.data.posts.length < searchParams.limit || !cursor) {
+                        /* If we get fewer posts than requested or no cursor, check if we can use time-based fallback */
+                        if (!cursor) {
+                            /* Find the oldest post's timestamp to use as 'until' for next batch */
+                            let oldestPost = searchData.data.posts[searchData.data.posts.length - 1];
+                            
+                            /* Use indexedAt or createdAt for the timestamp */
+                            const timestamp = oldestPost.indexedAt || 
+                                            (oldestPost.record && oldestPost.record.createdAt) || 
+                                            null;
+                            
+                            if (timestamp) {
+                                /* Subtract 1 millisecond to avoid getting the same post again */
+                                const date = new Date(timestamp);
+                                date.setMilliseconds(date.getMilliseconds() - 1);
+                                untilParam = date.toISOString();
+                                hasMore = true; // Still try with timestamp
+                                console.log(`No cursor, falling back to timestamp: ${untilParam}`);
+                            } else {
+                                hasMore = false; // Can't continue without cursor or timestamp
+                            }
+                        } else if (searchData.data.posts.length < searchParams.limit) {
+                            /* End of results, even with cursor */
+                            hasMore = false;
+                        }
+                    }
+                    
+                    /* Adaptive backoff delay between requests */
+                    const delayTime = attempts > 3 ? 2000 : 500;
+                    if (hasMore && allPosts.length < maxResults) {
+                        await new Promise(resolve => setTimeout(resolve, delayTime));
+                    }
+                    
+                } catch (err) {
+                    debugLog.add('batch_error', err);
+                    
+                    /* Check for rate limit errors */
+                    if (err.status === 429 || 
+                        (err.message && err.message.includes('rate')) || 
+                        (err.error && err.error.includes('rate'))) {
+                        possibleRateLimit = true;
+                        debugLog.add('confirmed_rate_limit', { attempts, allPosts: allPosts.length });
+                        break;
+                    }
+                    
+                    /* Other errors - try to continue with longer backoff */
+                    await new Promise(resolve => setTimeout(resolve, 3000));
+                    
+                    /* If we get too many errors, stop */
+                    if (attempts >= 3) {
+                        throw err;
+                    }
                 }
             }
             
             /* Restore original button text */
             processButton.innerHTML = originalText;
             
-            // Prepare result with pagination notes
+            /* Prepare result with pagination notes */
             const result = {
                 query: query,
                 sort: sort,
@@ -577,11 +656,28 @@ try {
                 batchSize: batchSize
             };
             
-            // Add note about pagination method for transparency
+            /* Include cursors in the result for debugging */
+            if (cursors.length > 0) {
+                result.cursors = cursors;
+                console.log('All cursors:', cursors);
+            }
+            
+            /* Add rate limit warning if detected */
+            if (possibleRateLimit) {
+                result.rateLimitWarning = `Possible API rate limit detected after ${attempts} batches. Try again in a few minutes.`;
+                console.warn(`Possible API rate limit hit after ${attempts} batches with ${allPosts.length} posts retrieved.`);
+            }
+            
+            /* Add note about pagination method */
             if (sort === 'top') {
                 result.paginationNote = `Results used optimized time-based pagination with 'top' sort order and smaller batch size (${batchSize}) to improve result quality.`;
             } else {
                 result.paginationNote = `Results used time-based pagination with 'latest' sort order and standard batch size (${batchSize}).`;
+            }
+            
+            /* Check if we got fewer than requested */
+            if (allPosts.length < maxResults && !possibleRateLimit) {
+                result.completionNote = `Retrieved ${allPosts.length} posts (requested ${maxResults}). This may be all available posts matching the query.`;
             }
             
             return result;
