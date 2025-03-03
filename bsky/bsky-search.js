@@ -98,3 +98,125 @@ async function processSearchWithPagination(query, maxResults, sort) {
         let untilParam = null;
         
         /* Dynamic batch sizing based on sort order */
+        const batchSize = sort === 'top' ? 25 : 100;
+        
+        while (allPosts.length < maxResults) {
+            /* Calculate remaining results to fetch */
+            const remaining = maxResults - allPosts.length;
+            const limit = Math.min(remaining, batchSize);
+            
+            /* Call the searchPosts API endpoint with authenticated agent */
+            const searchData = await authAgent.api.app.bsky.feed.searchPosts({
+                q: query,
+                limit: limit,
+                sort: sort,
+                cursor: cursor
+            });
+            
+            /* Log the cursor if available */
+            if (searchData.data.cursor) {
+                debugLog.add('search_cursor', searchData.data.cursor);
+            }
+            
+            /* Process each search result */
+            if (searchData?.data?.posts) {
+                for (const post of searchData.data.posts) {
+                    const rawProcessed = processPost(post);
+                    
+                    if (rawProcessed) {
+                        const processed = formatPostForOutput(rawProcessed);
+                        allPosts.push(processed);
+                    }
+                }
+            }
+            
+            /* Check if we have a cursor for the next page */
+            if (!searchData.data.cursor || searchData.data.posts.length < limit) {
+                /* No more results or reached the end */
+                break;
+            }
+            
+            /* Update cursor for next page */
+            cursor = searchData.data.cursor;
+            
+            /* Brief pause to avoid rate limiting */
+            await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        const result = {
+            query: query,
+            sort: sort,
+            count: allPosts.length,
+            posts: allPosts
+        };
+        
+        return result;
+    } catch (err) {
+        debugLog.add('search_pagination_error', err);
+        console.error('Search pagination processing error:', err);
+        throw new Error(`Failed to fetch paginated search results: ${err.message}`);
+    }
+}
+
+/* Initialize search processing functionality */
+export function initializeSearchProcessing() {
+    const searchForm = document.getElementById('search-form');
+    const searchInput = document.getElementById('search-input');
+    const limitInput = document.getElementById('limit-input');
+    const sortTopRadio = document.getElementById('sort-top');
+    
+    /* Search Form Submit Handler */
+    searchForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        
+        displayOutput('', false); // Clear output
+        
+        /* Set loading state */
+        setLoading('process-search', true);
+        
+        const query = searchInput.value.trim();
+        const limit = parseInt(limitInput.value) || 100;
+        const sort = sortTopRadio.checked ? 'top' : 'latest';
+        
+        /* Update URL parameters */
+        updateQueryParam('q', query);
+        updateQueryParam('limit', limit.toString());
+        updateQueryParam('sort', sort);
+        
+        try {
+            if (!query) {
+                throw new Error('Please enter a search query');
+            }
+            
+            /* Determine if we need pagination */
+            let processedData;
+            if (limit > 100) {
+                /* Use pagination for larger result sets */
+                processedData = await processSearchWithPagination(query, limit, sort);
+            } else {
+                /* Use standard search for smaller result sets */
+                processedData = await processSearch(query, limit, sort);
+            }
+            
+            displayOutput(processedData);
+        } catch (err) {
+            displayOutput(err.message, true);
+        } finally {
+            setLoading('process-search', false);
+        }
+    });
+}
+
+/* Function to auto-process a search if URL parameters are set */
+export function autoProcessSearch() {
+    const searchInput = document.getElementById('search-input');
+    const query = searchInput.value.trim();
+    
+    if (query && isAuthenticated()) {
+        const button = document.getElementById('process-search');
+        
+        if (button && !button.disabled) {
+            document.getElementById('search-form').dispatchEvent(new Event('submit'));
+        }
+    }
+}
