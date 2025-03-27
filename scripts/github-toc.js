@@ -1,4 +1,4 @@
-/* GitHub Table of Contents Web Component with Exclusion Support */
+/* GitHub Table of Contents Web Component with README Support */
 class GitHubToc extends HTMLElement {
     constructor() {
         super();
@@ -71,6 +71,12 @@ class GitHubToc extends HTMLElement {
                 a:hover {
                     text-decoration: underline;
                 }
+                .readme-link {
+                    margin-left: 0.5em;
+                    font-variant: small-caps;
+                    font-size: 0.8em;
+                    opacity: 0.8;
+                }
                 .error {
                     color: #dc2626;
                     padding: 1em;
@@ -87,6 +93,12 @@ class GitHubToc extends HTMLElement {
         
         const [, owner, repo, branch = 'main', path = ''] = match;
         return { owner, repo, branch, path };
+    }
+
+    /* Generate README URL for a given file */
+    getReadmeUrl(params, filename) {
+        const baseName = filename.replace(/\.[^/.]+$/, '');
+        return `https://github.com/${params.owner}/${params.repo}/blob/${params.branch}/${params.path}/${baseName}_README.md`;
     }
 
     /* Load content from GitHub API */
@@ -116,6 +128,11 @@ class GitHubToc extends HTMLElement {
             }
 
             const data = await response.json();
+
+            /* Get all README files to check which files have associated READMEs */
+            const readmeFiles = data
+                .filter(item => item.name.endsWith('_README.md'))
+                .map(item => item.name.replace('_README.md', ''));
             
             /* Sort files: directories first, then regular files */
             const sortedData = data.sort((a, b) => {
@@ -137,11 +154,19 @@ class GitHubToc extends HTMLElement {
                         .replace(/^./, str => str.toUpperCase()) /* Capitalize first letter */
                         .trim();
                     
+                    /* Check if this file has an associated README */
+                    const baseName = item.name.replace(/\.[^/.]+$/, '');
+                    const hasReadme = readmeFiles.includes(baseName);
+                    const readmeLink = hasReadme ? 
+                        `<a href="${this.getReadmeUrl(params, item.name)}" class="readme-link">(readme)</a>` : 
+                        '';
+                    
                     return `
                         <li>
                             <a href="${linkPrefix}/${item.name}">
                                 ${displayName}
                             </a>
+                            ${readmeLink}
                         </li>
                     `;
                 })

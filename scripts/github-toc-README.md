@@ -55,6 +55,16 @@ Examples:
 - Uses shadow DOM for style isolation
 - Handles errors gracefully with user feedback
 - Updates automatically when attributes change
+- Displays README links for files with associated documentation
+
+### README Links
+
+The component automatically detects and links to associated README files following this pattern:
+- For a file named `example.html`, it looks for `example_README.md` in the same directory
+- README links appear as a small "(readme)" label next to the filename
+- Links point directly to the GitHub source of the README file
+
+This feature makes it easy to provide and access documentation for individual files in your repository.
 
 ## Example Implementation
 
