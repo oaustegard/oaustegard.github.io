@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<!--
+    This is a simple PDF compressor that uses Ghostscript compiled to WebAssembly.
+    It allows users to drag and drop a PDF file or select it from their file system.
+    The user can choose the compression quality from a dropdown menu, and upon clicking the "Compress PDF" button,
+    the PDF is processed in the browser.
+    The compressed PDF is then available for download with the original and compressed file sizes displayed.
+
+    All processed files are kept in memory and never sent to a server.
+    The Ghostscript library is loaded from a CDN, and the UI is built with basic HTML and CSS.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PDF Compressor</title>
+  <style>
+    :root {
+      --accent: #6f7c3d;
+      --bg: #fafafa;
+      --text: #333;
+    }
+    body {
+      font-family: sans-serif;
+      max-width: 600px;
+      margin: 2rem auto;
+      background: var(--bg);
+      color: var(--text);
+    }
+    h1 {
+      text-align: center;
+      color: var(--accent);
+    }
+    #drop {
+      border: 2px dashed #ccc;
+      border-radius: 8px;
+      padding: 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: background 0.2s, border-color 0.2s;
+    }
+    #drop.hover {
+      border-color: var(--accent);
+      background: #f4f7f0;
+    }
+    label, select, button {
+      display: block;
+      margin: 1rem auto;
+      width: 80%;
+      max-width: 300px;
+    }
+    select, button {
+      padding: .75rem;
+      font-size: 1rem;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: opacity 0.2s;
+    }
+    button:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    #progress {
+      text-align: center;
+      margin-top: 1rem;
+      min-height: 2em;
+    }
+    .spinner {
+      margin: 0.5rem auto;
+      border: 4px solid #eee;
+      border-top: 4px solid var(--accent);
+      border-radius: 50%;
+      width: 32px;
+      height: 32px;
+      animation: spin 1s linear infinite;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+    #download {
+      display: none;
+      text-align: center;
+      margin: 1rem auto;
+      color: var(--accent);
+      font-weight: bold;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <h1>PDF Compressor</h1>
+
+  <div id="drop">📄 Drop PDF here, or click to browse</div>
+  <input type="file" id="fileIn" accept="application/pdf" style="display:none">
+
+  <label>
+    Quality:
+    <select id="profile">
+      <option value="/screen">Low</option>
+      <option value="/ebook" selected>Medium</option>
+      <option value="/printer">High</option>
+      <option value="/prepress">Max</option>
+    </select>
+  </label>
+
+  <button id="go" disabled>Compress PDF</button>
+  <div id="progress">Loading Ghostscript…</div>
+  <a id="download"></a>
+
+  <script type="module">
+    import initGhostscript from 'https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs';
+
+    // 1) Initialize the WASM module
+    const gs = await initGhostscript({
+      locateFile: file => 
+        `https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/${file}`
+    });
+
+    // 2) Wire up the UI
+    const drop  = document.getElementById('drop');
+    const inp   = document.getElementById('fileIn');
+    const go    = document.getElementById('go');
+    const prof  = document.getElementById('profile');
+    const prog  = document.getElementById('progress');
+    const dl    = document.getElementById('download');
+    let buf, name;
+
+    drop.onclick    = ()=> inp.click();
+    drop.ondragover = e=>{ e.preventDefault(); drop.classList.add('hover'); };
+    drop.ondragleave= ()=> drop.classList.remove('hover');
+    drop.ondrop     = e=>{ 
+      e.preventDefault(); drop.classList.remove('hover');
+      handleFile(e.dataTransfer.files[0]);
+    };
+    inp.onchange    = ()=> handleFile(inp.files[0]);
+
+    function handleFile(file) {
+      if (!file || file.type!=='application/pdf') {
+        alert('Please select a PDF file.');
+        return;
+      }
+      name = file.name.replace(/\.pdf$/i,'');
+      file.arrayBuffer().then(a=>{
+        buf = a;
+        go.disabled = false;
+        prog.textContent = `Loaded: ${file.name}`;
+      });
+    }
+
+    go.onclick = ()=>{
+      go.disabled = true;
+      dl.style.display = 'none';
+      prog.innerHTML = `<div class="spinner"></div>Compressing… <br><br>Your browser tab will freeze, but your CPU will keep you warm 😅`;
+
+      // give browser a tick to render the spinner
+      setTimeout(async ()=>{
+        // write into the WASM FS
+        gs.FS.writeFile('in.pdf', new Uint8Array(buf));
+
+        // run Ghostscript
+        await gs.callMain([
+          '-sDEVICE=pdfwrite',
+          '-dCompatibilityLevel=1.4',
+          `-dPDFSETTINGS=${prof.value}`,
+          '-dNOPAUSE','-dQUIET','-dBATCH',
+          '-sOutputFile=out.pdf',
+          'in.pdf'
+        ]);
+
+        // read it back
+        const out = gs.FS.readFile('out.pdf');
+        const blob = new Blob([out],{type:'application/pdf'});
+        const url  = URL.createObjectURL(blob);
+
+        // show download link
+        dl.href      = url;
+        dl.download  = `${name}-compressed.pdf`;
+        dl.text      = `Download (${format(blob.size)})`;
+        dl.style.display = 'block';
+
+        prog.textContent = 
+          `Done! Original ${format(buf.byteLength)}, Compressed ${format(blob.size)}.`;
+        go.disabled = false;
+      }, 50);
+    };
+
+    function format(b){
+      if (b===0) return '0 Bytes';
+      const k=1024, units=['Bytes','KB','MB','GB'];
+      const i = Math.floor(Math.log(b)/Math.log(k));
+      return parseFloat((b/Math.pow(k,i)).toFixed(2))+' '+units[i];
+    }
+
+    prog.textContent = 'Drop or select a PDF to begin. Processing may take a while, depending on PDF input size.';
+  </script>
+</body>
+</html>
