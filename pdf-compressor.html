@@ -5,6 +5,7 @@
     The user can choose the compression quality from a dropdown menu, and upon clicking the "Compress PDF" button,
     the PDF is processed in the browser.
     The compressed PDF is then available for download with the original and compressed file sizes displayed.
+    If compression fails to reduce file size, the user is explicitly notified.
 
     All processed files are kept in memory and never sent to a server.
     The Ghostscript library is loaded from a CDN, and the UI is built with basic HTML and CSS.
@@ -18,6 +19,7 @@
       --accent: #6f7c3d;
       --bg: #fafafa;
       --text: #333;
+      --warning: #b3742f;
     }
     body {
       font-family: sans-serif;
@@ -89,6 +91,11 @@
       font-weight: bold;
       text-decoration: none;
     }
+    .warning {
+      color: var(--warning);
+      font-weight: bold;
+      margin-top: 1rem;
+    }
   </style>
 </head>
 <body>
@@ -100,10 +107,10 @@
   <label>
     Quality:
     <select id="profile">
-      <option value="/screen">Low</option>
-      <option value="/ebook" selected>Medium</option>
-      <option value="/printer">High</option>
-      <option value="/prepress">Max</option>
+      <option value="/screen">Low (72 DPI)</option>
+      <option value="/ebook" selected>Medium (150 DPI)</option>
+      <option value="/printer">High (300 DPI)</option>
+      <option value="/prepress">Maximum (300 DPI)</option>
     </select>
   </label>
 
@@ -147,7 +154,7 @@
       file.arrayBuffer().then(a=>{
         buf = a;
         go.disabled = false;
-        prog.textContent = `Loaded: ${file.name}`;
+        prog.textContent = `Loaded: ${file.name} (${format(file.size)})`;
       });
     }
 
@@ -176,14 +183,27 @@
         const blob = new Blob([out],{type:'application/pdf'});
         const url  = URL.createObjectURL(blob);
 
+        // Check if compression was successful
+        const originalSize = buf.byteLength;
+        const compressedSize = blob.size;
+        
+        if (compressedSize >= originalSize) {
+          prog.innerHTML = `<span class="warning">⚠️ Unable to compress further!</span><br>
+            Current setting couldn't reduce the file size.<br>
+            Original: ${format(originalSize)}, Compressed: ${format(compressedSize)} (${Math.round(compressedSize/originalSize*100)}%)<br>
+            Try a lower quality setting or this file may already be optimized.`;
+        } else {
+          const saving = Math.round((1 - compressedSize/originalSize) * 100);
+          prog.innerHTML = `✅ Success! File size reduced by ${saving}%<br>
+            Original: ${format(originalSize)}, Compressed: ${format(compressedSize)}`;
+        }
+
         // show download link
         dl.href      = url;
         dl.download  = `${name}-compressed.pdf`;
-        dl.text      = `Download (${format(blob.size)})`;
+        dl.text      = `Download (${format(compressedSize)})`;
         dl.style.display = 'block';
 
-        prog.textContent = 
-          `Done! Original ${format(buf.byteLength)}, Compressed ${format(blob.size)}.`;
         go.disabled = false;
       }, 50);
     };
@@ -195,7 +215,7 @@
       return parseFloat((b/Math.pow(k,i)).toFixed(2))+' '+units[i];
     }
 
-    prog.textContent = 'Drop or select a PDF to begin. Processing may take a while, depending on PDF input size.';
+    prog.textContent = 'Drop or select a PDF to begin. Processing may take a while, depending on PDF input size. Your browser may freeze, but the CPU will keep you warm. 😅';
   </script>
 </body>
 </html>
