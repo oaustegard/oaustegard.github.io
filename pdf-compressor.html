@@ -7,6 +7,9 @@
     The compressed PDF is then available for download with the original and compressed file sizes displayed.
     If compression fails to reduce file size, the user is explicitly notified.
 
+    Additionally, the tool can extract text from the PDF, displaying it in a text area with options to copy to clipboard or download as a text file.
+    The text extraction is done page-by-page, and the output is formatted for readability.
+
     All processed files are kept in memory and never sent to a server.
     The Ghostscript library is loaded from a CDN, and the UI is built with basic HTML and CSS.
 -->
@@ -23,7 +26,7 @@
     }
     body {
       font-family: sans-serif;
-      max-width: 600px;
+      max-width: 700px;
       margin: 2rem auto;
       background: var(--bg);
       color: var(--text);
@@ -39,10 +42,23 @@
       text-align: center;
       cursor: pointer;
       transition: background 0.2s, border-color 0.2s;
+      margin-bottom: 1.5rem;
     }
     #drop.hover {
       border-color: var(--accent);
       background: #f4f7f0;
+    }
+    fieldset {
+      margin: 1.5rem 0;
+      padding: 1rem;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      background: white;
+    }
+    legend {
+      color: var(--accent);
+      font-weight: bold;
+      padding: 0 0.5rem;
     }
     label, select, button {
       display: block;
@@ -65,6 +81,33 @@
     button:disabled {
       opacity: 0.6;
       cursor: default;
+    }
+    .button-row {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+      margin-top: 1rem;
+    }
+    .button-row button, .button-row a {
+      width: auto;
+      margin: 0;
+    }
+    .button-row a {
+      display: inline-block;
+      background: var(--accent);
+      color: #fff;
+      padding: .75rem;
+      font-size: 1rem;
+      border-radius: 4px;
+      text-decoration: none;
+    }
+    #file-info {
+      background: #eee;
+      padding: 0.5rem 1rem;
+      margin: 1rem 0;
+      border-radius: 4px;
+      font-size: 0.9rem;
+      text-align: center;
     }
     #progress {
       text-align: center;
@@ -96,6 +139,23 @@
       font-weight: bold;
       margin-top: 1rem;
     }
+    #text-output-container {
+      display: none;
+      margin-top: 1.5rem;
+    }
+    #text-output {
+      width: 100%;
+      height: 300px;
+      padding: 0.5rem;
+      border: 1px solid #ccc;
+      border-radius: 4px;
+      font-family: monospace;
+      font-size: 0.9rem;
+      resize: vertical;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      margin-bottom: 1rem;
+    }
   </style>
 </head>
 <body>
@@ -103,119 +163,291 @@
 
   <div id="drop">📄 Drop PDF here, or click to browse</div>
   <input type="file" id="fileIn" accept="application/pdf" style="display:none">
+  
+  <div id="file-info">No file loaded</div>
 
-  <label>
-    Quality:
-    <select id="profile">
-      <option value="/screen">Low (72 DPI)</option>
-      <option value="/ebook" selected>Medium (150 DPI)</option>
-      <option value="/printer">High (300 DPI)</option>
-      <option value="/prepress">Maximum (300 DPI)</option>
-    </select>
-  </label>
+  <fieldset>
+    <legend>PDF Compression</legend>
+    <label>
+      Quality:
+      <select id="profile">
+        <option value="/screen">Low (72 DPI)</option>
+        <option value="/ebook" selected>Medium (150 DPI)</option>
+        <option value="/printer">High (300 DPI)</option>
+        <option value="/prepress">Maximum (300 DPI)</option>
+      </select>
+    </label>
+    <button id="compress-btn" disabled>Compress PDF</button>
+    <a id="download"></a>
+  </fieldset>
 
-  <button id="go" disabled>Compress PDF</button>
+  <fieldset id="extract-fieldset">
+    <legend>Text Extraction</legend>
+    <button id="extract-btn" disabled>Extract Text</button>
+    
+    <div id="text-output-container">
+      <div id="text-output"></div>
+      <div class="button-row">
+        <button id="copy-btn">Copy to Clipboard</button>
+        <a id="text-download">Download Text</a>
+      </div>
+    </div>
+  </fieldset>
+
   <div id="progress">Loading Ghostscript…</div>
-  <a id="download"></a>
 
   <script type="module">
     import initGhostscript from 'https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/gs.mjs';
 
-    // 1) Initialize the WASM module
+    /* Initialize the WASM module */
     const gs = await initGhostscript({
       locateFile: file => 
         `https://cdn.jsdelivr.net/npm/@jspawn/ghostscript-wasm@0.0.2/${file}`
     });
 
-    // 2) Wire up the UI
-    const drop  = document.getElementById('drop');
-    const inp   = document.getElementById('fileIn');
-    const go    = document.getElementById('go');
-    const prof  = document.getElementById('profile');
-    const prog  = document.getElementById('progress');
-    const dl    = document.getElementById('download');
-    let buf, name;
+    /* Set up UI elements */
+    const drop = document.getElementById('drop');
+    const inp = document.getElementById('fileIn');
+    const compressBtn = document.getElementById('compress-btn');
+    const extractBtn = document.getElementById('extract-btn');
+    const prof = document.getElementById('profile');
+    const prog = document.getElementById('progress');
+    const dl = document.getElementById('download');
+    const textOutputContainer = document.getElementById('text-output-container');
+    const textOutput = document.getElementById('text-output');
+    const copyBtn = document.getElementById('copy-btn');
+    const textDownload = document.getElementById('text-download');
+    const fileInfo = document.getElementById('file-info');
+    let buf, name, originalFile;
 
-    drop.onclick    = ()=> inp.click();
-    drop.ondragover = e=>{ e.preventDefault(); drop.classList.add('hover'); };
-    drop.ondragleave= ()=> drop.classList.remove('hover');
-    drop.ondrop     = e=>{ 
-      e.preventDefault(); drop.classList.remove('hover');
+    /* File handling */
+    drop.onclick = () => inp.click();
+    drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
+    drop.ondragleave = () => drop.classList.remove('hover');
+    drop.ondrop = e => { 
+      e.preventDefault(); 
+      drop.classList.remove('hover');
       handleFile(e.dataTransfer.files[0]);
     };
-    inp.onchange    = ()=> handleFile(inp.files[0]);
+    inp.onchange = () => handleFile(inp.files[0]);
 
     function handleFile(file) {
-      if (!file || file.type!=='application/pdf') {
+      if (!file || file.type !== 'application/pdf') {
         alert('Please select a PDF file.');
         return;
       }
-      name = file.name.replace(/\.pdf$/i,'');
-      file.arrayBuffer().then(a=>{
+      originalFile = file;
+      name = file.name.replace(/\.pdf$/i, '');
+      file.arrayBuffer().then(a => {
         buf = a;
-        go.disabled = false;
-        prog.textContent = `Loaded: ${file.name} (${format(file.size)})`;
+        compressBtn.disabled = false;
+        extractBtn.disabled = false;
+        fileInfo.innerHTML = `<strong>Current file:</strong> ${file.name} (${format(file.size)})`;
+        prog.textContent = `File loaded and ready to process`;
+        // Hide any previous output
+        textOutputContainer.style.display = 'none';
+        dl.style.display = 'none';
       });
     }
 
-    go.onclick = ()=>{
-      go.disabled = true;
-      dl.style.display = 'none';
-      prog.innerHTML = `<div class="spinner"></div>Compressing… <br><br>Your browser tab will freeze, but your CPU will keep you warm 😅`;
+    /* PDF Compression */
+    compressBtn.onclick = async () => {
+      resetUI();
+      compressBtn.disabled = true;
+      extractBtn.disabled = true;
+      
+      prog.innerHTML = `<div class="spinner"></div>Compressing… <br><br>Your browser tab may freeze temporarily during processing`;
+      
+      // Give browser a tick to render the spinner
+      setTimeout(async () => {
+        try {
+          // Write into the WASM FS
+          gs.FS.writeFile('in.pdf', new Uint8Array(buf));
 
-      // give browser a tick to render the spinner
-      setTimeout(async ()=>{
-        // write into the WASM FS
-        gs.FS.writeFile('in.pdf', new Uint8Array(buf));
+          // Run Ghostscript for compression
+          await gs.callMain([
+            '-sDEVICE=pdfwrite',
+            '-dCompatibilityLevel=1.4',
+            `-dPDFSETTINGS=${prof.value}`,
+            '-dNOPAUSE', '-dQUIET', '-dBATCH',
+            '-sOutputFile=out.pdf',
+            'in.pdf'
+          ]);
 
-        // run Ghostscript
-        await gs.callMain([
-          '-sDEVICE=pdfwrite',
-          '-dCompatibilityLevel=1.4',
-          `-dPDFSETTINGS=${prof.value}`,
-          '-dNOPAUSE','-dQUIET','-dBATCH',
-          '-sOutputFile=out.pdf',
-          'in.pdf'
-        ]);
+          // Read back the compressed PDF
+          const out = gs.FS.readFile('out.pdf');
+          const blob = new Blob([out], {type: 'application/pdf'});
+          const url = URL.createObjectURL(blob);
 
-        // read it back
-        const out = gs.FS.readFile('out.pdf');
-        const blob = new Blob([out],{type:'application/pdf'});
-        const url  = URL.createObjectURL(blob);
+          // Check if compression was successful
+          const originalSize = buf.byteLength;
+          const compressedSize = blob.size;
+          
+          if (compressedSize >= originalSize) {
+            prog.innerHTML = `<span class="warning">⚠️ Unable to compress further!</span><br>
+              Current setting couldn't reduce the file size.<br>
+              Original: ${format(originalSize)}, Compressed: ${format(compressedSize)} (${Math.round(compressedSize/originalSize*100)}%)<br>
+              Try a lower quality setting or this file may already be optimized.`;
+          } else {
+            const saving = Math.round((1 - compressedSize/originalSize) * 100);
+            prog.innerHTML = `✅ Success! File size reduced by ${saving}%<br>
+              Original: ${format(originalSize)}, Compressed: ${format(compressedSize)}`;
+          }
 
-        // Check if compression was successful
-        const originalSize = buf.byteLength;
-        const compressedSize = blob.size;
-        
-        if (compressedSize >= originalSize) {
-          prog.innerHTML = `<span class="warning">⚠️ Unable to compress further!</span><br>
-            Current setting couldn't reduce the file size.<br>
-            Original: ${format(originalSize)}, Compressed: ${format(compressedSize)} (${Math.round(compressedSize/originalSize*100)}%)<br>
-            Try a lower quality setting or this file may already be optimized.`;
-        } else {
-          const saving = Math.round((1 - compressedSize/originalSize) * 100);
-          prog.innerHTML = `✅ Success! File size reduced by ${saving}%<br>
-            Original: ${format(originalSize)}, Compressed: ${format(compressedSize)}`;
+          // Show download link
+          dl.href = url;
+          dl.download = `${name}-compressed.pdf`;
+          dl.text = `Download Compressed PDF (${format(compressedSize)})`;
+          dl.style.display = 'block';
+        } catch (error) {
+          prog.innerHTML = `<span class="warning">⚠️ Error compressing PDF: ${error.message}</span>`;
         }
-
-        // show download link
-        dl.href      = url;
-        dl.download  = `${name}-compressed.pdf`;
-        dl.text      = `Download (${format(compressedSize)})`;
-        dl.style.display = 'block';
-
-        go.disabled = false;
+        
+        compressBtn.disabled = false;
+        extractBtn.disabled = false;
       }, 50);
     };
 
-    function format(b){
-      if (b===0) return '0 Bytes';
-      const k=1024, units=['Bytes','KB','MB','GB'];
-      const i = Math.floor(Math.log(b)/Math.log(k));
-      return parseFloat((b/Math.pow(k,i)).toFixed(2))+' '+units[i];
+    /* Text Extraction - using page-by-page approach */
+    extractBtn.onclick = async () => {
+      resetUI();
+      compressBtn.disabled = true;
+      extractBtn.disabled = true;
+      
+      prog.innerHTML = `<div class="spinner"></div>Extracting text... <br><br>Your browser tab may freeze temporarily during processing`;
+      
+      // Give browser a tick to render the spinner
+      setTimeout(async () => {
+        try {
+          // Write the PDF to memory
+          gs.FS.writeFile('input.pdf', new Uint8Array(buf));
+          
+          // First, get the number of pages in the PDF
+          let pageCount = 0;
+          
+          try {
+            // Create a temporary JS file to determine page count
+            const pageCountScript = `
+              var pdfFile = "input.pdf";
+              var doc = PDFDocOpen(pdfFile);
+              var pageCount = PDFDocGetPageCount(doc);
+              println(pageCount);
+              quit();
+            `;
+            
+            gs.FS.writeFile('getpagecount.js', pageCountScript);
+            
+            // Execute the JavaScript to get page count
+            await gs.callMain([
+              '-dNODISPLAY',
+              '-dNOPAUSE',
+              '-dBATCH',
+              '-dQUIET',
+              '-sFile=input.pdf',
+              '-c',
+              '(getpagecount.js) runfile',
+            ]);
+
+          } catch(e) {
+            console.error("Error getting page count:", e);
+          }
+          
+          // Extract text using a special output format to handle multiple pages
+          await gs.callMain([
+            '-dNOPAUSE',
+            '-dBATCH',
+            '-dQUIET',
+            '-sDEVICE=txtwrite',
+            // Using output%d.txt format to get one file per page
+            '-sOutputFile=page%d.txt',
+            '-dTextFormat=3',
+            'input.pdf'
+          ]);
+          
+          // Now collect all text files
+          let allText = '';
+          let pageIndex = 1;
+          let hasMorePages = true;
+          
+          while (hasMorePages) {
+            try {
+              const pageFilename = `page${pageIndex}.txt`;
+              const pageText = new TextDecoder().decode(gs.FS.readFile(pageFilename));
+              const cleanedPageText = cleanupPDFText(pageText);
+              allText += `--- Page ${pageIndex} ---\n${cleanedPageText}\n\n`;
+              pageIndex++;
+            } catch (e) {
+              hasMorePages = false;
+            }
+          }
+          
+          if (pageIndex <= 1) {
+            throw new Error("No text was extracted. The PDF may be image-based or have no extractable text.");
+          }
+          
+          // Display text in the output area
+          textOutput.textContent = allText;
+          textOutputContainer.style.display = 'block';
+          
+          // Create blob for download link
+          const blob = new Blob([allText], {type: 'text/plain'});
+          const url = URL.createObjectURL(blob);
+          
+          // Set up text download link
+          textDownload.href = url;
+          textDownload.download = `${name}.txt`;
+          
+          prog.innerHTML = `✅ Text extraction complete! (${pageIndex-1} pages processed)`;
+        } catch (error) {
+          prog.innerHTML = `<span class="warning">⚠️ Error extracting text: ${error.message}</span>`;
+          console.error('GhostScript error:', error);
+        }
+        
+        compressBtn.disabled = false;
+        extractBtn.disabled = false;
+      }, 50);
+    };
+
+    /* Cleans up PDF extracted text with sensible defaults */
+    function cleanupPDFText(text) {
+      return text
+        // Trim trailing whitespace on each line
+        .replace(/[ \t]+$/gm, '')
+        // Trim leading whitespace on each line IF it's excessive (more than 3 spaces)
+        .replace(/^[ \t]{3,}/gm, '    ');
     }
 
-    prog.innerHTML = 'Drop or select a PDF to begin.<br><br>Processing may take a while, depending on PDF input size.';
+
+    /* Copy to clipboard */
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(textOutput.textContent)
+        .then(() => {
+          copyBtn.textContent = 'Copied!';
+          setTimeout(() => {
+            copyBtn.textContent = 'Copy to Clipboard';
+          }, 2000);
+        })
+        .catch(err => {
+          console.error('Failed to copy text: ', err);
+          alert('Failed to copy text. Please try selecting and copying manually.');
+        });
+    };
+
+    /* Helper function to reset UI */
+    function resetUI() {
+      dl.style.display = 'none';
+      textOutputContainer.style.display = 'none';
+    }
+
+    /* File size formatter */
+    function format(b) {
+      if (b === 0) return '0 Bytes';
+      const k = 1024, units = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(b) / Math.log(k));
+      return parseFloat((b / Math.pow(k, i)).toFixed(2)) + ' ' + units[i];
+    }
+
+    prog.textContent = 'Drop or select a PDF to begin. Processing happens in your browser and may take a while.';
   </script>
 </body>
 </html>
