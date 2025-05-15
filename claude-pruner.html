@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Claude Pruner</title>
+    <title>Claude Pruner (Debug)</title>
     <meta charset="utf-8">
     <style>
         body {
@@ -11,6 +11,59 @@
             min-height: 100vh;
         }
 
+        #debug-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            height: 200px;
+            background: #f0f0f0;
+            border-top: 2px solid #999;
+            padding: 10px;
+            overflow-y: auto;
+            z-index: 1000;
+            font-family: monospace;
+            font-size: 14px;
+        }
+
+        #debug-panel.hidden {
+            display: none;
+        }
+
+        #debug-panel .log {
+            margin: 5px 0;
+            padding: 3px 0;
+            border-bottom: 1px solid #ddd;
+        }
+
+        #debug-panel .log.error {
+            color: red;
+            font-weight: bold;
+        }
+
+        #debug-panel .log.warn {
+            color: orange;
+        }
+
+        #debug-panel .log.info {
+            color: blue;
+        }
+
+        #debug-controls {
+            position: fixed;
+            bottom: 200px;
+            right: 10px;
+            z-index: 1001;
+            display: flex;
+            gap: 5px;
+        }
+
+        #debug-controls button {
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+
+        /* Rest of the styles from original */
         .controls {
             position: sticky;
             top: 0;
@@ -43,16 +96,17 @@
             color: #666;
         }
 
-        /* Three-column layout */
+        /* Two-column layout */
         .container {
             display: grid;
-            grid-template-columns: 1fr 1fr 1fr;
+            grid-template-columns: 1fr 1fr;
             gap: 20px;
-            max-width: 2400px;
+            max-width: 1800px;
             margin: 0 auto;
+            padding-bottom: 220px; /* Add space for debug panel */
         }
 
-        .messages-column, .artifacts-column, .tools-column {
+        .messages-column, .artifacts-column {
             min-width: 0;
             display: flex;
             flex-direction: column;
@@ -61,11 +115,6 @@
 
         .artifacts-column {
             border-left: 1px solid #ddd;
-            border-right: 1px solid #ddd;
-            padding: 0 20px;
-        }
-
-        .tools-column {
             padding-left: 20px;
         }
 
@@ -134,50 +183,8 @@
             color: #1565C0;
         }
 
-        /* Tool Use Styling */
-        .tool-use {
-            padding: 15px;
-            border: 2px solid #9C27B0;
-            border-radius: 4px;
-            background: #F3E5F5;
-            cursor: pointer;
-        }
-
-        .tool-use:not(.selected) {
-            border-color: #ff4444;
-            background: #fff0f0;
-            opacity: 0.7;
-        }
-
-        .tool-use.selected {
-            border-color: #9C27B0;
-            background: #F3E5F5;
-            opacity: 1;
-        }
-
-        /* Thinking Block Styling */
-        .thinking {
-            padding: 15px;
-            border: 2px solid #FF9800;
-            border-radius: 4px;
-            background: #FFF3E0;
-            cursor: pointer;
-        }
-
-        .thinking:not(.selected) {
-            border-color: #ff4444;
-            background: #fff0f0;
-            opacity: 0.7;
-        }
-
-        .thinking.selected {
-            border-color: #FF9800;
-            background: #FFF3E0;
-            opacity: 1;
-        }
-
-        /* Common styles */
-        .message, .artifact, .tool-use, .thinking {
+        /* Message and Artifact common styles */
+        .message, .artifact {
             max-height: 400px;
             overflow-y: auto;
             margin: 0; 
@@ -220,39 +227,153 @@
             z-index: 1;
             padding: 10px 0;
             margin: 0;
-            font-weight: bold;
-            font-size: 1.1em;
-        }
-
-        /* Tool content styling */
-        .tool-name {
-            font-weight: bold;
-            color: #7B1FA2;
-            margin-bottom: 10px;
-        }
-
-        .tool-params, .tool-result {
-            background: #f8f9fa;
-            padding: 10px;
-            border-radius: 4px;
-            margin: 5px 0;
-            font-size: 0.9em;
-        }
-
-        .tool-label {
-            font-weight: bold;
-            color: #666;
-            margin-bottom: 5px;
-        }
-
-        /* Thinking summary */
-        .thinking-summary {
-            font-style: italic;
-            color: #666;
-            margin: 10px 0;
         }
     </style>
     <script>
+        /* Debug logging */
+        const debugLog = {
+            panel: null,
+            logs: [],
+            
+            init() {
+                // Create debug panel
+                this.panel = document.createElement('div');
+                this.panel.id = 'debug-panel';
+                
+                // Create debug controls
+                const controls = document.createElement('div');
+                controls.id = 'debug-controls';
+                controls.innerHTML = `
+                    <button id="toggle-debug">Hide Debug</button>
+                    <button id="clear-debug">Clear</button>
+                    <button id="test-processing">Test Processing</button>
+                `;
+                
+                document.body.appendChild(this.panel);
+                document.body.appendChild(controls);
+                
+                // Setup event listeners
+                document.getElementById('toggle-debug').addEventListener('click', () => {
+                    this.panel.classList.toggle('hidden');
+                    document.getElementById('toggle-debug').textContent = 
+                        this.panel.classList.contains('hidden') ? 'Show Debug' : 'Hide Debug';
+                });
+                
+                document.getElementById('clear-debug').addEventListener('click', () => {
+                    this.clear();
+                });
+                
+                document.getElementById('test-processing').addEventListener('click', () => {
+                    this.log('Testing with sample data', 'info');
+                    processSampleData();
+                });
+            },
+            
+            log(message, level = 'log') {
+                const timestamp = new Date().toLocaleTimeString();
+                let formattedMsg;
+                
+                if (typeof message === 'object') {
+                    try {
+                        formattedMsg = JSON.stringify(message, null, 2);
+                    } catch (e) {
+                        formattedMsg = '[Object cannot be stringified]';
+                    }
+                } else {
+                    formattedMsg = message;
+                }
+                
+                const logEntry = {
+                    timestamp,
+                    message: formattedMsg,
+                    level
+                };
+                
+                this.logs.push(logEntry);
+                
+                if (this.panel) {
+                    const logElement = document.createElement('div');
+                    logElement.className = `log ${level}`;
+                    logElement.innerHTML = `<strong>[${timestamp}]</strong> ${formattedMsg}`;
+                    this.panel.appendChild(logElement);
+                    this.panel.scrollTop = this.panel.scrollHeight;
+                }
+                
+                // Also log to console
+                console[level](message);
+            },
+            
+            error(message) {
+                this.log(message, 'error');
+            },
+            
+            warn(message) {
+                this.log(message, 'warn');
+            },
+            
+            info(message) {
+                this.log(message, 'info');
+            },
+            
+            clear() {
+                this.logs = [];
+                if (this.panel) {
+                    this.panel.innerHTML = '';
+                }
+            }
+        };
+
+        /* Processing sample data for testing */
+        function processSampleData() {
+            const sampleData = {
+                chat_messages: [
+                    {
+                        uuid: "test-uuid-1",
+                        sender: "human",
+                        content: [
+                            {
+                                type: "text",
+                                text: "Hello, can you help me with something?"
+                            }
+                        ],
+                        created_at: new Date().toISOString()
+                    },
+                    {
+                        uuid: "test-uuid-2",
+                        sender: "assistant",
+                        content: [
+                            {
+                                type: "thinking",
+                                thinking: "Let me think about how to respond to this query.",
+                                summaries: [{ summary: "Planning my response" }],
+                                start_timestamp: new Date().toISOString()
+                            },
+                            {
+                                type: "text",
+                                text: "I'd be happy to help. What do you need?"
+                            }
+                        ],
+                        created_at: new Date().toISOString()
+                    }
+                ]
+            };
+            
+            try {
+                debugLog.info("Processing sample data");
+                
+                // Clear any existing content
+                document.body.innerHTML = '';
+                
+                // Initialize debug panel again since we cleared the body
+                debugLog.init();
+                
+                setupInterface(sampleData);
+            } catch (error) {
+                debugLog.error(`Error processing sample data: ${error.message}`);
+                debugLog.error(error.stack);
+            }
+        }
+
         /* Utility functions */
         function estimateTokens(text) {
             const words = text.trim().split(/\s+/).length;
@@ -260,359 +381,313 @@
         }
 
         function formatTimestamp(isoString) {
-            return new Date(isoString).toLocaleString('en-US', {
-                month: 'short',
-                day: 'numeric',
-                hour: '2-digit',
-                minute: '2-digit',
-                second: '2-digit',
-                hour12: true
-            });
+            try {
+                return new Date(isoString).toLocaleString('en-US', {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                    hour12: true
+                });
+            } catch (error) {
+                debugLog.error(`Error formatting timestamp: ${error.message}`);
+                return 'Invalid date';
+            }
         }
 
         function processMessageContent(message) {
-            if (!message.content) return { text: message.text || '', artifacts: [], toolUses: [], thinking: [] };
-            
-            const elements = [];
-            const artifacts = [];
-            const toolUses = [];
-            const thinking = [];
-            
-            message.content.forEach(part => {
-                if (part.type === 'text') {
-                    const text = part.text.trim();
-                    if (text && !text.startsWith('<antArtifact')) {
-                        elements.push(`<div class="text-content">${text}</div>`);
-                    }
+            try {
+                debugLog.info(`Processing message: ${message.uuid}`);
+                
+                if (!message.content) {
+                    debugLog.warn('Message has no content, falling back to text property');
+                    return { text: message.text || '', artifacts: [] };
                 }
                 
-                // Handle tool use
-                if (part.type === 'tool_use') {
-                    const toolInputJson = JSON.stringify(part.input, null, 2)
-                        .replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;');
-                    
-                    const toolElement = {
-                        name: part.name,
-                        message: part.message || part.name,
-                        input: toolInputJson,
-                        timestamp: part.start_timestamp || message.created_at
-                    };
-                    
-                    toolUses.push(toolElement);
-                }
+                const elements = [];
+                const artifacts = [];
                 
-                // Handle tool results
-                if (part.type === 'tool_result') {
-                    let resultContent = '';
-                    if (part.content && Array.isArray(part.content)) {
-                        part.content.forEach(resultPart => {
-                            if (resultPart.type === 'text') {
-                                resultContent += resultPart.text;
-                            }
-                        });
-                    } else if (typeof part.content === 'string') {
-                        resultContent = part.content;
+                message.content.forEach((part, index) => {
+                    debugLog.info(`Processing content part ${index}, type: ${part.type}`);
+                    
+                    if (part.type === 'text') {
+                        const text = part.text.trim();
+                        if (text && !text.startsWith('<antArtifact')) {
+                            elements.push(`<div class="text-content">${text}</div>`);
+                        }
                     }
                     
-                    const resultHtml = resultContent
-                        .replace(/&/g, '&amp;')
-                        .replace(/</g, '&lt;')
-                        .replace(/>/g, '&gt;');
-                    
-                    toolUses.push({
-                        name: part.name,
-                        result: resultHtml,
-                        timestamp: part.start_timestamp || message.created_at,
-                        isResult: true
-                    });
-                }
-                
-                // Handle thinking blocks
-                if (part.type === 'thinking') {
-                    thinking.push({
-                        content: part.thinking,
-                        summaries: part.summaries || [],
-                        timestamp: part.start_timestamp || message.created_at
-                    });
-                }
-            });
+                    if (part.type === 'thinking') {
+                        debugLog.info('Found thinking block');
+                        // Thinking blocks are processed separately
+                    }
+                });
 
-            // Extract artifacts from text content
-            message.content.forEach(part => {
-                if (part.type === 'text' && part.text.includes('<antArtifact')) {
-                    part.text.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/g)
-                        ?.forEach(match => {
-                            const [, , title, content] = match.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/);
-                            const cleanContent = content
-                                .trim()
-                                .replace(/&/g, '&amp;')
-                                .replace(/</g, '&lt;')
-                                .replace(/>/g, '&gt;');
+                message.content.forEach((part, index) => {
+                    if (part.type === 'text' && part.text.includes('<antArtifact')) {
+                        debugLog.info('Found artifact in text');
+                        
+                        const artifactMatches = part.text.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/g);
+                        
+                        if (artifactMatches) {
+                            artifactMatches.forEach(match => {
+                                try {
+                                    const matchResult = match.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/);
+                                    
+                                    if (matchResult && matchResult.length >= 4) {
+                                        const [, identifier, title, content] = matchResult;
+                                        
+                                        debugLog.info(`Found artifact: ${identifier} - ${title}`);
+                                        
+                                        const cleanContent = content
+                                            .trim()
+                                            .replace(/&/g, '&amp;')
+                                            .replace(/</g, '&lt;')
+                                            .replace(/>/g, '&gt;');
 
-                            artifacts.push({
-                                title,
-                                content: cleanContent,
-                                timestamp: message.created_at
+                                        artifacts.push({
+                                            title,
+                                            content: cleanContent,
+                                            timestamp: message.created_at
+                                        });
+                                    } else {
+                                        debugLog.error('Failed to extract artifact components from match');
+                                    }
+                                } catch (error) {
+                                    debugLog.error(`Error processing artifact match: ${error.message}`);
+                                }
                             });
-                        });
-                }
-            });
+                        } else {
+                            debugLog.warn('No artifact matches found in text that contains <antArtifact>');
+                        }
+                    }
+                });
 
-            return { text: elements.join('\n'), artifacts, toolUses, thinking };
+                debugLog.info(`Processed ${elements.length} text elements and ${artifacts.length} artifacts`);
+                return { text: elements.join('\n'), artifacts };
+                
+            } catch (error) {
+                debugLog.error(`Error in processMessageContent: ${error.message}`);
+                debugLog.error(error.stack);
+                return { text: 'Error processing message content', artifacts: [] };
+            }
         }
 
         function formatSelectedContent() {
-            const selectedContent = [];
-            
-            // Add thinking blocks
-            document.querySelectorAll('.thinking.selected').forEach(el => {
-                const content = el.getAttribute('data-content');
-                selectedContent.push({
-                    timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
-                    content: `<Thinking>${content}</Thinking>`,
-                    type: 'thinking'
-                });
-            });
-            
-            // Add messages
-            document.querySelectorAll('.message.selected').forEach(el => {
-                const role = el.classList.contains('human') ? 'Human' : 'Assistant';
-                const textElements = Array.from(el.querySelectorAll('.text-content'))
-                    .map(textEl => textEl.textContent.trim())
-                    .filter(text => text)
-                    .join('\n');
+            try {
+                const selectedContent = [];
                 
-                if (textElements) {
+                document.querySelectorAll('.message.selected').forEach(el => {
+                    const role = el.classList.contains('human') ? 'Human' : 'Assistant';
+                    const textElements = Array.from(el.querySelectorAll('.text-content'))
+                        .map(textEl => textEl.textContent.trim())
+                        .filter(text => text)
+                        .join('\n');
+                    
+                    if (textElements) {
+                        selectedContent.push({
+                            timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
+                            content: `<${role}>${textElements}</${role}>`,
+                            type: 'message'
+                        });
+                    }
+                });
+
+                document.querySelectorAll('.artifact.selected').forEach(artifact => {
+                    const title = artifact.getAttribute('data-title');
+                    const code = artifact.querySelector('code').textContent.trim();
+                    const timestamp = new Date(artifact.getAttribute('data-timestamp')).getTime();
+                    
                     selectedContent.push({
-                        timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
-                        content: `<${role}>${textElements}</${role}>`,
-                        type: 'message'
+                        timestamp,
+                        content: `<Artifact title="${title}">${code}</Artifact>`,
+                        type: 'artifact'
                     });
-                }
-            });
-
-            // Add tool uses
-            document.querySelectorAll('.tool-use.selected').forEach(tool => {
-                const content = tool.getAttribute('data-content');
-                selectedContent.push({
-                    timestamp: new Date(tool.getAttribute('data-timestamp')).getTime(),
-                    content: content,
-                    type: 'tool'
                 });
-            });
-
-            // Add artifacts
-            document.querySelectorAll('.artifact.selected').forEach(artifact => {
-                const title = artifact.getAttribute('data-title');
-                const code = artifact.querySelector('code').textContent.trim();
-                const timestamp = new Date(artifact.getAttribute('data-timestamp')).getTime();
                 
-                selectedContent.push({
-                    timestamp,
-                    content: `<Artifact title="${title}">${code}</Artifact>`,
-                    type: 'artifact'
-                });
-            });
-            
-            selectedContent.sort((a, b) => a.timestamp - b.timestamp);
-            
-            return selectedContent.map(item => item.content).join('\n\n');
+                selectedContent.sort((a, b) => a.timestamp - b.timestamp);
+                
+                return selectedContent.map(item => item.content).join('\n\n');
+            } catch (error) {
+                debugLog.error(`Error in formatSelectedContent: ${error.message}`);
+                return 'Error formatting selected content';
+            }
         }
 
         function updateStats() {
-            const selectedMessages = document.querySelectorAll('.message.selected').length;
-            const totalMessages = document.querySelectorAll('.message').length;
-            const selectedArtifacts = document.querySelectorAll('.artifact.selected').length;
-            const totalArtifacts = document.querySelectorAll('.artifact').length;
-            const selectedTools = document.querySelectorAll('.tool-use.selected').length;
-            const totalTools = document.querySelectorAll('.tool-use').length;
-            const selectedThinking = document.querySelectorAll('.thinking.selected').length;
-            const totalThinking = document.querySelectorAll('.thinking').length;
-            
-            const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .artifact.selected, .tool-use.selected, .thinking.selected'))
-                .map(el => el.textContent)
-                .join(' ');
-            const words = selectedText.trim().split(/\s+/).length;
-            const tokens = estimateTokens(selectedText);
-            
-            document.querySelector('.stats').textContent = 
-                `Messages: ${selectedMessages}/${totalMessages} | Artifacts: ${selectedArtifacts}/${totalArtifacts} | Tools: ${selectedTools}/${totalTools} | Thinking: ${selectedThinking}/${totalThinking} | Words: ${words} | Tokens: ~${tokens}`;
+            try {
+                const selectedMessages = document.querySelectorAll('.message.selected').length;
+                const totalMessages = document.querySelectorAll('.message').length;
+                const selectedArtifacts = document.querySelectorAll('.artifact.selected').length;
+                const totalArtifacts = document.querySelectorAll('.artifact').length;
+                
+                const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .artifact.selected'))
+                    .map(el => el.textContent)
+                    .join(' ');
+                const words = selectedText.trim().split(/\s+/).length;
+                const tokens = estimateTokens(selectedText);
+                
+                document.querySelector('.stats').textContent = 
+                    `Messages: ${selectedMessages}/${totalMessages} | Artifacts: ${selectedArtifacts}/${totalArtifacts} | Words: ${words} | Tokens: ~${tokens}`;
+            } catch (error) {
+                debugLog.error(`Error in updateStats: ${error.message}`);
+            }
         }
 
         function setupEventListeners() {
-            document.querySelectorAll('.message, .artifact, .tool-use, .thinking').forEach(el => {
-                el.addEventListener('click', () => {
-                    el.classList.toggle('selected');
-                    updateStats();
+            try {
+                document.querySelectorAll('.message').forEach(el => {
+                    el.addEventListener('click', () => {
+                        el.classList.toggle('selected');
+                        updateStats();
+                    });
                 });
-            });
 
-            document.getElementById('toggle-all').onclick = () => {
-                const allElements = document.querySelectorAll('.message, .artifact, .tool-use, .thinking');
-                const allSelected = Array.from(allElements).every(el => el.classList.contains('selected'));
-                
-                allElements.forEach(el => el.classList.toggle('selected', !allSelected));
-                updateStats();
-            };
-
-            document.getElementById('toggle-human').onclick = () => {
-                document.querySelectorAll('.message.human').forEach(el => {
-                    el.classList.toggle('selected');
-                });
-                updateStats();
-            };
-
-            document.getElementById('toggle-assistant').onclick = () => {
-                document.querySelectorAll('.message.assistant').forEach(el => {
-                    el.classList.toggle('selected');
-                });
-                updateStats();
-            };
-
-            document.getElementById('toggle-artifacts').onclick = () => {
                 document.querySelectorAll('.artifact').forEach(el => {
-                    el.classList.toggle('selected');
+                    el.addEventListener('click', () => {
+                        el.classList.toggle('selected');
+                        updateStats();
+                    });
                 });
-                updateStats();
-            };
 
-            document.getElementById('toggle-tools').onclick = () => {
-                document.querySelectorAll('.tool-use').forEach(el => {
-                    el.classList.toggle('selected');
-                });
-                updateStats();
-            };
+                document.getElementById('toggle-all').onclick = () => {
+                    const allMessages = document.querySelectorAll('.message');
+                    const allArtifacts = document.querySelectorAll('.artifact');
+                    const allSelected = Array.from(allMessages).every(m => m.classList.contains('selected')) &&
+                                    Array.from(allArtifacts).every(a => a.classList.contains('selected'));
+                    
+                    allMessages.forEach(m => m.classList.toggle('selected', !allSelected));
+                    allArtifacts.forEach(a => a.classList.toggle('selected', !allSelected));
+                    updateStats();
+                };
 
-            document.getElementById('toggle-thinking').onclick = () => {
-                document.querySelectorAll('.thinking').forEach(el => {
-                    el.classList.toggle('selected');
-                });
-                updateStats();
-            };
+                document.getElementById('toggle-human').onclick = () => {
+                    document.querySelectorAll('.message.human').forEach(el => {
+                        el.classList.toggle('selected');
+                    });
+                    updateStats();
+                };
 
-            document.getElementById('copy-selected').onclick = () => {
-                const text = formatSelectedContent();
-                navigator.clipboard.writeText(text);
-                const btn = document.getElementById('copy-selected');
-                btn.textContent = 'Copied!';
-                setTimeout(() => {
-                    btn.textContent = 'Copy';
-                }, 2000);
-            };
+                document.getElementById('toggle-assistant').onclick = () => {
+                    document.querySelectorAll('.message.assistant').forEach(el => {
+                        el.classList.toggle('selected');
+                    });
+                    updateStats();
+                };
 
-            document.getElementById('download-selected').onclick = () => {
-                const text = formatSelectedContent();
-                const blob = new Blob([text], { type: 'text/plain' });
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = 'claude-conversation.txt';
-                a.click();
-                URL.revokeObjectURL(url);
-            };
+                document.getElementById('toggle-artifacts').onclick = () => {
+                    document.querySelectorAll('.artifact').forEach(el => {
+                        el.classList.toggle('selected');
+                    });
+                    updateStats();
+                };
+
+                document.getElementById('copy-selected').onclick = () => {
+                    const text = formatSelectedContent();
+                    navigator.clipboard.writeText(text);
+                    const btn = document.getElementById('copy-selected');
+                    btn.textContent = 'Copied!';
+                    setTimeout(() => {
+                        btn.textContent = 'Copy';
+                    }, 2000);
+                };
+
+                document.getElementById('download-selected').onclick = () => {
+                    const text = formatSelectedContent();
+                    const blob = new Blob([text], { type: 'text/plain' });
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = 'claude-conversation.txt';
+                    a.click();
+                    URL.revokeObjectURL(url);
+                };
+                
+                debugLog.info('Event listeners set up successfully');
+            } catch (error) {
+                debugLog.error(`Error in setupEventListeners: ${error.message}`);
+            }
         }
         
-        function renderMessageContent(msg, { text, artifacts, toolUses, thinking }, messagesColumn, artifactsColumn, toolsColumn) {
-            const timestamp = msg.created_at;
-            const formattedTime = formatTimestamp(timestamp);
-
-            // Render thinking blocks
-            thinking.forEach(({ content, summaries, timestamp: thinkingTimestamp }) => {
-                const thinkingDiv = document.createElement('div');
-                thinkingDiv.className = 'thinking selected';
-                thinkingDiv.setAttribute('data-content', content);
-                thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
+        function renderMessagePair(msg, { text, artifacts }, messagesColumn, artifactsColumn) {
+            try {
+                debugLog.info(`Rendering message: ${msg.uuid}`);
                 
-                let summaryHtml = '';
-                if (summaries && summaries.length > 0) {
-                    summaryHtml = `<div class="thinking-summary">${summaries[0].summary}</div>`;
-                }
-                
-                thinkingDiv.innerHTML = `
-                    <div class="message-header">
-                        <strong>Thinking</strong>
-                        <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
-                    </div>
-                    ${summaryHtml}
-                    <pre><code>${content}</code></pre>
-                `;
-                messagesColumn.appendChild(thinkingDiv);
-            });
+                const timestamp = msg.created_at;
+                const formattedTime = formatTimestamp(timestamp);
 
-            // Render main message
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${msg.sender} selected`;
-            messageDiv.setAttribute('data-timestamp', timestamp);
-            messageDiv.innerHTML = `
-                <div class="message-header">
-                    <strong>${msg.sender}</strong>
-                    <span class="timestamp">${formattedTime}</span>
-                </div>
-                <div class="content">${text}</div>
-            `;
-            messagesColumn.appendChild(messageDiv);
+                // Render thinking blocks (if any)
+                msg.content.forEach((part, index) => {
+                    if (part.type === 'thinking') {
+                        debugLog.info(`Rendering thinking block for message: ${msg.uuid}`);
+                        
+                        const thinkingTimestamp = part.start_timestamp || timestamp;
+                        const formattedThinkingTime = formatTimestamp(thinkingTimestamp);
+                        
+                        let summaryHtml = '';
+                        if (part.summaries && part.summaries.length > 0) {
+                            summaryHtml = `<div class="thinking-summary">${part.summaries[0].summary}</div>`;
+                        }
+                        
+                        const thinkingDiv = document.createElement('div');
+                        thinkingDiv.className = 'message thinking selected';
+                        thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
+                        thinkingDiv.innerHTML = `
+                            <div class="message-header">
+                                <strong>Thinking</strong>
+                                <span class="timestamp">${formattedThinkingTime}</span>
+                            </div>
+                            ${summaryHtml}
+                            <pre><code>${part.thinking}</code></pre>
+                        `;
+                        messagesColumn.appendChild(thinkingDiv);
+                    }
+                });
 
-            // Render artifacts
-            artifacts.forEach(({ title, content, timestamp: artifactTimestamp }) => {
-                const artifactDiv = document.createElement('div');
-                artifactDiv.className = 'artifact selected';
-                artifactDiv.setAttribute('data-title', title);
-                artifactDiv.setAttribute('data-timestamp', artifactTimestamp);
-                artifactDiv.innerHTML = `
-                    <div class="message-header">
-                        <h2>${title}</h2>
-                        <span class="timestamp">${formatTimestamp(artifactTimestamp)}</span>
-                    </div>
-                    <pre><code>${content}</code></pre>
-                `;
-                artifactsColumn.appendChild(artifactDiv);
-            });
-
-            // Render tool uses
-            toolUses.forEach(tool => {
-                const toolDiv = document.createElement('div');
-                toolDiv.className = 'tool-use selected';
-                
-                const toolTimestamp = tool.timestamp;
-                toolDiv.setAttribute('data-timestamp', toolTimestamp);
-                
-                if (tool.isResult) {
-                    toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
-                    toolDiv.innerHTML = `
+                const artifactElements = artifacts.map(({ title, content }) => {
+                    debugLog.info(`Rendering artifact: ${title}`);
+                    
+                    const artifactDiv = document.createElement('div');
+                    artifactDiv.className = 'artifact selected';
+                    artifactDiv.setAttribute('data-title', title);
+                    artifactDiv.setAttribute('data-timestamp', timestamp);
+                    artifactDiv.innerHTML = `
                         <div class="message-header">
-                            <strong>Tool Result: ${tool.name}</strong>
-                            <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                            <h2>${title}</h2>
+                            <span class="timestamp">${formattedTime}</span>
                         </div>
-                        <div class="tool-label">Result:</div>
-                        <pre class="tool-result"><code>${tool.result}</code></pre>
+                        <pre><code>${content}</code></pre>
                     `;
-                } else {
-                    toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
-                    toolDiv.innerHTML = `
-                        <div class="message-header">
-                            <strong>Tool Use: ${tool.name}</strong>
-                            <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
-                        </div>
-                        <div class="tool-label">Message: ${tool.message}</div>
-                        <div class="tool-label">Input:</div>
-                        <pre class="tool-params"><code>${tool.input}</code></pre>
-                    `;
-                }
-                
-                toolsColumn.appendChild(toolDiv);
-            });
+                    return artifactDiv;
+                });
+
+                debugLog.info(`Rendering main message: ${msg.uuid}`);
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${msg.sender} selected`;
+                messageDiv.setAttribute('data-timestamp', timestamp);
+                messageDiv.innerHTML = `
+                    <div class="message-header">
+                        <strong>${msg.sender}</strong>
+                        <span class="timestamp">${formattedTime}</span>
+                    </div>
+                    <div class="content">${text}</div>
+                `;
+
+                messagesColumn.appendChild(messageDiv);
+                artifactElements.forEach(artifact => artifactsColumn.appendChild(artifact));
+
+                return { messageDiv, artifactElements };
+            } catch (error) {
+                debugLog.error(`Error in renderMessagePair: ${error.message}`);
+                debugLog.error(error.stack);
+            }
         }
 
-        window.addEventListener('message', (event) => {
-            if (event.origin !== "https://austegard.com") return;
-            
-            if (event.data.type === 'claude-conversation') {
-                const data = event.data.data;
-
-                // Clear any existing content
-                document.body.innerHTML = '';
+        // Function to set up the interface with the conversation data
+        function setupInterface(data) {
+            try {
+                debugLog.info('Setting up interface');
                 
                 const controls = document.createElement('div');
                 controls.className = 'controls';
@@ -621,11 +696,9 @@
                     <button id="toggle-human">Toggle Human</button>
                     <button id="toggle-assistant">Toggle Assistant</button>
                     <button id="toggle-artifacts">Toggle Artifacts</button>
-                    <button id="toggle-tools">Toggle Tools</button>
-                    <button id="toggle-thinking">Toggle Thinking</button>
                     <button id="copy-selected">Copy</button>
                     <button id="download-selected">Download</button>
-                    <div class="stats">Messages: 0/0 | Artifacts: 0/0 | Tools: 0/0 | Thinking: 0/0 | Words: 0 | Tokens: ~0</div>
+                    <div class="stats">Messages: 0/0 | Artifacts: 0/0 | Words: 0 | Tokens: ~0</div>
                 `;
                 document.body.appendChild(controls);
 
@@ -634,28 +707,83 @@
                 
                 const messagesColumn = document.createElement('div');
                 messagesColumn.className = 'messages-column';
-                messagesColumn.innerHTML = '<div class="column-header">Messages & Thinking</div>';
+                messagesColumn.innerHTML = '<div class="column-header">Messages</div>';
                 
                 const artifactsColumn = document.createElement('div');
                 artifactsColumn.className = 'artifacts-column';
                 artifactsColumn.innerHTML = '<div class="column-header">Artifacts</div>';
                 
-                const toolsColumn = document.createElement('div');
-                toolsColumn.className = 'tools-column';
-                toolsColumn.innerHTML = '<div class="column-header">Tool Uses</div>';
-                
                 container.appendChild(messagesColumn);
                 container.appendChild(artifactsColumn);
-                container.appendChild(toolsColumn);
                 document.body.appendChild(container);
 
-                data.chat_messages.forEach(msg => {
+                debugLog.info(`Processing ${data.chat_messages.length} messages`);
+                
+                data.chat_messages.forEach((msg, index) => {
+                    debugLog.info(`Processing message ${index + 1}/${data.chat_messages.length}`);
                     const processedContent = processMessageContent(msg);
-                    renderMessageContent(msg, processedContent, messagesColumn, artifactsColumn, toolsColumn);
+                    renderMessagePair(msg, processedContent, messagesColumn, artifactsColumn);
                 });
 
                 setupEventListeners();
                 updateStats();
+                
+                debugLog.info('Interface setup complete');
+            } catch (error) {
+                debugLog.error(`Error in setupInterface: ${error.message}`);
+                debugLog.error(error.stack);
+            }
+        }
+
+        // Init debug panel when page loads
+        window.addEventListener('DOMContentLoaded', () => {
+            debugLog.init();
+            debugLog.info('Debug panel initialized');
+            debugLog.info('Waiting for Claude.ai conversation data...');
+        });
+
+        window.addEventListener('message', (event) => {
+            debugLog.info(`Received message from origin: ${event.origin}`);
+            
+            try {
+                // Accept messages from multiple potential origins for testing
+                if (event.origin !== "https://claude.ai" && 
+                    event.origin !== "https://austegard.com" && 
+                    !event.origin.includes('localhost')) {
+                    debugLog.warn(`Rejected message from unauthorized origin: ${event.origin}`);
+                    return;
+                }
+                
+                if (event.data.type === 'claude-conversation') {
+                    debugLog.info('Received claude-conversation data');
+                    
+                    if (!event.data.data) {
+                        debugLog.error('No data property in the message');
+                        return;
+                    }
+                    
+                    if (!event.data.data.chat_messages) {
+                        debugLog.error('No chat_messages property in the data');
+                        debugLog.info('Received data:', event.data.data);
+                        return;
+                    }
+                    
+                    debugLog.info(`Message contains ${event.data.data.chat_messages.length} chat messages`);
+                    
+                    // Clear any existing content
+                    document.body.innerHTML = '';
+                    
+                    // Re-initialize debug panel
+                    debugLog.init();
+                    debugLog.info('Processing received conversation data');
+                    
+                    setupInterface(event.data.data);
+                } else {
+                    debugLog.warn(`Unknown message type: ${event.data.type}`);
+                }
+            } catch (error) {
+                debugLog.error(`Error processing message: ${error.message}`);
+                debugLog.error(error.stack);
             }
         });
     </script>
@@ -665,5 +793,6 @@
     <p>See the <a href="https://github.com/oaustegard/bookmarklets/blob/main/claude_pruner_README.md">README</a> for how this works, 
         or <a href="https://github.com/oaustegard/oaustegard.github.io/edit/main/claude-pruner.html">view the code</a>.</p>
     <p><b>All processing happens locally in your browser, no data is sent to any servers.</b></p>
+    <p>Click the "Test Processing" button to test with sample data.</p>
 </body>
 </html>
