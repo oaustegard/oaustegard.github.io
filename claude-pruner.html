@@ -21,6 +21,7 @@
             display: flex;
             gap: 10px;
             align-items: center;
+            flex-wrap: wrap;
             z-index: 100;
         }
 
@@ -42,16 +43,16 @@
             color: #666;
         }
 
-        /* Two-column layout */
+        /* Three-column layout */
         .container {
             display: grid;
-            grid-template-columns: 1fr 1fr;
+            grid-template-columns: 1fr 1fr 1fr;
             gap: 20px;
-            max-width: 1800px;
+            max-width: 2400px;
             margin: 0 auto;
         }
 
-        .messages-column, .artifacts-column {
+        .messages-column, .artifacts-column, .tools-column {
             min-width: 0;
             display: flex;
             flex-direction: column;
@@ -60,6 +61,11 @@
 
         .artifacts-column {
             border-left: 1px solid #ddd;
+            border-right: 1px solid #ddd;
+            padding: 0 20px;
+        }
+
+        .tools-column {
             padding-left: 20px;
         }
 
@@ -87,12 +93,6 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 10px;
-        }
-        
-        .message-pair {
-            display: grid;
-            grid-template-columns: 1fr;
-            min-height: min-content;
         }
 
         .timestamp {
@@ -134,8 +134,50 @@
             color: #1565C0;
         }
 
-        /* Message and Artifact common styles */
-        .message, .artifact {
+        /* Tool Use Styling */
+        .tool-use {
+            padding: 15px;
+            border: 2px solid #9C27B0;
+            border-radius: 4px;
+            background: #F3E5F5;
+            cursor: pointer;
+        }
+
+        .tool-use:not(.selected) {
+            border-color: #ff4444;
+            background: #fff0f0;
+            opacity: 0.7;
+        }
+
+        .tool-use.selected {
+            border-color: #9C27B0;
+            background: #F3E5F5;
+            opacity: 1;
+        }
+
+        /* Thinking Block Styling */
+        .thinking {
+            padding: 15px;
+            border: 2px solid #FF9800;
+            border-radius: 4px;
+            background: #FFF3E0;
+            cursor: pointer;
+        }
+
+        .thinking:not(.selected) {
+            border-color: #ff4444;
+            background: #fff0f0;
+            opacity: 0.7;
+        }
+
+        .thinking.selected {
+            border-color: #FF9800;
+            background: #FFF3E0;
+            opacity: 1;
+        }
+
+        /* Common styles */
+        .message, .artifact, .tool-use, .thinking {
             max-height: 400px;
             overflow-y: auto;
             margin: 0; 
@@ -178,6 +220,36 @@
             z-index: 1;
             padding: 10px 0;
             margin: 0;
+            font-weight: bold;
+            font-size: 1.1em;
+        }
+
+        /* Tool content styling */
+        .tool-name {
+            font-weight: bold;
+            color: #7B1FA2;
+            margin-bottom: 10px;
+        }
+
+        .tool-params, .tool-result {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+
+        .tool-label {
+            font-weight: bold;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        /* Thinking summary */
+        .thinking-summary {
+            font-style: italic;
+            color: #666;
+            margin: 10px 0;
         }
     </style>
     <script>
@@ -199,10 +271,12 @@
         }
 
         function processMessageContent(message) {
-            if (!message.content) return { text: message.text || '', artifacts: [] };
+            if (!message.content) return { text: message.text || '', artifacts: [], toolUses: [], thinking: [] };
             
             const elements = [];
             const artifacts = [];
+            const toolUses = [];
+            const thinking = [];
             
             message.content.forEach(part => {
                 if (part.type === 'text') {
@@ -211,8 +285,61 @@
                         elements.push(`<div class="text-content">${text}</div>`);
                     }
                 }
+                
+                // Handle tool use
+                if (part.type === 'tool_use') {
+                    const toolInputJson = JSON.stringify(part.input, null, 2)
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+                    
+                    const toolElement = {
+                        name: part.name,
+                        message: part.message || part.name,
+                        input: toolInputJson,
+                        timestamp: part.start_timestamp || message.created_at
+                    };
+                    
+                    toolUses.push(toolElement);
+                }
+                
+                // Handle tool results
+                if (part.type === 'tool_result') {
+                    let resultContent = '';
+                    if (part.content && Array.isArray(part.content)) {
+                        part.content.forEach(resultPart => {
+                            if (resultPart.type === 'text') {
+                                resultContent += resultPart.text;
+                            }
+                        });
+                    } else if (typeof part.content === 'string') {
+                        resultContent = part.content;
+                    }
+                    
+                    const resultHtml = resultContent
+                        .replace(/&/g, '&amp;')
+                        .replace(/</g, '&lt;')
+                        .replace(/>/g, '&gt;');
+                    
+                    toolUses.push({
+                        name: part.name,
+                        result: resultHtml,
+                        timestamp: part.start_timestamp || message.created_at,
+                        isResult: true
+                    });
+                }
+                
+                // Handle thinking blocks
+                if (part.type === 'thinking') {
+                    thinking.push({
+                        content: part.thinking,
+                        summaries: part.summaries || [],
+                        timestamp: part.start_timestamp || message.created_at
+                    });
+                }
             });
 
+            // Extract artifacts from text content
             message.content.forEach(part => {
                 if (part.type === 'text' && part.text.includes('<antArtifact')) {
                     part.text.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/g)
@@ -233,12 +360,23 @@
                 }
             });
 
-            return { text: elements.join('\n'), artifacts };
+            return { text: elements.join('\n'), artifacts, toolUses, thinking };
         }
 
         function formatSelectedContent() {
             const selectedContent = [];
             
+            // Add thinking blocks
+            document.querySelectorAll('.thinking.selected').forEach(el => {
+                const content = el.getAttribute('data-content');
+                selectedContent.push({
+                    timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
+                    content: `<Thinking>${content}</Thinking>`,
+                    type: 'thinking'
+                });
+            });
+            
+            // Add messages
             document.querySelectorAll('.message.selected').forEach(el => {
                 const role = el.classList.contains('human') ? 'Human' : 'Assistant';
                 const textElements = Array.from(el.querySelectorAll('.text-content'))
@@ -255,6 +393,17 @@
                 }
             });
 
+            // Add tool uses
+            document.querySelectorAll('.tool-use.selected').forEach(tool => {
+                const content = tool.getAttribute('data-content');
+                selectedContent.push({
+                    timestamp: new Date(tool.getAttribute('data-timestamp')).getTime(),
+                    content: content,
+                    type: 'tool'
+                });
+            });
+
+            // Add artifacts
             document.querySelectorAll('.artifact.selected').forEach(artifact => {
                 const title = artifact.getAttribute('data-title');
                 const code = artifact.querySelector('code').textContent.trim();
@@ -277,26 +426,23 @@
             const totalMessages = document.querySelectorAll('.message').length;
             const selectedArtifacts = document.querySelectorAll('.artifact.selected').length;
             const totalArtifacts = document.querySelectorAll('.artifact').length;
+            const selectedTools = document.querySelectorAll('.tool-use.selected').length;
+            const totalTools = document.querySelectorAll('.tool-use').length;
+            const selectedThinking = document.querySelectorAll('.thinking.selected').length;
+            const totalThinking = document.querySelectorAll('.thinking').length;
             
-            const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .artifact.selected'))
+            const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .artifact.selected, .tool-use.selected, .thinking.selected'))
                 .map(el => el.textContent)
                 .join(' ');
             const words = selectedText.trim().split(/\s+/).length;
             const tokens = estimateTokens(selectedText);
             
             document.querySelector('.stats').textContent = 
-                `Messages: ${selectedMessages}/${totalMessages} | Artifacts: ${selectedArtifacts}/${totalArtifacts} | Words: ${words} | Tokens: ~${tokens}`;
+                `Messages: ${selectedMessages}/${totalMessages} | Artifacts: ${selectedArtifacts}/${totalArtifacts} | Tools: ${selectedTools}/${totalTools} | Thinking: ${selectedThinking}/${totalThinking} | Words: ${words} | Tokens: ~${tokens}`;
         }
 
         function setupEventListeners() {
-            document.querySelectorAll('.message').forEach(el => {
-                el.addEventListener('click', () => {
-                    el.classList.toggle('selected');
-                    updateStats();
-                });
-            });
-
-            document.querySelectorAll('.artifact').forEach(el => {
+            document.querySelectorAll('.message, .artifact, .tool-use, .thinking').forEach(el => {
                 el.addEventListener('click', () => {
                     el.classList.toggle('selected');
                     updateStats();
@@ -304,13 +450,10 @@
             });
 
             document.getElementById('toggle-all').onclick = () => {
-                const allMessages = document.querySelectorAll('.message');
-                const allArtifacts = document.querySelectorAll('.artifact');
-                const allSelected = Array.from(allMessages).every(m => m.classList.contains('selected')) &&
-                                Array.from(allArtifacts).every(a => a.classList.contains('selected'));
+                const allElements = document.querySelectorAll('.message, .artifact, .tool-use, .thinking');
+                const allSelected = Array.from(allElements).every(el => el.classList.contains('selected'));
                 
-                allMessages.forEach(m => m.classList.toggle('selected', !allSelected));
-                allArtifacts.forEach(a => a.classList.toggle('selected', !allSelected));
+                allElements.forEach(el => el.classList.toggle('selected', !allSelected));
                 updateStats();
             };
 
@@ -330,6 +473,20 @@
 
             document.getElementById('toggle-artifacts').onclick = () => {
                 document.querySelectorAll('.artifact').forEach(el => {
+                    el.classList.toggle('selected');
+                });
+                updateStats();
+            };
+
+            document.getElementById('toggle-tools').onclick = () => {
+                document.querySelectorAll('.tool-use').forEach(el => {
+                    el.classList.toggle('selected');
+                });
+                updateStats();
+            };
+
+            document.getElementById('toggle-thinking').onclick = () => {
+                document.querySelectorAll('.thinking').forEach(el => {
                     el.classList.toggle('selected');
                 });
                 updateStats();
@@ -357,25 +514,34 @@
             };
         }
         
-        function renderMessagePair(msg, { text, artifacts }, messagesColumn, artifactsColumn) {
+        function renderMessageContent(msg, { text, artifacts, toolUses, thinking }, messagesColumn, artifactsColumn, toolsColumn) {
             const timestamp = msg.created_at;
             const formattedTime = formatTimestamp(timestamp);
 
-            const artifactElements = artifacts.map(({ title, content }) => {
-                const artifactDiv = document.createElement('div');
-                artifactDiv.className = 'artifact selected';
-                artifactDiv.setAttribute('data-title', title);
-                artifactDiv.setAttribute('data-timestamp', timestamp);
-                artifactDiv.innerHTML = `
+            // Render thinking blocks
+            thinking.forEach(({ content, summaries, timestamp: thinkingTimestamp }) => {
+                const thinkingDiv = document.createElement('div');
+                thinkingDiv.className = 'thinking selected';
+                thinkingDiv.setAttribute('data-content', content);
+                thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
+                
+                let summaryHtml = '';
+                if (summaries && summaries.length > 0) {
+                    summaryHtml = `<div class="thinking-summary">${summaries[0].summary}</div>`;
+                }
+                
+                thinkingDiv.innerHTML = `
                     <div class="message-header">
-                        <h2>${title}</h2>
-                        <span class="timestamp">${formattedTime}</span>
+                        <strong>Thinking</strong>
+                        <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
                     </div>
+                    ${summaryHtml}
                     <pre><code>${content}</code></pre>
                 `;
-                return artifactDiv;
+                messagesColumn.appendChild(thinkingDiv);
             });
 
+            // Render main message
             const messageDiv = document.createElement('div');
             messageDiv.className = `message ${msg.sender} selected`;
             messageDiv.setAttribute('data-timestamp', timestamp);
@@ -386,20 +552,66 @@
                 </div>
                 <div class="content">${text}</div>
             `;
-
             messagesColumn.appendChild(messageDiv);
-            artifactElements.forEach(artifact => artifactsColumn.appendChild(artifact));
 
-            return { messageDiv, artifactElements };
+            // Render artifacts
+            artifacts.forEach(({ title, content, timestamp: artifactTimestamp }) => {
+                const artifactDiv = document.createElement('div');
+                artifactDiv.className = 'artifact selected';
+                artifactDiv.setAttribute('data-title', title);
+                artifactDiv.setAttribute('data-timestamp', artifactTimestamp);
+                artifactDiv.innerHTML = `
+                    <div class="message-header">
+                        <h2>${title}</h2>
+                        <span class="timestamp">${formatTimestamp(artifactTimestamp)}</span>
+                    </div>
+                    <pre><code>${content}</code></pre>
+                `;
+                artifactsColumn.appendChild(artifactDiv);
+            });
+
+            // Render tool uses
+            toolUses.forEach(tool => {
+                const toolDiv = document.createElement('div');
+                toolDiv.className = 'tool-use selected';
+                
+                const toolTimestamp = tool.timestamp;
+                toolDiv.setAttribute('data-timestamp', toolTimestamp);
+                
+                if (tool.isResult) {
+                    toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
+                    toolDiv.innerHTML = `
+                        <div class="message-header">
+                            <strong>Tool Result: ${tool.name}</strong>
+                            <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                        </div>
+                        <div class="tool-label">Result:</div>
+                        <pre class="tool-result"><code>${tool.result}</code></pre>
+                    `;
+                } else {
+                    toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
+                    toolDiv.innerHTML = `
+                        <div class="message-header">
+                            <strong>Tool Use: ${tool.name}</strong>
+                            <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                        </div>
+                        <div class="tool-label">Message: ${tool.message}</div>
+                        <div class="tool-label">Input:</div>
+                        <pre class="tool-params"><code>${tool.input}</code></pre>
+                    `;
+                }
+                
+                toolsColumn.appendChild(toolDiv);
+            });
         }
 
         window.addEventListener('message', (event) => {
-            if (event.origin !== "https://claude.ai") return;
+            if (event.origin !== "https://austegard.com") return;
             
             if (event.data.type === 'claude-conversation') {
                 const data = event.data.data;
 
-                // Clear any existing content including the waiting message
+                // Clear any existing content
                 document.body.innerHTML = '';
                 
                 const controls = document.createElement('div');
@@ -409,9 +621,11 @@
                     <button id="toggle-human">Toggle Human</button>
                     <button id="toggle-assistant">Toggle Assistant</button>
                     <button id="toggle-artifacts">Toggle Artifacts</button>
+                    <button id="toggle-tools">Toggle Tools</button>
+                    <button id="toggle-thinking">Toggle Thinking</button>
                     <button id="copy-selected">Copy</button>
                     <button id="download-selected">Download</button>
-                    <div class="stats">Messages: 0/0 | Artifacts: 0/0 | Words: 0 | Tokens: ~0</div>
+                    <div class="stats">Messages: 0/0 | Artifacts: 0/0 | Tools: 0/0 | Thinking: 0/0 | Words: 0 | Tokens: ~0</div>
                 `;
                 document.body.appendChild(controls);
 
@@ -420,19 +634,24 @@
                 
                 const messagesColumn = document.createElement('div');
                 messagesColumn.className = 'messages-column';
-                messagesColumn.innerHTML = '<div class="column-header">Messages</div>';
+                messagesColumn.innerHTML = '<div class="column-header">Messages & Thinking</div>';
                 
                 const artifactsColumn = document.createElement('div');
                 artifactsColumn.className = 'artifacts-column';
                 artifactsColumn.innerHTML = '<div class="column-header">Artifacts</div>';
                 
+                const toolsColumn = document.createElement('div');
+                toolsColumn.className = 'tools-column';
+                toolsColumn.innerHTML = '<div class="column-header">Tool Uses</div>';
+                
                 container.appendChild(messagesColumn);
                 container.appendChild(artifactsColumn);
+                container.appendChild(toolsColumn);
                 document.body.appendChild(container);
 
                 data.chat_messages.forEach(msg => {
                     const processedContent = processMessageContent(msg);
-                    renderMessagePair(msg, processedContent, messagesColumn, artifactsColumn);
+                    renderMessageContent(msg, processedContent, messagesColumn, artifactsColumn, toolsColumn);
                 });
 
                 setupEventListeners();
