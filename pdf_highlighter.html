@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PDF Reader with Text Panel</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <script type="importmap">
+    {
+        "imports": {
+            "preact": "https://esm.sh/preact@10.26.7",
+            "preact/": "https://esm.sh/preact@10.26.7/",
+            "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+        }
+    }
+    </script>
+    <style>
+        .pdf-page {
+            margin-bottom: 10px;
+            border: 1px solid #e5e7eb;
+            display: block;
+        }
+        
+        .pdf-container {
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
+        }
+        
+        .text-container {
+            max-height: calc(100vh - 120px);
+            overflow-y: auto;
+        }
+        
+        .highlighted-text {
+            border-radius: 2px;
+            padding: 1px 2px;
+            position: relative;
+            cursor: pointer;
+            transition: background-color 0.2s ease;
+        }
+        
+        .comment-popup {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            z-index: 50;
+            background: white;
+            border: 1px solid #d1d5db;
+            border-radius: 8px;
+            padding: 12px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            min-width: 300px;
+            max-width: 400px;
+        }
+        
+        .text-page-break {
+            border-top: 2px solid #e5e7eb;
+            margin: 1.5rem 0;
+            padding-top: 1.5rem;
+            position: relative;
+        }
+        
+        .text-page-break::before {
+            content: "Page " attr(data-page);
+            position: absolute;
+            top: -10px;
+            left: 0;
+            background: white;
+            padding: 0 8px;
+            font-size: 12px;
+            color: #6b7280;
+            font-weight: 600;
+        }
+        
+        .page-placeholder {
+            background: linear-gradient(90deg, #f0f0f0 25%, #e0e0e0 50%, #f0f0f0 75%);
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 14px;
+            min-height: 300px;
+        }
+        
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        
+        .selectable-text {
+            line-height: 1.8;
+            font-family: ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+        }
+        
+        .text-paragraph {
+            margin-bottom: 1.2rem;
+            line-height: 1.8;
+        }
+        
+        .text-paragraph:last-child {
+            margin-bottom: 0;
+        }
+        
+        .text-line {
+            margin-bottom: 0.3rem;
+        }
+        
+        .scroll-sync-indicator {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: rgba(59, 130, 246, 0.1);
+            border: 2px solid #3b82f6;
+            border-radius: 4px;
+            width: 8px;
+            height: 60px;
+            transition: all 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-100">
+    <div id="app"></div>
+
+    <script type="module">
+        import { render } from 'preact';
+        import { useState, useEffect, useRef } from 'preact/hooks';
+        import { html } from 'htm/preact';
+
+        /* Configure PDF.js worker */
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+        function PDFReader() {
+            const [pdfDoc, setPdfDoc] = useState(null);
+            const [totalPages, setTotalPages] = useState(0);
+            const [loading, setLoading] = useState(false);
+            const [error, setError] = useState('');
+            const [zoomLevel, setZoomLevel] = useState(100);
+            const [allText, setAllText] = useState([]);
+            const [highlights, setHighlights] = useState({ green: [], red: [] });
+            const [currentTool, setCurrentTool] = useState('green');
+            const [renderingProgress, setRenderingProgress] = useState(0);
+            const [activeComment, setActiveComment] = useState(null);
+            const [pendingSelection, setPendingSelection] = useState(null);
+            const [hasUnsavedHighlights, setHasUnsavedHighlights] = useState(false);
+            
+            const pdfContainerRef = useRef();
+            const textContainerRef = useRef();
+            const renderedPagesRef = useRef(new Set());
+            const scrollSyncRef = useRef({ isScrolling: false, lastSync: 0 });
+
+            const confirmDiscardHighlights = () => {
+                if (!hasUnsavedHighlights) return true;
+                return window.confirm(
+                    'You have unsaved highlights. Loading a new PDF will discard them. Continue?'
+                );
+            };
+
+            const loadPDF = async (source) => {
+                if (!confirmDiscardHighlights()) return;
+                
+                try {
+                    setLoading(true);
+                    setError('');
+                    setRenderingProgress(0);
+                    setAllText([]);
+                    setHighlights({ green: [], red: [] });
+                    setHasUnsavedHighlights(false);
+                    setPendingSelection(null);
+                    setActiveComment(null);
+                    renderedPagesRef.current.clear();
+                    
+                    console.log('Loading PDF from source:', source);
+                    const pdf = await pdfjsLib.getDocument(source).promise;
+                    setPdfDoc(pdf);
+                    setTotalPages(pdf.numPages);
+                    
+                    /* Extract all text first */
+                    await extractAllText(pdf);
+                    
+                    /* Then render PDF pages */
+                    await renderAllPages(pdf);
+                } catch (err) {
+                    console.error('PDF loading error:', err);
+                    setError('Failed to load PDF: ' + err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const extractAllText = async (pdf) => {
+                const textPages = [];
+                
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    try {
+                        const page = await pdf.getPage(pageNum);
+                        const textContent = await page.getTextContent();
+                        
+                        /* Better text extraction with preserved formatting */
+                        const lines = [];
+                        let currentLine = [];
+                        let lastY = null;
+                        const lineThreshold = 8; /* Pixels to detect new line */
+                        
+                        textContent.items.forEach((item) => {
+                            const text = item.str;
+                            const y = item.transform[5];
+                            
+                            /* Skip empty strings */
+                            if (!text.trim()) return;
+                            
+                            /* Detect new line based on Y position */
+                            if (lastY !== null && Math.abs(y - lastY) > lineThreshold) {
+                                /* Save current line and start new one */
+                                if (currentLine.length > 0) {
+                                    lines.push(currentLine.join(' ').trim());
+                                    currentLine = [];
+                                }
+                            }
+                            
+                            currentLine.push(text);
+                            lastY = y;
+                        });
+                        
+                        /* Add final line */
+                        if (currentLine.length > 0) {
+                            lines.push(currentLine.join(' ').trim());
+                        }
+                        
+                        /* Create paragraphs from lines - look for natural breaks */
+                        const paragraphs = [];
+                        let currentParagraph = [];
+                        
+                        lines.forEach((line, index) => {
+                            currentParagraph.push(line);
+                            
+                            /* Check if this line ends a paragraph */
+                            const nextLine = lines[index + 1];
+                            const isEndOfParagraph = (
+                                !nextLine || /* Last line */
+                                line.match(/[.!?:]$/) && nextLine.match(/^[A-Z]/) || /* Sentence end + capital start */
+                                line.length < 50 && nextLine.match(/^[A-Z]/) /* Short line + capital start */
+                            );
+                            
+                            if (isEndOfParagraph || currentParagraph.length > 8) { /* Max 8 lines per paragraph */
+                                paragraphs.push(currentParagraph.join(' ').trim());
+                                currentParagraph = [];
+                            }
+                        });
+                        
+                        /* Add final paragraph */
+                        if (currentParagraph.length > 0) {
+                            paragraphs.push(currentParagraph.join(' ').trim());
+                        }
+                        
+                        textPages.push({
+                            pageNum,
+                            text: paragraphs.join('\n\n'), /* Double newlines for paragraphs */
+                            paragraphs: paragraphs,
+                            lines: lines
+                        });
+                        
+                        /* Update progress */
+                        setRenderingProgress(Math.round((pageNum / pdf.numPages) * 50));
+                    } catch (err) {
+                        console.error(`Failed to extract text from page ${pageNum}:`, err);
+                        textPages.push({
+                            pageNum,
+                            text: `[Error extracting text from page ${pageNum}]`,
+                            paragraphs: [`[Error extracting text from page ${pageNum}]`],
+                            lines: []
+                        });
+                    }
+                }
+                
+                console.log('Extracted text from', textPages.length, 'pages');
+                setAllText(textPages);
+            };
+
+            const renderAllPages = async (pdf) => {
+                if (!pdfContainerRef.current) return;
+                
+                pdfContainerRef.current.innerHTML = '';
+                
+                /* Create intersection observer for lazy loading */
+                const observer = new IntersectionObserver((entries) => {
+                    entries.forEach(entry => {
+                        if (entry.isIntersecting) {
+                            const pageNum = parseInt(entry.target.dataset.pageNum);
+                            if (!renderedPagesRef.current.has(pageNum)) {
+                                renderPage(pdf, pageNum, entry.target);
+                                renderedPagesRef.current.add(pageNum);
+                            }
+                        }
+                    });
+                }, { 
+                    rootMargin: '200px',
+                    threshold: 0.1 
+                });
+
+                /* Create placeholders for all pages */
+                for (let pageNum = 1; pageNum <= pdf.numPages; pageNum++) {
+                    const page = await pdf.getPage(pageNum);
+                    const scale = (zoomLevel / 100) * 1.2;
+                    const viewport = page.getViewport({ scale });
+
+                    const pageDiv = document.createElement('div');
+                    pageDiv.className = 'pdf-page page-placeholder mx-auto';
+                    pageDiv.dataset.pageNum = pageNum;
+                    pageDiv.style.width = viewport.width + 'px';
+                    pageDiv.style.height = viewport.height + 'px';
+                    pageDiv.innerHTML = `Loading page ${pageNum}...`;
+
+                    pdfContainerRef.current.appendChild(pageDiv);
+                    observer.observe(pageDiv);
+                }
+                
+                setRenderingProgress(100);
+                setupScrollSync();
+            };
+
+            const renderPage = async (pdf, pageNum, pageDiv) => {
+                try {
+                    const page = await pdf.getPage(pageNum);
+                    const scale = (zoomLevel / 100) * 1.2;
+                    const viewport = page.getViewport({ scale });
+
+                    /* Create canvas */
+                    const canvas = document.createElement('canvas');
+                    const context = canvas.getContext('2d');
+                    
+                    const devicePixelRatio = window.devicePixelRatio || 1;
+                    const canvasScale = scale * devicePixelRatio;
+                    const canvasViewport = page.getViewport({ scale: canvasScale });
+
+                    canvas.width = canvasViewport.width;
+                    canvas.height = canvasViewport.height;
+                    canvas.style.width = viewport.width + 'px';
+                    canvas.style.height = viewport.height + 'px';
+
+                    pageDiv.className = 'pdf-page mx-auto';
+                    pageDiv.innerHTML = '';
+                    pageDiv.appendChild(canvas);
+
+                    /* Add page number for scroll sync */
+                    pageDiv.dataset.pageRendered = 'true';
+
+                    /* Render page */
+                    const renderContext = {
+                        canvasContext: context,
+                        viewport: canvasViewport
+                    };
+                    
+                    await page.render(renderContext).promise;
+                    console.log(`Rendered page ${pageNum}`);
+                } catch (err) {
+                    console.error(`Failed to render page ${pageNum}:`, err);
+                    pageDiv.innerHTML = `<div class="text-red-500 text-center py-4">Failed to load page ${pageNum}</div>`;
+                }
+            };
+
+            const setupScrollSync = () => {
+                if (!pdfContainerRef.current || !textContainerRef.current) return;
+
+                const pdfContainer = pdfContainerRef.current;
+                const textContainer = textContainerRef.current;
+
+                /* Get current visible PDF page */
+                const getCurrentPdfPage = () => {
+                    const pdfPages = pdfContainer.querySelectorAll('.pdf-page[data-page-num]');
+                    const containerRect = pdfContainer.getBoundingClientRect();
+                    const centerY = containerRect.top + containerRect.height / 2;
+                    
+                    let closestPage = 1;
+                    let closestDistance = Infinity;
+                    
+                    pdfPages.forEach(page => {
+                        const pageRect = page.getBoundingClientRect();
+                        const pageCenterY = pageRect.top + pageRect.height / 2;
+                        const distance = Math.abs(pageCenterY - centerY);
+                        
+                        if (distance < closestDistance) {
+                            closestDistance = distance;
+                            closestPage = parseInt(page.dataset.pageNum);
+                        }
+                    });
+                    
+                    return closestPage;
+                };
+
+                /* Get current visible text page */
+                const getCurrentTextPage = () => {
+                    const textSections = textContainer.querySelectorAll('[data-page-num]');
+                    const containerRect = textContainer.getBoundingClientRect();
+                    const centerY = containerRect.top + containerRect.height / 2;
+                    
+                    let closestPage = 1;
+                    let closestDistance = Infinity;
+                    
+                    textSections.forEach(section => {
+                        const sectionRect = section.getBoundingClientRect();
+                        const sectionCenterY = sectionRect.top + sectionRect.height / 2;
+                        const distance = Math.abs(sectionCenterY - centerY);
+                        
+                        if (distance < closestDistance) {
+                            closestDistance = distance;
+                            closestPage = parseInt(section.dataset.pageNum);
+                        }
+                    });
+                    
+                    return closestPage;
+                };
+
+                /* Scroll to specific PDF page */
+                const scrollToPdfPage = (pageNum) => {
+                    const targetPage = pdfContainer.querySelector(`[data-page-num="${pageNum}"]`);
+                    if (targetPage) {
+                        const containerRect = pdfContainer.getBoundingClientRect();
+                        const pageRect = targetPage.getBoundingClientRect();
+                        const targetScroll = pdfContainer.scrollTop + pageRect.top - containerRect.top - (containerRect.height / 3);
+                        pdfContainer.scrollTop = Math.max(0, targetScroll);
+                        console.log(`Synced to PDF page ${pageNum}`);
+                    }
+                };
+
+                /* Scroll to specific text page */
+                const scrollToTextPage = (pageNum) => {
+                    const targetSection = textContainer.querySelector(`[data-page-num="${pageNum}"]`);
+                    if (targetSection) {
+                        const containerRect = textContainer.getBoundingClientRect();
+                        const sectionRect = targetSection.getBoundingClientRect();
+                        const targetScroll = textContainer.scrollTop + sectionRect.top - containerRect.top - (containerRect.height / 4);
+                        textContainer.scrollTop = Math.max(0, targetScroll);
+                        console.log(`Synced to text page ${pageNum}`);
+                    }
+                };
+
+                /* Sync text scroll to PDF */
+                const syncTextToPdf = () => {
+                    if (scrollSyncRef.current.isScrolling) return;
+                    
+                    const currentTextPage = getCurrentTextPage();
+                    scrollSyncRef.current.isScrolling = true;
+                    scrollToPdfPage(currentTextPage);
+                    setTimeout(() => scrollSyncRef.current.isScrolling = false, 150);
+                };
+
+                /* Sync PDF scroll to text */
+                const syncPdfToText = () => {
+                    if (scrollSyncRef.current.isScrolling) return;
+                    
+                    const currentPdfPage = getCurrentPdfPage();
+                    scrollSyncRef.current.isScrolling = true;
+                    scrollToTextPage(currentPdfPage);
+                    setTimeout(() => scrollSyncRef.current.isScrolling = false, 150);
+                };
+
+                /* Throttle scroll events */
+                let textScrollTimeout;
+                let pdfScrollTimeout;
+
+                const throttledTextSync = () => {
+                    clearTimeout(textScrollTimeout);
+                    textScrollTimeout = setTimeout(syncTextToPdf, 100);
+                };
+
+                const throttledPdfSync = () => {
+                    clearTimeout(pdfScrollTimeout);
+                    pdfScrollTimeout = setTimeout(syncPdfToText, 100);
+                };
+
+                textContainer.addEventListener('scroll', throttledTextSync);
+                pdfContainer.addEventListener('scroll', throttledPdfSync);
+
+                return () => {
+                    textContainer.removeEventListener('scroll', throttledTextSync);
+                    pdfContainer.removeEventListener('scroll', throttledPdfSync);
+                    clearTimeout(textScrollTimeout);
+                    clearTimeout(pdfScrollTimeout);
+                };
+            };
+
+            const handleTextSelection = () => {
+                const selection = window.getSelection();
+                const selectedText = selection.toString().trim();
+                
+                if (selectedText.length === 0) return;
+
+                console.log('Text selected:', selectedText);
+
+                /* Find which page this selection is on */
+                const range = selection.getRangeAt(0);
+                const pageElement = range.startContainer.parentElement?.closest('[data-page-num]') || 
+                                  range.startContainer.parentElement?.closest('[data-page]');
+                const pageNum = pageElement ? 
+                    (pageElement.dataset.pageNum || pageElement.dataset.page) : 
+                    null;
+
+                /* Create highlight with current tool color */
+                const highlight = {
+                    id: Date.now() + Math.random(),
+                    text: selectedText,
+                    color: currentTool,
+                    comment: '',
+                    timestamp: new Date().toLocaleString(),
+                    pageNum: pageNum ? parseInt(pageNum) : null
+                };
+
+                /* Store as pending selection to apply after re-render */
+                setPendingSelection(highlight);
+                
+                /* Update highlights state */
+                setHighlights(prev => ({
+                    ...prev,
+                    [currentTool]: [...prev[currentTool], highlight]
+                }));
+                
+                setHasUnsavedHighlights(true);
+                console.log('Added highlight:', highlight);
+                
+                /* Clear selection */
+                selection.removeAllRanges();
+            };
+
+            const updateHighlightComment = (color, id, comment) => {
+                setHighlights(prev => ({
+                    ...prev,
+                    [color]: prev[color].map(h => h.id === id ? { ...h, comment } : h)
+                }));
+                setHasUnsavedHighlights(true);
+                console.log('Updated comment for highlight:', id);
+            };
+
+            const removeHighlight = (color, id) => {
+                setHighlights(prev => ({
+                    ...prev,
+                    [color]: prev[color].filter(h => h.id !== id)
+                }));
+                setActiveComment(null);
+                console.log('Removed highlight:', id);
+            };
+
+            const handleFileUpload = (e) => {
+                const file = e.target.files[0];
+                if (file && file.type === 'application/pdf') {
+                    console.log('File uploaded:', file.name);
+                    const fileReader = new FileReader();
+                    fileReader.onload = () => {
+                        loadPDF(new Uint8Array(fileReader.result));
+                    };
+                    fileReader.readAsArrayBuffer(file);
+                }
+            };
+
+            const handleUrlLoad = (e) => {
+                e.preventDefault();
+                const url = e.target.pdfUrl.value.trim();
+                if (url) {
+                    console.log('Loading PDF from URL:', url);
+                    loadPDF(url);
+                }
+            };
+
+            const exportData = () => {
+                /* Group highlights by page for better organization */
+                const highlightsByPage = {};
+                const allHighlights = [...highlights.green, ...highlights.red];
+                
+                allHighlights.forEach(highlight => {
+                    const pageNum = highlight.pageNum || 'unknown';
+                    if (!highlightsByPage[pageNum]) {
+                        highlightsByPage[pageNum] = [];
+                    }
+                    highlightsByPage[pageNum].push({
+                        text: highlight.text,
+                        color: highlight.color,
+                        comment: highlight.comment,
+                        timestamp: highlight.timestamp,
+                        pageContext: pageNum !== 'unknown' ? `Page ${pageNum}` : 'Page unknown'
+                    });
+                });
+
+                const data = {
+                    summary: {
+                        totalHighlights: allHighlights.length,
+                        greenHighlights: highlights.green.length,
+                        redHighlights: highlights.red.length,
+                        pagesWithHighlights: Object.keys(highlightsByPage).filter(p => p !== 'unknown').length,
+                        exportDate: new Date().toISOString()
+                    },
+                    highlightsByPage: highlightsByPage,
+                    extractedText: allText,
+                    rawHighlights: highlights /* Keep original format for re-import */
+                };
+                
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `pdf-analysis-${new Date().toISOString().split('T')[0]}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                
+                setHasUnsavedHighlights(false);
+                console.log('Data exported with page context');
+            };
+
+            /* Handle zoom changes */
+            useEffect(() => {
+                if (pdfDoc && pdfContainerRef.current) {
+                    renderedPagesRef.current.clear();
+                    renderAllPages(pdfDoc);
+                }
+            }, [zoomLevel]);
+
+            /* Apply pending selection after highlights update */
+            useEffect(() => {
+                if (pendingSelection) {
+                    console.log('Applied pending selection:', pendingSelection.text);
+                    setPendingSelection(null);
+                }
+            }, [highlights]);
+
+            /* Keyboard shortcuts */
+            useEffect(() => {
+                const handleKeyDown = (e) => {
+                    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') {
+                        return;
+                    }
+                    
+                    if (e.key === 'g' || e.key === 'G') {
+                        setCurrentTool('green');
+                        e.preventDefault();
+                    } else if (e.key === 'r' || e.key === 'R') {
+                        setCurrentTool('red');
+                        e.preventDefault();
+                    } else if (e.key === 'Escape') {
+                        setActiveComment(null);
+                        const selection = window.getSelection();
+                        if (selection.rangeCount > 0) {
+                            selection.removeAllRanges();
+                        }
+                        e.preventDefault();
+                    }
+                };
+
+                document.addEventListener('keydown', handleKeyDown);
+                return () => document.removeEventListener('keydown', handleKeyDown);
+            }, []);
+
+            /* Setup scroll sync when components are ready */
+            useEffect(() => {
+                if (pdfDoc && allText.length > 0) {
+                    const cleanup = setupScrollSync();
+                    return cleanup;
+                }
+            }, [pdfDoc, allText]);
+
+            const renderTextWithHighlights = (text, pageNum) => {
+                const allHighlights = [...highlights.green, ...highlights.red];
+                const paragraphs = text.split('\n\n').filter(p => p.trim());
+                
+                if (allHighlights.length === 0) {
+                    return html`
+                        <div data-page-num=${pageNum}>
+                            ${paragraphs.map((paragraph, i) => html`
+                                <div key=${i} class="text-paragraph">${paragraph}</div>
+                            `)}
+                        </div>
+                    `;
+                }
+
+                return html`
+                    <div data-page-num=${pageNum}>
+                        ${paragraphs.map((paragraph, pIndex) => {
+                            /* Apply highlights to each paragraph */
+                            const highlightPositions = [];
+                            
+                            allHighlights.forEach(highlight => {
+                                const escapedText = highlight.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                                const regex = new RegExp(escapedText, 'gi');
+                                let match;
+                                let matchCount = 0;
+                                
+                                while ((match = regex.exec(paragraph)) !== null && matchCount < 2) {
+                                    highlightPositions.push({
+                                        start: match.index,
+                                        end: match.index + match[0].length,
+                                        highlight: highlight,
+                                        text: match[0]
+                                    });
+                                    matchCount++;
+                                    
+                                    if (match.index === regex.lastIndex) {
+                                        regex.lastIndex++;
+                                    }
+                                }
+                            });
+
+                            highlightPositions.sort((a, b) => a.start - b.start);
+
+                            if (highlightPositions.length === 0) {
+                                return html`
+                                    <div key=${pIndex} class="text-paragraph">${paragraph}</div>
+                                `;
+                            }
+
+                            const parts = [];
+                            let lastIndex = 0;
+
+                            highlightPositions.forEach(pos => {
+                                if (pos.start > lastIndex) {
+                                    parts.push({
+                                        type: 'text',
+                                        content: paragraph.slice(lastIndex, pos.start)
+                                    });
+                                }
+                                
+                                parts.push({
+                                    type: 'highlight',
+                                    content: pos.text,
+                                    highlight: pos.highlight
+                                });
+                                
+                                lastIndex = pos.end;
+                            });
+
+                            if (lastIndex < paragraph.length) {
+                                parts.push({
+                                    type: 'text',
+                                    content: paragraph.slice(lastIndex)
+                                });
+                            }
+
+                            return html`
+                                <div key=${pIndex} class="text-paragraph">
+                                    ${parts.map((part, index) => {
+                                        if (part.type === 'highlight') {
+                                            const bgColor = part.highlight.color === 'green' 
+                                                ? 'rgba(34, 197, 94, 0.3)' 
+                                                : 'rgba(239, 68, 68, 0.3)';
+                                            const hoverColor = part.highlight.color === 'green'
+                                                ? 'rgba(34, 197, 94, 0.4)'
+                                                : 'rgba(239, 68, 68, 0.4)';
+                                            
+                                            return html`
+                                                <span 
+                                                    key=${index}
+                                                    class="highlighted-text"
+                                                    style="background-color: ${bgColor};"
+                                                    onClick=${(e) => {
+                                                        e.stopPropagation();
+                                                        setActiveComment(
+                                                            activeComment === part.highlight.id 
+                                                                ? null 
+                                                                : part.highlight.id
+                                                        );
+                                                    }}
+                                                    onMouseEnter=${(e) => {
+                                                        e.target.style.backgroundColor = hoverColor;
+                                                    }}
+                                                    onMouseLeave=${(e) => {
+                                                        e.target.style.backgroundColor = bgColor;
+                                                    }}
+                                                >
+                                                    ${part.content}
+                                                    ${activeComment === part.highlight.id && html`
+                                                        <div class="comment-popup">
+                                                            <div class="text-sm font-medium mb-2 ${part.highlight.color === 'green' ? 'text-green-700' : 'text-red-700'}">
+                                                                ${part.highlight.color === 'green' ? '✓ Positive' : '✗ Negative'} Highlight
+                                                                ${part.highlight.pageNum && html`
+                                                                    <span class="text-xs text-gray-500 ml-2">(Page ${part.highlight.pageNum})</span>
+                                                                `}
+                                                            </div>
+                                                            <textarea
+                                                                value=${part.highlight.comment}
+                                                                onChange=${(e) => updateHighlightComment(part.highlight.color, part.highlight.id, e.target.value)}
+                                                                placeholder="Add your comment..."
+                                                                class="w-full text-sm border border-gray-300 rounded px-2 py-1 resize-none"
+                                                                rows="3"
+                                                                onClick=${(e) => e.stopPropagation()}
+                                                            ></textarea>
+                                                            <div class="flex justify-between items-center mt-2">
+                                                                <span class="text-xs text-gray-500">${part.highlight.timestamp}</span>
+                                                                <button
+                                                                    onClick=${(e) => {
+                                                                        e.stopPropagation();
+                                                                        removeHighlight(part.highlight.color, part.highlight.id);
+                                                                    }}
+                                                                    class="text-xs text-red-500 hover:text-red-700"
+                                                                >
+                                                                    Remove
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    `}
+                                                </span>
+                                            `;
+                                        } else {
+                                            return part.content;
+                                        }
+                                    })}
+                                </div>
+                            `;
+                        })}
+                    </div>
+                `;
+            };
+
+            return html`
+                <div class="flex h-screen bg-white">
+                    <!-- PDF Viewer -->
+                    <div class="flex-1 flex flex-col border-r border-gray-200">
+                        <!-- Toolbar -->
+                        <div class="bg-gray-50 p-4 border-b border-gray-200">
+                            <div class="flex flex-wrap items-center gap-4">
+                                <!-- File Upload -->
+                                <label class="bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded cursor-pointer">
+                                    Upload PDF
+                                    <input type="file" accept=".pdf" onChange=${handleFileUpload} class="hidden" />
+                                </label>
+
+                                <!-- URL Input -->
+                                <form onSubmit=${handleUrlLoad} class="flex items-center gap-2">
+                                    <input 
+                                        name="pdfUrl" 
+                                        type="url" 
+                                        placeholder="Enter PDF URL" 
+                                        class="border border-gray-300 rounded px-3 py-2 w-64"
+                                    />
+                                    <button type="submit" class="bg-green-500 hover:bg-green-600 text-white px-4 py-2 rounded">
+                                        Load
+                                    </button>
+                                </form>
+
+                                <!-- Highlighter Tools -->
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-medium">Highlighter:</span>
+                                    <button 
+                                        onClick=${() => setCurrentTool('green')}
+                                        class="${'px-3 py-1 rounded text-white font-medium text-sm ' + (currentTool === 'green' ? 'bg-green-500 shadow-md' : 'bg-green-300')}"
+                                        title="Good/Positive (Press G)"
+                                    >
+                                        Green ${currentTool === 'green' ? '✓' : ''}
+                                    </button>
+                                    <button 
+                                        onClick=${() => setCurrentTool('red')}
+                                        class="${'px-3 py-1 rounded text-white font-medium text-sm ' + (currentTool === 'red' ? 'bg-red-500 shadow-md' : 'bg-red-300')}"
+                                        title="Bad/Negative (Press R)"
+                                    >
+                                        Red ${currentTool === 'red' ? '✓' : ''}
+                                    </button>
+                                </div>
+
+                                <!-- Zoom Controls -->
+                                <div class="flex items-center gap-2">
+                                    <span class="text-sm font-medium">Zoom:</span>
+                                    <select 
+                                        value=${zoomLevel}
+                                        onChange=${(e) => setZoomLevel(parseInt(e.target.value))}
+                                        class="px-2 py-1 border border-gray-300 rounded text-sm"
+                                    >
+                                        <option value="50">50%</option>
+                                        <option value="75">75%</option>
+                                        <option value="100">100%</option>
+                                        <option value="125">125%</option>
+                                        <option value="150">150%</option>
+                                        <option value="200">200%</option>
+                                    </select>
+                                </div>
+
+                                ${totalPages > 0 && html`
+                                    <div class="text-sm text-gray-600">
+                                        Pages: ${totalPages}
+                                        ${renderingProgress < 100 && html`
+                                            <span class="ml-2 text-blue-600">
+                                                (${renderingProgress}% loaded)
+                                            </span>
+                                        `}
+                                    </div>
+                                `}
+                            </div>
+                        </div>
+
+                        <!-- PDF Display -->
+                        <div class="flex-1 relative">
+                            ${loading && html`
+                                <div class="absolute inset-0 flex items-center justify-center bg-gray-100">
+                                    <div class="text-center">
+                                        <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
+                                        <p class="text-gray-600">Loading PDF...</p>
+                                        ${renderingProgress > 0 && html`
+                                            <div class="mt-2">
+                                                <div class="w-64 bg-gray-200 rounded-full h-2 mx-auto">
+                                                    <div class="bg-blue-500 h-2 rounded-full transition-all duration-300" style="width: ${renderingProgress}%"></div>
+                                                </div>
+                                                <p class="text-sm text-gray-500 mt-1">${renderingProgress}% loaded</p>
+                                            </div>
+                                        `}
+                                    </div>
+                                </div>
+                            `}
+
+                            ${error && html`
+                                <div class="absolute inset-0 flex items-center justify-center bg-gray-100">
+                                    <div class="text-center text-red-600">
+                                        <p class="mb-2">⚠️ Error</p>
+                                        <p class="text-sm">${error}</p>
+                                    </div>
+                                </div>
+                            `}
+
+                            ${!pdfDoc && !loading && !error && html`
+                                <div class="absolute inset-0 flex items-center justify-center bg-gray-100">
+                                    <div class="text-center text-gray-500">
+                                        <p class="mb-2">📄 No PDF loaded</p>
+                                        <p class="text-sm">Upload a file or enter a URL to begin</p>
+                                        <p class="text-xs mt-2 text-blue-600">✨ Text extraction and highlighting made simple</p>
+                                    </div>
+                                </div>
+                            `}
+
+                            <div ref=${pdfContainerRef} class="pdf-container p-4"></div>
+                        </div>
+                    </div>
+
+                    <!-- Text Panel -->
+                    <div class="w-1/2 flex flex-col bg-gray-50">
+                        <div class="p-4 border-b border-gray-200 bg-white">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="font-bold text-lg">Extracted Text</h3>
+                                <div class="flex gap-2">
+                                    <button 
+                                        onClick=${exportData}
+                                        class="${'text-sm px-3 py-1 rounded ' + (hasUnsavedHighlights ? 'bg-orange-500 hover:bg-orange-600 text-white' : 'bg-blue-500 hover:bg-blue-600 text-white')}"
+                                        disabled=${allText.length === 0}
+                                        title=${hasUnsavedHighlights ? 'Export highlights (unsaved changes)' : 'Export highlights'}
+                                    >
+                                        ${hasUnsavedHighlights ? '● Export' : 'Export'}
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="text-sm text-gray-600">
+                                Green: ${highlights.green.length} | Red: ${highlights.red.length}
+                                ${hasUnsavedHighlights && html`
+                                    <span class="text-orange-600 ml-2">● Unsaved</span>
+                                `}
+                            </div>
+                            <div class="text-xs text-gray-500 mt-1">
+                                💡 Select text to highlight • <kbd class="px-1 py-0.5 bg-gray-200 rounded text-xs">G</kbd> green • <kbd class="px-1 py-0.5 bg-gray-200 rounded text-xs">R</kbd> red • Scroll synced 🔄
+                            </div>
+                        </div>
+
+                        <div class="flex-1 overflow-y-auto">
+                            ${allText.length > 0 ? html`
+                                <div 
+                                    ref=${textContainerRef}
+                                    class="text-container p-6"
+                                    onClick=${() => setActiveComment(null)}
+                                    onMouseUp=${handleTextSelection}
+                                >
+                                    <div class="selectable-text">
+                                        ${allText.map((page, index) => html`
+                                            <div key=${page.pageNum}>
+                                                ${index > 0 && html`
+                                                    <div class="text-page-break" data-page=${page.pageNum}></div>
+                                                `}
+                                                ${renderTextWithHighlights(page.text, page.pageNum)}
+                                            </div>
+                                        `)}
+                                    </div>
+                                </div>
+                            ` : html`
+                                <div class="flex-1 flex items-center justify-center text-gray-500">
+                                    <div class="text-center">
+                                        <p class="mb-2">📝 No text extracted yet</p>
+                                        <p class="text-sm">Load a PDF to see extracted text here</p>
+                                    </div>
+                                </div>
+                            `}
+                        </div>
+                    </div>
+                </div>
+            `;
+        }
+
+        render(html`<${PDFReader} />`, document.getElementById('app'));
+    </script>
+</body>
+</html>
