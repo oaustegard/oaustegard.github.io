@@ -1,0 +1,559 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>AWS Global Infrastructure Map</title>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    <script src="https://d3js.org/d3-geo-projection.v3.min.js"></script>
+    <script src="https://unpkg.com/topojson-client@3"></script>
+    <style>
+        body { 
+            margin: 0; 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f8f9fa;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #232f3e, #ff9900);
+            color: white;
+            padding: 20px;
+            text-align: center;
+            position: relative;
+            z-index: 1000;
+        }
+        
+        .header h1 {
+            margin: 0 0 10px 0;
+            font-size: 28px;
+            font-weight: 600;
+        }
+        
+        .header p {
+            margin: 0;
+            opacity: 0.9;
+            font-size: 16px;
+        }
+        
+        .map-container {
+            position: relative;
+            height: 550px;
+            background: linear-gradient(to bottom, #e8f4f8 0%, #b8dce8 100%);
+            overflow: hidden;
+            text-align: center
+        }
+        
+        .country {
+            fill: #e8f4f8;
+            stroke: #b0d4e3;
+            stroke-width: 0.5px;
+            transition: fill 0.2s ease;
+        }
+        
+        .country:hover {
+            fill: #d4e5f7;
+        }
+        
+        .graticule {
+            fill: none;
+            stroke: #b0d4e3;
+            stroke-width: 0.2px;
+            stroke-opacity: 0.3;
+        }
+        
+        .datacenter {
+            stroke: #232f3e;
+            stroke-width: 2;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        
+        .datacenter:hover {
+            stroke-width: 4;
+        }
+        
+        .datacenter.selected {
+            stroke: #000;
+            stroke-width: 3;
+            filter: drop-shadow(0 0 6px rgba(0,0,0,0.5));
+        }
+        
+        .datacenter.low-latency { fill: #00d084; }
+        .datacenter.medium-latency { fill: #ff9900; }
+        .datacenter.high-latency { fill: #ff4444; }
+        .datacenter.default { fill: #666; }
+        
+        .tooltip {
+            position: absolute;
+            padding: 12px;
+            background: rgba(35, 47, 62, 0.95);
+            color: white;
+            border-radius: 6px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 14px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+            z-index: 1000;
+            max-width: 200px;
+        }
+        
+        .tooltip.show {
+            opacity: 1;
+        }
+        
+        .controls {
+            padding: 20px;
+            background: white;
+            border-bottom: 2px solid #eee;
+            text-align: center;
+        }
+        
+        .controls button {
+            background: #232f3e;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 0 5px;
+        }
+        
+        .controls button:hover {
+            background: #ff9900;
+        }
+        
+        .selected-region {
+            font-weight: bold;
+            color: #232f3e;
+        }
+        
+        .stats {
+            padding: 20px;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            background-color: #f8f9fa;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 15px;
+            border-radius: 6px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .stat-number {
+            font-size: 32px;
+            font-weight: bold;
+            color: #232f3e;
+            margin: 0;
+        }
+        
+        .stat-label {
+            color: #666;
+            margin: 5px 0 0 0;
+            font-size: 14px;
+        }
+        
+        .region-list {
+            padding: 20px;
+            columns: 2;
+            column-gap: 30px;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+        
+        .region-item {
+            break-inside: avoid;
+            margin-bottom: 8px;
+            color: #333;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background-color 0.2s ease;
+        }
+        
+        .region-item:hover {
+            background-color: #f0f0f0;
+        }
+        
+        .region-item.selected {
+            background-color: #e8f4f8;
+            border-left: 4px solid #ff9900;
+        }
+        
+        .region-code {
+            font-family: 'Monaco', 'Menlo', monospace;
+            background: #f1f3f4;
+            padding: 2px 6px;
+            border-radius: 3px;
+            margin-right: 8px;
+            font-weight: 600;
+        }
+        
+        .latency-info {
+            display: inline-block;
+            margin-left: 8px;
+            font-size: 12px;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-weight: 600;
+        }
+        
+        .latency-low { background-color: #00d084; color: white; }
+        .latency-medium { background-color: #ff9900; color: white; }
+        .latency-high { background-color: #ff4444; color: white; }
+        
+        .loading {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            color: #666;
+            font-size: 18px;
+        }
+        
+        .legend {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: rgba(255,255,255,0.9);
+            padding: 15px;
+            border-radius: 6px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            font-size: 12px;
+        }
+        
+        .legend h4 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #232f3e;
+        }
+        
+        .legend-item {
+            display: flex;
+            align-items: center;
+            margin: 5px 0;
+        }
+        
+        .legend-color {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            margin-right: 8px;
+            border: 1px solid #333;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 10px;
+            font-size: 11px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>AWS Global Infrastructure</h1>
+        <p>Interactive latency map - click any region to see ping times to all other regions</p>
+    </div>
+    
+    <div class="controls">
+        <span>Selected Region: <span class="selected-region" id="selected-region">None (click a region on the map)</span></span>
+        <button onclick="clearSelection()">Clear Selection</button>
+    </div>
+    
+    <div class="map-container" id="map-container">
+        <div class="loading">Loading world map and latency data...</div>
+        <div class="legend">
+            <h4>Latency from Selected Region</h4>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #00d084;"></div>
+                <span>&lt; 100ms</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #ff9900;"></div>
+                <span>100-180ms</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #ff4444;"></div>
+                <span>&gt; 180ms</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-color" style="background-color: #666;"></div>
+                <span>No data</span>
+            </div>
+        </div>
+    </div>
+    
+    <div class="stats">
+        <div class="stat-card">
+            <div class="stat-number" id="total-regions">32</div>
+            <div class="stat-label">Total Regions</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="avg-latency">-</div>
+            <div class="stat-label">Avg Latency</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="min-latency">-</div>
+            <div class="stat-label">Min Latency</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-number" id="max-latency">-</div>
+            <div class="stat-label">Max Latency</div>
+        </div>
+    </div>
+    
+    <div class="region-list" id="region-list"></div>
+    
+    <div class="footer">
+        Data captured 05/29/2025 from <a href="https://www.cloudping.co/api/latencies?percentile=p_50&timeframe=1Y" target="_blank">cloudping.co</a> (1-year p50 latencies)
+    </div>
+    
+    <div class="tooltip" id="tooltip"></div>
+
+    <script>
+        const datacenters = [
+            { code: "eu-west-1", city: "Dublin", country: "Ireland", lat: 53.3498, lng: -6.2603 },
+            { code: "eu-west-2", city: "London", country: "United Kingdom", lat: 51.5074, lng: -0.1278 },
+            { code: "ap-southeast-5", city: "Kuala Lumpur", country: "Malaysia", lat: 3.1390, lng: 101.6869 },
+            { code: "ap-southeast-3", city: "Jakarta", country: "Indonesia", lat: -6.2088, lng: 106.8456 },
+            { code: "ap-southeast-7", city: "Bangkok", country: "Thailand", lat: 13.7563, lng: 100.5018 },
+            { code: "ca-central-1", city: "Toronto", country: "Canada", lat: 43.6532, lng: -79.3832 },
+            { code: "il-central-1", city: "Tel Aviv", country: "Israel", lat: 32.0853, lng: 34.7818 },
+            { code: "ap-southeast-1", city: "Singapore", country: "Singapore", lat: 1.3521, lng: 103.8198 },
+            { code: "ap-east-1", city: "Hong Kong", country: "Hong Kong", lat: 22.3193, lng: 114.1694 },
+            { code: "eu-south-2", city: "Madrid", country: "Spain", lat: 40.4168, lng: -3.7038 },
+            { code: "ap-northeast-3", city: "Osaka", country: "Japan", lat: 34.6937, lng: 135.5023 },
+            { code: "ap-northeast-2", city: "Seoul", country: "South Korea", lat: 37.5665, lng: 126.9780 },
+            { code: "ap-northeast-1", city: "Tokyo", country: "Japan", lat: 35.6762, lng: 139.6503 },
+            { code: "eu-central-1", city: "Frankfurt", country: "Germany", lat: 50.1109, lng: 8.6821 },
+            { code: "sa-east-1", city: "São Paulo", country: "Brazil", lat: -23.5558, lng: -46.6396 },
+            { code: "mx-central-1", city: "Mexico City", country: "Mexico", lat: 19.4326, lng: -99.1332 },
+            { code: "af-south-1", city: "Cape Town", country: "South Africa", lat: -33.9249, lng: 18.4241 },
+            { code: "us-west-2", city: "Portland", country: "United States", lat: 45.5152, lng: -122.6784 },
+            { code: "ap-south-2", city: "Hyderabad", country: "India", lat: 17.3850, lng: 78.4867 },
+            { code: "ca-west-1", city: "Calgary", country: "Canada", lat: 51.0447, lng: -114.0719 },
+            { code: "us-west-1", city: "San Francisco", country: "United States", lat: 37.7749, lng: -122.4194 },
+            { code: "eu-south-1", city: "Milan", country: "Italy", lat: 45.4642, lng: 9.1900 },
+            { code: "ap-southeast-2", city: "Sydney", country: "Australia", lat: -33.8688, lng: 151.2093 },
+            { code: "eu-north-1", city: "Stockholm", country: "Sweden", lat: 59.3293, lng: 18.0686 },
+            { code: "eu-central-2", city: "Zurich", country: "Switzerland", lat: 47.3769, lng: 8.5417 },
+            { code: "us-east-1", city: "Ashburn", country: "United States", lat: 39.0458, lng: -77.4874 },
+            { code: "ap-south-1", city: "Mumbai", country: "India", lat: 19.0760, lng: 72.8777 },
+            { code: "me-central-1", city: "Dubai", country: "UAE", lat: 25.2048, lng: 55.2708 },
+            { code: "eu-west-3", city: "Paris", country: "France", lat: 48.8566, lng: 2.3522 },
+            { code: "us-east-2", city: "Columbus", country: "United States", lat: 39.9612, lng: -82.9988 },
+            { code: "me-south-1", city: "Manama", country: "Bahrain", lat: 26.2285, lng: 50.5860 },
+            { code: "ap-southeast-4", city: "Melbourne", country: "Australia", lat: -37.8136, lng: 144.9631 }
+        ];
+
+        let latencyData = {};
+        let selectedRegion = null;
+        let svg, projection, tooltip;
+
+        const width = 1200;
+        const height = 600;
+
+        async function initializeMap() {
+            // Load latency data
+            try {
+                const response = await fetch('https://raw.githubusercontent.com/oaustegard/oaustegard.github.io/refs/heads/main/awspingp501y.json');
+                latencyData = await response.json();
+                console.log('Loaded latency data:', latencyData);
+            } catch (error) {
+                console.error('Error loading latency data:', error);
+            }
+
+            svg = d3.select(".map-container").append("svg")
+                .attr("width", width)
+                .attr("height", height);
+
+            projection = d3.geoNaturalEarth1()
+                .scale(180)
+                .translate([width / 2, height / 2]);
+
+            const path = d3.geoPath()
+                .projection(projection);
+
+            tooltip = d3.select("#tooltip");
+
+            // Load world map data
+            try {
+                const world = await d3.json("https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json");
+                
+                // Remove loading message
+                d3.select(".loading").remove();
+                
+                // Convert TopoJSON to GeoJSON
+                const countries = topojson.feature(world, world.objects.countries);
+
+                // Draw countries
+                svg.selectAll(".country")
+                    .data(countries.features)
+                    .enter().append("path")
+                    .attr("class", "country")
+                    .attr("d", path);
+
+                // Draw graticule
+                svg.append("path")
+                    .datum(d3.geoGraticule())
+                    .attr("class", "graticule")
+                    .attr("d", path);
+
+                // Add datacenters
+                addDatacenters();
+                updateRegionList();
+
+            } catch (error) {
+                console.error("Error loading world map:", error);
+                d3.select(".loading").text("Failed to load map data. Please refresh the page.");
+            }
+        }
+
+        function addDatacenters() {
+            svg.selectAll(".datacenter")
+                .data(datacenters)
+                .enter()
+                .append("circle")
+                .attr("class", "datacenter default")
+                .attr("cx", d => projection([d.lng, d.lat])[0])
+                .attr("cy", d => projection([d.lng, d.lat])[1])
+                .attr("r", 6)
+                .on("click", function(event, d) {
+                    selectRegion(d.code);
+                })
+                .on("mouseover", function(event, d) {
+                    d3.select(this).attr("r", 8);
+                    showTooltip(event, d);
+                })
+                .on("mouseout", function() {
+                    d3.select(this).attr("r", 6);
+                    tooltip.classed("show", false);
+                });
+        }
+
+        function selectRegion(regionCode) {
+            selectedRegion = regionCode;
+            document.getElementById('selected-region').textContent = regionCode;
+            
+            // Update datacenter colors based on latency from selected region
+            const regionLatencies = latencyData.data && latencyData.data[regionCode] ? latencyData.data[regionCode] : {};
+            
+            svg.selectAll(".datacenter")
+                .attr("class", d => {
+                    let classes = "datacenter";
+                    if (d.code === regionCode) {
+                        classes += " selected";
+                    }
+                    
+                    const latency = regionLatencies[d.code];
+                    if (latency !== undefined) {
+                        if (latency < 100) classes += " low-latency";
+                        else if (latency <= 180) classes += " medium-latency";
+                        else classes += " high-latency";
+                    } else {
+                        classes += " default";
+                    }
+                    return classes;
+                });
+            
+            updateRegionList();
+            updateStats(regionLatencies);
+        }
+
+        function clearSelection() {
+            selectedRegion = null;
+            document.getElementById('selected-region').textContent = 'None (click a region on the map)';
+            
+            svg.selectAll(".datacenter")
+                .attr("class", "datacenter default");
+            
+            updateRegionList();
+            updateStats({});
+        }
+
+        function showTooltip(event, d) {
+            let content = `<strong>${d.code}</strong><br>${d.city}, ${d.country}`;
+            
+            if (selectedRegion && latencyData.data && latencyData.data[selectedRegion]) {
+                const latency = latencyData.data[selectedRegion][d.code];
+                if (latency !== undefined) {
+                    content += `<br>Latency: ${latency.toFixed(1)}ms`;
+                }
+            }
+            
+            tooltip.html(content)
+                .classed("show", true)
+                .style("left", (event.pageX + 10) + "px")
+                .style("top", (event.pageY - 10) + "px");
+        }
+
+        function updateRegionList() {
+            const regionList = document.getElementById('region-list');
+            regionList.innerHTML = '';
+            
+            let regions = [...datacenters];
+            
+            // Sort by latency if a region is selected
+            if (selectedRegion && latencyData.data && latencyData.data[selectedRegion]) {
+                const regionLatencies = latencyData.data[selectedRegion];
+                regions.sort((a, b) => {
+                    const latencyA = regionLatencies[a.code] || Infinity;
+                    const latencyB = regionLatencies[b.code] || Infinity;
+                    return latencyA - latencyB;
+                });
+            }
+            
+            regions.forEach(dc => {
+                const div = document.createElement('div');
+                div.className = 'region-item';
+                if (dc.code === selectedRegion) {
+                    div.className += ' selected';
+                }
+                
+                let latencyInfo = '';
+                if (selectedRegion && latencyData.data && latencyData.data[selectedRegion]) {
+                    const latency = latencyData.data[selectedRegion][dc.code];
+                    if (latency !== undefined) {
+                        const latencyClass = latency < 100 ? 'latency-low' : 
+                                           latency <= 180 ? 'latency-medium' : 'latency-high';
+                        latencyInfo = `<span class="latency-info ${latencyClass}">${latency.toFixed(1)}ms</span>`;
+                    }
+                }
+                
+                div.innerHTML = `
+                    <span class="region-code">${dc.code}</span>
+                    ${dc.city}, ${dc.country}
+                    ${latencyInfo}
+                `;
+                
+                div.addEventListener('click', () => selectRegion(dc.code));
+                regionList.appendChild(div);
+            });
+        }
+
+        function updateStats(regionLatencies) {
+            const latencies = Object.values(regionLatencies).filter(l => l !== undefined && l > 0);
+            
+            if (latencies.length > 0) {
+                const avg = latencies.reduce((sum, l) => sum + l, 0) / latencies.length;
+                const min = Math.min(...latencies);
+                const max = Math.max(...latencies);
+                
+                document.getElementById('avg-latency').textContent = avg.toFixed(1) + 'ms';
+                document.getElementById('min-latency').textContent = min.toFixed(1) + 'ms';
+                document.getElementById('max-latency').textContent = max.toFixed(1) + 'ms';
+            } else {
+                document.getElementById('avg-latency').textContent = '-';
+                document.getElementById('min-latency').textContent = '-';
+                document.getElementById('max-latency').textContent = '-';
+            }
+        }
+
+        // Initialize the map
+        initializeMap();
+    </script>
+</body>
+</html>
