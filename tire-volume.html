@@ -45,12 +45,30 @@
         const tireWidth = signal(28); // mm
         const rimWidth = signal(17); // mm (internal)
         const wheelDiameter = signal(622); // mm (BSD)
-        const targetPressure = signal(80); // PSI
+        const targetPressure = signal(80); // Always stored in PSI internally
         const enableTempAdjustment = signal(false);
         const ambientTemp = signal(20); // Celsius
         const operatingTemp = signal(25); // Celsius
         const pressureUnit = signal('psi');
         const savedConfig = signal(null);
+
+        // Helper functions for pressure conversion
+        const getPressureDisplay = () => {
+            return pressureUnit.value === 'psi' 
+                ? targetPressure.value 
+                : (targetPressure.value / 14.504).toFixed(1);
+        };
+
+        const setPressureFromInput = (value) => {
+            targetPressure.value = pressureUnit.value === 'psi' 
+                ? parseFloat(value) 
+                : parseFloat(value) * 14.504;
+        };
+
+        const switchPressureUnit = (newUnit) => {
+            // Keep the same pressure value, just change the display unit
+            pressureUnit.value = newUnit;
+        };
 
         // Get recommended rim width for tire
         const recommendedRimWidth = computed(() => {
@@ -88,7 +106,7 @@
         // Equivalent air volume at ambient pressure
         const equivalentAirVolume = computed(() => {
             const volumeMl = tireVolume.value;
-            const pressurePsi = pressureUnit.value === 'psi' ? targetPressure.value : targetPressure.value * 14.504;
+            const pressurePsi = targetPressure.value; // Always stored in PSI
             const pressureAtm = pressurePsi / 14.696; // Convert to atmospheres
             
             return volumeMl * pressureAtm;
@@ -100,7 +118,7 @@
             
             const t1 = ambientTemp.value + 273.15; // Convert to Kelvin
             const t2 = operatingTemp.value + 273.15;
-            const targetPsi = pressureUnit.value === 'psi' ? targetPressure.value : targetPressure.value * 14.504;
+            const targetPsi = targetPressure.value; // Always stored in PSI
             
             // P1/T1 = P2/T2, so P2 = P1 * (T2/T1)
             const operatingPressure = targetPsi * (t2 / t1);
@@ -209,18 +227,18 @@
                                 <!-- Target Pressure -->
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">
-                                        Target Pressure: ${targetPressure.value} ${pressureUnit.value.toUpperCase()}
+                                        Target Pressure: ${getPressureDisplay()} ${pressureUnit.value.toUpperCase()}
                                     </label>
                                     <div class="flex gap-2 mb-2">
                                         <button 
                                             class=${`px-3 py-1 text-sm rounded ${pressureUnit.value === 'psi' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-                                            onClick=${() => pressureUnit.value = 'psi'}
+                                            onClick=${() => switchPressureUnit('psi')}
                                         >
                                             PSI
                                         </button>
                                         <button 
                                             class=${`px-3 py-1 text-sm rounded ${pressureUnit.value === 'bar' ? 'bg-blue-500 text-white' : 'bg-gray-200'}`}
-                                            onClick=${() => pressureUnit.value = 'bar'}
+                                            onClick=${() => switchPressureUnit('bar')}
                                         >
                                             BAR
                                         </button>
@@ -229,9 +247,9 @@
                                         type="range" 
                                         min=${pressureUnit.value === 'psi' ? '30' : '2'}
                                         max=${pressureUnit.value === 'psi' ? '120' : '8'}
-                                        step=${pressureUnit.value === 'psi' ? '5' : '0.2'}
-                                        value=${targetPressure.value}
-                                        onInput=${e => targetPressure.value = parseFloat(e.target.value)}
+                                        step=${pressureUnit.value === 'psi' ? '5' : '0.1'}
+                                        value=${getPressureDisplay()}
+                                        onInput=${e => setPressureFromInput(e.target.value)}
                                         class="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer slider"
                                     />
                                 </div>
@@ -310,7 +328,7 @@
                                         </h3>
                                         <div class="text-sm space-y-1">
                                             ${tempAdjust.tempDifference !== 0 ? html`
-                                                <div>Inflate to: <strong>${tempAdjust.adjustedInflationPressure.toFixed(1)} ${pressureUnit.value.toUpperCase()}</strong></div>
+                                                <div>Inflate to: <strong>${(pressureUnit.value === 'psi' ? tempAdjust.adjustedInflationPressure : tempAdjust.adjustedInflationPressure / 14.504).toFixed(1)} ${pressureUnit.value.toUpperCase()}</strong></div>
                                                 <div>Will reach: <strong>${(pressureUnit.value === 'psi' ? tempAdjust.operatingPressure : tempAdjust.operatingPressure / 14.504).toFixed(1)} ${pressureUnit.value.toUpperCase()}</strong> when riding</div>
                                                 <div class="text-xs mt-2">
                                                     ${tempAdjust.tempDifference > 0 ? 'Temperature increase' : 'Temperature decrease'}: ${Math.abs(tempAdjust.tempDifference)}°C
