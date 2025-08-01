@@ -1,0 +1,661 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Interactive SVG: Pelican Riding a Bicycle</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    :root {
+      --bg: #f2fbff;
+      --sky1: #cde8ff;
+      --sky2: #eaf6ff;
+      --ground: #e9f6ef;
+      --line: #3a4a5a;
+      --bike: #2c6db1;
+      --accent: #ff7a59;
+      --pelican-body: #f6f6f6;
+      --pelican-shadow: #e2e2e2;
+      --beak: #f3b233;
+      --eye: #1b1b1b;
+      --wing: #dddfe5;
+      --cloud: rgba(255,255,255,0.9);
+    }
+
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: linear-gradient(180deg, var(--sky2), var(--bg));
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, "Helvetica Neue", Arial, "Noto Sans", "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+      color: #1e293b;
+    }
+
+    .wrap {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100%;
+    }
+
+    header {
+      padding: 16px 20px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      justify-content: space-between;
+      background: linear-gradient(180deg, #ffffffaa, #ffffff66);
+      backdrop-filter: blur(4px);
+      border-bottom: 1px solid #e5eef7;
+    }
+
+    header h1 {
+      font-size: 20px;
+      margin: 0;
+      letter-spacing: 0.3px;
+      color: #0f172a;
+    }
+
+    .controls {
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .btn {
+      appearance: none;
+      border: 1px solid #c7d8ea;
+      background: #fff;
+      color: #0f172a;
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      font-weight: 600;
+      transition: transform .06s ease, box-shadow .2s ease, background .2s ease;
+      box-shadow: 0 1px 1px rgba(0,0,0,0.03);
+    }
+    .btn:hover { background: #f6fbff; }
+    .btn:active { transform: translateY(1px); }
+
+    .slider {
+      display: inline-grid;
+      grid-template-columns: auto 180px auto;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid #c7d8ea;
+      border-radius: 10px;
+      background: #fff;
+      box-shadow: 0 1px 1px rgba(0,0,0,0.03);
+      font-weight: 600;
+    }
+    .slider input[type="range"] {
+      width: 180px;
+      accent-color: #2c6db1;
+    }
+    .slider span {
+      min-width: 36px;
+      text-align: right;
+      font-variant-numeric: tabular-nums;
+      color: #0f172a;
+    }
+
+    main {
+      display: grid;
+      place-items: center;
+      padding: 12px;
+    }
+
+    .stage {
+      width: min(980px, 96vw);
+      aspect-ratio: 16 / 9;
+      border-radius: 16px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 12px 35px rgba(0,0,0,0.08), inset 0 0 0 1px #e5eef7;
+      background: radial-gradient(120% 100% at 50% 0%, var(--sky1), var(--bg) 60%) no-repeat;
+    }
+
+    footer {
+      padding: 12px 20px 18px;
+      font-size: 12px;
+      color: #475569;
+      text-align: center;
+    }
+
+    /* Tooltip */
+    .tip {
+      position: absolute;
+      bottom: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(15, 23, 42, 0.8);
+      color: #fff;
+      font-size: 12px;
+      padding: 6px 10px;
+      border-radius: 999px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .3s ease;
+    }
+    .stage:hover .tip {
+      opacity: 1;
+    }
+
+    /* Accessibility helpers for focus */
+    .btn:focus-visible,
+    .slider input:focus-visible {
+      outline: 3px solid #a7d2ff;
+      outline-offset: 2px;
+    }
+  </style>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "bezier-easing": "https://cdn.jsdelivr.net/npm/bezier-easing@2.1.0/dist/bezier-easing.esm.js"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Pelican on Wheels</h1>
+      <div class="controls">
+        <button class="btn" id="toggle">Pause</button>
+        <button class="btn" id="bell">Ring Bell</button>
+        <label class="slider" title="Adjust speed">
+          Speed
+          <input id="speed" type="range" min="0" max="200" value="100" />
+          <span id="speedVal">1.00x</span>
+        </label>
+      </div>
+    </header>
+
+    <main>
+      <div class="stage" id="stage" aria-label="Interactive pelican riding a bicycle">
+        <svg id="scene" viewBox="0 0 1000 600" width="100%" height="100%" role="img" aria-labelledby="title desc">
+          <title id="title">Pelican riding a bicycle</title>
+          <desc id="desc">A stylized pelican rides a bicycle along a path. Wheels spin, pedals turn, the head bobs, and clouds drift. Click and drag to move, scroll to zoom, and use controls to adjust speed or ring the bell.</desc>
+
+          <defs>
+            <!-- Background hills gradient -->
+            <linearGradient id="hillGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#d8f1e3"/>
+              <stop offset="100%" stop-color="#bfe6d2"/>
+            </linearGradient>
+
+            <radialGradient id="sunGrad" cx="50%" cy="30%" r="40%">
+              <stop offset="0%" stop-color="#fff7c2" />
+              <stop offset="60%" stop-color="#ffe07a" />
+              <stop offset="100%" stop-color="#ffd36f" stop-opacity="0.95"/>
+            </radialGradient>
+
+            <filter id="softShadow" x="-40%" y="-40%" width="180%" height="180%">
+              <feDropShadow dx="0" dy="3" stdDeviation="3" flood-color="#000" flood-opacity="0.18"/>
+            </filter>
+
+            <filter id="groundBlur" x="-50%" y="-50%" width="200%" height="200%">
+              <feGaussianBlur stdDeviation="1.4"/>
+            </filter>
+
+            <linearGradient id="rimGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#3e83c7"/>
+              <stop offset="100%" stop-color="#1b5e9e"/>
+            </linearGradient>
+
+            <linearGradient id="frameGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#2c6db1"/>
+              <stop offset="100%" stop-color="#1d4f89"/>
+            </linearGradient>
+
+            <linearGradient id="wingGrad" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#f0f2f7"/>
+              <stop offset="100%" stop-color="#d7dbe6"/>
+            </linearGradient>
+
+            <clipPath id="viewClip">
+              <rect x="0" y="0" width="1000" height="600" rx="18" ry="18"/>
+            </clipPath>
+
+            <g id="cloud">
+              <g opacity="0.9">
+                <ellipse cx="0" cy="0" rx="50" ry="28" fill="#fff"/>
+                <ellipse cx="-35" cy="8" rx="35" ry="22" fill="#fff"/>
+                <ellipse cx="35" cy="8" rx="40" ry="24" fill="#fff"/>
+                <ellipse cx="4" cy="16" rx="55" ry="20" fill="#fff"/>
+              </g>
+            </g>
+
+            <g id="spoke">
+              <rect x="-1.2" y="-80" width="2.4" height="160" rx="1.2" fill="#9fbad3"/>
+            </g>
+
+            <g id="feather">
+              <path d="M0,0 C16,-6 28,-4 40,0 C28,8 16,12 0,10 Z" fill="url(#wingGrad)"/>
+              <path d="M0,7 C18,2 28,2 40,5" fill="none" stroke="#cbd3e1" stroke-width="1.2" stroke-linecap="round"/>
+            </g>
+          </defs>
+
+          <g clip-path="url(#viewClip)">
+            <!-- Sky elements -->
+            <rect x="0" y="0" width="1000" height="600" fill="url(#sunGrad)" opacity="0.15"/>
+            <circle cx="820" cy="90" r="55" fill="url(#sunGrad)" opacity="0.9"/>
+
+            <!-- Parallax clouds -->
+            <g id="clouds" opacity="0.8">
+              <g id="cloudRowBack" transform="translate(0,80)">
+                <use href="#cloud" transform="translate(150,0) scale(1.1)"/>
+                <use href="#cloud" transform="translate(420,-20) scale(0.8)"/>
+                <use href="#cloud" transform="translate(720,10) scale(1.2)"/>
+              </g>
+              <g id="cloudRowFront" transform="translate(0,140)">
+                <use href="#cloud" transform="translate(260,0) scale(1.3)"/>
+                <use href="#cloud" transform="translate(560,20) scale(1.0)"/>
+                <use href="#cloud" transform="translate(860,-10) scale(1.4)"/>
+              </g>
+            </g>
+
+            <!-- Distant hills -->
+            <g id="hills" opacity="0.9">
+              <path d="M-50,420 C120,340 220,350 380,420 S680,470 860,420 S1120,330 1160,420 L1160,600 L-50,600 Z" fill="url(#hillGrad)"/>
+              <path d="M-50,440 C160,380 320,420 520,460 S900,500 1160,460 L1160,600 L-50,600 Z" fill="#d2ecd9"/>
+            </g>
+
+            <!-- Ground and road -->
+            <g id="ground">
+              <rect x="-50" y="470" width="1200" height="200" fill="var(--ground)"/>
+              <g id="road">
+                <path d="M-50,500 C200,520 420,520 700,505 S1180,490 1160,520 L1160,560 L-50,560 Z" fill="#d9e6ef"/>
+                <g id="laneMarks" opacity="0.5">
+                  <rect x="-30" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="80" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="190" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="300" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="410" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="520" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="630" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="740" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="850" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                  <rect x="960" y="528" width="60" height="4" fill="#a9bfd3" rx="2" filter="url(#groundBlur)"/>
+                </g>
+              </g>
+            </g>
+
+            <!-- Bicycle and Pelican -->
+            <g id="bikeScene" transform="translate(240, 230)" filter="url(#softShadow)">
+              <!-- Shadow -->
+              <ellipse id="shadow" cx="260" cy="340" rx="160" ry="24" fill="#000" opacity="0.12" />
+
+              <!-- Rear wheel -->
+              <g id="wheelRear" transform="translate(140,320)">
+                <circle r="74" fill="url(#rimGrad)" stroke="#184a7b" stroke-width="4"/>
+                <circle r="68" fill="#f7fbff" stroke="#9fbad3" stroke-width="2"/>
+                <g id="spokesRear">
+                  <use href="#spoke" transform="rotate(0)"/>
+                  <use href="#spoke" transform="rotate(30)"/>
+                  <use href="#spoke" transform="rotate(60)"/>
+                  <use href="#spoke" transform="rotate(90)"/>
+                  <use href="#spoke" transform="rotate(120)"/>
+                  <use href="#spoke" transform="rotate(150)"/>
+                </g>
+                <circle r="10" fill="#7fa6c6" stroke="#3b6c94" stroke-width="2"/>
+              </g>
+
+              <!-- Front wheel -->
+              <g id="wheelFront" transform="translate(380,320)">
+                <circle r="74" fill="url(#rimGrad)" stroke="#184a7b" stroke-width="4"/>
+                <circle r="68" fill="#f7fbff" stroke="#9fbad3" stroke-width="2"/>
+                <g id="spokesFront">
+                  <use href="#spoke" transform="rotate(15)"/>
+                  <use href="#spoke" transform="rotate(45)"/>
+                  <use href="#spoke" transform="rotate(75)"/>
+                  <use href="#spoke" transform="rotate(105)"/>
+                  <use href="#spoke" transform="rotate(135)"/>
+                  <use href="#spoke" transform="rotate(165)"/>
+                </g>
+                <circle r="10" fill="#7fa6c6" stroke="#3b6c94" stroke-width="2"/>
+              </g>
+
+              <!-- Frame -->
+              <g id="frame" stroke="url(#frameGrad)" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" fill="none">
+                <path d="M160,260 L260,320 L360,260" />
+                <path d="M160,260 L200,180 L300,180 L360,260" />
+                <path d="M260,320 L260,240" />
+              </g>
+
+              <!-- Handlebar and fork -->
+              <g id="handle" stroke="url(#frameGrad)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" fill="none">
+                <path d="M360,260 L380,280" />
+                <path d="M380,280 C400,250 430,240 440,252" />
+              </g>
+              <circle cx="440" cy="252" r="6" fill="var(--accent)" id="bellBtn"/>
+
+              <!-- Pedals and crank -->
+              <g id="crank" transform="translate(260,320)">
+                <circle r="12" fill="#ff985e" stroke="#e66b42" stroke-width="3"/>
+                <g id="armL">
+                  <rect x="-4" y="-54" width="8" height="54" rx="3" fill="#89a9c7"/>
+                  <circle cx="0" cy="-54" r="10" fill="#2c6db1" stroke="#1d4f89" stroke-width="2"/>
+                </g>
+                <g id="armR">
+                  <rect x="-4" y="0" width="8" height="54" rx="3" fill="#89a9c7"/>
+                  <circle cx="0" cy="54" r="10" fill="#2c6db1" stroke="#1d4f89" stroke-width="2"/>
+                </g>
+              </g>
+
+              <!-- Chain -->
+              <path id="chain" d="M196,320 C220,296 300,296 324,320 C300,344 220,344 196,320 Z" fill="none" stroke="#b3c7d8" stroke-width="6" stroke-linecap="round"/>
+
+              <!-- Pelican -->
+              <g id="pelican" transform="translate(220,140)">
+                <!-- Tail -->
+                <path d="M-20,160 C-30,150 -36,140 -34,128 C-20,138 -10,148 2,154 Z" fill="#e3e7ee" stroke="#cfd5e2" stroke-width="2" />
+
+                <!-- Body -->
+                <ellipse cx="60" cy="160" rx="90" ry="74" fill="var(--pelican-body)" stroke="#cfd5e2" stroke-width="3"/>
+
+                <!-- Wing -->
+                <g id="wing" transform="translate(32,130)">
+                  <ellipse cx="20" cy="40" rx="54" ry="36" fill="url(#wingGrad)" stroke="#cfd5e2" stroke-width="2"/>
+                  <use href="#feather" transform="translate(-10,40) scale(0.9) rotate(-6)"/>
+                  <use href="#feather" transform="translate(10,58) scale(0.85) rotate(-2)"/>
+                  <use href="#feather" transform="translate(28,30) scale(0.8) rotate(8)"/>
+                </g>
+
+                <!-- Neck -->
+                <path id="neck" d="M90,132 C104,110 124,100 160,96 C174,94 186,98 196,110 C178,114 168,120 156,132 C144,144 128,154 112,158" fill="var(--pelican-body)" stroke="#cfd5e2" stroke-width="3"/>
+
+                <!-- Head group -->
+                <g id="head" transform="translate(180,108)">
+                  <!-- Crest -->
+                  <path d="M-6,-8 C-2,-16 6,-20 16,-18 C8,-14 4,-6 2,2" fill="#e8edf4" stroke="#cfd5e2" stroke-width="2" />
+                  <!-- Head -->
+                  <ellipse cx="0" cy="0" rx="22" ry="18" fill="var(--pelican-body)" stroke="#cfd5e2" stroke-width="2"/>
+                  <!-- Eye -->
+                  <circle cx="6" cy="-4" r="3.4" fill="var(--eye)"/>
+                  <circle cx="6" cy="-4" r="1.3" fill="#ffffff" opacity="0.8"/>
+                  <!-- Beak top -->
+                  <path id="beakTop" d="M-10,4 C10,10 38,8 60,2 C40,0 18,-2 -4,-2 Z" fill="var(--beak)" stroke="#e49f2a" stroke-width="2"/>
+                  <!-- Beak pouch -->
+                  <path id="beakBottom" d="M-10,6 C12,16 28,24 54,22 C40,18 20,10 -4,6 Z" fill="#f7c45b" stroke="#e49f2a" stroke-width="2"/>
+                </g>
+
+                <!-- Legs -->
+                <g id="legs">
+                  <!-- Rear leg -->
+                  <path d="M70,210 C70,232 66,248 60,262" stroke="#f0a54a" stroke-width="6" stroke-linecap="round" fill="none"/>
+                  <path d="M56,262 C66,264 74,268 78,274 C70,274 60,274 50,272" stroke="#f0a54a" stroke-width="6" stroke-linecap="round" fill="none"/>
+                  <!-- Front leg -->
+                  <path d="M110,210 C110,232 114,248 120,262" stroke="#f0a54a" stroke-width="6" stroke-linecap="round" fill="none"/>
+                  <path d="M124,262 C114,264 106,268 102,274 C110,274 120,274 130,272" stroke="#f0a54a" stroke-width="6" stroke-linecap="round" fill="none"/>
+                </g>
+              </g>
+            </g>
+          </g>
+        </svg>
+
+        <div class="tip">Drag to move • Scroll to zoom • Click bell or press B</div>
+      </div>
+    </main>
+
+    <footer>
+      Interactive SVG demo. All graphics are generated procedurally within this file.
+    </footer>
+  </div>
+
+  <script type="module">
+    import BezierEasing from "bezier-easing";
+
+    // Basic elements
+    const svg = document.getElementById('scene');
+    const stage = document.getElementById('stage');
+
+    // Controls
+    const toggleBtn = document.getElementById('toggle');
+    const bellBtn = document.getElementById('bell');
+    const speedSlider = document.getElementById('speed');
+    const speedVal = document.getElementById('speedVal');
+
+    // Nodes to animate
+    const cloudBack = document.getElementById('cloudRowBack');
+    const cloudFront = document.getElementById('cloudRowFront');
+    const wheelRear = document.getElementById('wheelRear');
+    const wheelFront = document.getElementById('wheelFront');
+    const crank = document.getElementById('crank');
+    const armL = document.getElementById('armL');
+    const armR = document.getElementById('armR');
+    const pelican = document.getElementById('pelican');
+    const head = document.getElementById('head');
+    const wing = document.getElementById('wing');
+    const shadow = document.getElementById('shadow');
+    const bikeScene = document.getElementById('bikeScene');
+    const chain = document.getElementById('chain');
+    const bellBtnSvg = document.getElementById('bellBtn');
+
+    // Motion state
+    let running = true;
+    let speed = 1.0; // 1x base speed
+    let t0 = performance.now();
+    let view = { x: 0, y: 0, k: 1 };
+    const viewMinK = 0.8;
+    const viewMaxK = 1.6;
+
+    // Easing for bobbing
+    const easeInOut = BezierEasing(0.42, 0.0, 0.58, 1.0);
+
+    // Resize viewBox fitting helper (keeps 1000x600 but allows pan/zoom)
+    function updateViewBox() {
+      const w = 1000 / view.k;
+      const h = 600 / view.k;
+      const x = view.x - (w - 1000) / 2;
+      const y = view.y - (h - 600) / 2;
+      svg.setAttribute('viewBox', `${x} ${y} ${w} ${h}`);
+    }
+    updateViewBox();
+
+    // Drag to pan
+    let dragging = false;
+    let last = null;
+    stage.addEventListener('pointerdown', (e) => {
+      dragging = true;
+      stage.setPointerCapture(e.pointerId);
+      last = { x: e.clientX, y: e.clientY };
+    });
+    stage.addEventListener('pointermove', (e) => {
+      if (!dragging) return;
+      const dx = e.clientX - last.x;
+      const dy = e.clientY - last.y;
+      last = { x: e.clientX, y: e.clientY };
+      // Convert pixels to SVG units roughly proportional
+      const rect = stage.getBoundingClientRect();
+      view.x -= (dx / rect.width) * (1000 / view.k);
+      view.y -= (dy / rect.height) * (600 / view.k);
+      updateViewBox();
+    });
+    function endPointer(e){
+      if (!dragging) return;
+      dragging = false;
+      try { stage.releasePointerCapture(e.pointerId); } catch {}
+    }
+    stage.addEventListener('pointerup', endPointer);
+    stage.addEventListener('pointercancel', endPointer);
+    stage.addEventListener('mouseleave', endPointer);
+
+    // Scroll to zoom
+    stage.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const delta = Math.sign(e.deltaY);
+      const factor = Math.pow(1.06, delta);
+      const oldK = view.k;
+      const rect = stage.getBoundingClientRect();
+      const mx = (e.clientX - rect.left) / rect.width;
+      const my = (e.clientY - rect.top) / rect.height;
+
+      const wOld = 1000 / oldK;
+      const hOld = 600 / oldK;
+      const xOld = view.x - (wOld - 1000) / 2;
+      const yOld = view.y - (hOld - 600) / 2;
+
+      view.k = Math.min(viewMaxK, Math.max(viewMinK, view.k / factor));
+
+      const wNew = 1000 / view.k;
+      const hNew = 600 / view.k;
+
+      const targetX = xOld + mx * wOld;
+      const targetY = yOld + my * hOld;
+
+      const xNew = targetX - mx * wNew;
+      const yNew = targetY - my * hNew;
+
+      view.x = xNew + (wNew - 1000)/2;
+      view.y = yNew + (hNew - 600)/2;
+
+      updateViewBox();
+    }, { passive: false });
+
+    // Controls wiring
+    function setSpeedFromSlider() {
+      speed = parseInt(speedSlider.value, 10) / 100;
+      speedVal.textContent = `${speed.toFixed(2)}x`;
+    }
+    setSpeedFromSlider();
+    speedSlider.addEventListener('input', setSpeedFromSlider);
+
+    // Animation loop timing vars declared before toggle handler
+    let elapsed = 0;
+    let wheelAngle = 0;
+    let crankAngle = 0;
+    let bellAnimStart = -1;
+
+    function tick(now) {
+      if (!running) return;
+      elapsed = now - t0;
+
+      // Base omega scaled by speed
+      const omega = 0.0025 * speed; // radians/ms for wheels
+      const omegaCrank = 0.0050 * speed;
+
+      wheelAngle += omega * (now - (tick.lastNow || now));
+      crankAngle += omegaCrank * (now - (tick.lastNow || now));
+      tick.lastNow = now;
+
+      // Wheels rotate
+      const wheelDeg = wheelAngle * 180/Math.PI;
+      wheelRear.setAttribute('transform', `translate(140,320) rotate(${wheelDeg})`);
+      wheelFront.setAttribute('transform', `translate(380,320) rotate(${wheelDeg})`);
+
+      // Crank spins; pedal arms counter-rotate for depth effect
+      const crankDeg = crankAngle * 180/Math.PI;
+      crank.setAttribute('transform', `translate(260,320) rotate(${crankDeg})`);
+      armL.setAttribute('opacity', 0.95);
+      armR.setAttribute('opacity', 0.75);
+
+      // Chain shimmer (stroke-dashoffset)
+      const dash = (now * 0.04 * speed) % 40;
+      chain.setAttribute('stroke-dasharray', '6 8');
+      chain.setAttribute('stroke-dashoffset', dash.toFixed(2));
+
+      // Pelican bobbing and subtle sway
+      const bob = Math.sin(now * 0.004 * speed) * 4;
+      const sway = Math.sin(now * 0.0023 * speed) * 2;
+      const tilt = Math.sin(now * 0.003 * speed) * 1.2;
+      pelican.setAttribute('transform', `translate(${220 + sway}, ${140 + bob}) rotate(${tilt}, 260, 220)`);
+
+      // Head bob and beak nibble
+      const headBob = Math.sin(now * 0.0048 * speed + 0.6) * 3;
+      const headNod = Math.sin(now * 0.0036 * speed) * 4;
+      head.setAttribute('transform', `translate(${180}, ${108 + headBob}) rotate(${headNod * 0.6})`);
+
+      // Wing flap
+      const flap = Math.sin(now * 0.006 * speed) * 6 + 2;
+      wing.setAttribute('transform', `translate(32,130) rotate(${flap}, 20, 40)`);
+
+      // Shadow stretch with speed
+      const rx = 160 + speed * 10;
+      const op = 0.12 + speed * 0.05;
+      shadow.setAttribute('rx', rx.toFixed(1));
+      shadow.setAttribute('opacity', Math.min(0.24, op).toFixed(2));
+
+      // Clouds parallax drift
+      const cx = (now * 0.02) % 2000;
+      cloudBack.setAttribute('transform', `translate(${-cx * 0.3},80)`);
+      cloudFront.setAttribute('transform', `translate(${-cx * 0.5},140)`);
+
+      // Bell wobble animation
+      if (bellAnimStart > 0) {
+        const dt = now - bellAnimStart;
+        if (dt < 500) {
+          const k = easeInOut(Math.min(1, dt / 500));
+          const wob = Math.sin(k * Math.PI * 6) * (8 * (1 - k));
+          bikeScene.setAttribute('transform', `translate(240, 230) rotate(${wob * 0.02}, 260, 320)`);
+          bellBtnSvg.setAttribute('transform', `translate(${440 + Math.sin(k*12)*1.5}, ${252})`);
+        } else {
+          bellAnimStart = -1;
+          bikeScene.setAttribute('transform', `translate(240, 230)`);
+          bellBtnSvg.removeAttribute('transform');
+        }
+      } else {
+        bikeScene.setAttribute('transform', `translate(240, 230)`);
+      }
+
+      requestAnimationFrame(tick);
+    }
+
+    toggleBtn.addEventListener('click', () => {
+      running = !running;
+      toggleBtn.textContent = running ? 'Pause' : 'Play';
+      if (running) {
+        // reset timing reference to avoid jump
+        tick.lastNow = undefined;
+        t0 = performance.now() - elapsed;
+        requestAnimationFrame(tick);
+      }
+    });
+
+    // Simple synthesized "bell" using Web Audio
+    let audioCtx = null;
+    function ensureAudio() {
+      if (audioCtx) return audioCtx;
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return null;
+      audioCtx = new Ctx();
+      return audioCtx;
+    }
+
+    function ringBell() {
+      const ctx = ensureAudio();
+      if (ctx) {
+        const now = ctx.currentTime;
+        const o1 = ctx.createOscillator();
+        const o2 = ctx.createOscillator();
+        const g = ctx.createGain();
+        o1.type = 'sine';
+        o2.type = 'sine';
+        o1.frequency.setValueAtTime(1320, now);
+        o2.frequency.setValueAtTime(1980, now);
+        o2.detune.setValueAtTime(8, now);
+
+        g.gain.setValueAtTime(0.001, now);
+        g.gain.exponentialRampToValueAtTime(0.3, now + 0.01);
+        g.gain.exponentialRampToValueAtTime(0.001, now + 0.35);
+
+        o1.connect(g); o2.connect(g); g.connect(ctx.destination);
+        o1.start(now); o2.start(now + 0.02);
+        o1.stop(now + 0.4); o2.stop(now + 0.42);
+      }
+      // trigger wobble regardless of audio policy
+      bellAnimStart = performance.now();
+    }
+
+    bellBtn.addEventListener('click', ringBell);
+    bellBtnSvg.addEventListener('click', ringBell);
+    document.addEventListener('keydown', (e) => {
+      if (e.key && e.key.toLowerCase() === 'b') ringBell();
+      if (e.key === ' ') { e.preventDefault(); toggleBtn.click(); }
+    });
+
+    // Kick off
+    requestAnimationFrame((n)=>{ t0 = n; tick(n); });
+  </script>
+</body>
+</html>
