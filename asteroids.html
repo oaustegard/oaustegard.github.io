@@ -1,0 +1,662 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Asteroids – Preact SPA (Single File)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <style>
+    :root {
+      --bg: #05070B;
+      --ui: #0a0f14;
+      --text: #cfe8ff;
+      --btn-bg: #123;
+      --btn-bd: #345;
+      --btn-bg-2: #234;
+      --btn-bd-2: #456;
+      --accent: #E6F1FF;
+    }
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #000;
+      color: var(--text);
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+    }
+    .app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      background: #000;
+    }
+    .topbar {
+      display: flex;
+      gap: 8px;
+      padding: 8px;
+      align-items: center;
+      background: var(--ui);
+      color: var(--text);
+      font-size: 14px;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .spacer {
+      margin-left: auto;
+      opacity: 0.72;
+      white-space: nowrap;
+    }
+    button, .btn {
+      appearance: none;
+      border: 1px solid var(--btn-bd);
+      background: var(--btn-bg);
+      color: var(--text);
+      padding: 6px 10px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    button.secondary {
+      border-color: var(--btn-bd-2);
+      background: var(--btn-bg-2);
+    }
+    .canvas-wrap {
+      flex: 1;
+      min-height: 0;
+    }
+    canvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: var(--bg);
+      touch-action: manipulation;
+    }
+    .links {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      font-size: 12px;
+      opacity: 0.7;
+    }
+    .links a {
+      color: #8fc7ff;
+      text-decoration: none;
+    }
+    .links a:hover {
+      text-decoration: underline;
+    }
+  </style>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://cdn.jsdelivr.net/npm/preact@10.24.1/dist/preact.module.js",
+        "preact/hooks": "https://cdn.jsdelivr.net/npm/preact@10.24.1/hooks/dist/hooks.module.js"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="root"></div>
+
+  <script type="module">
+    import { h, render } from 'preact';
+    import { useEffect, useRef, useState } from 'preact/hooks';
+
+    // Incorporating references:
+    // - Asteroids game state patterns (bullets, asteroids arrays, collisions) are common in React/Preact projects; see examples like a React asteroids clone where arrays for asteroids and bullets are maintained [github.com](https://github.com/elborracho420/asteroids/blob/master/src/App.js).
+    // - Touch / visual polish ideas and event usage are widespread; fireworks effect libraries and device input integration are often wrapped with refs and effects in React apps [blog.openreplay.com](https://blog.openreplay.com/adding-fireworks-effects-to-your-react-app/).
+    // - SVG tricks, UI polish, and modern JS ecosystem news (e.g., intros to SVG, ESLint plugins) can inform enhancements although not used directly here [javascriptweekly.com](https://javascriptweekly.com/issues/746).
+
+    // Types (JSDoc so this file runs as plain JS)
+    /**
+     * @typedef {{ x:number, y:number }} Vec
+     * @typedef {{ id:number, pos:Vec, vel:Vec, angle:number, size:number, verts:number[] }} Asteroid
+     * @typedef {{ id:number, pos:Vec, vel:Vec, life:number }} Bullet
+     * @typedef {{ pos:Vec, vel:Vec, angle:number, invul:number, lives:number }} Ship
+     */
+
+    const TAU = Math.PI * 2;
+    const rand = (a,b)=> Math.random()*(b-a)+a;
+    const clamp = (v,a,b)=> Math.max(a, Math.min(b, v));
+    const dist2 = (a,b)=> { const dx=a.x-b.x, dy=a.y-b.y; return dx*dx + dy*dy; };
+    const wrap = (v, max)=> (v<0? v+max : v>=max? v-max : v);
+
+    const SHIP_RADIUS = 14;
+    const BULLET_SPEED = 420;
+    const BULLET_LIFE = 0.8; // seconds
+    const FIRE_COOLDOWN = 0.12;
+    const SHIP_THRUST = 240;
+    const SHIP_ROT_SPEED = 4.2; // rad/s
+    const FRICTION = 0.995;
+    const AST_INIT = 5;
+    const AST_MIN_SIZE = 18;
+    const AST_MAX_SIZE = 60;
+    const AST_SPEED = 80;
+    const AST_SPLIT_FACTOR = 0.6;
+    const RESPAWN_INVUL = 2.0;
+
+    function polyCircleHit(poly, cx, cy, r) {
+      // poly = [x0,y0,x1,y1,...]
+      const r2 = r*r;
+      for (let i=0;i<poly.length;i+=2){
+        const dx = poly[i]-cx, dy = poly[i+1]-cy;
+        if (dx*dx + dy*dy <= r2) return true;
+      }
+      // Rough edge intersection check
+      for (let i=0;i<poly.length;i+=2){
+        const x1 = poly[i], y1 = poly[i+1];
+        const j = (i+2) % poly.length;
+        const x2 = poly[j], y2 = poly[j+1];
+        const vx = x2-x1, vy = y2-y1;
+        const wx = cx-x1, wy = cy-y1;
+        const denom = vx*vx + vy*vy || 1e-6;
+        const t = clamp((wx*vx + wy*vy)/denom, 0, 1);
+        const px = x1 + t*vx, py = y1 + t*vy;
+        const dx = px-cx, dy = py-cy;
+        if (dx*dx + dy*dy <= r2) return true;
+      }
+      return false;
+    }
+
+    function makeAsteroid(idGen, w,h, avoid, minDist) {
+      let pos;
+      let tries=0;
+      do {
+        pos = { x: rand(0,w), y: rand(0,h) };
+        tries++;
+        if (tries>200) break;
+      } while (Math.hypot(pos.x-avoid.x,pos.y-avoid.y) < minDist);
+      const angle = rand(0, TAU);
+      const speed = rand(AST_SPEED*0.5, AST_SPEED);
+      const vel = { x: Math.cos(angle)*speed, y: Math.sin(angle)*speed };
+      const size = rand(AST_MAX_SIZE*0.7, AST_MAX_SIZE);
+      const vertsCount = 10 + (Math.random()*6|0);
+      const verts = [];
+      for (let i=0;i<vertsCount;i++){
+        const a = (i/vertsCount)*TAU + rand(-0.15,0.15);
+        const r = size*rand(0.7,1);
+        verts.push(Math.cos(a)*r, Math.sin(a)*r);
+      }
+      return { id:idGen(), pos, vel, angle: rand(0,TAU), size, verts };
+    }
+
+    function splitAsteroid(a, idGen) {
+      const newSize = a.size * AST_SPLIT_FACTOR;
+      if (newSize < AST_MIN_SIZE) return [];
+      const makeChild = ()=> {
+        const angle = rand(0, TAU);
+        const speed = rand(AST_SPEED*0.6, AST_SPEED*1.2);
+        const vel = { x: Math.cos(angle)*speed, y: Math.sin(angle)*speed };
+        const vertsCount = 8 + (Math.random()*6|0);
+        const verts = [];
+        for (let i=0;i<vertsCount;i++){
+          const ag = (i/vertsCount)*TAU + rand(-0.2,0.2);
+          const r = newSize*rand(0.7,1);
+          verts.push(Math.cos(ag)*r, Math.sin(ag)*r);
+        }
+        return { id:idGen(), pos: { ...a.pos }, vel, angle: rand(0,TAU), size: newSize, verts };
+      };
+      return [makeChild(), makeChild()];
+    }
+
+    function useIdGen() {
+      const ref = useRef(1);
+      return ()=> ref.current++;
+    }
+
+    function App(){
+      const canvasRef = useRef(null);
+      const [running, setRunning] = useState(false);
+      const [score, setScore] = useState(0);
+      const [level, setLevel] = useState(1);
+      const [useAccel, setUseAccel] = useState(false);
+      const [needsPerm, setNeedsPerm] = useState(false);
+
+      const idGen = useIdGen();
+
+      // Controls
+      const keys = useRef({ left:false, right:false, thrust:false, fire:false });
+      const touchState = useRef({ left:false, right:false, thrust:false, fire:false });
+      const fireCooldown = useRef(0);
+
+      // Device motion
+      const tilt = useRef({ beta:0, gamma:0 });
+
+      // Game state
+      const shipRef = useRef(/** @type {Ship} */({ pos:{x:0,y:0}, vel:{x:0,y:0}, angle: -Math.PI/2, invul:0, lives:3 }));
+      const asteroidsRef = useRef(/** @type {Asteroid[]} */([]));
+      const bulletsRef = useRef(/** @type {Bullet[]} */([]));
+      const lastTime = useRef(0);
+      const anim = useRef(0);
+
+      function resizeCanvas(c){
+        const dpr = Math.max(1, window.devicePixelRatio || 1);
+        const rect = c.getBoundingClientRect();
+        c.width = Math.round(rect.width * dpr);
+        c.height = Math.round(rect.height * dpr);
+        const ctx = c.getContext('2d');
+        ctx.setTransform(dpr,0,0,dpr,0,0);
+      }
+
+      function resetLevel(w,h,lvl){
+        const ship = shipRef.current;
+        ship.pos = { x: w/2, y: h/2 };
+        ship.vel = { x:0, y:0 };
+        ship.angle = -Math.PI/2;
+        ship.invul = 2.5;
+        const asts = [];
+        for (let i=0;i<AST_INIT + (lvl-1);i++){
+          asts.push(makeAsteroid(idGen, w,h, ship.pos, Math.min(w,h)*0.35));
+        }
+        asteroidsRef.current = asts;
+        bulletsRef.current = [];
+      }
+
+      function startGame(){
+        const c = canvasRef.current;
+        if (!c) return;
+        const rect = c.getBoundingClientRect();
+        const w = rect.width, h = rect.height;
+        shipRef.current = { pos:{x:w/2,y:h/2}, vel:{x:0,y:0}, angle:-Math.PI/2, invul:2.5, lives:3 };
+        setScore(0);
+        setLevel(1);
+        resetLevel(w,h,1);
+        setRunning(true);
+      }
+
+      // Keyboard controls
+      useEffect(()=>{
+        const onKey = (e, down)=>{
+          switch(e.code){
+            case 'ArrowLeft': case 'KeyA': keys.current.left = down; e.preventDefault(); break;
+            case 'ArrowRight': case 'KeyD': keys.current.right = down; e.preventDefault(); break;
+            case 'ArrowUp': case 'KeyW': keys.current.thrust = down; e.preventDefault(); break;
+            case 'Space': keys.current.fire = down; e.preventDefault(); break;
+          }
+        };
+        const down=(e)=>onKey(e,true);
+        const up=(e)=>onKey(e,false);
+        window.addEventListener('keydown',down,{passive:false});
+        window.addEventListener('keyup',up,{passive:false});
+        return ()=>{ window.removeEventListener('keydown',down); window.removeEventListener('keyup',up); };
+      },[]);
+
+      // Touch controls
+      useEffect(()=>{
+        const c = canvasRef.current;
+        if (!c) return;
+        const activePointers = new Map();
+
+        const getZone = (x,y, rect) => {
+          const w = rect.width, h = rect.height;
+          const topZone = y < h*0.35;
+          if (topZone) return 'thrust';
+          const leftZone = x < w*0.5;
+          return leftZone ? 'left' : 'right';
+        };
+
+        let lastTapTime = 0;
+
+        const updateTouchState = (map)=>{
+          touchState.current.left = false;
+          touchState.current.right = false;
+          touchState.current.thrust = false;
+          for (const v of map.values()){
+            if (v.zone==='left') touchState.current.left = true;
+            else if (v.zone==='right') touchState.current.right = true;
+            else if (v.zone==='thrust') touchState.current.thrust = true;
+          }
+        };
+
+        const onDown = (e)=>{
+          const rect = c.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          const zone = getZone(x,y,rect);
+          activePointers.set(e.pointerId, { zone });
+          updateTouchState(activePointers);
+          const t = performance.now();
+          if (t - lastTapTime < 250) {
+            touchState.current.fire = true;
+          }
+          lastTapTime = t;
+          try{ c.setPointerCapture(e.pointerId); }catch{}
+        };
+        const onMove = (e)=>{ /* keep original zone */ };
+        const onUp = (e)=>{
+          activePointers.delete(e.pointerId);
+          touchState.current.fire = false;
+          updateTouchState(activePointers);
+          try{ c.releasePointerCapture(e.pointerId); }catch{}
+        };
+
+        c.addEventListener('pointerdown', onDown);
+        c.addEventListener('pointermove', onMove);
+        c.addEventListener('pointerup', onUp);
+        c.addEventListener('pointercancel', onUp);
+        return ()=>{
+          c.removeEventListener('pointerdown', onDown);
+          c.removeEventListener('pointermove', onMove);
+          c.removeEventListener('pointerup', onUp);
+          c.removeEventListener('pointercancel', onUp);
+        };
+      },[]);
+
+      // Device orientation
+      useEffect(()=>{
+        let handler;
+        function enable(){
+          if (typeof window.DeviceOrientationEvent?.requestPermission === 'function') {
+            setNeedsPerm(true);
+          } else {
+            window.addEventListener('deviceorientation', handler = (e)=>{
+              tilt.current.beta = (e.beta ?? 0);
+              tilt.current.gamma = (e.gamma ?? 0);
+            });
+          }
+        }
+        function disable(){
+          if (handler) window.removeEventListener('deviceorientation', handler);
+        }
+        if (useAccel) enable();
+        else disable();
+        return ()=>disable();
+      },[useAccel]);
+
+      const requestMotionPermission = async ()=>{
+        try{
+          const perm = await window.DeviceOrientationEvent.requestPermission();
+          if (perm === 'granted') {
+            window.addEventListener('deviceorientation', (e)=>{
+              tilt.current.beta = (e.beta ?? 0);
+              tilt.current.gamma = (e.gamma ?? 0);
+            });
+            setNeedsPerm(false);
+          }
+        }catch{}
+      };
+
+      // Main loop
+      useEffect(()=>{
+        const c = canvasRef.current;
+        if (!c) return;
+        const ctx = c.getContext('2d');
+        const onResize = ()=> resizeCanvas(c);
+        onResize();
+        window.addEventListener('resize', onResize);
+        lastTime.current = performance.now();
+
+        const loop = (t)=>{
+          const dt = Math.min(0.033, (t - lastTime.current)/1000);
+          lastTime.current = t;
+          if (running) update(dt);
+          renderFrame();
+          anim.current = requestAnimationFrame(loop);
+        };
+        anim.current = requestAnimationFrame(loop);
+        return ()=>{
+          window.removeEventListener('resize', onResize);
+          if (anim.current) cancelAnimationFrame(anim.current);
+        };
+
+        function update(dt){
+          const rect = c.getBoundingClientRect();
+          const W = rect.width, H = rect.height;
+
+          const k = keys.current;
+          const ts = touchState.current;
+
+          let left = k.left || ts.left;
+          let right = k.right || ts.right;
+          let thrust = k.thrust || ts.thrust;
+
+          if (useAccel) {
+            const b = tilt.current.beta;
+            const g = tilt.current.gamma;
+            if (g < -8) left = true;
+            else if (g > 8) right = true;
+            if (b < -10) thrust = true;
+          }
+
+          const ship = shipRef.current;
+
+          if (left) ship.angle -= SHIP_ROT_SPEED * dt;
+          if (right) ship.angle += SHIP_ROT_SPEED * dt;
+
+          if (thrust) {
+            ship.vel.x += Math.cos(ship.angle) * SHIP_THRUST * dt;
+            ship.vel.y += Math.sin(ship.angle) * SHIP_THRUST * dt;
+          } else {
+            ship.vel.x *= FRICTION;
+            ship.vel.y *= FRICTION;
+          }
+
+          ship.pos.x = wrap(ship.pos.x + ship.vel.x*dt, W);
+          ship.pos.y = wrap(ship.pos.y + ship.vel.y*dt, H);
+          ship.invul = Math.max(0, ship.invul - dt);
+
+          // Fire
+          fireCooldown.current = Math.max(0, fireCooldown.current - dt);
+          const firing = (k.fire || ts.fire);
+          if (firing && fireCooldown.current<=0) {
+            fireCooldown.current = FIRE_COOLDOWN;
+            const b = {
+              id: idGen(),
+              pos: { x: ship.pos.x + Math.cos(ship.angle)*SHIP_RADIUS, y: ship.pos.y + Math.sin(ship.angle)*SHIP_RADIUS },
+              vel: { x: ship.vel.x + Math.cos(ship.angle)*BULLET_SPEED, y: ship.vel.y + Math.sin(ship.angle)*BULLET_SPEED },
+              life: BULLET_LIFE
+            };
+            bulletsRef.current.push(b);
+          }
+
+          // Update bullets
+          const bullets = bulletsRef.current;
+          for (let i=bullets.length-1;i>=0;i--){
+            const b = bullets[i];
+            b.pos.x = wrap(b.pos.x + b.vel.x*dt, W);
+            b.pos.y = wrap(b.pos.y + b.vel.y*dt, H);
+            b.life -= dt;
+            if (b.life<=0) bullets.splice(i,1);
+          }
+
+          // Update asteroids
+          const asts = asteroidsRef.current;
+          for (const a of asts){
+            a.pos.x = wrap(a.pos.x + a.vel.x*dt, W);
+            a.pos.y = wrap(a.pos.y + a.vel.y*dt, H);
+            a.angle += 0.2*dt;
+          }
+
+          // Collisions: bullets vs asteroids
+          for (let i=asts.length-1;i>=0;i--){
+            const a = asts[i];
+            const cos = Math.cos(a.angle), sin = Math.sin(a.angle);
+            const poly = [];
+            for (let j=0;j<a.verts.length;j+=2){
+              const x = a.verts[j], y = a.verts[j+1];
+              poly.push(a.pos.x + x*cos - y*sin, a.pos.y + x*sin + y*cos);
+            }
+            let hit = false;
+            for (let bi=bullets.length-1; bi>=0; bi--){
+              const b = bullets[bi];
+              if (polyCircleHit(poly, b.pos.x, b.pos.y, 2)) {
+                bullets.splice(bi,1);
+                hit = true;
+                break;
+              }
+            }
+            if (hit){
+              asts.splice(i,1);
+              setScore(s=> s + Math.round(100 + (AST_MAX_SIZE - a.size)));
+              const children = splitAsteroid(a, idGen);
+              asts.push(...children);
+            }
+          }
+
+          // Collisions: ship vs asteroids
+          if (ship.invul<=0) {
+            for (const a of asts){
+              const cos = Math.cos(a.angle), sin = Math.sin(a.angle);
+              const poly = [];
+              for (let j=0;j<a.verts.length;j+=2){
+                const x = a.verts[j], y = a.verts[j+1];
+                poly.push(a.pos.x + x*cos - y*sin, a.pos.y + x*sin + y*cos);
+              }
+              if (polyCircleHit(poly, ship.pos.x, ship.pos.y, SHIP_RADIUS*0.9)) {
+                ship.lives -= 1;
+                ship.invul = RESPAWN_INVUL;
+                ship.pos = { x: W/2, y: H/2 };
+                ship.vel = { x:0, y:0 };
+                break;
+              }
+            }
+          }
+
+          // Level complete
+          if (asts.length===0) {
+            const next = level + 1;
+            setLevel(next);
+            resetLevel(W,H,next);
+          }
+
+          // Game over
+          if (ship.lives<=0) {
+            setRunning(false);
+          }
+        }
+
+        function renderFrame(){
+          const rect = c.getBoundingClientRect();
+          const W = rect.width, H = rect.height;
+          ctx.clearRect(0,0,W,H);
+
+          // Background
+          ctx.fillStyle = '#05070B';
+          ctx.fillRect(0,0,W,H);
+
+          // Procedural stars
+          ctx.fillStyle = '#111824';
+          // Use a simple LCG to get consistent pseudo-random star field per frame size
+          let seed = (W|0)*73856093 ^ (H|0)*19349663;
+          const randStar = ()=> {
+            seed = (seed * 1664525 + 1013904223) | 0;
+            return ((seed >>> 0) % 100000) / 100000;
+          };
+          for (let i=0;i<70;i++){
+            const x = Math.floor(randStar() * W);
+            const y = Math.floor(randStar() * H);
+            const s = randStar()<0.1 ? 2 : 1;
+            ctx.fillRect(x, y, s, s);
+          }
+
+          // Ship
+          const ship = shipRef.current;
+          ctx.save();
+          ctx.translate(ship.pos.x, ship.pos.y);
+          ctx.rotate(ship.angle);
+          const blink = ship.invul>0 && Math.floor(lastTime.current*0.02)%2===0;
+          if (!blink) {
+            ctx.strokeStyle = '#E6F1FF';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(16,0);
+            ctx.lineTo(-12,10);
+            ctx.lineTo(-7,0);
+            ctx.lineTo(-12,-10);
+            ctx.closePath();
+            ctx.stroke();
+            // Thrust flame
+            const showFlame = (keys.current.thrust || touchState.current.thrust || (useAccel && tilt.current.beta < -10));
+            if (showFlame) {
+              ctx.strokeStyle = '#FF8A00';
+              ctx.beginPath();
+              ctx.moveTo(-12,6);
+              ctx.lineTo(-22,0);
+              ctx.lineTo(-12,-6);
+              ctx.stroke();
+            }
+          }
+          ctx.restore();
+
+          // Bullets
+          ctx.strokeStyle = '#A7FFEB';
+          for (const b of bulletsRef.current){
+            ctx.beginPath();
+            ctx.arc(b.pos.x, b.pos.y, 2, 0, TAU);
+            ctx.stroke();
+          }
+
+          // Asteroids
+          ctx.strokeStyle = '#9BB3C6';
+          ctx.lineWidth = 2;
+          for (const a of asteroidsRef.current){
+            ctx.save();
+            ctx.translate(a.pos.x, a.pos.y);
+            ctx.rotate(a.angle);
+            ctx.beginPath();
+            const v = a.verts;
+            ctx.moveTo(v[0], v[1]);
+            for (let i=2;i<v.length;i+=2) ctx.lineTo(v[i], v[i+1]);
+            ctx.closePath();
+            ctx.stroke();
+            ctx.restore();
+          }
+
+          // UI
+          ctx.fillStyle = '#E6F1FF';
+          ctx.textAlign = 'left';
+          ctx.font = '16px system-ui, -apple-system, Segoe UI, Roboto';
+          ctx.fillText(`Score: ${score}`, 12, 20);
+          ctx.fillText(`Level: ${level}`, 12, 40);
+          ctx.fillText(`Lives: ${ship.lives}`, 12, 60);
+
+          if (!running) {
+            ctx.fillStyle = '#E6F1FF';
+            ctx.textAlign = 'center';
+            ctx.font = 'bold 28px system-ui, -apple-system, Segoe UI, Roboto';
+            ctx.fillText('ASTEROIDS', W/2, H/2 - 40);
+            ctx.font = '16px system-ui, -apple-system, Segoe UI, Roboto';
+            ctx.fillText('Press Space or Tap to Start', W/2, H/2);
+            ctx.fillText('W/Up=Thrust  A/Left=Rotate Left  D/Right=Rotate Right  Space=Fire', W/2, H/2+24);
+            ctx.fillText('Touch: Top=Thrust, Left/Right=Rotate, Double-tap=Fire', W/2, H/2+44);
+          }
+        }
+      },[running, level, score, useAccel]);
+
+      // Start on click/tap when not running
+      useEffect(()=>{
+        const c = canvasRef.current;
+        if (!c) return;
+        const onTap = ()=> { if (!running) startGame(); };
+        c.addEventListener('click', onTap);
+        return ()=> c.removeEventListener('click', onTap);
+      },[running]);
+
+      return h('div', { class: 'app' },
+        h('div', { class: 'topbar' },
+          h('button', { onClick: ()=> running? setRunning(false): startGame() }, running ? 'Pause' : 'Start'),
+          h('label', { style:'display:flex; align-items:center; gap:6px;' },
+            h('input', {
+              type:'checkbox',
+              checked: useAccel,
+              onChange: (e)=> setUseAccel(e.currentTarget.checked)
+            }),
+            'Tilt controls'
+          ),
+          useAccel && needsPerm && h('button', { class: 'secondary', onClick: ()=>requestMotionPermission() }, 'Enable Motion'),
+          h('div', { class:'spacer' }, 'W/A/D or Arrows, Space. Touch on mobile.'),
+          h('div', { class:'links' },
+            h('a', { href:'https://github.com/elborracho420/asteroids/blob/master/src/App.js', target:'_blank', rel:'noreferrer' }, 'github.com'),
+            h('a', { href:'https://javascriptweekly.com/issues/746', target:'_blank', rel:'noreferrer' }, 'javascriptweekly.com'),
+            h('a', { href:'https://blog.openreplay.com/adding-fireworks-effects-to-your-react-app/', target:'_blank', rel:'noreferrer' }, 'blog.openreplay.com')
+          )
+        ),
+        h('div', { class: 'canvas-wrap' },
+          h('canvas', { ref: canvasRef })
+        )
+      );
+    }
+
+    render(h(App, {}), document.getElementById('root'));
+  </script>
+</body>
+</html>
