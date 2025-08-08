@@ -226,30 +226,80 @@
         function markdownToHtml(text) {
             if (!text) return '';
             
-            return text
+            // Split into lines for better processing
+            const lines = text.split('\n');
+            const result = [];
+            let inList = false;
+            let currentParagraph = '';
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                
                 // Headers
-                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
-                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
-                .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-                // Bold
-                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-                // Lists (simple implementation)
-                .replace(/^\- (.*$)/gm, '<li>$1</li>')
-                .replace(/^(\d+)\. (.*$)/gm, '<li>$1. $2</li>')
-                // Wrap consecutive <li> items in <ul>
-                .replace(/(<li>.*<\/li>(\n<li>.*<\/li>)*)/gs, (match) => {
-                    return '<ul>' + match + '</ul>';
-                })
-                // Paragraphs (double newlines)
-                .replace(/\n\n/g, '</p><p>')
-                .replace(/^/, '<p>')
-                .replace(/$/, '</p>')
-                // Clean up empty paragraphs
-                .replace(/<p><\/p>/g, '')
-                .replace(/<p>(<h[1-6]>)/g, '$1')
-                .replace(/(<\/h[1-6]>)<\/p>/g, '$1')
-                .replace(/<p>(<ul>)/g, '$1')
-                .replace(/(<\/ul>)<\/p>/g, '$1');
+                if (line.startsWith('### ')) {
+                    if (currentParagraph) {
+                        result.push(`<p>${currentParagraph}</p>`);
+                        currentParagraph = '';
+                    }
+                    if (inList) { result.push('</ul>'); inList = false; }
+                    result.push(`<h3>${line.substring(4)}</h3>`);
+                } else if (line.startsWith('## ')) {
+                    if (currentParagraph) {
+                        result.push(`<p>${currentParagraph}</p>`);
+                        currentParagraph = '';
+                    }
+                    if (inList) { result.push('</ul>'); inList = false; }
+                    result.push(`<h2>${line.substring(3)}</h2>`);
+                } else if (line.startsWith('# ')) {
+                    if (currentParagraph) {
+                        result.push(`<p>${currentParagraph}</p>`);
+                        currentParagraph = '';
+                    }
+                    if (inList) { result.push('</ul>'); inList = false; }
+                    result.push(`<h1>${line.substring(2)}</h1>`);
+                }
+                // List items
+                else if (line.startsWith('- ') || /^\d+\. /.test(line)) {
+                    if (currentParagraph) {
+                        result.push(`<p>${currentParagraph}</p>`);
+                        currentParagraph = '';
+                    }
+                    if (!inList) {
+                        result.push('<ul>');
+                        inList = true;
+                    }
+                    const content = line.startsWith('- ') ? line.substring(2) : line.replace(/^\d+\. /, '');
+                    result.push(`<li>${content}</li>`);
+                }
+                // Empty line - paragraph break
+                else if (line === '') {
+                    if (currentParagraph) {
+                        result.push(`<p>${currentParagraph}</p>`);
+                        currentParagraph = '';
+                    }
+                    if (inList) { result.push('</ul>'); inList = false; }
+                }
+                // Regular text
+                else {
+                    if (inList) { result.push('</ul>'); inList = false; }
+                    if (currentParagraph) {
+                        currentParagraph += ' ' + line;
+                    } else {
+                        currentParagraph = line;
+                    }
+                }
+            }
+            
+            // Close any remaining elements
+            if (currentParagraph) {
+                result.push(`<p>${currentParagraph}</p>`);
+            }
+            if (inList) {
+                result.push('</ul>');
+            }
+            
+            // Apply bold formatting
+            return result.join('').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
         }
 
         function App() {
@@ -405,11 +455,17 @@
                                 return `<a href="${citation.url}" class="citation" target="_blank" title="${safeTitle}">${citationNum}</a>`;
                             });
 
-                            const htmlContent = markdownToHtml(item.text);
-                            const combinedHtml = htmlContent + citationLinks.join('');
+                            let htmlContent = markdownToHtml(item.text);
+                            
+                            // If the content ends with </p>, insert citations before the closing tag
+                            if (htmlContent.endsWith('</p>')) {
+                                htmlContent = htmlContent.slice(0, -4) + citationLinks.join('') + '</p>';
+                            } else {
+                                htmlContent = htmlContent + citationLinks.join('');
+                            }
                             
                             return html`
-                                <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: combinedHtml }}></div>
+                                <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
                             `;
                         } else {
                             const htmlContent = markdownToHtml(item.text);
