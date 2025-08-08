@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Claude API Response Viewer</title>
+    <script type="importmap">
+        {
+            "imports": {
+                "preact": "https://esm.sh/preact@10.23.1",
+                "preact/": "https://esm.sh/preact@10.23.1/",
+                "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+            }
+        }
+    </script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            line-height: 1.6;
+            margin: 0;
+            padding: 20px;
+            background: #fafafa;
+            color: #333;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            padding: 30px;
+            border-radius: 8px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        
+        .input-section {
+            margin-bottom: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+        
+        .input-section h2 {
+            margin: 0 0 15px 0;
+            color: #555;
+            font-size: 1.1em;
+        }
+        
+        .gist-input {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+            margin-bottom: 10px;
+        }
+        
+        .load-btn {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        
+        .load-btn:hover {
+            background: #0056b3;
+        }
+        
+        .error {
+            color: #d73027;
+            background: #ffebee;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+        
+        .collapsible {
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin-bottom: 15px;
+        }
+        
+        .collapsible-header {
+            background: #f5f5f5;
+            padding: 10px 15px;
+            cursor: pointer;
+            border-bottom: 1px solid #ddd;
+            font-weight: 500;
+            user-select: none;
+        }
+        
+        .collapsible-header:hover {
+            background: #ebebeb;
+        }
+        
+        .collapsible-content {
+            padding: 15px;
+            display: none;
+            background: #fafafa;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            white-space: pre-wrap;
+        }
+        
+        .collapsible.expanded .collapsible-content {
+            display: block;
+        }
+        
+        .content-section {
+            margin-top: 20px;
+        }
+        
+        .content-text {
+            font-size: 16px;
+            line-height: 1.8;
+        }
+        
+        .citation {
+            font-size: 0.8em;
+            vertical-align: super;
+            color: #007bff;
+            text-decoration: none;
+            margin: 0 1px;
+        }
+        
+        .citation:hover {
+            text-decoration: underline;
+        }
+        
+        .search-result {
+            margin-bottom: 20px;
+            padding: 15px;
+            border: 1px solid #e0e0e0;
+            border-radius: 4px;
+            background: #f9f9f9;
+        }
+        
+        .search-result h4 {
+            margin: 0 0 8px 0;
+            color: #1a0dab;
+        }
+        
+        .search-result a {
+            color: #1a0dab;
+            text-decoration: none;
+        }
+        
+        .search-result a:hover {
+            text-decoration: underline;
+        }
+        
+        .search-url {
+            color: #006621;
+            font-size: 14px;
+            margin-bottom: 5px;
+        }
+        
+        .instructions {
+            color: #666;
+            font-style: italic;
+            margin-top: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="app"></div>
+
+    <script type="module">
+        import { render } from 'preact';
+        import { html } from 'htm/preact';
+        import { useState, useEffect } from 'preact/hooks';
+
+        function App() {
+            const [data, setData] = useState(null);
+            const [error, setError] = useState(null);
+            const [gistUrl, setGistUrl] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            useEffect(() => {
+                const params = new URLSearchParams(window.location.search);
+                const gist = params.get('gist');
+                if (gist) {
+                    setGistUrl(gist);
+                    loadFromGist(gist);
+                }
+            }, []);
+
+            const loadFromGist = async (url) => {
+                setLoading(true);
+                setError(null);
+                
+                try {
+                    let fetchUrl = url;
+                    
+                    // Convert GitHub gist URL to raw URL if needed
+                    if (url.includes('github.com') && url.includes('/gist/')) {
+                        const gistId = url.split('/').pop().split('#')[0];
+                        fetchUrl = `https://gist.githubusercontent.com/oaustegard/${gistId}/raw`;
+                    }
+                    
+                    const response = await fetch(fetchUrl);
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch: ${response.status}`);
+                    }
+                    
+                    const text = await response.text();
+                    const parsed = JSON.parse(text);
+                    setData(parsed);
+                } catch (err) {
+                    setError(`Error loading gist: ${err.message}`);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleLoad = () => {
+                if (gistUrl.trim()) {
+                    const newUrl = new URL(window.location);
+                    newUrl.searchParams.set('gist', gistUrl.trim());
+                    window.history.pushState({}, '', newUrl);
+                    loadFromGist(gistUrl.trim());
+                }
+            };
+
+            const toggleCollapsible = (e) => {
+                const header = e.currentTarget;
+                const collapsible = header.parentElement;
+                collapsible.classList.toggle('expanded');
+            };
+
+            const renderContent = (content) => {
+                if (!content || !Array.isArray(content)) return null;
+
+                let citationCounter = 1;
+                const citations = [];
+
+                return content.map((item, index) => {
+                    if (item.type === 'thinking') {
+                        return html`
+                            <div key=${index} class="collapsible">
+                                <div class="collapsible-header" onClick=${toggleCollapsible}>
+                                    🤔 Thinking Process
+                                </div>
+                                <div class="collapsible-content">${item.thinking}</div>
+                            </div>
+                        `;
+                    }
+
+                    if (item.type === 'server_tool_use' && item.name === 'web_search') {
+                        return html`
+                            <div key=${index} class="collapsible">
+                                <div class="collapsible-header" onClick=${toggleCollapsible}>
+                                    🔍 Web Search: "${item.input.query}"
+                                </div>
+                                <div class="collapsible-content">
+                                    Query: ${item.input.query}
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    if (item.type === 'web_search_tool_result') {
+                        const results = item.content?.filter(c => c.type === 'web_search_result') || [];
+                        return html`
+                            <div key=${index} class="collapsible">
+                                <div class="collapsible-header" onClick=${toggleCollapsible}>
+                                    📋 Search Results (${results.length} results)
+                                </div>
+                                <div class="collapsible-content">
+                                    ${results.map((result, idx) => html`
+                                        <div key=${idx} class="search-result">
+                                            <h4><a href=${result.url} target="_blank">${result.title}</a></h4>
+                                            <div class="search-url">${result.url}</div>
+                                            ${result.page_age && html`<div>Page age: ${result.page_age}</div>`}
+                                        </div>
+                                    `)}
+                                </div>
+                            </div>
+                        `;
+                    }
+
+                    if (item.type === 'text') {
+                        return html`
+                            <div key=${index} class="content-text">${item.text}</div>
+                        `;
+                    }
+
+                    if (item.type === 'citations') {
+                        const citationLinks = item.citations?.map(citation => {
+                            const citationNum = citationCounter++;
+                            citations.push({ num: citationNum, citation });
+                            
+                            return html`<a 
+                                key=${citationNum}
+                                href=${citation.url} 
+                                class="citation" 
+                                target="_blank"
+                                title="${citation.title}: ${citation.cited_text}"
+                            >${citationNum}</a>`;
+                        }) || [];
+
+                        return html`
+                            <div key=${index} class="content-text">
+                                ${item.text}${citationLinks}
+                            </div>
+                        `;
+                    }
+
+                    return null;
+                }).filter(Boolean);
+            };
+
+            return html`
+                <div class="container">
+                    <h1>Claude API Response Viewer</h1>
+                    
+                    <div class="input-section">
+                        <h2>Load from GitHub Gist</h2>
+                        <input 
+                            type="text" 
+                            class="gist-input"
+                            placeholder="Paste GitHub Gist URL containing Claude API JSON response"
+                            value=${gistUrl}
+                            onInput=${(e) => setGistUrl(e.target.value)}
+                        />
+                        <button class="load-btn" onClick=${handleLoad} disabled=${loading}>
+                            ${loading ? 'Loading...' : 'Load Response'}
+                        </button>
+                        
+                        ${!data && !error && html`
+                            <div class="instructions">
+                                <strong>Instructions:</strong> Create a GitHub Gist containing only the JSON output 
+                                from an Anthropic API response, then paste the gist URL above and click "Load Response".
+                            </div>
+                        `}
+                    </div>
+
+                    ${error && html`<div class="error">${error}</div>`}
+                    
+                    ${data && html`
+                        <div class="content-section">
+                            ${renderContent(data.content)}
+                        </div>
+                    `}
+                </div>
+            `;
+        }
+
+        render(html`<${App} />`, document.getElementById('app'));
+    </script>
+</body>
+</html>
