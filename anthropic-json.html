@@ -103,14 +103,17 @@
             padding: 15px;
             display: none;
             background: #fafafa;
-            font-family: 'SF Mono', Monaco, monospace;
-            font-size: 13px;
-            line-height: 1.4;
-            white-space: pre-wrap;
         }
         
         .collapsible.expanded .collapsible-content {
             display: block;
+        }
+        
+        .thinking-content {
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+            line-height: 1.4;
+            white-space: pre-wrap;
         }
         
         .content-section {
@@ -120,6 +123,33 @@
         .content-text {
             font-size: 16px;
             line-height: 1.8;
+            margin-bottom: 16px;
+        }
+        
+        .content-text h1, .content-text h2, .content-text h3 {
+            margin: 24px 0 12px 0;
+            font-weight: 600;
+        }
+        
+        .content-text h1 { font-size: 1.5em; }
+        .content-text h2 { font-size: 1.3em; }
+        .content-text h3 { font-size: 1.1em; }
+        
+        .content-text strong, .content-text b {
+            font-weight: 600;
+        }
+        
+        .content-text ul, .content-text ol {
+            padding-left: 20px;
+            margin: 12px 0;
+        }
+        
+        .content-text li {
+            margin: 4px 0;
+        }
+        
+        .content-text p {
+            margin: 12px 0;
         }
         
         .citation {
@@ -134,9 +164,22 @@
             text-decoration: underline;
         }
         
-        .search-result {
+        .search-section {
             margin-bottom: 20px;
-            padding: 15px;
+        }
+        
+        .search-query {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, monospace;
+            font-size: 13px;
+        }
+        
+        .search-result {
+            margin-bottom: 15px;
+            padding: 12px;
             border: 1px solid #e0e0e0;
             border-radius: 4px;
             background: #f9f9f9;
@@ -145,6 +188,7 @@
         .search-result h4 {
             margin: 0 0 8px 0;
             color: #1a0dab;
+            font-size: 14px;
         }
         
         .search-result a {
@@ -158,8 +202,9 @@
         
         .search-url {
             color: #006621;
-            font-size: 14px;
+            font-size: 12px;
             margin-bottom: 5px;
+            word-break: break-all;
         }
         
         .instructions {
@@ -176,6 +221,36 @@
         import { render } from 'preact';
         import { html } from 'htm/preact';
         import { useState, useEffect } from 'preact/hooks';
+
+        // Simple markdown to HTML converter
+        function markdownToHtml(text) {
+            if (!text) return '';
+            
+            return text
+                // Headers
+                .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+                .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+                .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+                // Bold
+                .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+                // Lists (simple implementation)
+                .replace(/^\- (.*$)/gm, '<li>$1</li>')
+                .replace(/^(\d+)\. (.*$)/gm, '<li>$1. $2</li>')
+                // Wrap consecutive <li> items in <ul>
+                .replace(/(<li>.*<\/li>(\n<li>.*<\/li>)*)/gs, (match) => {
+                    return '<ul>' + match + '</ul>';
+                })
+                // Paragraphs (double newlines)
+                .replace(/\n\n/g, '</p><p>')
+                .replace(/^/, '<p>')
+                .replace(/$/, '</p>')
+                // Clean up empty paragraphs
+                .replace(/<p><\/p>/g, '')
+                .replace(/<p>(<h[1-6]>)/g, '$1')
+                .replace(/(<\/h[1-6]>)<\/p>/g, '$1')
+                .replace(/<p>(<ul>)/g, '$1')
+                .replace(/(<\/ul>)<\/p>/g, '$1');
+        }
 
         function App() {
             const [data, setData] = useState(null);
@@ -238,47 +313,81 @@
             const renderContent = (content) => {
                 if (!content || !Array.isArray(content)) return null;
 
-                let citationCounter = 1;
-                const citations = [];
+                // Group searches and results together
+                const processedContent = [];
+                const searchGroups = [];
+                let currentSearchGroup = null;
 
-                return content.map((item, index) => {
+                // First pass: group search-related items
+                content.forEach((item, index) => {
+                    if (item.type === 'thinking') {
+                        processedContent.push(item);
+                    } else if (item.type === 'server_tool_use' && item.name === 'web_search') {
+                        currentSearchGroup = { searches: [item], results: [] };
+                        searchGroups.push(currentSearchGroup);
+                    } else if (item.type === 'web_search_tool_result' && currentSearchGroup) {
+                        currentSearchGroup.results.push(item);
+                    } else {
+                        if (currentSearchGroup) {
+                            processedContent.push({ type: 'search_group', groups: [...searchGroups] });
+                            searchGroups.length = 0;
+                            currentSearchGroup = null;
+                        }
+                        processedContent.push(item);
+                    }
+                });
+
+                // Don't forget remaining search groups
+                if (searchGroups.length > 0) {
+                    processedContent.push({ type: 'search_group', groups: [...searchGroups] });
+                }
+
+                let citationCounter = 1;
+
+                return processedContent.map((item, index) => {
                     if (item.type === 'thinking') {
                         return html`
                             <div key=${index} class="collapsible">
                                 <div class="collapsible-header" onClick=${toggleCollapsible}>
                                     🤔 Thinking Process
                                 </div>
-                                <div class="collapsible-content">${item.thinking}</div>
-                            </div>
-                        `;
-                    }
-
-                    if (item.type === 'server_tool_use' && item.name === 'web_search') {
-                        return html`
-                            <div key=${index} class="collapsible">
-                                <div class="collapsible-header" onClick=${toggleCollapsible}>
-                                    🔍 Web Search: "${item.input.query}"
-                                </div>
                                 <div class="collapsible-content">
-                                    Query: ${item.input.query}
+                                    <div class="thinking-content">${item.thinking}</div>
                                 </div>
                             </div>
                         `;
                     }
 
-                    if (item.type === 'web_search_tool_result') {
-                        const results = item.content?.filter(c => c.type === 'web_search_result') || [];
+                    if (item.type === 'search_group') {
+                        const totalSearches = item.groups.reduce((acc, group) => acc + group.searches.length, 0);
                         return html`
                             <div key=${index} class="collapsible">
                                 <div class="collapsible-header" onClick=${toggleCollapsible}>
-                                    📋 Search Results (${results.length} results)
+                                    🔍 Web Research (${totalSearches} searches)
                                 </div>
                                 <div class="collapsible-content">
-                                    ${results.map((result, idx) => html`
-                                        <div key=${idx} class="search-result">
-                                            <h4><a href=${result.url} target="_blank">${result.title}</a></h4>
-                                            <div class="search-url">${result.url}</div>
-                                            ${result.page_age && html`<div>Page age: ${result.page_age}</div>`}
+                                    ${item.groups.map((group, groupIdx) => html`
+                                        <div key=${groupIdx} class="search-section">
+                                            ${group.searches.map((search, searchIdx) => html`
+                                                <div key=${searchIdx} class="search-query">
+                                                    🔍 Query: "${search.input.query}"
+                                                </div>
+                                            `)}
+                                            ${group.results.map((result, resultIdx) => {
+                                                const results = result.content?.filter(c => c.type === 'web_search_result') || [];
+                                                return html`
+                                                    <div key=${resultIdx}>
+                                                        <div style="margin: 10px 0; font-weight: 500;">📋 Results (${results.length}):</div>
+                                                        ${results.map((res, resIdx) => html`
+                                                            <div key=${resIdx} class="search-result">
+                                                                <h4><a href=${res.url} target="_blank">${res.title}</a></h4>
+                                                                <div class="search-url">${res.url}</div>
+                                                                ${res.page_age && html`<div style="font-size: 12px; color: #666;">Page age: ${res.page_age}</div>`}
+                                                            </div>
+                                                        `)}
+                                                    </div>
+                                                `;
+                                            })}
                                         </div>
                                     `)}
                                 </div>
@@ -287,16 +396,15 @@
                     }
 
                     if (item.type === 'text') {
+                        const htmlContent = markdownToHtml(item.text);
                         return html`
-                            <div key=${index} class="content-text">${item.text}</div>
+                            <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
                         `;
                     }
 
                     if (item.type === 'citations') {
                         const citationLinks = item.citations?.map(citation => {
                             const citationNum = citationCounter++;
-                            citations.push({ num: citationNum, citation });
-                            
                             return html`<a 
                                 key=${citationNum}
                                 href=${citation.url} 
@@ -306,9 +414,11 @@
                             >${citationNum}</a>`;
                         }) || [];
 
+                        const htmlContent = markdownToHtml(item.text);
+                        
                         return html`
                             <div key=${index} class="content-text">
-                                ${item.text}${citationLinks}
+                                <span dangerouslySetInnerHTML=${{ __html: htmlContent }}></span>${citationLinks}
                             </div>
                         `;
                     }
