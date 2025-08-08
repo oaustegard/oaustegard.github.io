@@ -377,55 +377,21 @@
             const renderContent = (content) => {
                 if (!content || !Array.isArray(content)) return null;
 
-                // Group searches and results together, and merge adjacent text items with citations
+                // Group searches and results together
                 const processedContent = [];
                 const searchGroups = [];
                 let currentSearchGroup = null;
-                let pendingTextWithCitations = null;
 
-                // First pass: group search-related items and merge text items
+                // First pass: group search-related items
                 content.forEach((item, index) => {
                     if (item.type === 'thinking') {
-                        if (pendingTextWithCitations) {
-                            processedContent.push(pendingTextWithCitations);
-                            pendingTextWithCitations = null;
-                        }
                         processedContent.push(item);
                     } else if (item.type === 'server_tool_use' && item.name === 'web_search') {
-                        if (pendingTextWithCitations) {
-                            processedContent.push(pendingTextWithCitations);
-                            pendingTextWithCitations = null;
-                        }
                         currentSearchGroup = { searches: [item], results: [] };
                         searchGroups.push(currentSearchGroup);
                     } else if (item.type === 'web_search_tool_result' && currentSearchGroup) {
                         currentSearchGroup.results.push(item);
-                    } else if (item.type === 'text') {
-                        if (currentSearchGroup) {
-                            processedContent.push({ type: 'search_group', groups: [...searchGroups] });
-                            searchGroups.length = 0;
-                            currentSearchGroup = null;
-                        }
-                        
-                        // Merge consecutive text items
-                        if (pendingTextWithCitations) {
-                            // Merge with previous text item
-                            pendingTextWithCitations.text += '\n' + item.text;
-                            if (item.citations) {
-                                pendingTextWithCitations.citations = (pendingTextWithCitations.citations || []).concat(item.citations);
-                            }
-                        } else {
-                            pendingTextWithCitations = { 
-                                type: 'text', 
-                                text: item.text, 
-                                citations: item.citations || [] 
-                            };
-                        }
                     } else {
-                        if (pendingTextWithCitations) {
-                            processedContent.push(pendingTextWithCitations);
-                            pendingTextWithCitations = null;
-                        }
                         if (currentSearchGroup) {
                             processedContent.push({ type: 'search_group', groups: [...searchGroups] });
                             searchGroups.length = 0;
@@ -435,10 +401,7 @@
                     }
                 });
 
-                // Don't forget remaining items
-                if (pendingTextWithCitations) {
-                    processedContent.push(pendingTextWithCitations);
-                }
+                // Don't forget remaining search groups
                 if (searchGroups.length > 0) {
                     processedContent.push({ type: 'search_group', groups: [...searchGroups] });
                 }
@@ -497,9 +460,7 @@
                     }
 
                     if (item.type === 'text') {
-                        let htmlContent = markdownToHtml(item.text.trim());
-                        
-                        // Process citations if they exist
+                        // Check if this text item has citations
                         if (item.citations && item.citations.length > 0) {
                             const citationLinks = item.citations.map(citation => {
                                 const citationNum = citationCounter++;
@@ -507,18 +468,25 @@
                                 return `<a href="${citation.url}" class="citation" target="_blank" title="${safeTitle}">${citationNum}</a>`;
                             });
 
-                            // Insert citations at the very end of the last element, whether it's <p>, <li>, etc.
+                            let htmlContent = markdownToHtml(item.text);
+                            
+                            // Insert citations at the very end of the last closing tag
                             const lastTagRegex = /(<\/(?:p|li|h[1-6])>)(?!.*<\/(?:p|li|h[1-6])>)/;
                             if (lastTagRegex.test(htmlContent)) {
                                 htmlContent = htmlContent.replace(lastTagRegex, citationLinks.join('') + '$1');
                             } else {
                                 htmlContent = htmlContent + citationLinks.join('');
                             }
+                            
+                            return html`
+                                <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
+                            `;
+                        } else {
+                            const htmlContent = markdownToHtml(item.text);
+                            return html`
+                                <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
+                            `;
                         }
-                        
-                        return html`
-                            <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
-                        `;
                     }
 
                     return null;
