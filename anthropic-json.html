@@ -258,8 +258,8 @@
                     if (inList) { result.push('</ul>'); inList = false; }
                     result.push(`<h1>${line.substring(2)}</h1>`);
                 }
-                // List items
-                else if (line.startsWith('- ') || /^\d+\. /.test(line)) {
+                // List items (including standalone numbers like "1.", "2.", etc.)
+                else if (line.startsWith('- ') || /^\d+\.\s*$/.test(line) || /^\d+\.\s+/.test(line)) {
                     if (currentParagraph) {
                         result.push(`<p>${currentParagraph}</p>`);
                         currentParagraph = '';
@@ -268,7 +268,21 @@
                         result.push('<ul>');
                         inList = true;
                     }
-                    const content = line.startsWith('- ') ? line.substring(2) : line.replace(/^\d+\. /, '');
+                    
+                    let content;
+                    if (line.startsWith('- ')) {
+                        content = line.substring(2);
+                    } else if (/^\d+\.\s*$/.test(line)) {
+                        // Just a number like "1." or "2." - look ahead for content
+                        content = line;
+                        // Check if next line has content that should be part of this list item
+                        if (i + 1 < lines.length && lines[i + 1].trim() && !lines[i + 1].trim().match(/^(#{1,3}|[-\d])/)) {
+                            i++; // consume next line
+                            content = line + ' ' + lines[i].trim();
+                        }
+                    } else {
+                        content = line.replace(/^\d+\.\s+/, match => match);
+                    }
                     result.push(`<li>${content}</li>`);
                 }
                 // Empty line - paragraph break
@@ -363,21 +377,55 @@
             const renderContent = (content) => {
                 if (!content || !Array.isArray(content)) return null;
 
-                // Group searches and results together
+                // Group searches and results together, and merge adjacent text items with citations
                 const processedContent = [];
                 const searchGroups = [];
                 let currentSearchGroup = null;
+                let pendingTextWithCitations = null;
 
-                // First pass: group search-related items
+                // First pass: group search-related items and merge text items
                 content.forEach((item, index) => {
                     if (item.type === 'thinking') {
+                        if (pendingTextWithCitations) {
+                            processedContent.push(pendingTextWithCitations);
+                            pendingTextWithCitations = null;
+                        }
                         processedContent.push(item);
                     } else if (item.type === 'server_tool_use' && item.name === 'web_search') {
+                        if (pendingTextWithCitations) {
+                            processedContent.push(pendingTextWithCitations);
+                            pendingTextWithCitations = null;
+                        }
                         currentSearchGroup = { searches: [item], results: [] };
                         searchGroups.push(currentSearchGroup);
                     } else if (item.type === 'web_search_tool_result' && currentSearchGroup) {
                         currentSearchGroup.results.push(item);
+                    } else if (item.type === 'text') {
+                        if (currentSearchGroup) {
+                            processedContent.push({ type: 'search_group', groups: [...searchGroups] });
+                            searchGroups.length = 0;
+                            currentSearchGroup = null;
+                        }
+                        
+                        // Merge consecutive text items
+                        if (pendingTextWithCitations) {
+                            // Merge with previous text item
+                            pendingTextWithCitations.text += '\n' + item.text;
+                            if (item.citations) {
+                                pendingTextWithCitations.citations = (pendingTextWithCitations.citations || []).concat(item.citations);
+                            }
+                        } else {
+                            pendingTextWithCitations = { 
+                                type: 'text', 
+                                text: item.text, 
+                                citations: item.citations || [] 
+                            };
+                        }
                     } else {
+                        if (pendingTextWithCitations) {
+                            processedContent.push(pendingTextWithCitations);
+                            pendingTextWithCitations = null;
+                        }
                         if (currentSearchGroup) {
                             processedContent.push({ type: 'search_group', groups: [...searchGroups] });
                             searchGroups.length = 0;
@@ -387,7 +435,10 @@
                     }
                 });
 
-                // Don't forget remaining search groups
+                // Don't forget remaining items
+                if (pendingTextWithCitations) {
+                    processedContent.push(pendingTextWithCitations);
+                }
                 if (searchGroups.length > 0) {
                     processedContent.push({ type: 'search_group', groups: [...searchGroups] });
                 }
@@ -446,33 +497,28 @@
                     }
 
                     if (item.type === 'text') {
-                        // Check if this text item has citations
+                        let htmlContent = markdownToHtml(item.text.trim());
+                        
+                        // Process citations if they exist
                         if (item.citations && item.citations.length > 0) {
                             const citationLinks = item.citations.map(citation => {
                                 const citationNum = citationCounter++;
-                                // Escape HTML in title attribute to prevent XSS and parsing issues
                                 const safeTitle = `${citation.title}: ${citation.cited_text}`.replace(/"/g, '&quot;').replace(/'/g, '&#39;');
                                 return `<a href="${citation.url}" class="citation" target="_blank" title="${safeTitle}">${citationNum}</a>`;
                             });
 
-                            let htmlContent = markdownToHtml(item.text);
-                            
-                            // If the content ends with </p>, insert citations before the closing tag
-                            if (htmlContent.endsWith('</p>')) {
-                                htmlContent = htmlContent.slice(0, -4) + citationLinks.join('') + '</p>';
+                            // Insert citations at the very end of the last element, whether it's <p>, <li>, etc.
+                            const lastTagRegex = /(<\/(?:p|li|h[1-6])>)(?!.*<\/(?:p|li|h[1-6])>)/;
+                            if (lastTagRegex.test(htmlContent)) {
+                                htmlContent = htmlContent.replace(lastTagRegex, citationLinks.join('') + '$1');
                             } else {
                                 htmlContent = htmlContent + citationLinks.join('');
                             }
-                            
-                            return html`
-                                <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
-                            `;
-                        } else {
-                            const htmlContent = markdownToHtml(item.text);
-                            return html`
-                                <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
-                            `;
                         }
+                        
+                        return html`
+                            <div key=${index} class="content-text" dangerouslySetInnerHTML=${{ __html: htmlContent }}></div>
+                        `;
                     }
 
                     return null;
