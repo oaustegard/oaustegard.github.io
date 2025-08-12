@@ -1,0 +1,735 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HTML Trimmer for LLM Communication</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/preact@10.23.1",
+        "preact/": "https://esm.sh/preact@10.23.1/",
+        "@preact/signals": "https://esm.sh/@preact/signals@1.3.0?external=preact",
+        "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="module">
+    import { render } from 'preact';
+    import { useState, useEffect, useMemo } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    // HTML parsing and analysis utilities
+    function parseHtmlToTree(htmlString) {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(htmlString, 'text/html');
+      
+      function nodeToObject(node, path = '', index = 0) {
+        if (node.nodeType === Node.TEXT_NODE) {
+          const text = node.textContent.trim();
+          if (!text) return null;
+          return {
+            type: 'text',
+            content: text,
+            size: text.length,
+            path: `${path}/text[${index}]`,
+            enabled: true
+          };
+        }
+        
+        if (node.nodeType === Node.ELEMENT_NODE) {
+          const children = Array.from(node.childNodes)
+            .map((child, idx) => nodeToObject(child, `${path}/${node.tagName.toLowerCase()}[${index}]`, idx))
+            .filter(Boolean);
+          
+          const attributes = {};
+          for (const attr of node.attributes) {
+            attributes[attr.name] = attr.value;
+          }
+          
+          // Calculate content preview for this element
+          const textContent = node.textContent.trim();
+          const preview = textContent.length > 100 ? textContent.substring(0, 100) + '...' : textContent;
+          
+          return {
+            type: 'element',
+            tag: node.tagName.toLowerCase(),
+            attributes,
+            children,
+            size: node.outerHTML.length,
+            path: `${path}/${node.tagName.toLowerCase()}[${index}]`,
+            enabled: true,
+            preview,
+            elementCount: children.filter(c => c.type === 'element').length
+          };
+        }
+        
+        return null;
+      }
+      
+      const body = doc.body;
+      return body ? nodeToObject(body) : null;
+    }
+
+    function analyzeTableStructures(tree) {
+      const tables = [];
+      
+      function findTables(node, parentPath = '', depth = 0) {
+        if (node.type === 'element' && node.tag === 'table') {
+          const rows = [];
+          
+          function findRows(n) {
+            if (n.type === 'element' && n.tag === 'tr') {
+              rows.push(n);
+            }
+            if (n.children) {
+              n.children.forEach(findRows);
+            }
+          }
+          
+          findRows(node);
+          
+          tables.push({
+            table: node,
+            rowCount: rows.length,
+            totalSize: node.size,
+            rows: rows,
+            hasHeaders: rows.some(row => 
+              row.children?.some(cell => cell.tag === 'th')
+            ),
+            documentOrder: tables.length + 1, // Keep document order instead of sorting by size
+            id: node.attributes.id || `table-${tables.length + 1}`
+          });
+        }
+        
+        if (node.children) {
+          node.children.forEach(child => findTables(child, node.path, depth + 1));
+        }
+      }
+      
+      findTables(tree);
+      return tables; // Don't sort by size, keep document order
+    }
+
+    function analyzeRepeatingPatterns(tree) {
+      const patterns = new Map();
+      
+      function traverse(node, parentContext = '') {
+        if (node.type === 'element') {
+          // Create a more specific signature including parent context
+          const classStr = node.attributes.class || '';
+          const idStr = node.attributes.id || '';
+          const signature = `${parentContext}>${node.tag}${classStr ? `.${classStr.split(' ')[0]}` : ''}${idStr ? `#${idStr}` : ''}`;
+          
+          if (!patterns.has(signature)) {
+            patterns.set(signature, { 
+              count: 0, 
+              examples: [], 
+              totalSize: 0,
+              tag: node.tag,
+              context: parentContext 
+            });
+          }
+          
+          const pattern = patterns.get(signature);
+          pattern.count++;
+          pattern.totalSize += node.size;
+          
+          if (pattern.examples.length < 5) {
+            pattern.examples.push(node);
+          }
+          
+          // Traverse children with updated context
+          const newContext = node.tag === 'table' ? 'table' : 
+                            node.tag === 'tbody' ? parentContext + '>tbody' :
+                            node.tag === 'thead' ? parentContext + '>thead' :
+                            parentContext;
+          
+          node.children?.forEach(child => traverse(child, newContext));
+        }
+      }
+      
+      traverse(tree);
+      
+      return Array.from(patterns.entries())
+        .map(([signature, data]) => ({ signature, ...data }))
+        .filter(p => p.count > 2) // Show patterns with more than 2 instances
+        .sort((a, b) => b.totalSize - a.totalSize);
+    }
+
+    function reconstructHtml(tree) {
+      if (!tree || !tree.enabled) return '';
+      
+      if (tree.type === 'text') {
+        return tree.content;
+      }
+      
+      if (tree.type === 'element') {
+        const attrs = Object.entries(tree.attributes)
+          .map(([key, value]) => `${key}="${value}"`)
+          .join(' ');
+        
+        const attrsStr = attrs ? ` ${attrs}` : '';
+        const children = tree.children
+          .filter(child => child.enabled)
+          .map(reconstructHtml)
+          .join('');
+        
+        if (['br', 'hr', 'img', 'input', 'meta', 'link'].includes(tree.tag)) {
+          return `<${tree.tag}${attrsStr} />`;
+        }
+        
+        return `<${tree.tag}${attrsStr}>${children}</${tree.tag}>`;
+      }
+      
+      return '';
+    }
+
+    function calculateSize(tree) {
+      if (!tree || !tree.enabled) return 0;
+      
+      if (tree.type === 'text') {
+        return tree.content.length;
+      }
+      
+      if (tree.type === 'element') {
+        const tagSize = tree.tag.length * 2 + 5;
+        const attrsSize = Object.entries(tree.attributes)
+          .reduce((sum, [key, value]) => sum + key.length + value.length + 4, 0);
+        const childrenSize = tree.children
+          .filter(child => child.enabled)
+          .reduce((sum, child) => sum + calculateSize(child), 0);
+        
+        return tagSize + attrsSize + childrenSize;
+      }
+      
+      return 0;
+    }
+
+    // Tree manipulation utilities
+    function updateTreeNode(tree, path, updates) {
+      if (tree.path === path) {
+        return { ...tree, ...updates };
+      }
+      
+      if (tree.children) {
+        return {
+          ...tree,
+          children: tree.children.map(child => updateTreeNode(child, path, updates))
+        };
+      }
+      
+      return tree;
+    }
+
+    function toggleAllChildren(tree, parentPath, enabled) {
+      if (tree.path === parentPath) {
+        return {
+          ...tree,
+          children: tree.children?.map(child => ({
+            ...child,
+            enabled: enabled
+          }))
+        };
+      }
+      
+      if (tree.children) {
+        return {
+          ...tree,
+          children: tree.children.map(child => toggleAllChildren(child, parentPath, enabled))
+        };
+      }
+      
+      return tree;
+    }
+
+    function keepFirstNOfPattern(tree, pattern, keepCount) {
+      let foundCount = 0;
+      
+      function processNode(node) {
+        if (node.type === 'element') {
+          const classStr = node.attributes.class || '';
+          const idStr = node.attributes.id || '';
+          const nodeSignature = `${pattern.context}>${node.tag}${classStr ? `.${classStr.split(' ')[0]}` : ''}${idStr ? `#${idStr}` : ''}`;
+          
+          if (nodeSignature === pattern.signature) {
+            foundCount++;
+            if (foundCount > keepCount) {
+              return { ...node, enabled: false, children: node.children?.map(processNode) };
+            }
+          }
+        }
+        
+        return { ...node, children: node.children?.map(processNode) };
+      }
+      
+      return processNode(tree);
+    }
+
+    // UI Components
+    function TreeNode({ node, onToggle, onToggleChildren, depth = 0, showPreview = true }) {
+      const [collapsed, setCollapsed] = useState(depth > 1);
+      const hasChildren = node.children && node.children.length > 0;
+      const indent = depth * 16;
+      
+      if (node.type === 'text') {
+        if (!showPreview && node.content.length > 200) return null;
+        
+        const preview = node.content.length > 60 
+          ? node.content.substring(0, 60) + '...' 
+          : node.content;
+        
+        return html`
+          <div style="margin-left: ${indent}px" class="flex items-start space-x-2 py-1 text-sm">
+            <input 
+              type="checkbox" 
+              checked=${node.enabled}
+              onChange=${(e) => onToggle(node.path, { enabled: e.target.checked })}
+              class="mt-1 rounded"
+            />
+            <span class="text-gray-600 font-mono break-all">"${preview}"</span>
+            <span class="text-xs text-gray-400 whitespace-nowrap">(${node.content.length})</span>
+          </div>
+        `;
+      }
+      
+      const isTable = node.tag === 'table';
+      const isTableRow = node.tag === 'tr';
+      const isImportantStructure = ['table', 'thead', 'tbody', 'tr'].includes(node.tag);
+      
+      // Check if all children are enabled or disabled for bulk toggle button state
+      const allChildrenEnabled = hasChildren && node.children.every(child => child.enabled);
+      const allChildrenDisabled = hasChildren && node.children.every(child => !child.enabled);
+      
+      return html`
+        <div>
+          <div style="margin-left: ${indent}px" class="flex items-center space-x-2 py-1">
+            ${hasChildren && html`
+              <button 
+                onClick=${() => setCollapsed(!collapsed)}
+                class="w-5 h-5 flex items-center justify-center text-xs text-gray-500 hover:bg-gray-100 rounded border"
+              >
+                ${collapsed ? '+' : '−'}
+              </button>
+            `}
+            ${!hasChildren && html`<div class="w-5"></div>`}
+            
+            <input 
+              type="checkbox" 
+              checked=${node.enabled}
+              onChange=${(e) => onToggle(node.path, { enabled: e.target.checked })}
+              class="rounded"
+            />
+            
+            ${hasChildren && html`
+              <div class="flex space-x-1">
+                <button 
+                  onClick=${() => onToggleChildren(node.path, true)}
+                  class="px-2 py-0.5 text-xs bg-green-100 text-green-700 hover:bg-green-200 rounded border disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Select all children"
+                  disabled=${allChildrenEnabled}
+                >
+                  ✓ All
+                </button>
+                <button 
+                  onClick=${() => onToggleChildren(node.path, false)}
+                  class="px-2 py-0.5 text-xs bg-red-100 text-red-700 hover:bg-red-200 rounded border disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Unselect all children"
+                  disabled=${allChildrenDisabled}
+                >
+                  ✗ All
+                </button>
+              </div>
+            `}
+            
+            <div class="flex items-center space-x-2 min-w-0 flex-1">
+              <span class="${isImportantStructure ? 'font-semibold text-blue-700' : 'text-gray-700'} font-mono text-sm">
+                ${node.tag}
+              </span>
+              
+              ${node.attributes.class && html`
+                <span class="text-xs bg-blue-100 text-blue-700 px-1 rounded">
+                  .${node.attributes.class.split(' ')[0]}
+                </span>
+              `}
+              
+              ${node.attributes.id && html`
+                <span class="text-xs bg-green-100 text-green-700 px-1 rounded">
+                  #${node.attributes.id}
+                </span>
+              `}
+              
+              ${isTable && html`
+                <span class="text-xs bg-purple-100 text-purple-700 px-2 py-1 rounded">
+                  Table (${node.children?.filter(c => c.tag === 'tr' || (c.children && c.children.some(cc => cc.tag === 'tr'))).length || 0} rows)
+                </span>
+              `}
+              
+              ${isTableRow && html`
+                <span class="text-xs bg-yellow-100 text-yellow-700 px-1 rounded">
+                  Row
+                </span>
+              `}
+              
+              <span class="text-xs text-gray-400">
+                ${Math.round(node.size / 1024 * 10) / 10}KB
+              </span>
+              
+              ${node.elementCount > 0 && html`
+                <span class="text-xs text-gray-500">
+                  (${node.elementCount} children)
+                </span>
+              `}
+            </div>
+          </div>
+          
+          ${showPreview && node.preview && !collapsed && html`
+            <div style="margin-left: ${indent + 32}px" class="text-xs text-gray-500 italic mb-2 max-w-md truncate">
+              ${node.preview}
+            </div>
+          `}
+          
+          ${hasChildren && !collapsed && html`
+            <div class="border-l border-gray-200" style="margin-left: ${indent + 10}px;">
+              ${node.children.map((child, idx) => html`
+                <${TreeNode} 
+                  key=${child.path || idx} 
+                  node=${child} 
+                  onToggle=${onToggle} 
+                  onToggleChildren=${onToggleChildren}
+                  depth=${depth + 1}
+                  showPreview=${showPreview && depth < 3}
+                />
+              `)}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    function TableAnalysisPanel({ tables, onTrimTable }) {
+      if (tables.length === 0) return null;
+      
+      return html`
+        <div class="bg-green-50 p-4 rounded-lg mb-4">
+          <h3 class="font-semibold text-green-800 mb-3">Table Analysis</h3>
+          <div class="space-y-3">
+            ${tables.map((table, idx) => html`
+              <div key=${idx} class="bg-white p-3 rounded border">
+                <div class="flex items-center justify-between mb-2">
+                  <div>
+                    <span class="font-medium">Table ${idx + 1}</span>
+                    ${table.id && table.id !== `table-${idx + 1}` && html`
+                      <span class="ml-2 text-xs bg-gray-100 text-gray-600 px-2 py-1 rounded font-mono">
+                        #${table.id}
+                      </span>
+                    `}
+                    <span class="ml-2 text-sm text-gray-600">
+                      ${table.rowCount} rows, ${Math.round(table.totalSize / 1024)}KB
+                      ${table.hasHeaders ? '(has headers)' : ''}
+                    </span>
+                  </div>
+                  ${table.rowCount > 5 && html`
+                    <div class="flex space-x-2">
+                      <button 
+                        onClick=${() => onTrimTable(table, 3)}
+                        class="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                      >
+                        Keep 3 Rows
+                      </button>
+                      <button 
+                        onClick=${() => onTrimTable(table, 5)}
+                        class="px-3 py-1 bg-green-500 text-white text-sm rounded hover:bg-green-600"
+                      >
+                        Keep 5 Rows
+                      </button>
+                    </div>
+                  `}
+                </div>
+                <div class="text-xs text-gray-600 max-h-16 overflow-hidden">
+                  ${table.table.preview}
+                </div>
+              </div>
+            `)}
+          </div>
+        </div>
+      `;
+    }
+
+    function PatternPanel({ patterns, onSelectPattern }) {
+      if (patterns.length === 0) return null;
+      
+      return html`
+        <div class="bg-blue-50 p-4 rounded-lg mb-4">
+          <h3 class="font-semibold text-blue-800 mb-3">Detected Patterns</h3>
+          <div class="space-y-2 max-h-64 overflow-y-auto">
+            ${patterns.slice(0, 8).map(pattern => html`
+              <div key=${pattern.signature} class="flex items-center justify-between bg-white p-2 rounded text-sm">
+                <div class="min-w-0 flex-1">
+                  <code class="text-sm font-mono text-blue-700">${pattern.signature}</code>
+                  <div class="text-xs text-gray-600 mt-1">
+                    ${pattern.count} instances • ${Math.round(pattern.totalSize / 1024)}KB total
+                  </div>
+                </div>
+                <div class="flex space-x-1 ml-3">
+                  <button 
+                    onClick=${() => onSelectPattern(pattern, 1)}
+                    class="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                  >
+                    Keep 1
+                  </button>
+                  <button 
+                    onClick=${() => onSelectPattern(pattern, 3)}
+                    class="px-2 py-1 bg-blue-500 text-white text-xs rounded hover:bg-blue-600"
+                  >
+                    Keep 3
+                  </button>
+                  ${pattern.count > 5 && html`
+                    <button 
+                      onClick=${() => onSelectPattern(pattern, 5)}
+                      class="px-2 py-1 bg-blue-400 text-white text-xs rounded hover:bg-blue-500"
+                    >
+                      Keep 5
+                    </button>
+                  `}
+                </div>
+              </div>
+            `)}
+          </div>
+        </div>
+      `;
+    }
+
+    function App() {
+      const [inputHtml, setInputHtml] = useState('');
+      const [parsedTree, setParsedTree] = useState(null);
+      const [activeTab, setActiveTab] = useState('input');
+      
+      const patterns = useMemo(() => 
+        parsedTree ? analyzeRepeatingPatterns(parsedTree) : []
+      , [parsedTree]);
+      
+      const tables = useMemo(() =>
+        parsedTree ? analyzeTableStructures(parsedTree) : []
+      , [parsedTree]);
+      
+      const trimmedHtml = useMemo(() => 
+        parsedTree ? reconstructHtml(parsedTree) : ''
+      , [parsedTree]);
+      
+      const originalSize = inputHtml.length;
+      const trimmedSize = trimmedHtml.length;
+      const savings = originalSize > 0 ? ((originalSize - trimmedSize) / originalSize * 100).toFixed(1) : 0;
+      
+      const handleParse = () => {
+        if (!inputHtml.trim()) return;
+        
+        try {
+          const tree = parseHtmlToTree(inputHtml);
+          setParsedTree(tree);
+          setActiveTab('structure');
+        } catch (error) {
+          alert('Error parsing HTML: ' + error.message);
+        }
+      };
+      
+      const handleTreeToggle = (path, updates) => {
+        if (!parsedTree) return;
+        setParsedTree(updateTreeNode(parsedTree, path, updates));
+      };
+      
+      const handleToggleChildren = (parentPath, enabled) => {
+        if (!parsedTree) return;
+        setParsedTree(toggleAllChildren(parsedTree, parentPath, enabled));
+      };
+      
+      const handlePatternSelect = (pattern, keepCount) => {
+        if (!parsedTree) return;
+        setParsedTree(keepFirstNOfPattern(parsedTree, pattern, keepCount));
+      };
+      
+      const handleTrimTable = (table, keepCount) => {
+        if (!parsedTree) return;
+        
+        let keptRows = 0;
+        function trimRows(node) {
+          if (node.type === 'element' && node.tag === 'tr') {
+            // Always keep header rows (containing th elements)
+            const isHeaderRow = node.children?.some(child => child.tag === 'th');
+            if (isHeaderRow) {
+              return { ...node, children: node.children?.map(trimRows) };
+            }
+            
+            keptRows++;
+            if (keptRows > keepCount) {
+              return { ...node, enabled: false, children: node.children?.map(trimRows) };
+            }
+          }
+          
+          return { ...node, children: node.children?.map(trimRows) };
+        }
+        
+        setParsedTree(trimRows(parsedTree));
+      };
+      
+      const copyToClipboard = async () => {
+        try {
+          await navigator.clipboard.writeText(trimmedHtml);
+          alert('HTML copied to clipboard!');
+        } catch (error) {
+          alert('Failed to copy to clipboard');
+        }
+      };
+      
+      const tabs = [
+        { id: 'input', label: 'Input HTML' },
+        { id: 'structure', label: 'Structure Analysis', disabled: !parsedTree },
+        { id: 'preview', label: 'Preview', disabled: !parsedTree },
+        { id: 'output', label: 'Output', disabled: !parsedTree }
+      ];
+      
+      return html`
+        <div class="min-h-screen bg-gray-50">
+          <div class="max-w-7xl mx-auto p-6">
+            <div class="mb-6">
+              <h1 class="text-3xl font-bold text-gray-900 mb-2">HTML Trimmer for LLM Communication</h1>
+              <p class="text-gray-600">Paste large HTML content and interactively trim it for efficient LLM communication</p>
+            </div>
+            
+            <!-- Stats -->
+            ${parsedTree && html`
+              <div class="bg-white p-4 rounded-lg shadow mb-6">
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div class="text-center">
+                    <div class="text-2xl font-bold text-blue-600">${(originalSize / 1024).toFixed(1)}KB</div>
+                    <div class="text-sm text-gray-600">Original Size</div>
+                  </div>
+                  <div class="text-center">
+                    <div class="text-2xl font-bold text-green-600">${(trimmedSize / 1024).toFixed(1)}KB</div>
+                    <div class="text-sm text-gray-600">Trimmed Size</div>
+                  </div>
+                  <div class="text-center">
+                    <div class="text-2xl font-bold text-purple-600">${savings}%</div>
+                    <div class="text-sm text-gray-600">Size Reduction</div>
+                  </div>
+                  <div class="text-center">
+                    <button 
+                      onClick=${copyToClipboard}
+                      class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-semibold"
+                    >
+                      Copy to Clipboard
+                    </button>
+                  </div>
+                </div>
+              </div>
+            `}
+            
+            <!-- Tabs -->
+            <div class="bg-white rounded-lg shadow">
+              <div class="border-b border-gray-200">
+                <nav class="flex space-x-8 px-6">
+                  ${tabs.map(tab => html`
+                    <button
+                      key=${tab.id}
+                      onClick=${() => !tab.disabled && setActiveTab(tab.id)}
+                      class="${activeTab === tab.id 
+                        ? 'border-blue-500 text-blue-600' 
+                        : tab.disabled 
+                          ? 'text-gray-400 cursor-not-allowed' 
+                          : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                      } py-4 px-1 border-b-2 font-medium text-sm"
+                      disabled=${tab.disabled}
+                    >
+                      ${tab.label}
+                    </button>
+                  `)}
+                </nav>
+              </div>
+              
+              <div class="p-6">
+                ${activeTab === 'input' && html`
+                  <div class="space-y-4">
+                    <div>
+                      <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Paste your HTML content here:
+                      </label>
+                      <textarea
+                        value=${inputHtml}
+                        onInput=${(e) => setInputHtml(e.target.value)}
+                        placeholder="<html>...</html>"
+                        class="w-full h-96 p-3 border border-gray-300 rounded-lg font-mono text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                      ></textarea>
+                    </div>
+                    
+                    <button
+                      onClick=${handleParse}
+                      disabled=${!inputHtml.trim()}
+                      class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-300 disabled:cursor-not-allowed font-semibold"
+                    >
+                      Parse HTML
+                    </button>
+                  </div>
+                `}
+                
+                ${activeTab === 'structure' && parsedTree && html`
+                  <div class="space-y-4">
+                    <${TableAnalysisPanel} tables=${tables} onTrimTable=${handleTrimTable} />
+                    <${PatternPanel} patterns=${patterns} onSelectPattern=${handlePatternSelect} />
+                    
+                    <div class="border border-gray-200 rounded-lg p-4 bg-gray-50">
+                      <div class="text-sm font-medium text-gray-700 mb-3">
+                        HTML Structure (check/uncheck to include/exclude)
+                      </div>
+                      <${TreeNode} 
+                        node=${parsedTree} 
+                        onToggle=${handleTreeToggle} 
+                        onToggleChildren=${handleToggleChildren}
+                      />
+                    </div>
+                  </div>
+                `}
+                
+                ${activeTab === 'preview' && parsedTree && html`
+                  <div class="space-y-4">
+                    <div class="text-sm font-medium text-gray-700">Rendered Preview:</div>
+                    <div 
+                      class="border border-gray-200 rounded-lg p-4 max-h-96 overflow-auto bg-white"
+                      dangerouslySetInnerHTML=${{ __html: trimmedHtml }}
+                    ></div>
+                  </div>
+                `}
+                
+                ${activeTab === 'output' && parsedTree && html`
+                  <div class="space-y-4">
+                    <div class="flex justify-between items-center">
+                      <div class="text-sm font-medium text-gray-700">Trimmed HTML Output:</div>
+                      <button
+                        onClick=${copyToClipboard}
+                        class="px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <textarea
+                      value=${trimmedHtml}
+                      readonly
+                      class="w-full h-96 p-3 border border-gray-300 rounded-lg font-mono text-sm resize-none bg-gray-50"
+                    ></textarea>
+                  </div>
+                `}
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>
