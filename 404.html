@@ -1,0 +1,128 @@
+---
+permalink: /404.html
+---
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Page Not Found - austegard.com</title>
+    <link rel="stylesheet" href="/styles/style.css">
+</head>
+<body>
+    <div id="message">
+        <h1>Oops, we're lost.</h1>
+        <p>Searching for the page you requested...</p>
+    </div>
+    
+    <script>
+        document.addEventListener("DOMContentLoaded", function() {
+            console.log('404 page loaded, searching for redirect...');
+            
+            fetch('/sitemap.xml')
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error('Network response was not ok');
+                    }
+                    return response.text();
+                })
+                .then(xmlText => {
+                    console.log('Sitemap fetched successfully');
+                    
+                    /* Parse the XML */
+                    const parser = new DOMParser();
+                    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+                    
+                    /* Extract all <loc> elements (URLs) */
+                    const locElements = xmlDoc.getElementsByTagName('loc');
+                    const fileList = [];
+                    
+                    /* Convert XML URLs to relative paths */
+                    for (let i = 0; i < locElements.length; i++) {
+                        const url = locElements[i].textContent;
+                        try {
+                            const urlObj = new URL(url);
+                            fileList.push(urlObj.pathname);
+                        } catch (e) {
+                            console.warn('Invalid URL in sitemap:', url);
+                        }
+                    }
+                    
+                    console.log('Found', fileList.length, 'pages in sitemap');
+                    
+                    const path = window.location.pathname;
+                    const params = window.location.search;
+                    const filename = path.split('/').pop();
+                    
+                    console.log('Looking for:', { path, filename, params });
+
+                    if (filename) {
+                        const matches = fileList.filter(file => file.endsWith('/' + filename));
+                        console.log('Found matches:', matches);
+                        
+                        if (matches.length > 0) {
+                            const newPath = matches[0];
+                            const message = document.getElementById('message');
+                            if (message) {
+                                message.innerHTML = `We found it! You are being redirected to <a href="${newPath}${params}">${newPath}</a>...`;
+                            }
+                            console.log('Redirecting to:', newPath + params);
+                            setTimeout(() => {
+                                window.location.href = `${newPath}${params}`;
+                            }, 3000);
+                        } else {
+                            /* No matches found - show helpful alternatives */
+                            showNotFoundMessage(filename, path);
+                        }
+                    } else {
+                        /* No filename to search for */
+                        showNotFoundMessage(null, path);
+                    }
+                })
+                .catch(error => {
+                    console.error('Error fetching or processing sitemap:', error);
+                    showNotFoundMessage(null, window.location.pathname);
+                });
+
+            function showNotFoundMessage(filename, fullPath) {
+                console.log('No matches found, showing not found message');
+                
+                const message = document.getElementById('message');
+                if (!message) return;
+                
+                let content = '<h1>Page Not Found</h1>';
+                
+                if (filename) {
+                    const searchTerm = encodeURIComponent(filename.replace(/\.[^.]*$/, '')); /* Remove file extension */
+                    const googleSearchUrl = `https://www.google.com/search?q=site%3Aaustegard.com+${searchTerm}`;
+                    
+                    content += `
+                        <p>Sorry, we couldn't find a page matching "<strong>${filename}</strong>" anywhere on this site.</p>
+                        <p>You might want to:</p>
+                        <ul>
+                            <li><a href="${googleSearchUrl}" target="_blank">Search the site for "${filename.replace(/\.[^.]*$/, '')}"</a></li>
+                            <li><a href="/">Go to the home page</a></li>
+                            <li><a href="javascript:history.back()">Go back to the previous page</a></li>
+                        </ul>
+                    `;
+                } else {
+                    const pathTerm = encodeURIComponent(fullPath.split('/').filter(p => p).pop() || 'content');
+                    const googleSearchUrl = `https://www.google.com/search?q=site%3Aaustegard.com+${pathTerm}`;
+                    
+                    content += `
+                        <p>Sorry, we couldn't find the page at "<strong>${fullPath}</strong>".</p>
+                        <p>You might want to:</p>
+                        <ul>
+                            <li><a href="${googleSearchUrl}" target="_blank">Search the site</a></li>
+                            <li><a href="/">Go to the home page</a></li>
+                            <li><a href="javascript:history.back()">Go back to the previous page</a></li>
+                        </ul>
+                    `;
+                }
+                
+                message.innerHTML = content;
+            }
+        });
+    </script>
+</body>
+</html>
