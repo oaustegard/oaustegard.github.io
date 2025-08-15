@@ -1,12 +1,33 @@
 document.addEventListener("DOMContentLoaded", function() {
-    fetch('/sitemap.json')
+    fetch('/sitemap.xml')
         .then(response => {
             if (!response.ok) {
                 throw new Error('Network response was not ok');
             }
-            return response.json();
+            return response.text(); // Get XML as text, not JSON
         })
-        .then(fileList => {
+        .then(xmlText => {
+            // Parse the XML
+            const parser = new DOMParser();
+            const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
+            
+            // Extract all <loc> elements (URLs)
+            const locElements = xmlDoc.getElementsByTagName('loc');
+            const fileList = [];
+            
+            // Convert XML URLs to relative paths
+            for (let i = 0; i < locElements.length; i++) {
+                const url = locElements[i].textContent;
+                try {
+                    const urlObj = new URL(url);
+                    fileList.push(urlObj.pathname); // Extract just the path part
+                } catch (e) {
+                    // Skip invalid URLs
+                    console.warn('Invalid URL in sitemap:', url);
+                }
+            }
+            
+            // Rest of your logic remains the same
             const path = window.location.pathname;
             const params = window.location.search;
             const filename = path.split('/').pop();
