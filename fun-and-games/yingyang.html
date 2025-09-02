@@ -4,25 +4,24 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-<title>Yin-Yang Impacts — press & hold to speed</title>
+<title>Yin-Yang Impacts — hold to speed</title>
 <style>
   :root { --bg: #f3e5d3; }
   html, body { height: 100%; margin: 0; background: var(--bg); }
-  body { display: grid; place-items: center; }
-  canvas { width: min(92vmin, 900px); height: min(92vmin, 900px); touch-action: none; }
+  body { display: grid; place-items: center; -webkit-user-select:none; user-select:none; }
+  canvas { width: min(92vmin, 900px); height: min(92vmin, 900px); touch-action: none; -webkit-user-select:none; user-select:none; }
   .ui {
     position: fixed; top: 14px; right: 16px; font: 16px/1.2 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
   }
   .ui a { color: #5a3; text-decoration: underline; cursor: pointer; user-select: none; }
   .hint {
     position: fixed; bottom: 14px; left: 0; right: 0; text-align: center;
-    font: 14px/1.3 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color:#544;
-    opacity:.8; pointer-events:none;
+    font: 14px/1.3 ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; color:#544; opacity:.8; pointer-events:none;
   }
 </style>
 </head>
 <body>
-  <div class="ui"><a id="bg">change background</a></div>
+  <div class="ui"><a id="bg" href="javascript:void(0)">change background</a></div>
   <canvas id="c"></canvas>
   <div class="hint">Press & hold (mouse/touch/pen) to speed it up</div>
 
@@ -30,202 +29,193 @@
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d', { alpha: false });
 
-// Offscreen mask where we build the WHITE region via boolean ops
-const mask = document.createElement('canvas');
+const mask = document.createElement('canvas');        // white region mask
 const mctx = mask.getContext('2d', { willReadFrequently: true });
 
-let DPR = Math.max(1, window.devicePixelRatio || 1);
-let W = 0, H = 0, cx = 0, cy = 0, R = 0;
+let DPR=1, W=0, H=0, cx=0, cy=0, R=0;
 
-function resize() {
-  DPR = Math.max(1, window.devicePixelRatio || 1);
-  const sideCSS = Math.min(window.innerWidth, window.innerHeight) * 0.92;
-  W = Math.round(sideCSS * DPR);
-  H = W;
-  canvas.width = W; canvas.height = H;
-  mask.width = W; mask.height = H;
-
-  cx = W / 2;
-  cy = H / 2;
-  R = Math.round(W * 0.42); // radius of the big circle
+function resize(){
+  DPR = Math.max(1, window.devicePixelRatio||1);
+  const sideCSS = Math.min(innerWidth, innerHeight)*0.92;
+  W = Math.round(sideCSS*DPR); H=W;
+  canvas.width=W; canvas.height=H;
+  mask.width=W; mask.height=H;
+  cx=W/2; cy=H/2; R=Math.round(W*0.42);
+  for (const b of balls) b.r = Math.round(R*0.075);
 }
 resize();
-window.addEventListener('resize', resize);
+addEventListener('resize', resize);
 
-// ---------- Utilities ----------
-function dot(ax, ay, bx, by){ return ax*bx + ay*by; }
-function reflectVelocity(vx, vy, nx, ny) {
-  const d = dot(vx, vy, nx, ny);
-  return [vx - 2*d*nx, vy - 2*d*ny];
-}
-function clampToCircle(p) {
-  // keep a point (x,y) inside the big circle
-  const dx = p.x - cx, dy = p.y - cy;
-  const d = Math.hypot(dx, dy);
-  if (d > R - p.r) {
-    const n = (R - p.r) / d;
-    p.x = cx + dx * n; p.y = cy + dy * n;
-  }
-}
+// --- build base white area (yin-yang without dents) ---
+function drawWhiteBase(){
+  mctx.clearRect(0,0,W,H);
+  mctx.fillStyle='#fff';
 
-// ---------- Yin-Yang white base on mask ----------
-function drawWhiteBase() {
-  mctx.clearRect(0, 0, W, H);
-  mctx.fillStyle = '#fff';
-
-  // Right half-disk on the big circle
+  // right half of big circle
   mctx.beginPath();
-  mctx.moveTo(cx, cy);
-  mctx.arc(cx, cy, R, -Math.PI/2, Math.PI/2, false);
+  mctx.moveTo(cx,cy);
+  mctx.arc(cx,cy,R,-Math.PI/2,Math.PI/2,false);
   mctx.closePath();
   mctx.fill();
 
-  // Add top small circle (union)
+  // add top small circle
   mctx.beginPath();
   mctx.arc(cx, cy - R/2, R/2, 0, Math.PI*2);
   mctx.fill();
 
-  // Subtract bottom small circle (difference)
-  mctx.globalCompositeOperation = 'destination-out';
+  // subtract bottom small circle
+  mctx.globalCompositeOperation='destination-out';
   mctx.beginPath();
   mctx.arc(cx, cy + R/2, R/2, 0, Math.PI*2);
   mctx.fill();
-  mctx.globalCompositeOperation = 'source-over';
+  mctx.globalCompositeOperation='source-over';
 }
-
-function alphaAt(x, y) {
-  // safe sample (clamped & integer to align with pixel grid)
+function alphaAt(x,y){
   const ix = Math.max(0, Math.min(W-1, x|0));
   const iy = Math.max(0, Math.min(H-1, y|0));
-  return mctx.getImageData(ix, iy, 1, 1).data[3]; // 0..255
+  return mctx.getImageData(ix,iy,1,1).data[3]; // 0..255 (white area > 0)
+}
+function gradAt(x,y){ // central differences on mask alpha (as vec pointing toward increasing white)
+  const a1 = alphaAt(x+1,y), a2 = alphaAt(x-1,y);
+  const a3 = alphaAt(x,y+1), a4 = alphaAt(x,y-1);
+  let gx = (a1 - a2), gy = (a3 - a4);
+  const len = Math.hypot(gx,gy)||1;
+  return [gx/len, gy/len];
 }
 
-// ---------- Balls ----------
+// --- balls ---
 const balls = [
-  // white dot (starts in the top/black lobe)
-  { color: '#fff', r: Math.round(R*0.075), x: 0, y: 0, vx: 0, vy: 0 },
-  // black dot (starts in the bottom/white lobe)
-  { color: '#000', r: Math.round(R*0.075), x: 0, y: 0, vx: 0, vy: 0 }
+  { color:'#fff', r:0, x:0, y:0, vx:0, vy:0 }, // white dot
+  { color:'#000', r:0, x:0, y:0, vx:0, vy:0 }  // black dot
 ];
 
-function resetBalls() {
-  balls[0].x = cx; balls[0].y = cy - R/2; // white
-  balls[1].x = cx; balls[1].y = cy + R/2; // black
-  // give them gentle randomized velocities
-  for (const b of balls) {
-    const a = Math.random() * Math.PI * 2;
-    const speed = R * 0.25; // px/sec base
-    b.vx = Math.cos(a) * speed;
-    b.vy = Math.sin(a) * speed;
+function resetBalls(){
+  balls[0].x=cx; balls[0].y=cy - R/2;      // white in black lobe
+  balls[1].x=cx; balls[1].y=cy + R/2;      // black in white lobe
+  for (const b of balls){
+    const a = Math.random()*Math.PI*2;
+    const speed = R*0.60;                   // faster default
+    b.vx=Math.cos(a)*speed;
+    b.vy=Math.sin(a)*speed;
   }
 }
 resetBalls();
 
-// ---------- Input: press & hold to speed ----------
-let speedMultiplier = 1;
-const FAST = 5; // ~5x speed while held
+// --- outer circle bounce ---
+function reflect(vx,vy,nx,ny){ const d=vx*nx+vy*ny; return [vx-2*d*nx, vy-2*d*ny]; }
+function keepInside(b){
+  const dx=b.x-cx, dy=b.y-cy, d=Math.hypot(dx,dy);
+  if (d>R-b.r){
+    const nx=dx/d, ny=dy/d;
+    [b.vx,b.vy]=reflect(b.vx,b.vy,nx,ny);
+    const overlap=d-(R-b.r);
+    b.x-=nx*(overlap+0.5);
+    b.y-=ny*(overlap+0.5);
+  }
+}
 
-function holdOn(){ speedMultiplier = FAST; }
-function holdOff(){ speedMultiplier = 1; }
+// --- yin-yang boundary bounce (internal) ---
+// If the ball crosses the mask boundary within dt, we binary-search the hit point,
+// estimate the normal from the alpha gradient, reflect, and finish remaining time.
+function collideYY(b, dt){
+  const startInWhite = alphaAt(b.x, b.y) > 0;
+  const nx = b.x + b.vx*dt, ny = b.y + b.vy*dt;
+  const endInWhite = alphaAt(nx, ny) > 0;
 
-['pointerdown','mousedown','touchstart'].forEach(e => canvas.addEventListener(e, holdOn, {passive:true}));
-['pointerup','pointercancel','pointerleave','mouseup','touchend','touchcancel'].forEach(e => window.addEventListener(e, holdOff, {passive:true}));
-window.addEventListener('blur', holdOff);
+  // Only bounce if we crossed the boundary (white<->black)
+  if (startInWhite === endInWhite) return; // no crossing
 
-// ---------- Background toggle ----------
-const bgs = ['#f3e5d3','#fefefe','#0a0a0a','#0c1724','#faf5e4'];
-let bgIdx = 0;
-document.getElementById('bg').addEventListener('click', () => {
-  bgIdx = (bgIdx + 1) % bgs.length;
+  // binary search for boundary time t in [0,1]
+  let lo=0, hi=1, px=b.x, py=b.y;
+  for (let i=0;i<14;i++){
+    const mid=(lo+hi)/2;
+    const mx=b.x + b.vx*dt*mid, my=b.y + b.vy*dt*mid;
+    (alphaAt(mx,my)>0) === startInWhite ? (lo=mid) : (hi=mid);
+    px=mx; py=my;
+  }
+
+  // normal from alpha gradient (points from black->white)
+  let [gnx,gny]=gradAt(px,py);
+  if (startInWhite) { gnx=-gnx; gny=-gny; } // make normal face INTO the side we are entering
+
+  // reflect
+  [b.vx,b.vy]=reflect(b.vx,b.vy,gnx,gny);
+
+  // place just off the boundary along the new direction
+  const eps = b.r*0.6;
+  b.x = px + gnx*eps;
+  b.y = py + gny*eps;
+
+  // finish the remaining time after collision
+  const remain = (1-hi) * dt;
+  b.x += b.vx * remain;
+  b.y += b.vy * remain;
+}
+
+// --- press & hold speed up ---
+let speedMul = 1;
+const FAST = 10; // stronger boost
+canvas.addEventListener('pointerdown', (e)=>{ e.preventDefault(); speedMul=FAST; });
+addEventListener('pointerup',   ()=>{ speedMul=1; });
+addEventListener('pointercancel', ()=>{ speedMul=1; });
+addEventListener('pointerleave',  ()=>{ speedMul=1; });
+addEventListener('blur', ()=>{ speedMul=1; });
+
+// background toggle
+const bgs=['#f3e5d3','#fefefe','#0a0a0a','#0c1724','#faf5e4'];
+let bgIdx=0;
+document.getElementById('bg').addEventListener('click', ()=>{
+  bgIdx=(bgIdx+1)%bgs.length;
   document.documentElement.style.setProperty('--bg', bgs[bgIdx]);
 });
 
-// ---------- Main loop ----------
-let last = performance.now();
+// --- loop ---
+let last=performance.now();
+function frame(now){
+  const dt = Math.min(0.033, (now-last)/1000) * speedMul; last=now;
 
-function step(now) {
-  const dt = Math.min(0.033, (now - last) / 1000) * speedMultiplier; // clamp dt
-  last = now;
+  // physics
+  for (const b of balls){
+    // attempt move
+    const nx=b.x + b.vx*dt, ny=b.y + b.vy*dt;
+    b.x=nx; b.y=ny;
 
-  // Move balls with elastic bounce on the outer circle
-  for (const b of balls) {
-    b.x += b.vx * dt;
-    b.y += b.vy * dt;
+    // outer circle
+    keepInside(b);
 
-    // Bounce on outer circle
-    const dx = b.x - cx, dy = b.y - cy;
-    const dist = Math.hypot(dx, dy);
-    if (dist > R - b.r) {
-      const nx = dx / dist, ny = dy / dist;               // outward normal
-      [b.vx, b.vy] = reflectVelocity(b.vx, b.vy, nx, ny); // reflect
-      // nudge inside to avoid tunneling
-      const overlap = dist - (R - b.r);
-      b.x -= nx * (overlap + 0.5);
-      b.y -= ny * (overlap + 0.5);
-    }
-    clampToCircle(b);
+    // yin-yang internal boundary
+    collideYY(b, dt*1.0);
   }
 
-  // Build white mask = base yin-yang + dents from impacts
+  // build mask (base + dents)
   drawWhiteBase();
-
-  // Dents: subtract black ball if inside white; add white ball if inside black
-  // This yields a realistic "boolean-collision" look.
-  for (const b of balls) {
-    const inWhite = alphaAt(b.x, b.y) > 0;
-    const dentR = Math.max(2, b.r * 1.12);
-
-    if (b.color === '#000' && inWhite) {
-      // carve a dent into the white region
-      mctx.globalCompositeOperation = 'destination-out';
-      mctx.beginPath();
-      mctx.arc(b.x, b.y, dentR, 0, Math.PI*2);
-      mctx.fill();
-      mctx.globalCompositeOperation = 'source-over';
-    } else if (b.color === '#fff' && !inWhite) {
-      // push white into black region
-      mctx.globalCompositeOperation = 'source-over';
-      mctx.beginPath();
-      mctx.arc(b.x, b.y, dentR, 0, Math.PI*2);
-      mctx.fillStyle = '#fff';
-      mctx.fill();
+  for (const b of balls){
+    const inWhite = alphaAt(b.x,b.y) > 0;
+    const dentR = Math.max(2, b.r*1.12);
+    if (b.color==='#000' && inWhite){
+      mctx.globalCompositeOperation='destination-out';
+      mctx.beginPath(); mctx.arc(b.x,b.y,dentR,0,Math.PI*2); mctx.fill();
+      mctx.globalCompositeOperation='source-over';
+    } else if (b.color==='#fff' && !inWhite){
+      mctx.beginPath(); mctx.arc(b.x,b.y,dentR,0,Math.PI*2);
+      mctx.fillStyle='#fff'; mctx.fill();
     }
   }
 
-  // ----- Render to screen -----
-  ctx.save();
-  ctx.clearRect(0, 0, W, H);
-
-  // clip to big circle so we never draw outside
-  ctx.beginPath();
-  ctx.arc(cx, cy, R + 1, 0, Math.PI*2);
-  ctx.clip();
-
-  // ground layer: solid black disk
-  ctx.fillStyle = '#000';
-  ctx.beginPath();
-  ctx.arc(cx, cy, R + 1, 0, Math.PI*2);
-  ctx.fill();
-
-  // bring in the white mask (it already encodes all dents)
-  ctx.drawImage(mask, 0, 0);
-
-  // draw the moving dots on top
-  for (const b of balls) {
-    ctx.beginPath();
-    ctx.arc(b.x, b.y, b.r, 0, Math.PI*2);
-    ctx.fillStyle = b.color;
-    ctx.shadowColor = 'rgba(0,0,0,0.2)';
-    ctx.shadowBlur = 4;
-    ctx.fill();
-    ctx.shadowBlur = 0;
+  // render
+  ctx.save(); ctx.clearRect(0,0,W,H);
+  ctx.beginPath(); ctx.arc(cx,cy,R+1,0,Math.PI*2); ctx.clip();
+  ctx.fillStyle='#000'; ctx.beginPath(); ctx.arc(cx,cy,R+1,0,Math.PI*2); ctx.fill();
+  ctx.drawImage(mask,0,0);
+  for (const b of balls){
+    ctx.beginPath(); ctx.arc(b.x,b.y,b.r,0,Math.PI*2);
+    ctx.fillStyle=b.color; ctx.shadowColor='rgba(0,0,0,0.18)'; ctx.shadowBlur=4; ctx.fill(); ctx.shadowBlur=0;
   }
-
   ctx.restore();
 
-  requestAnimationFrame(step);
+  requestAnimationFrame(frame);
 }
-requestAnimationFrame(step);
+requestAnimationFrame(frame);
 </script>
 </body>
 </html>
