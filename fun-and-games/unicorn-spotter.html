@@ -1,0 +1,1116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🦄 Unicorn Spotter - Track Magical Creatures!</title>
+    
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        @keyframes rainbow {
+            0% { filter: hue-rotate(0deg); }
+            100% { filter: hue-rotate(360deg); }
+        }
+
+        @keyframes sparkle {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.6; transform: scale(1.2); }
+        }
+
+        @keyframes float {
+            0%, 100% { transform: translateY(0px); }
+            50% { transform: translateY(-10px); }
+        }
+
+        body {
+            font-family: 'Comic Sans MS', 'Chalkboard SE', 'Comic Neue', cursive, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            overflow: hidden;
+            height: 100vh;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 50%, #f093fb 100%);
+            position: relative;
+        }
+
+        body::before {
+            content: "✨";
+            position: fixed;
+            font-size: 20px;
+            animation: sparkle 2s infinite, float 3s ease-in-out infinite;
+            pointer-events: none;
+            z-index: 10;
+            left: 10%;
+            top: 15%;
+        }
+
+        body::after {
+            content: "⭐";
+            position: fixed;
+            font-size: 16px;
+            animation: sparkle 2.5s infinite, float 4s ease-in-out infinite;
+            pointer-events: none;
+            z-index: 10;
+            right: 15%;
+            top: 25%;
+        }
+
+        #map {
+            height: 100vh;
+            width: 100%;
+            position: absolute;
+            top: 0;
+            left: 0;
+            z-index: 1;
+            filter: saturate(1.2);
+        }
+
+        .controls {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            z-index: 1000;
+            display: flex;
+            gap: 12px;
+            align-items: center;
+        }
+
+        .btn {
+            padding: 16px 28px;
+            border: none;
+            border-radius: 30px;
+            font-size: 17px;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3), 0 0 20px rgba(255, 255, 255, 0.2);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .btn::before {
+            content: "✨";
+            position: absolute;
+            right: -20px;
+            opacity: 0;
+            transition: all 0.3s;
+        }
+
+        .btn:hover::before {
+            right: 10px;
+            opacity: 1;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 8px 25px rgba(0, 0, 0, 0.4), 0 0 30px rgba(255, 255, 255, 0.3);
+        }
+
+        .btn:active {
+            transform: scale(0.95);
+        }
+
+        .btn-primary {
+            background: linear-gradient(135deg, #ff6b9d 0%, #c06c84 50%, #f67280 100%);
+            color: white;
+            animation: rainbow 10s infinite linear;
+        }
+
+        .btn-secondary {
+            background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);
+            color: #333;
+        }
+
+        .btn-locate {
+            background: linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%);
+            color: white;
+            border-radius: 50%;
+            width: 55px;
+            height: 55px;
+            padding: 0;
+            justify-content: center;
+            font-size: 24px;
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            animation: none;
+        }
+
+        .status-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.95) 0%, rgba(118, 75, 162, 0.95) 100%);
+            color: white;
+            padding: 14px 20px;
+            z-index: 1000;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.2);
+            border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .status-bar.demo-mode {
+            background: linear-gradient(135deg, rgba(255, 152, 0, 0.9) 0%, rgba(255, 193, 7, 0.9) 100%);
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 15px;
+            font-weight: 600;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.5);
+            border: 2px solid white;
+        }
+
+        .status-dot.connected {
+            background: #4ade80;
+            animation: sparkle 2s infinite;
+            box-shadow: 0 0 10px #4ade80;
+        }
+
+        .report-mode-indicator {
+            position: fixed;
+            top: 80px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: linear-gradient(135deg, #ff6b9d 0%, #f67280 100%);
+            color: white;
+            padding: 14px 28px;
+            border-radius: 25px;
+            z-index: 1000;
+            font-weight: 700;
+            display: none;
+            animation: slideDown 0.3s, sparkle 2s infinite;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+        }
+
+        @keyframes slideDown {
+            from {
+                transform: translate(-50%, -20px);
+                opacity: 0;
+            }
+            to {
+                transform: translate(-50%, 0);
+                opacity: 1;
+            }
+        }
+
+        .report-mode-indicator.active {
+            display: block;
+        }
+
+        .notification-toast {
+            position: fixed;
+            top: 80px;
+            right: 20px;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.95) 0%, rgba(118, 75, 162, 0.95) 100%);
+            color: white;
+            padding: 18px 26px;
+            border-radius: 16px;
+            z-index: 1001;
+            max-width: 350px;
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+            display: none;
+            animation: slideIn 0.3s;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(400px);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
+        }
+
+        .notification-toast.show {
+            display: block;
+        }
+
+        .notification-title {
+            font-weight: 700;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .notification-body {
+            font-size: 14px;
+            opacity: 0.95;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(102, 126, 234, 0.4);
+            z-index: 1002;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            backdrop-filter: blur(8px);
+        }
+
+        .modal-overlay.active {
+            display: flex;
+        }
+
+        .modal {
+            background: linear-gradient(135deg, #fdfbfb 0%, #ebedee 100%);
+            border-radius: 24px;
+            padding: 28px;
+            max-width: 420px;
+            width: 90%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+            border: 3px solid rgba(255, 255, 255, 0.8);
+        }
+
+        .modal h2 {
+            margin-bottom: 18px;
+            color: #667eea;
+            font-size: 24px;
+            text-align: center;
+        }
+
+        .form-group {
+            margin-bottom: 18px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 700;
+            color: #555;
+            font-size: 15px;
+        }
+
+        .form-group textarea {
+            width: 100%;
+            padding: 14px;
+            border: 3px solid #e0e0e0;
+            border-radius: 12px;
+            font-size: 14px;
+            font-family: inherit;
+            resize: vertical;
+            min-height: 90px;
+            transition: border-color 0.3s;
+        }
+
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .modal-actions {
+            display: flex;
+            gap: 12px;
+            margin-top: 24px;
+        }
+
+        .modal-actions .btn {
+            flex: 1;
+            justify-content: center;
+        }
+
+        .sighting-count {
+            font-size: 15px;
+            color: #fff;
+            font-weight: 600;
+        }
+
+        /* Custom marker styles */
+        .unicorn-marker {
+            background: linear-gradient(135deg, #ff6b9d 0%, #f67280 100%);
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: 3px solid white;
+            box-shadow: 0 3px 12px rgba(0, 0, 0, 0.3), 0 0 15px rgba(255, 107, 157, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+
+        .unicorn-popup {
+            min-width: 220px;
+        }
+
+        .unicorn-popup-content {
+            font-size: 14px;
+        }
+
+        .unicorn-time {
+            font-weight: 700;
+            color: #ff6b9d;
+            margin-bottom: 10px;
+            font-size: 15px;
+        }
+
+        .unicorn-details {
+            color: #555;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        .unicorn-expires {
+            font-size: 12px;
+            color: #999;
+            font-style: italic;
+        }
+
+        .sparkle-decoration {
+            position: fixed;
+            font-size: 30px;
+            pointer-events: none;
+            z-index: 10;
+            animation: sparkle 2s infinite, float 3s ease-in-out infinite;
+        }
+
+        .rainbow-text {
+            background: linear-gradient(to right, #ff6b9d, #c06c84, #6a5acd, #4169e1, #00bfff);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: rainbow 5s linear infinite;
+        }
+
+        @media (max-width: 768px) {
+            .controls {
+                bottom: 15px;
+            }
+
+            .btn {
+                padding: 14px 22px;
+                font-size: 15px;
+            }
+
+            .status-bar {
+                font-size: 13px;
+                padding: 12px 16px;
+            }
+
+            .modal h2 {
+                font-size: 20px;
+            }
+        }
+
+        /* Leaflet popup customization */
+        .leaflet-popup-content-wrapper {
+            border-radius: 16px;
+            padding: 4px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+        }
+
+        .leaflet-popup-tip {
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+        }
+    </style>
+</head>
+<body>
+    <!-- Floating sparkles -->
+    <div class="sparkle-decoration" style="left: 5%; top: 10%;">🌟</div>
+    <div class="sparkle-decoration" style="right: 8%; top: 20%; animation-delay: 0.5s;">✨</div>
+    <div class="sparkle-decoration" style="left: 15%; bottom: 15%; animation-delay: 1s;">🌈</div>
+    <div class="sparkle-decoration" style="right: 20%; bottom: 25%; animation-delay: 1.5s;">💫</div>
+
+    <div class="status-bar">
+        <div class="status-indicator">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Connecting to magic network...</span>
+        </div>
+        <div class="sighting-count">
+            🦄 <span id="sightingCount">0</span> unicorns spotted nearby
+        </div>
+    </div>
+
+    <div class="report-mode-indicator" id="reportModeIndicator">
+        ✨ Tap map to report unicorn sighting! 🦄
+    </div>
+
+    <div class="notification-toast" id="notificationToast">
+        <div class="notification-title" id="notificationTitle"></div>
+        <div class="notification-body" id="notificationBody"></div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="controls">
+        <button class="btn btn-locate" id="locateBtn" title="Center on my location">
+            🎯
+        </button>
+        <button class="btn btn-primary" id="reportBtn">
+            🦄 Spotted a Unicorn!
+        </button>
+        <button class="btn btn-secondary" id="cancelBtn" style="display: none;">
+            ✕ Cancel
+        </button>
+    </div>
+
+    <div class="modal-overlay" id="reportModal">
+        <div class="modal">
+            <h2>🦄 Report Unicorn Sighting! ✨</h2>
+            <form id="reportForm">
+                <div class="form-group">
+                    <label for="details">What did you see? 🌈 (optional)</label>
+                    <textarea 
+                        id="details" 
+                        placeholder="Color, size, horn sparkle level, rainbow trail, magical aura..."
+                        maxlength="500"
+                    ></textarea>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-secondary" id="modalCancelBtn">
+                        Cancel
+                    </button>
+                    <button type="submit" class="btn btn-primary">
+                        🌟 Share the Magic!
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // Configuration
+        // TO USE WITH YOUR BACKEND:
+        // 1. Set DEMO_MODE to false
+        // 2. Update WS_URL to your WebSocket endpoint
+        // 3. Update API_URL to your REST API endpoint
+        const CONFIG = {
+            WS_URL: 'wss://api.unicornspotter.app/ws', // Replace with actual WebSocket URL
+            API_URL: 'https://api.unicornspotter.app', // Replace with actual API URL
+            RADIUS_MILES: 5,
+            RADIUS_METERS: 8047, // 5 miles
+            REPORT_COOLDOWN_MS: 300000, // 5 minutes
+            AUTO_DELETE_HOURS: 4,
+            MAX_DETAILS_LENGTH: 500,
+            DEMO_MODE: true // Set to false when backend is ready
+        };
+
+        class UnicornSpotterApp {
+            constructor() {
+                this.map = null;
+                this.ws = null;
+                this.userLocation = null;
+                this.reportMode = false;
+                this.markers = new Map();
+                this.lastReportTime = 0;
+                this.sightings = new Map();
+                this.userMarker = null;
+                
+                this.init();
+            }
+
+            init() {
+                this.initMap();
+                this.initWebSocket();
+                this.initEventListeners();
+                this.requestLocation();
+                this.checkNotificationPermission();
+            }
+
+            initMap() {
+                // Initialize Leaflet map
+                this.map = L.map('map', {
+                    zoomControl: true,
+                    attributionControl: false
+                }).setView([37.7749, -122.4194], 13); // Default to SF
+
+                // Add OpenStreetMap tiles
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+                    maxZoom: 19
+                }).addTo(this.map);
+
+                // Add attribution
+                L.control.attribution({
+                    position: 'bottomright',
+                    prefix: false
+                }).addAttribution('© OpenStreetMap contributors').addTo(this.map);
+            }
+
+            initWebSocket() {
+                if (CONFIG.DEMO_MODE) {
+                    this.initDemoMode();
+                    return;
+                }
+                this.connectWebSocket();
+            }
+
+            connectWebSocket() {
+                try {
+                    this.ws = new WebSocket(CONFIG.WS_URL);
+
+                    this.ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        this.updateStatus('connected', '✨ Connected to magic network!');
+                        this.sendLocationSubscription();
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this.handleWebSocketMessage(data);
+                        } catch (e) {
+                            console.error('Error parsing WebSocket message:', e);
+                        }
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.updateStatus('error', '⚠️ Connection error');
+                    };
+
+                    this.ws.onclose = () => {
+                        console.log('WebSocket closed, reconnecting...');
+                        this.updateStatus('disconnected', '🔄 Reconnecting...');
+                        setTimeout(() => this.connectWebSocket(), 3000);
+                    };
+                } catch (error) {
+                    console.error('Failed to create WebSocket:', error);
+                    this.updateStatus('error', '❌ Failed to connect');
+                }
+            }
+
+            initDemoMode() {
+                console.log('Running in DEMO MODE - Creating magical unicorns! 🦄✨');
+                this.updateStatus('connected', '✨ Demo Mode - Magic Everywhere!');
+                
+                // Add visual indicator
+                document.querySelector('.status-bar').classList.add('demo-mode');
+                
+                // Generate some magical unicorns for demo
+                if (this.userLocation) {
+                    this.generateDemoSightings();
+                }
+
+                // Simulate new unicorn sightings every 30 seconds
+                setInterval(() => {
+                    if (this.userLocation && Math.random() > 0.7) {
+                        this.addRandomDemoSighting();
+                    }
+                }, 30000);
+            }
+
+            generateDemoSightings() {
+                const count = Math.floor(Math.random() * 4) + 2; // 2-5 unicorns
+                for (let i = 0; i < count; i++) {
+                    setTimeout(() => this.addRandomDemoSighting(), i * 500);
+                }
+            }
+
+            addRandomDemoSighting() {
+                if (!this.userLocation) return;
+
+                // Generate random location within 5 miles
+                const angle = Math.random() * Math.PI * 2;
+                const distance = Math.random() * CONFIG.RADIUS_METERS;
+                
+                const lat = this.userLocation.lat + (distance * Math.cos(angle)) / 111320;
+                const lng = this.userLocation.lng + (distance * Math.sin(angle)) / (111320 * Math.cos(this.userLocation.lat * Math.PI / 180));
+
+                const demoDetails = [
+                    'Shimmering purple horn with golden sparkles! 💜✨',
+                    'White unicorn with rainbow mane flowing in the breeze 🌈',
+                    'Baby unicorn with sparkly blue coat, so adorable! 💙',
+                    'Majestic silver unicorn, left trail of stardust ⭐',
+                    'Pink unicorn drinking from a magical fountain 🦄💖',
+                    'Group of three unicorns playing in a meadow! 🌸',
+                    null, null // Some without details
+                ];
+
+                const sighting = {
+                    id: 'demo-' + Date.now() + '-' + Math.random(),
+                    latitude: lat,
+                    longitude: lng,
+                    details: demoDetails[Math.floor(Math.random() * demoDetails.length)],
+                    created_at: new Date().toISOString(),
+                    expires_at: new Date(Date.now() + CONFIG.AUTO_DELETE_HOURS * 3600000).toISOString()
+                };
+
+                this.addSighting(sighting);
+                
+                if (Math.random() > 0.5) {
+                    this.showNotification('🦄 New Unicorn Spotted!', 
+                        `A magical unicorn appeared ${this.formatDistance(sighting)} away! ✨`);
+                }
+            }
+
+            handleWebSocketMessage(data) {
+                switch(data.type) {
+                    case 'sighting_new':
+                        this.addSighting(data.sighting);
+                        this.showNotification('🦄 New Unicorn Spotted!', 
+                            `A magical unicorn appeared ${this.formatDistance(data.sighting)} away!`);
+                        break;
+                    case 'sighting_expired':
+                        this.removeSighting(data.sighting_id);
+                        break;
+                    case 'sightings_initial':
+                        this.loadInitialSightings(data.sightings);
+                        break;
+                    case 'location_subscribed':
+                        console.log('Location subscription confirmed - magic flowing!');
+                        break;
+                }
+            }
+
+            sendLocationSubscription() {
+                if (CONFIG.DEMO_MODE) return; // Skip in demo mode
+                
+                if (this.ws && this.ws.readyState === WebSocket.OPEN && this.userLocation) {
+                    this.ws.send(JSON.stringify({
+                        type: 'subscribe_location',
+                        latitude: this.userLocation.lat,
+                        longitude: this.userLocation.lng,
+                        radius_meters: CONFIG.RADIUS_METERS
+                    }));
+                }
+            }
+
+            loadInitialSightings(sightings) {
+                sightings.forEach(sighting => this.addSighting(sighting, false));
+                this.updateSightingCount();
+            }
+
+            addSighting(sighting, showAnimation = true) {
+                if (this.markers.has(sighting.id)) return;
+
+                const marker = L.circleMarker([sighting.latitude, sighting.longitude], {
+                    radius: 16,
+                    fillColor: '#ff6b9d',
+                    color: '#fff',
+                    weight: 3,
+                    opacity: 1,
+                    fillOpacity: 0.9
+                }).addTo(this.map);
+
+                // Add unicorn emoji to marker
+                const iconElement = document.createElement('div');
+                iconElement.innerHTML = '🦄';
+                iconElement.style.fontSize = '24px';
+                iconElement.style.textAlign = 'center';
+                iconElement.style.lineHeight = '1';
+                iconElement.style.marginTop = '-6px';
+                
+                const icon = L.divIcon({
+                    html: iconElement.outerHTML,
+                    className: 'unicorn-marker-icon',
+                    iconSize: [30, 30],
+                    iconAnchor: [15, 15]
+                });
+
+                const unicornMarker = L.marker([sighting.latitude, sighting.longitude], {
+                    icon: icon
+                }).addTo(this.map);
+
+                const expiresAt = new Date(sighting.expires_at);
+                const reportedAt = new Date(sighting.created_at);
+                const timeAgo = this.getTimeAgo(reportedAt);
+
+                const popupContent = `
+                    <div class="unicorn-popup-content">
+                        <div class="unicorn-time">🦄 Spotted ${timeAgo}</div>
+                        ${sighting.details ? `<div class="unicorn-details">${this.escapeHtml(sighting.details)}</div>` : ''}
+                        <div class="unicorn-expires">✨ Magic fades: ${expiresAt.toLocaleTimeString()}</div>
+                    </div>
+                `;
+
+                unicornMarker.bindPopup(popupContent);
+
+                this.markers.set(sighting.id, { circle: marker, icon: unicornMarker });
+                this.sightings.set(sighting.id, sighting);
+                this.updateSightingCount();
+
+                if (showAnimation) {
+                    this.animateMarker(marker);
+                }
+
+                // Auto-remove after expiration
+                const timeUntilExpiry = expiresAt - new Date();
+                if (timeUntilExpiry > 0) {
+                    setTimeout(() => this.removeSighting(sighting.id), timeUntilExpiry);
+                }
+            }
+
+            removeSighting(sightingId) {
+                const markerObj = this.markers.get(sightingId);
+                if (markerObj) {
+                    this.map.removeLayer(markerObj.circle);
+                    this.map.removeLayer(markerObj.icon);
+                    this.markers.delete(sightingId);
+                    this.sightings.delete(sightingId);
+                    this.updateSightingCount();
+                }
+            }
+
+            animateMarker(marker) {
+                const element = marker._path || marker._icon;
+                if (element) {
+                    element.style.animation = 'sparkle 0.5s ease-out';
+                    setTimeout(() => {
+                        element.style.animation = '';
+                    }, 500);
+                }
+            }
+
+            initEventListeners() {
+                document.getElementById('reportBtn').addEventListener('click', () => {
+                    this.enterReportMode();
+                });
+
+                document.getElementById('cancelBtn').addEventListener('click', () => {
+                    this.exitReportMode();
+                });
+
+                document.getElementById('locateBtn').addEventListener('click', () => {
+                    this.centerOnUser();
+                });
+
+                document.getElementById('modalCancelBtn').addEventListener('click', () => {
+                    this.closeReportModal();
+                });
+
+                document.getElementById('reportForm').addEventListener('submit', (e) => {
+                    e.preventDefault();
+                    this.submitReport();
+                });
+
+                this.map.on('click', (e) => {
+                    if (this.reportMode) {
+                        this.showReportModal(e.latlng);
+                    }
+                });
+            }
+
+            enterReportMode() {
+                // Check cooldown
+                const now = Date.now();
+                if (now - this.lastReportTime < CONFIG.REPORT_COOLDOWN_MS) {
+                    const remainingSeconds = Math.ceil((CONFIG.REPORT_COOLDOWN_MS - (now - this.lastReportTime)) / 1000);
+                    this.showNotification('⏰ Whoa There!', 
+                        `Please wait ${remainingSeconds} seconds before reporting another unicorn sighting!`);
+                    return;
+                }
+
+                this.reportMode = true;
+                document.getElementById('reportModeIndicator').classList.add('active');
+                document.getElementById('reportBtn').style.display = 'none';
+                document.getElementById('cancelBtn').style.display = 'flex';
+                this.map.getContainer().style.cursor = 'crosshair';
+            }
+
+            exitReportMode() {
+                this.reportMode = false;
+                document.getElementById('reportModeIndicator').classList.remove('active');
+                document.getElementById('reportBtn').style.display = 'flex';
+                document.getElementById('cancelBtn').style.display = 'none';
+                this.map.getContainer().style.cursor = '';
+            }
+
+            showReportModal(latlng) {
+                this.pendingReport = latlng;
+                document.getElementById('reportModal').classList.add('active');
+            }
+
+            closeReportModal() {
+                document.getElementById('reportModal').classList.remove('active');
+                document.getElementById('details').value = '';
+                this.exitReportMode();
+            }
+
+            async submitReport() {
+                if (!this.pendingReport || !this.userLocation) return;
+
+                // Validate distance from user
+                const distance = this.map.distance(
+                    [this.userLocation.lat, this.userLocation.lng],
+                    [this.pendingReport.lat, this.pendingReport.lng]
+                );
+
+                if (distance > CONFIG.RADIUS_METERS) {
+                    this.showNotification('🌈 Too Far Away!', 
+                        'You can only report unicorn sightings within 5 miles of your location!');
+                    return;
+                }
+
+                const details = document.getElementById('details').value.trim();
+                
+                const report = {
+                    latitude: this.pendingReport.lat,
+                    longitude: this.pendingReport.lng,
+                    details: details || null
+                };
+
+                // Demo mode - just add locally
+                if (CONFIG.DEMO_MODE) {
+                    const sighting = {
+                        id: 'user-' + Date.now(),
+                        ...report,
+                        created_at: new Date().toISOString(),
+                        expires_at: new Date(Date.now() + CONFIG.AUTO_DELETE_HOURS * 3600000).toISOString()
+                    };
+                    
+                    this.addSighting(sighting);
+                    this.lastReportTime = Date.now();
+                    this.showNotification('✨ Magical Report Received! (Demo)', 
+                        'In production, this would be shared with all unicorn spotters! 🦄');
+                    this.closeReportModal();
+                    return;
+                }
+
+                // Production mode - send to server
+                try {
+                    const response = await fetch(`${CONFIG.API_URL}/sightings`, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify(report)
+                    });
+
+                    if (response.ok) {
+                        this.lastReportTime = Date.now();
+                        this.showNotification('✨ Report Submitted!', 
+                            'Thank you for sharing the magic with the community! 🦄🌈');
+                        this.closeReportModal();
+                    } else {
+                        const error = await response.json().catch(() => ({ message: 'Unknown error' }));
+                        this.showNotification('❌ Oops!', error.message || 'Failed to submit report');
+                    }
+                } catch (error) {
+                    console.error('Error submitting report:', error);
+                    this.showNotification('❌ Network Error', 'Please check your connection and try again!');
+                }
+            }
+
+            requestLocation() {
+                if ('geolocation' in navigator) {
+                    navigator.geolocation.getCurrentPosition(
+                        (position) => {
+                            this.userLocation = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            this.updateUserMarker();
+                            this.map.setView([this.userLocation.lat, this.userLocation.lng], 13);
+                            
+                            if (CONFIG.DEMO_MODE) {
+                                this.generateDemoSightings();
+                            } else {
+                                this.sendLocationSubscription();
+                                this.fetchNearbySightings();
+                            }
+                        },
+                        (error) => {
+                            console.error('Geolocation error:', error);
+                            this.showNotification('📍 Location Needed!', 
+                                'Please enable location access to spot unicorns in your area! 🦄');
+                        },
+                        {
+                            enableHighAccuracy: true,
+                            timeout: 5000,
+                            maximumAge: 0
+                        }
+                    );
+
+                    // Watch position for updates
+                    navigator.geolocation.watchPosition(
+                        (position) => {
+                            this.userLocation = {
+                                lat: position.coords.latitude,
+                                lng: position.coords.longitude
+                            };
+                            this.updateUserMarker();
+                        },
+                        null,
+                        { enableHighAccuracy: false, maximumAge: 30000 }
+                    );
+                }
+            }
+
+            updateUserMarker() {
+                if (!this.userLocation) return;
+
+                if (this.userMarker) {
+                    this.userMarker.setLatLng([this.userLocation.lat, this.userLocation.lng]);
+                } else {
+                    this.userMarker = L.circleMarker([this.userLocation.lat, this.userLocation.lng], {
+                        radius: 10,
+                        fillColor: '#a6c1ee',
+                        color: '#fff',
+                        weight: 3,
+                        opacity: 1,
+                        fillOpacity: 0.9
+                    }).addTo(this.map);
+
+                    this.userMarker.bindPopup('📍 You are here!');
+                }
+            }
+
+            centerOnUser() {
+                if (this.userLocation) {
+                    this.map.setView([this.userLocation.lat, this.userLocation.lng], 14, {
+                        animate: true,
+                        duration: 0.5
+                    });
+                }
+            }
+
+            async fetchNearbySightings() {
+                if (!this.userLocation) return;
+                if (CONFIG.DEMO_MODE) return; // Skip in demo mode
+
+                try {
+                    const response = await fetch(
+                        `${CONFIG.API_URL}/sightings/nearby?` + 
+                        `lat=${this.userLocation.lat}&` +
+                        `lng=${this.userLocation.lng}&` +
+                        `radius=${CONFIG.RADIUS_METERS}`
+                    );
+
+                    if (response.ok) {
+                        const sightings = await response.json();
+                        this.loadInitialSightings(sightings);
+                    }
+                } catch (error) {
+                    console.error('Error fetching sightings:', error);
+                }
+            }
+
+            async checkNotificationPermission() {
+                if ('Notification' in window && Notification.permission === 'default') {
+                    const permission = await Notification.requestPermission();
+                    if (permission === 'granted') {
+                        console.log('Notifications enabled - you\'ll know when unicorns appear! 🦄');
+                    }
+                }
+            }
+
+            showNotification(title, body) {
+                const toast = document.getElementById('notificationToast');
+                document.getElementById('notificationTitle').textContent = title;
+                document.getElementById('notificationBody').textContent = body;
+                
+                toast.classList.add('show');
+                
+                setTimeout(() => {
+                    toast.classList.remove('show');
+                }, 4000);
+
+                // Also show browser notification if permitted
+                if ('Notification' in window && Notification.permission === 'granted') {
+                    new Notification(title, { body, icon: '🦄' });
+                }
+            }
+
+            updateStatus(status, text) {
+                const dot = document.getElementById('statusDot');
+                const statusText = document.getElementById('statusText');
+                
+                dot.className = 'status-dot';
+                if (status === 'connected') {
+                    dot.classList.add('connected');
+                }
+                
+                statusText.textContent = text;
+            }
+
+            updateSightingCount() {
+                document.getElementById('sightingCount').textContent = this.markers.size;
+            }
+
+            formatDistance(sighting) {
+                if (!this.userLocation) return '';
+                
+                const distance = this.map.distance(
+                    [this.userLocation.lat, this.userLocation.lng],
+                    [sighting.latitude, sighting.longitude]
+                );
+                
+                const miles = (distance / 1609.34).toFixed(1);
+                return `${miles} mi`;
+            }
+
+            getTimeAgo(date) {
+                const seconds = Math.floor((new Date() - date) / 1000);
+                
+                if (seconds < 60) return 'just now';
+                
+                const minutes = Math.floor(seconds / 60);
+                if (minutes < 60) return `${minutes} min ago`;
+                
+                const hours = Math.floor(minutes / 60);
+                if (hours < 24) return `${hours} hour${hours > 1 ? 's' : ''} ago`;
+                
+                return date.toLocaleDateString();
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+
+        // Initialize app when DOM is ready
+        function initApp() {
+            try {
+                new UnicornSpotterApp();
+            } catch (error) {
+                console.error('Failed to initialize app:', error);
+                document.body.innerHTML = `
+                    <div style="display: flex; align-items: center; justify-content: center; height: 100vh; padding: 20px; text-align: center; color: white;">
+                        <div>
+                            <h2 style="font-size: 48px; margin-bottom: 20px;">🦄 Oops!</h2>
+                            <p style="font-size: 18px; margin-bottom: 20px;">The magic didn't quite work. Please refresh and try again!</p>
+                            <button onclick="location.reload()" style="margin-top: 20px; padding: 12px 24px; font-size: 18px; cursor: pointer; border-radius: 25px; border: none; background: linear-gradient(135deg, #ff6b9d 0%, #f67280 100%); color: white; font-weight: 700;">
+                                ✨ Reload Page
+                            </button>
+                        </div>
+                    </div>
+                `;
+            }
+        }
+
+        if (document.readyState === 'loading') {
+            document.addEventListener('DOMContentLoaded', initApp);
+        } else {
+            initApp();
+        }
+    </script>
+</body>
+</html>
