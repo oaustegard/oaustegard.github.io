@@ -150,9 +150,12 @@ class GitHubToc extends HTMLElement {
                 .map(item => {
                     const displayName = item.name
                         .replace(/\.[^/.]+$/, '')  /* Remove file extension */
-                        .replace(/([A-Z])/g, ' $1') /* Add spaces before capitals */
-                        .replace(/^./, str => str.toUpperCase()) /* Capitalize first letter */
-                        .trim();
+                        .replace(/[-_]/g, ' ')     /* Replace hyphens and underscores with spaces */
+                        .replace(/([a-z])([A-Z])/g, '$1 $2') /* Add space between camelCase */
+                        .replace(/\s+/g, ' ')      /* Collapse spaces */
+                        .toLowerCase()             /* Normalize to lower case for title casing */
+                        .replace(/(?:^|\s)\w/g, c => c.toUpperCase()) /* Apply title case */
+                        .trim();                   /* Trim whitespace */
                     
                     /* Check if this file has an associated README */
                     const baseName = item.name.replace(/\.[^/.]+$/, '');
