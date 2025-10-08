@@ -23,11 +23,11 @@ This tool provides a comprehensive interface for security analysts, administrato
 -   **Detailed Log Inspection**: Click any log in the table to open a detailed view showing all associated data, including parsed JSON objects for actor, event, and entity information.
 -   **Client-Side Privacy**: All data is processed locally in your browser. No audit log data is ever uploaded to a server.
 -   **Data Export**: Export the full, original log set or your filtered results to a CSV file for further analysis.
--   **Direct ZIP Support**: Handles the `.zip` archive directly from the Claude Enterprise console, automatically extracting and parsing the `audit_logs.csv` file.
+-   **Direct ZIP Support and Data Transformation**: Handles the `.zip` archive directly from the Claude Enterprise console, automatically extracting and parsing the `audit_logs.csv` file; then parsing the Python-formatted JSON residing within.
 
 ## Usage
 
-1.  From your Claude Enterprise console, navigate to **Settings & Members -> Reporting** and export your audit logs. This will download a `.zip` file.
+1.  From your Claude Enterprise console, navigate to **Settings & Members -> Reporting** and export your audit logs. This will trigger a background process, leading to yuu receiving an email with a link to download a `.zip` file of your logs.
 2.  Open the [Claude Audit Log Viewer](https://austegard.com/ai-tools/claude-enterprise-log-viewer.html).
 3.  Drag and drop the `.zip` file onto the upload area, or click to browse and select the file from your computer.
 4.  The tool will process the file and display the dashboard and log table.
@@ -42,7 +42,7 @@ This tool provides a comprehensive interface for security analysts, administrato
 
 ## Credits
 
-Created by Oskar Austegard ([@oaustegard](https://github.com/oaustegard))
+Created by Oskar Austegard ([@oaustegard](https://github.com/oaustegard)) and Claude Sonnet 4.5
 
 ---
 
