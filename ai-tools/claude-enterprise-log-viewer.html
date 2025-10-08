@@ -34,6 +34,7 @@
     const selectedLog = signal(null);
     const searchQuery = signal('');
     const filterEvent = signal('all');
+    const filterCategory = signal('all');
     const isDragging = signal(false);
     const isLoading = signal(false);
     const error = signal(null);
@@ -56,6 +57,28 @@
       } catch (err) {
         return 'Unknown';
       }
+    }
+
+    // Categorize events based on prefix patterns
+    function categorizeEvent(eventName) {
+      if (!eventName) return 'Other';
+      
+      // Special cases
+      if (eventName.startsWith('extra_usage_spend_limit_')) return 'Billing';
+      
+      // Extract prefix before first underscore
+      const prefix = eventName.split('_')[0];
+      
+      const categoryMap = {
+        'conversation': 'Conversations',
+        'project': 'Projects',
+        'user': 'Authentication',
+        'org': 'Organization',
+        'file': 'Files',
+        'role': 'Permissions'
+      };
+      
+      return categoryMap[prefix] || 'Other';
     }
 
     // Computed filtered logs
@@ -83,6 +106,11 @@
           
           return true;
         });
+      }
+      
+      // Filter by category
+      if (filterCategory.value !== 'all') {
+        result = result.filter(log => categorizeEvent(log.event) === filterCategory.value);
       }
       
       // Filter by event type
@@ -143,10 +171,15 @@
       return result;
     });
 
-    // Get unique event types for filter dropdown
+    // Get unique event types and categories for filter dropdown
     const eventTypes = computed(() => {
       const types = new Set(logs.value.map(log => log.event).filter(Boolean));
       return ['all', ...Array.from(types).sort()];
+    });
+
+    const eventCategories = computed(() => {
+      const categories = new Set(logs.value.map(log => categorizeEvent(log.event)));
+      return ['all', ...Array.from(categories).sort()];
     });
 
     // Parse JSON fields in CSV data (handles both JSON and Python dict strings)
@@ -298,9 +331,57 @@
       `;
     }
 
-    // Export functionality
+    // Export functionality - flatten parsed objects into columns
     function exportToCSV(data, filename = 'audit_logs_export.csv') {
-      const csv = Papa.unparse(data);
+      // Helper to convert object to key: value text block
+      const objectToTextBlock = (obj, prefix = '') => {
+        if (!obj || typeof obj !== 'object') return '';
+        
+        const lines = [];
+        Object.entries(obj).forEach(([key, value]) => {
+          const fullKey = prefix ? `${prefix}.${key}` : key;
+          if (value && typeof value === 'object' && !Array.isArray(value)) {
+            // Nested object - recurse
+            lines.push(objectToTextBlock(value, fullKey));
+          } else if (Array.isArray(value)) {
+            lines.push(`${fullKey}: [${value.join(', ')}]`);
+          } else {
+            lines.push(`${fullKey}: ${value}`);
+          }
+        });
+        return lines.filter(Boolean).join('\n');
+      };
+
+      // Flatten nested objects into separate columns
+      const flattenedData = data.map(row => {
+        const flatRow = {
+          created_at: row.created_at,
+          event: row.event,
+          event_category: categorizeEvent(row.event),
+          ip_address: row.ip_address,
+          device_id: row.device_id,
+          user_agent: row.user_agent,
+          client_platform: row.client_platform
+        };
+
+        // Flatten actor_parsed
+        if (row.actor_parsed) {
+          flatRow.actor_name = row.actor_parsed.name || '';
+          flatRow.actor_type = row.actor_parsed.type || '';
+          flatRow.actor_uuid = row.actor_parsed.uuid || '';
+          flatRow.actor_email = row.actor_parsed.metadata?.email_address || '';
+        }
+
+        // Add full event details as text block
+        flatRow.event_details = objectToTextBlock(row.event_parsed);
+
+        // Add full entity details as text block
+        flatRow.entity_details = objectToTextBlock(row.entity_parsed);
+
+        return flatRow;
+      });
+      
+      const csv = Papa.unparse(flattenedData);
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const link = document.createElement('a');
       link.href = URL.createObjectURL(blob);
@@ -316,6 +397,7 @@
         selectedLog.value = null;
         searchQuery.value = '';
         filterEvent.value = 'all';
+        filterCategory.value = 'all';
         dateRangeStart.value = '';
         dateRangeEnd.value = '';
         error.value = null;
@@ -384,6 +466,19 @@
                 onInput=${(e) => searchQuery.value = e.target.value}
                 class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
+            </div>
+            <div class="w-48">
+              <select
+                value=${filterCategory.value}
+                onChange=${(e) => filterCategory.value = e.target.value}
+                class="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              >
+                ${eventCategories.value.map(category => html`
+                  <option value=${category}>
+                    ${category === 'all' ? 'All Categories' : category}
+                  </option>
+                `)}
+              </select>
             </div>
             <div class="w-64">
               <select
@@ -511,6 +606,13 @@
           eventCounts[log.event] = (eventCounts[log.event] || 0) + 1;
         });
 
+        // Category distribution
+        const categoryCounts = {};
+        data.forEach(log => {
+          const category = categorizeEvent(log.event);
+          categoryCounts[category] = (categoryCounts[category] || 0) + 1;
+        });
+
         // Categorize events for admin insights
         const adminEvents = ['org_user_invite_accepted', 'org_user_added', 'org_user_removed', 'org_settings_changed'];
         const contentEvents = ['conversation_created', 'conversation_deleted', 'conversation_renamed'];
@@ -612,6 +714,7 @@
           uniqueUsersCount: Object.keys(userProfiles).length,
           topUsers,
           eventCounts,
+          categoryCounts,
           eventCategories,
           multiIPUsers,
           dateRange,
@@ -779,13 +882,42 @@
               </div>
 
               <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                <!-- Event Category Distribution -->
+                <div class="bg-white border border-gray-200 rounded-lg p-4">
+                  <h4 class="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
+                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 4 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
+                    </svg>
+                    Event Categories
+                  </h4>
+                  <div class="space-y-2">
+                    ${Object.entries(stats.value.categoryCounts).sort((a, b) => b[1] - a[1]).map(([category, count]) => {
+                      const percentage = (count / stats.value.totalEvents * 100).toFixed(1);
+                      return html`
+                        <div>
+                          <div class="flex justify-between text-xs mb-1">
+                            <span class="font-medium text-gray-700 truncate mr-2">${category}</span>
+                            <span class="text-gray-500">${count} (${percentage}%)</span>
+                          </div>
+                          <div class="w-full bg-gray-200 rounded-full h-2">
+                            <div 
+                              class="bg-purple-500 h-2 rounded-full transition-all"
+                              style="width: ${percentage}%"
+                            ></div>
+                          </div>
+                        </div>
+                      `;
+                    })}
+                  </div>
+                </div>
+
                 <!-- Event Type Distribution -->
                 <div class="bg-white border border-gray-200 rounded-lg p-4">
                   <h4 class="text-sm font-semibold text-gray-900 mb-4 flex items-center gap-2">
                     <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 4 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z" />
                     </svg>
-                    Event Types
+                    Top Event Types
                   </h4>
                   <div class="space-y-2">
                     ${stats.value.topEvents.map(([name, count]) => {
@@ -1129,9 +1261,14 @@
             <!-- Event Type Badge -->
             <div class="border-b border-gray-100 pb-4">
               <h4 class="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Event Type</h4>
-              <span class="inline-block px-3 py-1 text-sm font-medium text-blue-700 bg-blue-100 rounded-full">
-                ${log.event}
-              </span>
+              <div class="flex gap-2">
+                <span class="inline-block px-3 py-1 text-sm font-medium text-blue-700 bg-blue-100 rounded-full">
+                  ${log.event}
+                </span>
+                <span class="inline-block px-3 py-1 text-xs font-medium text-gray-600 bg-gray-100 rounded-full">
+                  ${categorizeEvent(log.event)}
+                </span>
+              </div>
             </div>
 
             ${renderSection('Actor Information', log.actor_parsed)}
@@ -1236,7 +1373,7 @@
       return html`
         <div class="bg-white">
           <table class="min-w-full divide-y divide-gray-200">
-            <thead class="sticky z-10 shadow-sm" style="top: 185px;">
+            <thead class="sticky z-10 shadow-sm" style="top: 210px;">
               <tr>
                 <${SortableHeader} column="created_at" label="Timestamp" />
                 <${SortableHeader} column="event" label="Event" />
