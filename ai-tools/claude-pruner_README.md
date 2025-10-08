@@ -2,7 +2,7 @@
 
 A web-based tool for selectively pruning and exporting conversations from Claude.ai, including messages, artifacts, tool usage, and thinking steps.
 
-**[Live Demo](https://austegard.com/ai-tools/claude-pruner.html)** | **[Source Code](https://github.com/oaustegard/oaustegard.github.io/blob/main/ai-tools/claude-pruner.html)** | **[Companion Bookmarklet](https://github.com/oaustegard/bookmarklets/blob/main/claude-pruner.js)**
+**[Live Demo](https://austegard.com/ai-tools/claude-pruner.html)** | **[Source Code](https://github.com/oaustegard/oaustegard.github.io/blob/main/ai-tools/claude-pruner.html)** | **[Companion Bookmarklet](https://github.com/oaustegard/bookmarklets/blob/main/claude_pruner_README.md)**
 
 ## Overview
 
@@ -21,7 +21,7 @@ Claude Pruner provides a detailed, interactive view of a Claude.ai conversation,
 
 This tool is designed to be used with its companion bookmarklet.
 
-1.  Install the [Claude Pruner bookmarklet](https://github.com/oaustegard/bookmarklets/blob/main/claude-pruner.js) in your browser.
+1.  Install the [Claude Pruner bookmarklet](https://github.com/oaustegard/bookmarklets/blob/main/claude_pruner.js) in your browser using the [Bookmarklet Installer](https://austegard.com/web-utilities/bookmarklet-installer.html?bookmarklet=claude_pruner.js).
 2.  While on an active conversation page on `claude.ai`, click the bookmarklet.
 3.  A new tab will open with this tool, displaying the full conversation broken down into its components.
 4.  By default, all items are selected. Click any item to deselect it. Use the toggle buttons at the top to manage selections in bulk.
@@ -29,7 +29,8 @@ This tool is designed to be used with its companion bookmarklet.
 
 ## Technical Details
 
--   Built with vanilla JavaScript, HTML, and CSS.
+-   ENTIRELY CLIENT SIDE -- no data is transferred to the server
+-   Built with vanilla JavaScript, HTML, and CSS. No server code -- the [claude-pruner.html](./claude-pruner.html) is entirely static. 
 -   Receives conversation data from the `claude.ai` domain via the `window.postMessage` API.
 -   Dynamically parses the JSON data structure and renders the interactive UI.
 -   Sorts all selected components chronologically in the final exported output.
