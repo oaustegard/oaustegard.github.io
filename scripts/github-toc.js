@@ -7,7 +7,7 @@ class GitHubToc extends HTMLElement {
 
     /* Define observed attributes for the component */
     static get observedAttributes() {
-        return ['repo-path', 'link-prefix', 'exclude'];
+        return ['repo-path', 'link-prefix', 'exclude', 'include-regex'];
     }
 
     /* Initialize the component when connected */
@@ -46,6 +46,20 @@ class GitHubToc extends HTMLElement {
         return patterns.some(pattern => 
             this.wildcardToRegex(pattern).test(filename)
         );
+    }
+
+    /* Check if a filename matches the include-regex pattern */
+    shouldInclude(filename) {
+        const regexStr = this.getAttribute('include-regex');
+        if (!regexStr) return true; // If no regex is provided, include all
+
+        try {
+            const regex = new RegExp(regexStr);
+            return regex.test(filename);
+        } catch (e) {
+            console.error('Invalid regex in include-regex:', e);
+            return false;
+        }
     }
 
     /* Render the basic structure */
@@ -142,10 +156,11 @@ class GitHubToc extends HTMLElement {
 
             /* Generate list items */
             list.innerHTML = sortedData
-                .filter(item => 
-                    !item.name.startsWith('.') && 
+                .filter(item =>
+                    !item.name.startsWith('.') &&
                     !item.name.startsWith('_') &&
-                    !this.shouldExclude(item.name)
+                    !this.shouldExclude(item.name) &&
+                    this.shouldInclude(item.name)
                 )
                 .map(item => {
                     const displayName = item.name
