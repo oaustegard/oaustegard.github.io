@@ -7,7 +7,7 @@ class GitHubToc extends HTMLElement {
 
     /* Define observed attributes for the component */
     static get observedAttributes() {
-        return ['repo-path', 'link-prefix', 'exclude', 'include-regex'];
+        return ['repo-path', 'link-prefix', 'exclude', 'include'];
     }
 
     /* Initialize the component when connected */
@@ -48,18 +48,21 @@ class GitHubToc extends HTMLElement {
         );
     }
 
-    /* Check if a filename matches the include-regex pattern */
+    /* Check if a filename matches any include pattern */
     shouldInclude(filename) {
-        const regexStr = this.getAttribute('include-regex');
-        if (!regexStr) return true; // If no regex is provided, include all
+        const includeStr = this.getAttribute('include');
+        if (!includeStr) return true; /* If no include patterns, include all files */
 
-        try {
-            const regex = new RegExp(regexStr);
-            return regex.test(filename);
-        } catch (e) {
-            console.error('Invalid regex in include-regex:', e);
-            return false;
-        }
+        /* Split by commas, trim whitespace, and filter empty strings */
+        const patterns = includeStr
+            .split(',')
+            .map(p => p.trim())
+            .filter(p => p);
+
+        /* Convert patterns to RegExp and check for matches */
+        return patterns.some(pattern => 
+            this.wildcardToRegex(pattern).test(filename)
+        );
     }
 
     /* Render the basic structure */
