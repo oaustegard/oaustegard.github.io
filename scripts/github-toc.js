@@ -112,16 +112,23 @@ class GitHubToc extends HTMLElement {
         return { owner, repo, branch, path };
     }
 
+    /* Generate GitHub blob URL for a file by transforming repo-path */
+    getFileUrl(repoPath, filename) {
+        const baseUrl = repoPath.replace(/\/tree\//, '/blob/').replace(/\/$/, '');
+        return `${baseUrl}/${filename}`;
+    }
+
     /* Generate README URL for a given file */
-    getReadmeUrl(params, filename) {
+    getReadmeUrl(repoPath, filename) {
         const baseName = filename.replace(/\.[^/.]+$/, '');
-        return `https://github.com/${params.owner}/${params.repo}/blob/${params.branch}/${params.path}/${baseName}_README.md`;
+        const baseUrl = repoPath.replace(/\/tree\//, '/blob/').replace(/\/$/, '');
+        return `${baseUrl}/${baseName}_README.md`;
     }
 
     /* Load content from GitHub API */
     async loadContent() {
         const repoPath = this.getAttribute('repo-path');
-        const linkPrefix = this.getAttribute('link-prefix')?.replace(/\/$/, '') || '';
+        const linkPrefix = this.getAttribute('link-prefix');
         const list = this.shadowRoot.getElementById('toc-list');
         
         if (!repoPath) {
@@ -175,16 +182,21 @@ class GitHubToc extends HTMLElement {
                         .replace(/(?:^|\s)\w/g, c => c.toUpperCase()) /* Apply title case */
                         .trim();                   /* Trim whitespace */
                     
+                    /* Generate file URL: use link-prefix if provided, otherwise use GitHub blob URL */
+                    const fileUrl = linkPrefix 
+                        ? `${linkPrefix.replace(/\/$/, '')}/${item.name}`
+                        : this.getFileUrl(repoPath, item.name);
+                    
                     /* Check if this file has an associated README */
                     const baseName = item.name.replace(/\.[^/.]+$/, '');
                     const hasReadme = readmeFiles.includes(baseName);
                     const readmeLink = hasReadme ? 
-                        `<a href="${this.getReadmeUrl(params, item.name)}" class="readme-link">(readme)</a>` : 
+                        `<a href="${this.getReadmeUrl(repoPath, item.name)}" class="readme-link">(readme)</a>` : 
                         '';
                     
                     return `
                         <li>
-                            <a href="${linkPrefix}/${item.name}">
+                            <a href="${fileUrl}">
                                 ${displayName}
                             </a>
                             ${readmeLink}
