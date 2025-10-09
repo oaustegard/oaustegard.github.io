@@ -55,7 +55,7 @@ The repository is organized into thematic subdirectories containing standalone w
 - `/bsky/`: Tools and utilities related to the BlueSky/AT Protocol social network.
 - `/fun-and-games/`: Interactive pages, curiosities, and small games.
 - `/web-utilities/`: General-purpose web tools like formatters, converters, and bookmarklets.
-- **Creating New Sections**: To create a new tool category, create a new directory (e.g., `/new-tools/`). Add an `index.html` file inside it, modeled after `/ai-tools/index.html`, which uses the `github-toc.js` component to list the tools in that directory.
+- **Creating New Sections**: To create a new tool category, create a new directory (e.g., `/new-tools/`). Add an `index.html` file inside it, modeled after `/ai-tools/index.html`, which uses the `github-toc.js` component to list the tools in that directory. AFter creating a new section also make sure to update this file (AGENTS.md) accordingly!
 - `/images/`: Site-wide images and assets.
 - `/scripts/`: Shared JavaScript files or scripts used by multiple pages.
 - `/styles/`: CSS stylesheets.
