@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>∞</title>
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/preact@10.23.1",
+        "preact/hooks": "https://esm.sh/preact@10.23.1/hooks",
+        "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+      }
+    }
+  </script>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    html, body {
+      width: 100%;
+      height: 100%;
+      background: #000;
+      overflow: hidden;
+    }
+    
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      background: #000;
+      cursor: grab;
+    }
+    
+    canvas:active {
+      cursor: grabbing;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  
+  <script type="module">
+    import { render } from 'preact';
+    import { useState, useEffect, useRef } from 'preact/hooks';
+    import { html } from 'htm/preact';
+    
+    const vertexShader = `
+      attribute vec2 position;
+      void main() {
+        gl_Position = vec4(position, 0.0, 1.0);
+      }
+    `;
+    
+    const fragmentShader = `
+      precision highp float;
+      uniform vec2 r;
+      uniform float t;
+      uniform float speed;
+      uniform float zoom;
+      
+      #define PI 3.14159265359
+      
+      float tanh(float x) {
+        float e = exp(2.0 * x);
+        return (e - 1.0) / (e + 1.0);
+      }
+      
+      void main() {
+        vec2 FC = gl_FragCoord.xy;
+        
+        // Original: vec2 u=FC.xy/r.y*PI;
+        // Zoom out by dividing by zoom factor
+        vec2 u = FC / r.y * PI / zoom;
+        
+        // Original: vec3 c=vec3(sin(u.x+vec2(0,11))*sin(u.y),cos(u.y))
+        vec3 c = vec3(
+          sin(u.x) * sin(u.y),
+          sin(u.x + 11.0) * sin(u.y),
+          cos(u.y)
+        );
+        
+        // Original: a+=.57
+        vec3 a = vec3(0.57);
+        
+        // Original: v=mix(dot(a,c)*a,c,sin(t))+cos(t)*cross(a,c)
+        vec3 v = mix(
+          dot(a, c) * a,
+          c,
+          sin(t * speed)
+        ) + cos(t * speed) * cross(a, c);
+        
+        // Original: o.rgb=tanh(.1/abs(tan(v/.1)))
+        // Thicker bands: use 0.15 instead of 0.1
+        vec3 tanV = tan(v / 0.15);
+        vec3 color = vec3(
+          tanh(0.15 / abs(tanV.r)),
+          tanh(0.15 / abs(tanV.g)),
+          tanh(0.15 / abs(tanV.b))
+        );
+        
+        // Take absolute value since tanh can be negative
+        color = abs(color);
+        
+        // Sharp threshold: only show the brightest bands
+        color = smoothstep(0.7, 0.95, color);
+        
+        // Boost remaining colors
+        color = pow(color, vec3(0.8)) * 2.5;
+        color = clamp(color, 0.0, 1.0);
+        
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+    
+    function App() {
+      const canvasRef = useRef(null);
+      const [zoom, setZoom] = useState(1.5);
+      const glRef = useRef(null);
+      const programRef = useRef(null);
+      const rafRef = useRef(null);
+      const startTime = useRef(Date.now());
+      const speed = 0.5; // Fixed speed
+      
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        const gl = canvas.getContext('webgl', { alpha: false });
+        if (!gl) return;
+        
+        glRef.current = gl;
+        
+        // Compile shaders
+        const vs = gl.createShader(gl.VERTEX_SHADER);
+        gl.shaderSource(vs, vertexShader);
+        gl.compileShader(vs);
+        
+        const fs = gl.createShader(gl.FRAGMENT_SHADER);
+        gl.shaderSource(fs, fragmentShader);
+        gl.compileShader(fs);
+        
+        const program = gl.createProgram();
+        gl.attachShader(program, vs);
+        gl.attachShader(program, fs);
+        gl.linkProgram(program);
+        gl.useProgram(program);
+        
+        programRef.current = program;
+        
+        // Setup geometry
+        const buffer = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([
+          -1, -1,  1, -1,  -1, 1,  1, 1
+        ]), gl.STATIC_DRAW);
+        
+        const pos = gl.getAttribLocation(program, 'position');
+        gl.enableVertexAttribArray(pos);
+        gl.vertexAttribPointer(pos, 2, gl.FLOAT, false, 0, 0);
+        
+        // Handle resize
+        const resize = () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+          gl.viewport(0, 0, canvas.width, canvas.height);
+        };
+        resize();
+        window.addEventListener('resize', resize);
+        
+        // Handle scroll wheel zoom
+        const handleWheel = (e) => {
+          e.preventDefault();
+          setZoom(prev => {
+            const delta = e.deltaY * 0.001;
+            return Math.max(0.5, Math.min(5.0, prev + delta));
+          });
+        };
+        canvas.addEventListener('wheel', handleWheel, { passive: false });
+        
+        return () => {
+          window.removeEventListener('resize', resize);
+          canvas.removeEventListener('wheel', handleWheel);
+        };
+      }, []);
+      
+      useEffect(() => {
+        const gl = glRef.current;
+        const program = programRef.current;
+        if (!gl || !program) return;
+        
+        const rLoc = gl.getUniformLocation(program, 'r');
+        const tLoc = gl.getUniformLocation(program, 't');
+        const speedLoc = gl.getUniformLocation(program, 'speed');
+        const zoomLoc = gl.getUniformLocation(program, 'zoom');
+        
+        const animate = () => {
+          const time = (Date.now() - startTime.current) / 1000;
+          
+          gl.clearColor(0, 0, 0, 1);
+          gl.clear(gl.COLOR_BUFFER_BIT);
+          
+          gl.uniform2f(rLoc, gl.canvas.width, gl.canvas.height);
+          gl.uniform1f(tLoc, time);
+          gl.uniform1f(speedLoc, speed);
+          gl.uniform1f(zoomLoc, zoom);
+          
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+          
+          rafRef.current = requestAnimationFrame(animate);
+        };
+        
+        animate();
+        
+        return () => {
+          if (rafRef.current) cancelAnimationFrame(rafRef.current);
+        };
+      }, [zoom]);
+      
+      return html`<canvas ref=${canvasRef}></canvas>`;
+    }
+    
+    render(html`<${App} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>
