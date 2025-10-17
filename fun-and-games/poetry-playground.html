@@ -1,0 +1,520 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Generative Typography Playground</title>
+  
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/preact@10.23.1",
+        "preact/": "https://esm.sh/preact@10.23.1/",
+        "@preact/signals": "https://esm.sh/@preact/signals@1.3.0?external=preact",
+        "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+      }
+    }
+  </script>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&family=JetBrains+Mono:wght@400;700&display=swap');
+    
+    body {
+      margin: 0;
+      background: #0a0a0a;
+      overflow-x: hidden;
+    }
+    
+    .word-fragment {
+      display: inline-block;
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    
+    .word-fragment:hover {
+      transform: scale(1.2) rotate(2deg);
+    }
+    
+    @keyframes float {
+      0%, 100% { transform: translateY(0px); }
+      50% { transform: translateY(-20px); }
+    }
+    
+    @keyframes pulse-glow {
+      0%, 100% { filter: drop-shadow(0 0 2px currentColor); }
+      50% { filter: drop-shadow(0 0 8px currentColor); }
+    }
+    
+    .floating {
+      animation: float 3s ease-in-out infinite;
+    }
+    
+    .glowing {
+      animation: pulse-glow 2s ease-in-out infinite;
+    }
+    
+    canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 0;
+    }
+    
+    .content {
+      position: relative;
+      z-index: 1;
+    }
+    
+    .gradient-text {
+      background: linear-gradient(45deg, #ff6b6b, #4ecdc4, #45b7d1, #96ceb4);
+      background-size: 300% 300%;
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      animation: gradient-shift 8s ease infinite;
+    }
+    
+    @keyframes gradient-shift {
+      0% { background-position: 0% 50%; }
+      50% { background-position: 100% 50%; }
+      100% { background-position: 0% 50%; }
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  
+  <script type="module">
+    import { render } from 'preact';
+    import { useSignal, computed, effect } from '@preact/signals';
+    import { useEffect, useRef } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    // Sample poem fragments
+    const poemFragments = [
+      "circuits dream in silicon",
+      "whispers through the ethernet",
+      "binary stars collapse",
+      "synthetic dawn breaks",
+      "algorithms breathe",
+      "pixels dissolve into meaning",
+      "the void compiles itself",
+      "data streams cascade",
+      "electric thoughts illuminate",
+      "recursive echoes multiply"
+    ];
+
+    // WebGL Particle Background
+    function ParticleCanvas({ intensity }) {
+      const canvasRef = useRef(null);
+      
+      useEffect(() => {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        
+        const particles = [];
+        const particleCount = Math.floor(intensity.value * 100);
+        
+        class Particle {
+          constructor() {
+            this.reset();
+          }
+          
+          reset() {
+            this.x = Math.random() * canvas.width;
+            this.y = Math.random() * canvas.height;
+            this.vx = (Math.random() - 0.5) * 0.5;
+            this.vy = (Math.random() - 0.5) * 0.5;
+            this.size = Math.random() * 2 + 0.5;
+            this.opacity = Math.random() * 0.5 + 0.2;
+            this.hue = Math.random() * 60 + 180; // Blue-cyan range
+          }
+          
+          update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            
+            if (this.x < 0 || this.x > canvas.width) this.vx *= -1;
+            if (this.y < 0 || this.y > canvas.height) this.vy *= -1;
+          }
+          
+          draw() {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+            ctx.fillStyle = `hsla(${this.hue}, 70%, 60%, ${this.opacity})`;
+            ctx.fill();
+          }
+        }
+        
+        // Initialize particles
+        for (let i = 0; i < particleCount; i++) {
+          particles.push(new Particle());
+        }
+        
+        function animate() {
+          ctx.fillStyle = 'rgba(10, 10, 10, 0.1)';
+          ctx.fillRect(0, 0, canvas.width, canvas.height);
+          
+          particles.forEach(particle => {
+            particle.update();
+            particle.draw();
+          });
+          
+          // Draw connections
+          particles.forEach((p1, i) => {
+            particles.slice(i + 1).forEach(p2 => {
+              const dx = p1.x - p2.x;
+              const dy = p1.y - p2.y;
+              const distance = Math.sqrt(dx * dx + dy * dy);
+              
+              if (distance < 100) {
+                ctx.beginPath();
+                ctx.moveTo(p1.x, p1.y);
+                ctx.lineTo(p2.x, p2.y);
+                ctx.strokeStyle = `hsla(200, 70%, 60%, ${(1 - distance / 100) * 0.2})`;
+                ctx.lineWidth = 0.5;
+                ctx.stroke();
+              }
+            });
+          });
+          
+          requestAnimationFrame(animate);
+        }
+        
+        animate();
+        
+        const handleResize = () => {
+          canvas.width = window.innerWidth;
+          canvas.height = window.innerHeight;
+        };
+        
+        window.addEventListener('resize', handleResize);
+        
+        return () => {
+          window.removeEventListener('resize', handleResize);
+        };
+      }, []);
+      
+      return html`<canvas ref=${canvasRef} />`;
+    }
+
+    // Typography Controls Component
+    function TypographyControls({ settings }) {
+      const fonts = ['Space Mono', 'Playfair Display', 'JetBrains Mono'];
+      const layouts = ['flow', 'cascade', 'scatter', 'spiral'];
+      
+      return html`
+        <div class="bg-gray-900/90 backdrop-blur-sm p-6 rounded-lg space-y-4 border border-gray-700">
+          <h2 class="text-xl font-bold text-white mb-4">Typography Controls</h2>
+          
+          <div class="space-y-3">
+            <div>
+              <label class="block text-sm text-gray-300 mb-2">Font Family</label>
+              <select 
+                value=${settings.font}
+                onChange=${(e) => settings.font.value = e.target.value}
+                class="w-full bg-gray-800 text-white p-2 rounded border border-gray-600"
+              >
+                ${fonts.map(font => html`<option value=${font}>${font}</option>`)}
+              </select>
+            </div>
+            
+            <div>
+              <label class="block text-sm text-gray-300 mb-2">
+                Font Size: ${settings.size.value}px
+              </label>
+              <input 
+                type="range" 
+                min="12" 
+                max="120" 
+                value=${settings.size}
+                onInput=${(e) => settings.size.value = parseInt(e.target.value)}
+                class="w-full"
+              />
+            </div>
+            
+            <div>
+              <label class="block text-sm text-gray-300 mb-2">
+                Letter Spacing: ${settings.spacing.value}px
+              </label>
+              <input 
+                type="range" 
+                min="-5" 
+                max="30" 
+                value=${settings.spacing}
+                onInput=${(e) => settings.spacing.value = parseInt(e.target.value)}
+                class="w-full"
+              />
+            </div>
+            
+            <div>
+              <label class="block text-sm text-gray-300 mb-2">
+                Line Height: ${settings.lineHeight.value}
+              </label>
+              <input 
+                type="range" 
+                min="0.8" 
+                max="3" 
+                step="0.1"
+                value=${settings.lineHeight}
+                onInput=${(e) => settings.lineHeight.value = parseFloat(e.target.value)}
+                class="w-full"
+              />
+            </div>
+            
+            <div>
+              <label class="block text-sm text-gray-300 mb-2">Layout Mode</label>
+              <div class="grid grid-cols-2 gap-2">
+                ${layouts.map(layout => html`
+                  <button
+                    onClick=${() => settings.layout.value = layout}
+                    class=${`p-2 rounded text-sm ${
+                      settings.layout.value === layout 
+                        ? 'bg-blue-600 text-white' 
+                        : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                    }`}
+                  >
+                    ${layout}
+                  </button>
+                `)}
+              </div>
+            </div>
+            
+            <div>
+              <label class="block text-sm text-gray-300 mb-2">
+                Particle Intensity: ${(settings.intensity.value * 100).toFixed(0)}%
+              </label>
+              <input 
+                type="range" 
+                min="0" 
+                max="1" 
+                step="0.1"
+                value=${settings.intensity}
+                onInput=${(e) => settings.intensity.value = parseFloat(e.target.value)}
+                class="w-full"
+              />
+            </div>
+            
+            <div class="flex gap-2">
+              <label class="flex items-center text-sm text-gray-300">
+                <input 
+                  type="checkbox"
+                  checked=${settings.effects.floating}
+                  onChange=${(e) => settings.effects.floating.value = e.target.checked}
+                  class="mr-2"
+                />
+                Floating Effect
+              </label>
+              
+              <label class="flex items-center text-sm text-gray-300">
+                <input 
+                  type="checkbox"
+                  checked=${settings.effects.glowing}
+                  onChange=${(e) => settings.effects.glowing.value = e.target.checked}
+                  class="mr-2"
+                />
+                Glow Effect
+              </label>
+            </div>
+          </div>
+          
+          <button
+            onClick=${() => settings.randomize.value++}
+            class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded transition"
+          >
+            🎲 Randomize All
+          </button>
+        </div>
+      `;
+    }
+
+    // Main Poetry Display Component
+    function PoetryDisplay({ settings, poem }) {
+      const layoutStyles = computed(() => {
+        const base = {
+          fontFamily: settings.font.value,
+          fontSize: `${settings.size.value}px`,
+          letterSpacing: `${settings.spacing.value}px`,
+          lineHeight: settings.lineHeight.value
+        };
+        
+        switch (settings.layout.value) {
+          case 'flow':
+            return { ...base, display: 'flex', flexWrap: 'wrap', gap: '20px' };
+          case 'cascade':
+            return { ...base, display: 'flex', flexDirection: 'column', alignItems: 'flex-start' };
+          case 'scatter':
+            return { ...base, position: 'relative', minHeight: '600px' };
+          case 'spiral':
+            return { ...base, position: 'relative', minHeight: '600px' };
+          default:
+            return base;
+        }
+      });
+      
+      const renderWord = (word, index, fragmentIndex) => {
+        const baseClass = "word-fragment cursor-pointer";
+        const effectClasses = [
+          settings.effects.floating.value ? 'floating' : '',
+          settings.effects.glowing.value ? 'glowing' : ''
+        ].filter(Boolean).join(' ');
+        
+        let style = { animationDelay: `${index * 0.1}s` };
+        
+        if (settings.layout.value === 'scatter') {
+          style = {
+            ...style,
+            position: 'absolute',
+            left: `${(index * 47 % 80) + 10}%`,
+            top: `${(fragmentIndex * 97 % 70) + 10}%`,
+            transform: `rotate(${(index * 13) % 360 - 180}deg)`
+          };
+        } else if (settings.layout.value === 'spiral') {
+          const angle = (index + fragmentIndex * 10) * 0.5;
+          const radius = 50 + (index + fragmentIndex * 5) * 15;
+          const x = 50 + Math.cos(angle) * (radius / window.innerWidth * 100);
+          const y = 50 + Math.sin(angle) * (radius / window.innerHeight * 100);
+          style = {
+            ...style,
+            position: 'absolute',
+            left: `${x}%`,
+            top: `${y}%`,
+            transform: `rotate(${angle * 57.2958}deg)`
+          };
+        } else if (settings.layout.value === 'cascade') {
+          style = {
+            ...style,
+            marginLeft: `${index * 20}px`
+          };
+        }
+        
+        return html`
+          <span 
+            key=${`${fragmentIndex}-${index}`}
+            class="${baseClass} ${effectClasses} gradient-text"
+            style=${style}
+          >
+            ${word}
+          </span>
+        `;
+      };
+      
+      return html`
+        <div class="p-8">
+          <div style=${layoutStyles.value}>
+            ${poem.value.map((fragment, fragmentIndex) => {
+              const words = fragment.split(' ');
+              return html`
+                <div key=${fragmentIndex} class="fragment-line">
+                  ${words.map((word, wordIndex) => renderWord(word, wordIndex, fragmentIndex))}
+                </div>
+              `;
+            })}
+          </div>
+        </div>
+      `;
+    }
+
+    // Main App Component
+    function App() {
+      // State using signals
+      const settings = {
+        font: useSignal('Space Mono'),
+        size: useSignal(48),
+        spacing: useSignal(2),
+        lineHeight: useSignal(1.5),
+        layout: useSignal('flow'),
+        intensity: useSignal(0.5),
+        effects: {
+          floating: useSignal(false),
+          glowing: useSignal(true)
+        },
+        randomize: useSignal(0)
+      };
+      
+      const poem = useSignal(poemFragments.slice(0, 5));
+      
+      // Effect to randomize settings when randomize counter changes
+      effect(() => {
+        if (settings.randomize.value > 0) {
+          settings.font.value = ['Space Mono', 'Playfair Display', 'JetBrains Mono'][Math.floor(Math.random() * 3)];
+          settings.size.value = Math.floor(Math.random() * 80) + 20;
+          settings.spacing.value = Math.floor(Math.random() * 20) - 5;
+          settings.lineHeight.value = Math.random() * 2 + 0.8;
+          settings.layout.value = ['flow', 'cascade', 'scatter', 'spiral'][Math.floor(Math.random() * 4)];
+          settings.intensity.value = Math.random();
+          settings.effects.floating.value = Math.random() > 0.5;
+          settings.effects.glowing.value = Math.random() > 0.5;
+        }
+      });
+      
+      const regeneratePoem = () => {
+        const shuffled = [...poemFragments].sort(() => Math.random() - 0.5);
+        const count = Math.floor(Math.random() * 5) + 3;
+        poem.value = shuffled.slice(0, count);
+      };
+      
+      return html`
+        <div class="content min-h-screen">
+          <${ParticleCanvas} intensity=${settings.intensity} />
+          
+          <div class="container mx-auto px-4 py-8">
+            <header class="text-center mb-12">
+              <h1 class="text-5xl font-bold text-white mb-4">
+                <span class="gradient-text">Generative Typography Playground</span>
+              </h1>
+              <p class="text-gray-400 text-lg">
+                Experimental poetry meets reactive design
+              </p>
+            </header>
+            
+            <div class="grid lg:grid-cols-[1fr,350px] gap-8">
+              <div class="bg-gray-900/50 backdrop-blur-sm rounded-lg p-8 border border-gray-800">
+                <div class="flex justify-between items-center mb-6">
+                  <h2 class="text-2xl font-bold text-white">Poetry Canvas</h2>
+                  <button
+                    onClick=${regeneratePoem}
+                    class="bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded transition"
+                  >
+                    ✨ New Poem
+                  </button>
+                </div>
+                
+                <${PoetryDisplay} settings=${settings} poem=${poem} />
+              </div>
+              
+              <div>
+                <${TypographyControls} settings=${settings} />
+                
+                <div class="mt-6 bg-gray-900/90 backdrop-blur-sm p-6 rounded-lg border border-gray-700">
+                  <h3 class="text-lg font-bold text-white mb-3">About</h3>
+                  <p class="text-sm text-gray-400 leading-relaxed">
+                    This playground demonstrates Preact's capabilities with zero-build architecture:
+                  </p>
+                  <ul class="text-sm text-gray-400 mt-2 space-y-1">
+                    <li>• HTM syntax with import maps</li>
+                    <li>• Signals for reactive state</li>
+                    <li>• WebGL particle system</li>
+                    <li>• CSS animations & transitions</li>
+                    <li>• No build tools required</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    // Render the app
+    render(html`<${App} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>
