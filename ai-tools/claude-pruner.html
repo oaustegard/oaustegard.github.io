@@ -43,7 +43,7 @@
             color: #666;
         }
 
-        /* Two-column layout - PRESERVING ORIGINAL LAYOUT */
+        /* Two-column layout */
         .container {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -52,14 +52,14 @@
             margin: 0 auto;
         }
 
-        .messages-column, .artifacts-column {
+        .messages-column, .tools-column {
             min-width: 0;
             display: flex;
             flex-direction: column;
             gap: 20px;
         }
 
-        .artifacts-column {
+        .tools-column {
             border-left: 1px solid #ddd;
             padding-left: 20px;
         }
@@ -307,7 +307,7 @@
                     
                     if (part.type === 'text') {
                         const text = part.text.trim();
-                        if (text && !text.startsWith('<antArtifact')) {
+                        if (text) {
                             elements.push(`<div class="text-content">${text}</div>`);
                         }
                     }
@@ -370,42 +370,6 @@
                     }
                 });
 
-                // Extract artifacts from text content
-                message.content.forEach(part => {
-                    if (part.type === 'text' && part.text.includes('<antArtifact')) {
-                        info('Found artifact in text');
-                        const artifactMatches = part.text.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/g);
-                        
-                        if (artifactMatches) {
-                            artifactMatches.forEach(match => {
-                                try {
-                                    const matchResult = match.match(/<antArtifact[^>]*identifier="([^"]*)"[^>]*title="([^"]*)"[^>]*>([\s\S]*?)<\/antArtifact>/);
-                                    
-                                    if (matchResult && matchResult.length >= 4) {
-                                        const [, identifier, title, content] = matchResult;
-                                        
-                                        info(`Found artifact: ${identifier} - ${title}`);
-                                        
-                                        const cleanContent = content
-                                            .trim()
-                                            .replace(/&/g, '&amp;')
-                                            .replace(/</g, '&lt;')
-                                            .replace(/>/g, '&gt;');
-
-                                        artifacts.push({
-                                            title,
-                                            content: cleanContent,
-                                            timestamp: message.created_at
-                                        });
-                                    }
-                                } catch (err) {
-                                    error(`Error processing artifact match: ${err.message}`);
-                                }
-                            });
-                        }
-                    }
-                });
-
                 info(`Processed ${elements.length} text elements, ${artifacts.length} artifacts, ${toolUses.length} tool uses, and ${thinking.length} thinking blocks`);
                 return { text: elements.join('\n'), artifacts, toolUses, thinking };
                 
@@ -459,19 +423,6 @@
                     });
                 });
 
-                // Add artifacts
-                document.querySelectorAll('.artifact.selected').forEach(artifact => {
-                    const title = artifact.getAttribute('data-title');
-                    const code = artifact.querySelector('code').textContent.trim();
-                    const timestamp = new Date(artifact.getAttribute('data-timestamp')).getTime();
-                    
-                    selectedContent.push({
-                        timestamp,
-                        content: `<Artifact title="${title}">${code}</Artifact>`,
-                        type: 'artifact'
-                    });
-                });
-                
                 selectedContent.sort((a, b) => a.timestamp - b.timestamp);
                 
                 return selectedContent.map(item => item.content).join('\n\n');
@@ -485,21 +436,19 @@
             try {
                 const selectedMessages = document.querySelectorAll('.message.selected:not(.thinking)').length;
                 const totalMessages = document.querySelectorAll('.message:not(.thinking)').length;
-                const selectedArtifacts = document.querySelectorAll('.artifact.selected').length;
-                const totalArtifacts = document.querySelectorAll('.artifact').length;
                 const selectedTools = document.querySelectorAll('.tool-use.selected').length;
                 const totalTools = document.querySelectorAll('.tool-use').length;
                 const selectedThinking = document.querySelectorAll('.thinking.selected').length;
                 const totalThinking = document.querySelectorAll('.thinking').length;
                 
-                const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .artifact.selected, .tool-use.selected, .thinking.selected'))
+                const selectedText = Array.from(document.querySelectorAll('.message.selected .text-content, .tool-use.selected, .thinking.selected'))
                     .map(el => el.textContent)
                     .join(' ');
                 const words = selectedText.trim().split(/\s+/).length;
                 const tokens = estimateTokens(selectedText);
                 
                 document.querySelector('.stats').textContent = 
-                    `Messages: ${selectedMessages}/${totalMessages} | Artifacts: ${selectedArtifacts}/${totalArtifacts} | Tools: ${selectedTools}/${totalTools} | Thinking: ${selectedThinking}/${totalThinking} | Words: ${words} | Tokens: ~${tokens}`;
+                    `Messages: ${selectedMessages}/${totalMessages} | Tools: ${selectedTools}/${totalTools} | Thinking: ${selectedThinking}/${totalThinking} | Words: ${words} | Tokens: ~${tokens}`;
             } catch (err) {
                 error(`Error in updateStats: ${err.message}`);
             }
@@ -507,7 +456,7 @@
 
         function setupEventListeners() {
             try {
-                document.querySelectorAll('.message, .artifact, .tool-use, .thinking').forEach(el => {
+                document.querySelectorAll('.message, .tool-use, .thinking').forEach(el => {
                     el.addEventListener('click', () => {
                         el.classList.toggle('selected');
                         updateStats();
@@ -515,7 +464,7 @@
                 });
 
                 document.getElementById('toggle-all').onclick = () => {
-                    const allElements = document.querySelectorAll('.message, .artifact, .tool-use, .thinking');
+                    const allElements = document.querySelectorAll('.message, .tool-use, .thinking');
                     const allSelected = Array.from(allElements).every(el => el.classList.contains('selected'));
                     
                     allElements.forEach(el => el.classList.toggle('selected', !allSelected));
@@ -531,13 +480,6 @@
 
                 document.getElementById('toggle-assistant').onclick = () => {
                     document.querySelectorAll('.message.assistant').forEach(el => {
-                        el.classList.toggle('selected');
-                    });
-                    updateStats();
-                };
-
-                document.getElementById('toggle-artifacts').onclick = () => {
-                    document.querySelectorAll('.artifact').forEach(el => {
                         el.classList.toggle('selected');
                     });
                     updateStats();
@@ -584,7 +526,7 @@
             }
         }
         
-        function renderMessagePair(msg, { text, artifacts, toolUses, thinking }, messagesColumn, artifactsColumn) {
+        function renderMessagePair(msg, { text, artifacts, toolUses, thinking }, messagesColumn, toolsColumn) {
             try {
                 info(`Rendering message: ${msg.uuid}`);
                 
@@ -629,25 +571,7 @@
                 `;
                 messagesColumn.appendChild(messageDiv);
 
-                // Render artifacts in artifacts column
-                artifacts.forEach(({ title, content, timestamp: artifactTimestamp }) => {
-                    info(`Rendering artifact: ${title}`);
-                    
-                    const artifactDiv = document.createElement('div');
-                    artifactDiv.className = 'artifact selected';
-                    artifactDiv.setAttribute('data-title', title);
-                    artifactDiv.setAttribute('data-timestamp', artifactTimestamp || timestamp);
-                    artifactDiv.innerHTML = `
-                        <div class="message-header">
-                            <h2>${title}</h2>
-                            <span class="timestamp">${formatTimestamp(artifactTimestamp || timestamp)}</span>
-                        </div>
-                        <pre><code>${content}</code></pre>
-                    `;
-                    artifactsColumn.appendChild(artifactDiv);
-                });
-
-                // Render tool uses in artifacts column with clear labels
+                // Render tool uses in tools column with clear labels
                 toolUses.forEach(tool => {
                     info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
                     
@@ -680,8 +604,8 @@
                         `;
                     }
                     
-                    // Tool uses go in the artifacts column
-                    artifactsColumn.appendChild(toolDiv);
+                    // Tool uses go in the tools column
+                    toolsColumn.appendChild(toolDiv);
                 });
             } catch (err) {
                 error(`Error in renderMessagePair: ${err.message}`);
@@ -743,12 +667,11 @@
                     <button id="toggle-all">Toggle All</button>
                     <button id="toggle-human">Toggle Human</button>
                     <button id="toggle-assistant">Toggle Assistant</button>
-                    <button id="toggle-artifacts">Toggle Artifacts</button>
                     <button id="toggle-tools">Toggle Tools</button>
                     <button id="toggle-thinking">Toggle Thinking</button>
                     <button id="copy-selected">Copy</button>
                     <button id="download-selected">Download</button>
-                    <div class="stats">Messages: 0/0 | Artifacts: 0/0 | Tools: 0/0 | Thinking: 0/0 | Words: 0 | Tokens: ~0</div>
+                    <div class="stats">Messages: 0/0 | Tools: 0/0 | Thinking: 0/0 | Words: 0 | Tokens: ~0</div>
                 `;
                 document.body.appendChild(controls);
 
@@ -759,12 +682,12 @@
                 messagesColumn.className = 'messages-column';
                 messagesColumn.innerHTML = '<div class="column-header">Messages & Thinking</div>';
                 
-                const artifactsColumn = document.createElement('div');
-                artifactsColumn.className = 'artifacts-column';
-                artifactsColumn.innerHTML = '<div class="column-header">Artifacts & Tools</div>';
-                
+                const toolsColumn = document.createElement('div');
+                toolsColumn.className = 'tools-column';
+                toolsColumn.innerHTML = '<div class="column-header">Tools</div>';
+
                 container.appendChild(messagesColumn);
-                container.appendChild(artifactsColumn);
+                container.appendChild(toolsColumn);
                 document.body.appendChild(container);
 
                 info(`Processing ${data.chat_messages.length} messages`);
@@ -772,7 +695,7 @@
                 data.chat_messages.forEach((msg, index) => {
                     info(`Processing message ${index + 1}/${data.chat_messages.length}`);
                     const processedContent = processMessageContent(msg);
-                    renderMessagePair(msg, processedContent, messagesColumn, artifactsColumn);
+                    renderMessagePair(msg, processedContent, messagesColumn, toolsColumn);
                 });
 
                 setupEventListeners();
