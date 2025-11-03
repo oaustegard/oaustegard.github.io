@@ -43,25 +43,13 @@
             color: #666;
         }
 
-        /* Two-column layout */
+        /* Single-column layout */
         .container {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 20px;
-            max-width: 1800px;
-            margin: 0 auto;
-        }
-
-        .messages-column, .tools-column {
-            min-width: 0;
             display: flex;
             flex-direction: column;
             gap: 20px;
-        }
-
-        .tools-column {
-            border-left: 1px solid #ddd;
-            padding-left: 20px;
+            max-width: 1200px;
+            margin: 0 auto;
         }
 
         /* Message Styling */
@@ -88,6 +76,23 @@
             justify-content: space-between;
             align-items: center;
             margin-bottom: 10px;
+            cursor: pointer;
+        }
+
+        .toggle-collapse {
+            padding: 5px;
+            font-size: 1.2em;
+            line-height: 1;
+            user-select: none;
+        }
+
+        .collapsed .content, .collapsed pre, .collapsed .tool-params, .collapsed .tool-result, .collapsed .thinking-summary {
+            display: none;
+        }
+
+        .collapsed {
+             max-height: 50px;
+             overflow: hidden;
         }
 
         .timestamp {
@@ -207,17 +212,6 @@
             overflow-x: auto;
         }
 
-        /* Column headers */
-        .column-header {
-            position: sticky;
-            top: 0;
-            background: white;
-            z-index: 1;
-            padding: 10px 0;
-            margin: 0;
-            font-weight: bold;
-            font-size: 1.1em;
-        }
 
         /* Tool content styling */
         .tool-name {
@@ -454,12 +448,61 @@
             }
         }
 
+        function updateCollapsedStates() {
+            const collapseToggledOff = document.getElementById('collapse-toggled-off').checked;
+            if (!collapseToggledOff) return;
+
+            document.querySelectorAll('.message, .tool-use, .thinking').forEach(el => {
+                const isSelected = el.classList.contains('selected');
+                el.classList.toggle('collapsed', !isSelected);
+
+                const toggle = el.querySelector('.toggle-collapse');
+                if (toggle) {
+                    toggle.textContent = el.classList.contains('collapsed') ? '▶' : '▼';
+                }
+            });
+        }
+
         function setupEventListeners() {
             try {
                 document.querySelectorAll('.message, .tool-use, .thinking').forEach(el => {
-                    el.addEventListener('click', () => {
-                        el.classList.toggle('selected');
+                    const header = el.querySelector('.message-header');
+                    if (header) {
+                        header.addEventListener('click', (event) => {
+                            event.stopPropagation();
+
+                            el.classList.toggle('collapsed');
+                            const toggle = header.querySelector('.toggle-collapse');
+                            if (toggle) {
+                                toggle.textContent = el.classList.contains('collapsed') ? '▶' : '▼';
+                            }
+                        });
+                    }
+
+                    el.addEventListener('click', (event) => {
+                        if (event.target.closest('.message-header')) return;
+
+                        const toggleMode = document.querySelector('input[name="toggle-mode"]:checked').value;
+
+                        if (toggleMode === 'normal') {
+                            el.classList.toggle('selected');
+                        } else {
+                            const allBlocks = Array.from(document.querySelectorAll('.message, .tool-use, .thinking'));
+                            const currentIndex = allBlocks.indexOf(el);
+
+                            if (toggleMode === 'before') {
+                                for (let i = 0; i < currentIndex; i++) {
+                                    allBlocks[i].classList.remove('selected');
+                                }
+                            } else if (toggleMode === 'after') {
+                                for (let i = currentIndex + 1; i < allBlocks.length; i++) {
+                                    allBlocks[i].classList.remove('selected');
+                                }
+                            }
+                        }
+
                         updateStats();
+                        updateCollapsedStates();
                     });
                 });
 
@@ -469,6 +512,7 @@
                     
                     allElements.forEach(el => el.classList.toggle('selected', !allSelected));
                     updateStats();
+                    updateCollapsedStates();
                 };
 
                 document.getElementById('toggle-human').onclick = () => {
@@ -476,6 +520,7 @@
                         el.classList.toggle('selected');
                     });
                     updateStats();
+                    updateCollapsedStates();
                 };
 
                 document.getElementById('toggle-assistant').onclick = () => {
@@ -483,6 +528,7 @@
                         el.classList.toggle('selected');
                     });
                     updateStats();
+                    updateCollapsedStates();
                 };
 
                 document.getElementById('toggle-tools').onclick = () => {
@@ -490,6 +536,7 @@
                         el.classList.toggle('selected');
                     });
                     updateStats();
+                    updateCollapsedStates();
                 };
 
                 document.getElementById('toggle-thinking').onclick = () => {
@@ -497,6 +544,11 @@
                         el.classList.toggle('selected');
                     });
                     updateStats();
+                    updateCollapsedStates();
+                };
+
+                document.getElementById('collapse-toggled-off').onchange = () => {
+                    updateCollapsedStates();
                 };
 
                 document.getElementById('copy-selected').onclick = () => {
@@ -526,14 +578,14 @@
             }
         }
         
-        function renderMessagePair(msg, { text, artifacts, toolUses, thinking }, messagesColumn, toolsColumn) {
+        function renderMessagePair(msg, { text, artifacts, toolUses, thinking }, container) {
             try {
                 info(`Rendering message: ${msg.uuid}`);
                 
                 const timestamp = msg.created_at;
                 const formattedTime = formatTimestamp(timestamp);
 
-                // Render thinking blocks in the messages column
+                // Render thinking blocks
                 thinking.forEach(({ content, summaries, timestamp: thinkingTimestamp }) => {
                     info(`Rendering thinking block for message: ${msg.uuid}`);
                     
@@ -549,29 +601,16 @@
                     
                     thinkingDiv.innerHTML = `
                         <div class="message-header">
-                            <strong>Thinking</strong>
+                            <div><strong>Thinking</strong> <span class="toggle-collapse">▼</span></div>
                             <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
                         </div>
                         ${summaryHtml}
                         <pre><code>${content}</code></pre>
                     `;
-                    messagesColumn.appendChild(thinkingDiv);
+                    container.appendChild(thinkingDiv);
                 });
 
-                // Render main message
-                const messageDiv = document.createElement('div');
-                messageDiv.className = `message ${msg.sender} selected`;
-                messageDiv.setAttribute('data-timestamp', timestamp);
-                messageDiv.innerHTML = `
-                    <div class="message-header">
-                        <strong>${msg.sender}</strong>
-                        <span class="timestamp">${formattedTime}</span>
-                    </div>
-                    <div class="content">${text}</div>
-                `;
-                messagesColumn.appendChild(messageDiv);
-
-                // Render tool uses in tools column with clear labels
+                // Render tool uses with clear labels
                 toolUses.forEach(tool => {
                     info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
                     
@@ -585,7 +624,7 @@
                         toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
                         toolDiv.innerHTML = `
                             <div class="message-header">
-                                <h2>Tool Result: ${tool.name}</h2>
+                                <div><h2>Tool Result: ${tool.name}</h2> <span class="toggle-collapse">▼</span></div>
                                 <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
                             </div>
                             <div class="tool-label">Result:</div>
@@ -595,7 +634,7 @@
                         toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
                         toolDiv.innerHTML = `
                             <div class="message-header">
-                                <h2>Tool Use: ${tool.name}</h2>
+                                <div><h2>Tool Use: ${tool.name}</h2> <span class="toggle-collapse">▼</span></div>
                                 <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
                             </div>
                             <div class="tool-label">Message: ${tool.message}</div>
@@ -604,9 +643,24 @@
                         `;
                     }
                     
-                    // Tool uses go in the tools column
-                    toolsColumn.appendChild(toolDiv);
+                    container.appendChild(toolDiv);
                 });
+
+                // Render main message if it has content
+                if (text.trim().length > 0) {
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = `message ${msg.sender} selected`;
+                    messageDiv.setAttribute('data-timestamp', timestamp);
+                    messageDiv.innerHTML = `
+                        <div class="message-header">
+                            <div><strong>${msg.sender}</strong> <span class="toggle-collapse">▼</span></div>
+                            <span class="timestamp">${formattedTime}</span>
+                        </div>
+                        <div class="content">${text}</div>
+                    `;
+                    container.appendChild(messageDiv);
+                }
+
             } catch (err) {
                 error(`Error in renderMessagePair: ${err.message}`);
                 error(err.stack);
@@ -619,8 +673,8 @@
             try {
                 // Accept messages from multiple potential origins for testing
                 if (event.origin !== "https://claude.ai" && 
-                    !event.origin.includes('austegard.com') && 
-                    !event.origin.includes('localhost')) {
+                    !event.origin.includes('austegard.com') &&
+                    event.origin !== 'http://localhost:8000') {
                     warn(`Rejected message from unauthorized origin: ${event.origin}`);
                     return;
                 }
@@ -671,23 +725,19 @@
                     <button id="toggle-thinking">Toggle Thinking</button>
                     <button id="copy-selected">Copy</button>
                     <button id="download-selected">Download</button>
+                    <label><input type="checkbox" id="collapse-toggled-off"> Collapse toggled-off</label>
+                    <fieldset>
+                        <legend>Quick Toggle Mode</legend>
+                        <label><input type="radio" name="toggle-mode" value="normal" checked> Normal</label>
+                        <label><input type="radio" name="toggle-mode" value="before"> Toggle Before</label>
+                        <label><input type="radio" name="toggle-mode" value="after"> Toggle After</label>
+                    </fieldset>
                     <div class="stats">Messages: 0/0 | Tools: 0/0 | Thinking: 0/0 | Words: 0 | Tokens: ~0</div>
                 `;
                 document.body.appendChild(controls);
 
                 const container = document.createElement('div');
                 container.className = 'container';
-                
-                const messagesColumn = document.createElement('div');
-                messagesColumn.className = 'messages-column';
-                messagesColumn.innerHTML = '<div class="column-header">Messages & Thinking</div>';
-                
-                const toolsColumn = document.createElement('div');
-                toolsColumn.className = 'tools-column';
-                toolsColumn.innerHTML = '<div class="column-header">Tools</div>';
-
-                container.appendChild(messagesColumn);
-                container.appendChild(toolsColumn);
                 document.body.appendChild(container);
 
                 info(`Processing ${data.chat_messages.length} messages`);
@@ -695,7 +745,7 @@
                 data.chat_messages.forEach((msg, index) => {
                     info(`Processing message ${index + 1}/${data.chat_messages.length}`);
                     const processedContent = processMessageContent(msg);
-                    renderMessagePair(msg, processedContent, messagesColumn, toolsColumn);
+                    renderMessagePair(msg, processedContent, container);
                 });
 
                 setupEventListeners();
