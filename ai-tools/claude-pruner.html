@@ -19,23 +19,36 @@
             border-bottom: 1px solid #ddd;
             margin-bottom: 20px;
             display: flex;
-            gap: 10px;
+            gap: 15px;
             align-items: center;
             flex-wrap: wrap;
             z-index: 100;
+        }
+
+        .control-group {
+            display: flex;
+            gap: 5px;
+            align-items: center;
+            border: 1px solid #ccc;
+            padding: 5px;
+            border-radius: 5px;
         }
 
         button {
             padding: 8px 16px;
             border: 1px solid #ddd;
             border-radius: 4px;
-            background: white;
+            background: #f0f0f0;
             cursor: pointer;
         }
 
         button:hover {
             background: #f5f5f5;
         }
+
+        #toggle-human, #toggle-assistant { background-color: #e8f5e9; }
+        #toggle-tools { background-color: #f3e5f5; }
+        #toggle-thinking { background-color: #fff3e0; }
 
         .stats {
             margin-left: auto;
@@ -53,19 +66,39 @@
         }
 
         /* Message Styling */
-        .message {
+        .message, .tool-use, .thinking {
             padding: 15px;
             border: 2px solid #ddd;
             border-radius: 4px;
             cursor: pointer;
         }
 
-        .message.selected {
-            border-color: #4CAF50;
-            background: #E8F5E9;
+        .message.human, .message.assistant {
+            background-color: #e8f5e9;
+            border-color: #a5d6a7;
         }
 
-        .message:not(.selected) {
+        .thinking {
+            background-color: #fff3e0;
+            border-color: #ffcc80;
+        }
+
+        .tool-use {
+            background-color: #f3e5f5;
+            border-color: #ce93d8;
+        }
+
+        .message.selected {
+            border-color: #4CAF50 !important;
+        }
+        .thinking.selected {
+            border-color: #FF9800 !important;
+        }
+        .tool-use.selected {
+            border-color: #9C27B0 !important;
+        }
+
+        .message:not(.selected), .tool-use:not(.selected), .thinking:not(.selected) {
             border-color: #ff4444;
             background: #fff0f0;
             opacity: 0.7;
@@ -77,11 +110,12 @@
             align-items: center;
             margin-bottom: 10px;
             cursor: pointer;
+            white-space: nowrap;
         }
 
         .toggle-collapse {
             padding: 5px;
-            font-size: 1.2em;
+            font-size: 0.8em;
             line-height: 1;
             user-select: none;
         }
@@ -91,89 +125,21 @@
         }
 
         .collapsed {
-             max-height: 50px;
+             max-height: 2.5em;
              overflow: hidden;
+        }
+
+        .collapsed-content-preview {
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            opacity: 0.7;
+            font-size: 0.9em;
         }
 
         .timestamp {
             font-size: 0.85em;
             color: #666;
-        }
-
-        /* Artifact Styling */
-        .artifact {
-            padding: 15px;
-            border: 2px solid #2196F3;
-            border-radius: 4px;
-            background: #E3F2FD;
-            cursor: pointer;
-        }
-
-        .artifact:not(.selected) {
-            border-color: #ff4444;
-            background: #fff0f0;
-            opacity: 0.7;
-        }
-
-        .artifact.selected {
-            border-color: #2196F3;
-            background: #E3F2FD;
-            opacity: 1;
-        }
-
-        .artifact .message-header {
-            background: #BBDEFB;
-            margin: -15px -15px 10px -15px;
-            padding: 10px 15px;
-            border-radius: 2px 2px 0 0;
-        }
-
-        .artifact .message-header h2 {
-            margin: 0;
-            font-size: 1em;
-            color: #1565C0;
-        }
-
-        /* Tool Use Styling */
-        .tool-use {
-            padding: 15px;
-            border: 2px solid #9C27B0;
-            border-radius: 4px;
-            background: #F3E5F5;
-            cursor: pointer;
-        }
-
-        .tool-use:not(.selected) {
-            border-color: #ff4444;
-            background: #fff0f0;
-            opacity: 0.7;
-        }
-
-        .tool-use.selected {
-            border-color: #9C27B0;
-            background: #F3E5F5;
-            opacity: 1;
-        }
-
-        /* Thinking Block Styling */
-        .thinking {
-            padding: 15px;
-            border: 2px solid #FF9800;
-            border-radius: 4px;
-            background: #FFF3E0;
-            cursor: pointer;
-        }
-
-        .thinking:not(.selected) {
-            border-color: #ff4444;
-            background: #fff0f0;
-            opacity: 0.7;
-        }
-
-        .thinking.selected {
-            border-color: #FF9800;
-            background: #FFF3E0;
-            opacity: 1;
         }
 
         /* Common styles */
@@ -426,6 +392,36 @@
             }
         }
 
+        function getBlockContent(el) {
+            const contentElement = el.querySelector('.content, pre');
+            return contentElement ? contentElement.textContent : '';
+        }
+
+        function updateCollapseState(el) {
+            const toggle = el.querySelector('.toggle-collapse');
+            if (toggle) {
+                toggle.textContent = el.classList.contains('collapsed') ? '▶' : '▼';
+            }
+
+            const existingPreview = el.querySelector('.collapsed-content-preview');
+            if (existingPreview) {
+                existingPreview.remove();
+            }
+
+            if (el.classList.contains('collapsed')) {
+                const content = getBlockContent(el);
+                if (content) {
+                    const firstLine = content.trim().split('\n')[0];
+                    if (firstLine) {
+                        const previewDiv = document.createElement('div');
+                        previewDiv.className = 'collapsed-content-preview';
+                        previewDiv.textContent = firstLine;
+                        el.appendChild(previewDiv);
+                    }
+                }
+            }
+        }
+
         function updateStats() {
             try {
                 const selectedMessages = document.querySelectorAll('.message.selected:not(.thinking)').length;
@@ -456,11 +452,7 @@
                 if (!isSelected) { // Only affect non-selected items
                     el.classList.toggle('collapsed', collapseToggledOff);
                 }
-
-                const toggle = el.querySelector('.toggle-collapse');
-                if (toggle) {
-                    toggle.textContent = el.classList.contains('collapsed') ? '▶' : '▼';
-                }
+                updateCollapseState(el);
             });
         }
 
@@ -471,12 +463,8 @@
                     if (header) {
                         header.addEventListener('click', (event) => {
                             event.stopPropagation();
-
                             el.classList.toggle('collapsed');
-                            const toggle = header.querySelector('.toggle-collapse');
-                            if (toggle) {
-                                toggle.textContent = el.classList.contains('collapsed') ? '▶' : '▼';
-                            }
+                            updateCollapseState(el);
                         });
                     }
 
@@ -625,7 +613,7 @@
                         toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
                         toolDiv.innerHTML = `
                             <div class="message-header">
-                                <div><h2>Tool Result: ${tool.name}</h2> <span class="toggle-collapse">▼</span></div>
+                                <div><strong>Tool Result: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
                                 <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
                             </div>
                             <div class="tool-label">Result:</div>
@@ -635,7 +623,7 @@
                         toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
                         toolDiv.innerHTML = `
                             <div class="message-header">
-                                <div><h2>Tool Use: ${tool.name}</h2> <span class="toggle-collapse">▼</span></div>
+                                <div><strong>Tool Use: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
                                 <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
                             </div>
                             <div class="tool-label">Message: ${tool.message}</div>
@@ -719,20 +707,24 @@
                 const controls = document.createElement('div');
                 controls.className = 'controls';
                 controls.innerHTML = `
-                    <button id="toggle-all">Toggle All</button>
-                    <button id="toggle-human">Toggle Human</button>
-                    <button id="toggle-assistant">Toggle Assistant</button>
-                    <button id="toggle-tools">Toggle Tools</button>
-                    <button id="toggle-thinking">Toggle Thinking</button>
-                    <button id="copy-selected">Copy</button>
-                    <button id="download-selected">Download</button>
-                    <label><input type="checkbox" id="collapse-toggled-off"> Collapse toggled-off</label>
-                    <fieldset>
-                        <legend>Quick Toggle Mode</legend>
+                    <div class="control-group">
+                        <button id="toggle-all">All</button>
+                        <button id="toggle-human">Human</button>
+                        <button id="toggle-assistant">Assistant</button>
+                        <button id="toggle-tools">Tools</button>
+                        <button id="toggle-thinking">Thinking</button>
+                    </div>
+                    <div class="control-group">
+                        <label><input type="checkbox" id="collapse-toggled-off"> Collapse Toggled-Off</label>
+                    </div>
+                    <div class="control-group">
+                        <span>Quick Toggle:</span>
                         <label><input type="radio" name="toggle-mode" value="before"> Before</label>
                         <label><input type="radio" name="toggle-mode" value="normal" checked> Clicked</label>
                         <label><input type="radio" name="toggle-mode" value="after"> After</label>
-                    </fieldset>
+                    </div>
+                    <button id="copy-selected">Copy</button>
+                    <button id="download-selected">Download</button>
                     <div class="stats">Messages: 0/0 | Tools: 0/0 | Thinking: 0/0 | Words: 0 | Tokens: ~0</div>
                 `;
                 document.body.appendChild(controls);
