@@ -564,11 +564,6 @@ function loadStateFromUrl() {
         // Update pagination warning after setting values
         updatePaginationWarning();
     }
-    
-    // Auto-process if we have everything needed
-    if (typeof autoProcessIfReady === 'function') {
-        autoProcessIfReady();
-    }
 }
 
 /* Export debug object for development use */

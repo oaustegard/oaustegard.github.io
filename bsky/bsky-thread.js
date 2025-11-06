@@ -140,13 +140,14 @@ export function initializeThreadProcessing() {
 export function autoProcessThread() {
     const urlInput = document.getElementById('url-input');
     const currentUrl = urlInput.value.trim();
-    
+
     if (currentUrl) {
         const processType = location.search.includes('quotes=true') ? 'process-quotes' : 'process-replies';
         const button = document.getElementById(processType);
-        
+
         if (button && !button.disabled) {
-            document.getElementById('processor-form').dispatchEvent(new Event('submit'));
+            /* Click the button directly so the submitter is properly set */
+            button.click();
         }
     }
 }
