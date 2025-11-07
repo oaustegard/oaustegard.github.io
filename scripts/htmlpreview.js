@@ -4,14 +4,194 @@
 
 	// edited by oaustegard to serve my own gists by guid
 	var previewForm = document.getElementById('previewform');
-	var url = location.search.substring(1)
-	// if just a guid, assume it's an oaustegard gist and use that gist's raw url
-	if (/^[0-9a-f]{32}$/i.test(url)) {
-		url = "https://gist.githubusercontent.com/oaustegard/" + url + "/raw/";
+	var url = location.search.substring(1);
+
+	// Theme management
+	var themeManager = {
+		current: (function() {
+			try {
+				return localStorage.getItem('pv-theme') || 'auto';
+			} catch(e) {
+				console.warn('localStorage not available:', e);
+				return 'auto';
+			}
+		})(),
+
+		init: function() {
+			console.log('[Theme] Initializing theme manager');
+			this.apply();
+			this.setupControls();
+			console.log('[Theme] Theme manager initialized');
+		},
+
+		apply: function() {
+			var theme = this.current;
+			var effectiveTheme = theme;
+
+			// Handle 'auto' theme
+			if (theme === 'auto') {
+				effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+			}
+
+			// Apply to document
+			if (effectiveTheme === 'dark') {
+				document.documentElement.setAttribute('data-theme', 'dark');
+			} else {
+				document.documentElement.removeAttribute('data-theme');
+			}
+
+			// Update button states
+			var buttons = document.querySelectorAll('#theme-controls button[data-theme]');
+			buttons.forEach(function(btn) {
+				if (btn.getAttribute('data-theme') === theme) {
+					btn.classList.add('active');
+				} else {
+					btn.classList.remove('active');
+				}
+			});
+		},
+
+		set: function(theme) {
+			this.current = theme;
+			localStorage.setItem('pv-theme', theme);
+			this.apply();
+			// Re-inject theme styles if content is loaded
+			if (!previewForm || previewForm.style.display === 'none') {
+				this.injectThemeStyles();
+			}
+		},
+
+		setupControls: function() {
+			var self = this;
+			var buttons = document.querySelectorAll('#theme-controls button[data-theme]');
+			buttons.forEach(function(btn) {
+				btn.addEventListener('click', function(e) {
+					e.preventDefault();
+					self.set(this.getAttribute('data-theme'));
+				});
+			});
+
+			// Listen for system theme changes when in auto mode
+			try {
+				window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function() {
+					if (self.current === 'auto') {
+						self.apply();
+						self.injectThemeStyles();
+					}
+				});
+			} catch(e) {
+				// Ignore if addEventListener is not supported
+				console.warn('Could not add theme change listener:', e);
+			}
+		},
+
+		injectThemeStyles: function() {
+			var theme = this.current;
+			var effectiveTheme = theme;
+
+			if (theme === 'auto') {
+				effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+			}
+
+			// Remove any existing injected theme styles
+			var existingStyle = document.getElementById('pv-theme-override');
+			if (existingStyle) {
+				existingStyle.remove();
+			}
+
+			// Only inject if dark theme
+			if (effectiveTheme === 'dark') {
+				var style = document.createElement('style');
+				style.id = 'pv-theme-override';
+				style.innerHTML = `
+					/* Theme override for loaded content */
+					html, body {
+						background-color: #1a1a1a !important;
+						color: #e0e0e0 !important;
+					}
+					body * {
+						background-color: transparent !important;
+						color: inherit !important;
+					}
+					/* Preserve some intentional backgrounds */
+					pre, code, table {
+						background-color: #2a2a2a !important;
+						color: #e0e0e0 !important;
+					}
+					a {
+						color: #6db3f2 !important;
+					}
+					a:visited {
+						color: #b19cd9 !important;
+					}
+					/* Ensure theme controls stay visible */
+					#theme-controls, #theme-controls * {
+						background-color: #2a2a2a !important;
+						color: #e0e0e0 !important;
+						border-color: #444 !important;
+					}
+					#theme-controls button.active {
+						background-color: #9a9a9a !important;
+						color: #1a1a1a !important;
+					}
+				`;
+				document.head.appendChild(style);
+			}
+		}
+	};
+
+	// Initialize theme on page load (wait for DOM)
+	if (document.readyState === 'loading') {
+		document.addEventListener('DOMContentLoaded', function() {
+			themeManager.init();
+		});
+	} else {
+		themeManager.init();
 	}
-	else {
-		url = url.replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/'); //Get URL of the raw file
-	}
+
+	// Enhanced URL parsing for various gist formats
+	var parseGistUrl = function(inputUrl) {
+		// Remove protocol if present to make matching easier
+		var urlNormalized = inputUrl.replace(/^https?:\/\//, '');
+
+		// Case 1: Just a 32-char hex GUID (existing functionality)
+		if (/^[0-9a-f]{32}$/i.test(urlNormalized)) {
+			return "https://gist.githubusercontent.com/oaustegard/" + urlNormalized + "/raw/";
+		}
+
+		// Case 2: gist.github.com URLs - various formats
+		// Format: gist.github.com/username/gistid or gist.github.com/username/gistid/filename.html
+		var gistMatch = urlNormalized.match(/gist\.github\.com\/([^\/]+)\/([0-9a-f]+)(?:\/([^\/\?#]+))?/i);
+		if (gistMatch) {
+			var username = gistMatch[1];
+			var gistId = gistMatch[2];
+			var filename = gistMatch[3] || ''; // Optional filename
+
+			// Build raw URL
+			if (filename && !filename.includes('raw')) {
+				// Specific file requested
+				return "https://gist.githubusercontent.com/" + username + "/" + gistId + "/raw/" + filename;
+			} else {
+				// No specific file, return raw gist URL (will load first HTML file or index.html)
+				return "https://gist.githubusercontent.com/" + username + "/" + gistId + "/raw/";
+			}
+		}
+
+		// Case 3: Already a raw.githubusercontent.com gist URL
+		if (urlNormalized.includes('gist.githubusercontent.com')) {
+			return 'https://' + urlNormalized;
+		}
+
+		// Case 4: Regular GitHub URLs (existing functionality)
+		if (urlNormalized.includes('github.com')) {
+			return 'https://' + urlNormalized.replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/');
+		}
+
+		// Case 5: Return as-is with protocol
+		return inputUrl.startsWith('http') ? inputUrl : 'https://' + inputUrl;
+	};
+
+	url = parseGistUrl(url);
 	var replaceAssets = function () {
 		var frame, a, link, links = [], script, scripts = [], i, href, src;
 		//Framesets
@@ -75,6 +255,60 @@
 				document.write(data);
 				document.close();
 				replaceAssets();
+
+				// Re-inject theme controls CSS and HTML after document.write()
+				var themeCSS = document.createElement('style');
+				themeCSS.innerHTML = `
+					#theme-controls {
+						position: fixed;
+						top: 10px;
+						right: 10px;
+						z-index: 10000;
+						display: flex;
+						gap: 5px;
+						background: #f0f0f0;
+						border: 1px solid #ccc;
+						border-radius: 5px;
+						padding: 5px;
+						box-shadow: 0 2px 5px rgba(0,0,0,0.2);
+					}
+					#theme-controls button {
+						background: #f0f0f0;
+						color: #333;
+						border: 1px solid #ccc;
+						border-radius: 3px;
+						padding: 5px 10px;
+						cursor: pointer;
+						font-size: 11px;
+					}
+					#theme-controls button:hover {
+						opacity: 0.8;
+					}
+					#theme-controls button.active {
+						background: #666;
+						color: #fff;
+						font-weight: bold;
+					}
+					#back-button {
+						margin-right: 10px;
+					}
+				`;
+				document.head.appendChild(themeCSS);
+
+				var themeControls = '<div id="theme-controls">' +
+					'<button id="back-button" onclick="location.href=\'/pv.html\';return false;" title="Back to form">Back</button>' +
+					'<button data-theme="light" title="Light theme">Light</button>' +
+					'<button data-theme="auto" title="Auto (system preference)">Auto</button>' +
+					'<button data-theme="dark" title="Dark theme">Dark</button>' +
+					'</div>';
+
+				document.body.insertAdjacentHTML('afterbegin', themeControls);
+
+				// Re-initialize theme after content loads
+				setTimeout(function() {
+					themeManager.init();
+					themeManager.injectThemeStyles();
+				}, 50);
 			}, 10); //Delay updating document to have it cleared before
 		}
 	};
@@ -110,13 +344,64 @@
 		})
 	};
 
-	if (url && url.indexOf(location.hostname) < 0)
-		fetchProxy(url, null, 0).then(loadHTML).catch(function (error) {
-			console.error(error);
+	// Helper functions for loading/error display
+	var showLoading = function(message) {
+		var loadingDiv = document.getElementById('loading-display');
+		var loadingMsg = document.getElementById('loading-message');
+		if (loadingDiv && loadingMsg) {
+			loadingMsg.innerText = message || 'Fetching content';
+			loadingDiv.style.display = 'block';
+		}
+	};
+
+	var hideLoading = function() {
+		var loadingDiv = document.getElementById('loading-display');
+		if (loadingDiv) {
+			loadingDiv.style.display = 'none';
+		}
+	};
+
+	var showError = function(error) {
+		var errorDiv = document.getElementById('error-display');
+		var errorMsg = document.getElementById('error-message');
+		if (errorDiv && errorMsg) {
+			errorMsg.innerText = error.message || error.toString();
+			errorDiv.style.display = 'block';
+		}
+		hideLoading();
+		console.error(error);
+	};
+
+	if (url && url.indexOf(location.hostname) < 0) {
+		showLoading('Fetching ' + url);
+		fetchProxy(url, null, 0).then(function(html) {
+			hideLoading();
+			loadHTML(html);
+			// Save successful URL to localStorage
+			try {
+				localStorage.setItem('pv-last-url', location.search.substring(1));
+			} catch(e) {
+				console.warn('Could not save last URL:', e);
+			}
+		}).catch(function (error) {
+			showError(error);
 			previewForm.style.display = 'block';
-			previewForm.innerText = error;
 		});
-	else
+	}
+	else {
 		previewForm.style.display = 'block';
+		// Populate input with last successful URL if available
+		var fileInput = document.getElementById('file');
+		if (fileInput) {
+			try {
+				var lastUrl = localStorage.getItem('pv-last-url');
+				if (lastUrl) {
+					fileInput.value = lastUrl;
+				}
+			} catch(e) {
+				console.warn('Could not load last URL:', e);
+			}
+		}
+	}
 
 })()
