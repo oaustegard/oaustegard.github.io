@@ -1,0 +1,589 @@
+<!DOCTYPE html>
+<!--
+    PDF Text Extraction Tool - Optimized for LLM Workflows
+
+    This tool extracts text from PDFs using Mozilla's pdf.js library and formats the output
+    specifically for Large Language Model (LLM) use cases:
+
+    1. Full In-Context Learning: The entire document is formatted with clear structure and metadata
+       that allows LLMs to reference specific pages when responding.
+
+    2. RAG (Retrieval-Augmented Generation): Each page is self-contained with metadata headers,
+       allowing auto-chunking systems to extract snippets that remain fully referenceable.
+
+    Output formats:
+    - Markdown: Optimized for both full-context and RAG chunking with clear headers
+    - JSON: Structured format with metadata for programmatic processing
+    - Plain Text: Simple format with page markers
+
+    All processing happens in-browser. No data is sent to servers.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>PDF Text Extractor - LLM Optimized</title>
+  <style>
+    :root {
+      --accent: #2563eb;
+      --accent-dark: #1d4ed8;
+      --bg: #fafafa;
+      --text: #333;
+      --success: #059669;
+      --warning: #dc2626;
+      --border: #e5e7eb;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      max-width: 900px;
+      margin: 2rem auto;
+      background: var(--bg);
+      color: var(--text);
+      padding: 0 1rem;
+    }
+
+    h1 {
+      text-align: center;
+      color: var(--accent);
+      margin-bottom: 0.5rem;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #6b7280;
+      font-size: 0.9rem;
+      margin-bottom: 2rem;
+    }
+
+    #drop {
+      border: 2px dashed var(--border);
+      border-radius: 8px;
+      padding: 3rem 2rem;
+      text-align: center;
+      cursor: pointer;
+      transition: all 0.2s;
+      margin-bottom: 1.5rem;
+      background: white;
+    }
+
+    #drop.hover {
+      border-color: var(--accent);
+      background: #eff6ff;
+    }
+
+    #drop .icon {
+      font-size: 3rem;
+      margin-bottom: 1rem;
+    }
+
+    fieldset {
+      margin: 1.5rem 0;
+      padding: 1.5rem;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: white;
+    }
+
+    legend {
+      color: var(--accent);
+      font-weight: 600;
+      padding: 0 0.5rem;
+      font-size: 1.1rem;
+    }
+
+    .format-options {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 1rem;
+      margin: 1rem 0;
+    }
+
+    .format-option {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.5rem;
+    }
+
+    .format-option input[type="radio"] {
+      margin-top: 0.25rem;
+    }
+
+    .format-option label {
+      cursor: pointer;
+      flex: 1;
+    }
+
+    .format-option .format-title {
+      font-weight: 600;
+      color: var(--accent);
+      display: block;
+      margin-bottom: 0.25rem;
+    }
+
+    .format-option .format-desc {
+      font-size: 0.85rem;
+      color: #6b7280;
+      display: block;
+    }
+
+    button {
+      background: var(--accent);
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 0.875rem 2rem;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+      width: 100%;
+      margin-top: 1rem;
+    }
+
+    button:hover:not(:disabled) {
+      background: var(--accent-dark);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .button-row {
+      display: flex;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .button-row button {
+      margin: 0;
+    }
+
+    .button-secondary {
+      background: #6b7280;
+    }
+
+    .button-secondary:hover:not(:disabled) {
+      background: #4b5563;
+    }
+
+    #file-info {
+      background: #f3f4f6;
+      padding: 1rem;
+      margin: 1rem 0;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      text-align: center;
+      border: 1px solid var(--border);
+    }
+
+    #progress {
+      text-align: center;
+      margin: 1rem 0;
+      min-height: 2em;
+      color: #6b7280;
+    }
+
+    .spinner {
+      margin: 0.5rem auto;
+      border: 4px solid #f3f4f6;
+      border-top: 4px solid var(--accent);
+      border-radius: 50%;
+      width: 40px;
+      height: 40px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .success {
+      color: var(--success);
+      font-weight: 600;
+    }
+
+    .warning {
+      color: var(--warning);
+      font-weight: 600;
+    }
+
+    #output-container {
+      display: none;
+      margin-top: 1.5rem;
+    }
+
+    #text-output {
+      width: 100%;
+      min-height: 400px;
+      max-height: 600px;
+      padding: 1rem;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 0.85rem;
+      resize: vertical;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      margin-bottom: 1rem;
+      background: #f9fafb;
+    }
+
+    .info-box {
+      background: #eff6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      padding: 1rem;
+      margin: 1rem 0;
+      font-size: 0.9rem;
+    }
+
+    .info-box h3 {
+      margin: 0 0 0.5rem 0;
+      color: var(--accent);
+      font-size: 1rem;
+    }
+
+    .info-box ul {
+      margin: 0.5rem 0 0 1.5rem;
+      padding: 0;
+    }
+
+    .info-box li {
+      margin: 0.25rem 0;
+    }
+  </style>
+</head>
+<body>
+  <h1>📄 PDF Text Extractor</h1>
+  <p class="subtitle">Optimized for LLM In-Context Learning and RAG Systems</p>
+
+  <div id="drop">
+    <div class="icon">📄</div>
+    <div><strong>Drop PDF here</strong> or click to browse</div>
+    <div style="font-size: 0.85rem; color: #6b7280; margin-top: 0.5rem;">
+      Text extraction happens in your browser - no data leaves your device
+    </div>
+  </div>
+  <input type="file" id="fileIn" accept="application/pdf" style="display:none">
+
+  <div id="file-info">No file loaded</div>
+
+  <fieldset>
+    <legend>Output Format</legend>
+
+    <div class="info-box">
+      <h3>Format Guide</h3>
+      <ul>
+        <li><strong>Markdown:</strong> Best for both full-context and RAG chunking. Each page has clear headers with filename and page number.</li>
+        <li><strong>JSON:</strong> Structured format with metadata. Ideal for programmatic processing and custom chunking strategies.</li>
+        <li><strong>Plain Text:</strong> Simple format with page markers. Works with any text processor.</li>
+      </ul>
+    </div>
+
+    <div class="format-options">
+      <div class="format-option">
+        <input type="radio" id="format-markdown" name="format" value="markdown" checked>
+        <label for="format-markdown">
+          <span class="format-title">Markdown</span>
+          <span class="format-desc">Optimized for LLM context windows and RAG chunking</span>
+        </label>
+      </div>
+
+      <div class="format-option">
+        <input type="radio" id="format-json" name="format" value="json">
+        <label for="format-json">
+          <span class="format-title">JSON</span>
+          <span class="format-desc">Structured data with full metadata</span>
+        </label>
+      </div>
+
+      <div class="format-option">
+        <input type="radio" id="format-text" name="format" value="text">
+        <label for="format-text">
+          <span class="format-title">Plain Text</span>
+          <span class="format-desc">Simple format with page markers</span>
+        </label>
+      </div>
+    </div>
+
+    <button id="extract-btn" disabled>Extract Text</button>
+  </fieldset>
+
+  <div id="progress">Select a PDF file to begin</div>
+
+  <div id="output-container">
+    <fieldset>
+      <legend>Extracted Text</legend>
+      <div id="text-output"></div>
+      <div class="button-row">
+        <button id="copy-btn">Copy to Clipboard</button>
+        <button id="download-btn" class="button-secondary">Download File</button>
+      </div>
+    </fieldset>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script type="module">
+    // Configure pdf.js worker
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    // UI elements
+    const drop = document.getElementById('drop');
+    const fileInput = document.getElementById('fileIn');
+    const extractBtn = document.getElementById('extract-btn');
+    const fileInfo = document.getElementById('file-info');
+    const progress = document.getElementById('progress');
+    const outputContainer = document.getElementById('output-container');
+    const textOutput = document.getElementById('text-output');
+    const copyBtn = document.getElementById('copy-btn');
+    const downloadBtn = document.getElementById('download-btn');
+
+    let currentFile = null;
+    let extractedText = '';
+    let currentFormat = 'markdown';
+
+    // File handling
+    drop.onclick = () => fileInput.click();
+    drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
+    drop.ondragleave = () => drop.classList.remove('hover');
+    drop.ondrop = e => {
+      e.preventDefault();
+      drop.classList.remove('hover');
+      handleFile(e.dataTransfer.files[0]);
+    };
+    fileInput.onchange = () => handleFile(fileInput.files[0]);
+
+    // Format selection
+    document.querySelectorAll('input[name="format"]').forEach(radio => {
+      radio.onchange = (e) => {
+        currentFormat = e.target.value;
+        // Re-render if we already have extracted text
+        if (extractedText) {
+          renderOutput();
+        }
+      };
+    });
+
+    function handleFile(file) {
+      if (!file || file.type !== 'application/pdf') {
+        alert('Please select a PDF file.');
+        return;
+      }
+
+      currentFile = file;
+      extractBtn.disabled = false;
+      fileInfo.innerHTML = `<strong>Ready to extract:</strong> ${file.name} (${formatBytes(file.size)})`;
+      progress.textContent = 'Click "Extract Text" to begin';
+      outputContainer.style.display = 'none';
+    }
+
+    // Main extraction function
+    extractBtn.onclick = async () => {
+      if (!currentFile) return;
+
+      extractBtn.disabled = true;
+      progress.innerHTML = '<div class="spinner"></div>Extracting text from PDF...';
+      outputContainer.style.display = 'none';
+
+      try {
+        const arrayBuffer = await currentFile.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+
+        const metadata = {
+          filename: currentFile.name,
+          pageCount: pdf.numPages,
+          extractedAt: new Date().toISOString(),
+        };
+
+        // Try to get PDF metadata
+        try {
+          const info = await pdf.getMetadata();
+          if (info.info) {
+            metadata.title = info.info.Title || '';
+            metadata.author = info.info.Author || '';
+            metadata.subject = info.info.Subject || '';
+            metadata.creator = info.info.Creator || '';
+            metadata.creationDate = info.info.CreationDate || '';
+          }
+        } catch (e) {
+          console.warn('Could not extract PDF metadata:', e);
+        }
+
+        // Extract text from all pages
+        const pages = [];
+        for (let i = 1; i <= pdf.numPages; i++) {
+          progress.innerHTML = `<div class="spinner"></div>Extracting page ${i} of ${pdf.numPages}...`;
+
+          const page = await pdf.getPage(i);
+          const textContent = await page.getTextContent();
+
+          // Reconstruct text with better spacing
+          let pageText = '';
+          let lastY = null;
+
+          textContent.items.forEach((item, index) => {
+            const text = item.str;
+            if (!text.trim()) return;
+
+            // Add line breaks based on vertical position changes
+            if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
+              pageText += '\n';
+            }
+
+            pageText += text;
+
+            // Add space if next item is on same line
+            const nextItem = textContent.items[index + 1];
+            if (nextItem && Math.abs(nextItem.transform[5] - item.transform[5]) < 5) {
+              // Check if we need a space (not already ending/starting with space or punctuation)
+              if (!text.endsWith(' ') && !text.endsWith('-') && nextItem.str && !nextItem.str.startsWith(' ')) {
+                pageText += ' ';
+              }
+            }
+
+            lastY = item.transform[5];
+          });
+
+          pages.push({
+            pageNumber: i,
+            text: pageText.trim()
+          });
+        }
+
+        // Generate output in selected format
+        extractedText = generateOutput(metadata, pages, currentFormat);
+
+        renderOutput();
+        outputContainer.style.display = 'block';
+        progress.innerHTML = `<span class="success">✓ Successfully extracted text from ${pdf.numPages} pages</span>`;
+
+      } catch (error) {
+        progress.innerHTML = `<span class="warning">⚠ Error: ${error.message}</span>`;
+        console.error('Extraction error:', error);
+      } finally {
+        extractBtn.disabled = false;
+      }
+    };
+
+    function generateOutput(metadata, pages, format) {
+      switch (format) {
+        case 'markdown':
+          return generateMarkdown(metadata, pages);
+        case 'json':
+          return generateJSON(metadata, pages);
+        case 'text':
+          return generatePlainText(metadata, pages);
+        default:
+          return generateMarkdown(metadata, pages);
+      }
+    }
+
+    function generateMarkdown(metadata, pages) {
+      let output = '';
+
+      // Document header
+      output += `# ${metadata.title || metadata.filename}\n\n`;
+      output += `**Source:** ${metadata.filename}\n`;
+      if (metadata.author) output += `**Author:** ${metadata.author}\n`;
+      if (metadata.subject) output += `**Subject:** ${metadata.subject}\n`;
+      output += `**Pages:** ${metadata.pageCount}\n`;
+      output += `**Extracted:** ${new Date(metadata.extractedAt).toLocaleString()}\n\n`;
+      output += `---\n\n`;
+
+      // Pages with clear metadata headers
+      pages.forEach(page => {
+        output += `## Page ${page.pageNumber}\n`;
+        output += `> **Document:** ${metadata.filename} | **Page:** ${page.pageNumber} of ${metadata.pageCount}\n\n`;
+        output += page.text + '\n\n';
+        output += `---\n\n`;
+      });
+
+      return output;
+    }
+
+    function generateJSON(metadata, pages) {
+      const output = {
+        metadata: metadata,
+        pages: pages.map(page => ({
+          pageNumber: page.pageNumber,
+          reference: `${metadata.filename}:${page.pageNumber}`,
+          text: page.text
+        }))
+      };
+
+      return JSON.stringify(output, null, 2);
+    }
+
+    function generatePlainText(metadata, pages) {
+      let output = '';
+
+      // Header
+      output += `====================================\n`;
+      output += `${metadata.title || metadata.filename}\n`;
+      output += `====================================\n`;
+      output += `Source: ${metadata.filename}\n`;
+      if (metadata.author) output += `Author: ${metadata.author}\n`;
+      output += `Pages: ${metadata.pageCount}\n`;
+      output += `Extracted: ${new Date(metadata.extractedAt).toLocaleString()}\n`;
+      output += `====================================\n\n`;
+
+      // Pages
+      pages.forEach(page => {
+        output += `\n[Page ${page.pageNumber} - ${metadata.filename}]\n`;
+        output += `${'='.repeat(60)}\n\n`;
+        output += page.text + '\n\n';
+      });
+
+      return output;
+    }
+
+    function renderOutput() {
+      textOutput.textContent = extractedText;
+    }
+
+    // Copy to clipboard
+    copyBtn.onclick = () => {
+      navigator.clipboard.writeText(extractedText)
+        .then(() => {
+          const originalText = copyBtn.textContent;
+          copyBtn.textContent = '✓ Copied!';
+          setTimeout(() => {
+            copyBtn.textContent = originalText;
+          }, 2000);
+        })
+        .catch(err => {
+          console.error('Failed to copy:', err);
+          alert('Failed to copy. Please try selecting and copying manually.');
+        });
+    };
+
+    // Download file
+    downloadBtn.onclick = () => {
+      const extension = currentFormat === 'json' ? 'json' : (currentFormat === 'markdown' ? 'md' : 'txt');
+      const mimeType = currentFormat === 'json' ? 'application/json' : 'text/plain';
+
+      const blob = new Blob([extractedText], { type: mimeType });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = currentFile.name.replace(/\.pdf$/i, '') + `-extracted.${extension}`;
+      a.click();
+
+      URL.revokeObjectURL(url);
+    };
+
+    function formatBytes(bytes) {
+      if (bytes === 0) return '0 Bytes';
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+
+    progress.textContent = 'Select a PDF file to begin';
+  </script>
+</body>
+</html>
