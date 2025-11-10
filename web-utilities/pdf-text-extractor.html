@@ -16,6 +16,12 @@
     - JSON: Structured format with metadata for programmatic processing
     - Plain Text: Simple format with page markers
 
+    URL API Support:
+    - Can fetch and parse PDFs from URLs via query parameters
+    - Example: ?url=https://arxiv.org/pdf/2406.11706&format=markdown
+    - Short form: ?https://arxiv.org/pdf/2406.11706 (defaults to markdown)
+    - Hash format: #url=https://arxiv.org/pdf/2406.11706 (avoids page reload)
+
     All processing happens in-browser. No data is sent to servers.
 -->
 <html lang="en">
@@ -343,6 +349,95 @@
     let currentFile = null;
     let extractedText = '';
     let currentFormat = 'markdown';
+    let currentPdfUrl = null;
+
+    // Parse URL parameters (supports both query string and hash)
+    function parseUrlParams() {
+      const params = new URLSearchParams(window.location.search || window.location.hash.slice(1));
+
+      // Check for 'url' parameter
+      let pdfUrl = params.get('url');
+
+      // Short form: first parameter is the URL (e.g., ?https://arxiv.org/pdf/123.pdf)
+      if (!pdfUrl) {
+        const firstParam = [...params.keys()][0];
+        if (firstParam && (firstParam.startsWith('http://') || firstParam.startsWith('https://'))) {
+          pdfUrl = firstParam;
+        }
+      }
+
+      const format = params.get('format') || 'markdown';
+
+      return { pdfUrl, format };
+    }
+
+    // Fetch PDF from URL
+    async function fetchPdfFromUrl(url) {
+      try {
+        progress.innerHTML = '<div class="spinner"></div>Fetching PDF from URL...';
+
+        const response = await fetch(url);
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const blob = await response.blob();
+
+        if (blob.type !== 'application/pdf' && !url.toLowerCase().endsWith('.pdf')) {
+          throw new Error('The fetched content does not appear to be a PDF file');
+        }
+
+        // Create a File object from the blob
+        const filename = url.split('/').pop().split('?')[0] || 'document.pdf';
+        const file = new File([blob], filename, { type: 'application/pdf' });
+
+        return file;
+      } catch (error) {
+        if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
+          throw new Error('CORS Error: The PDF server does not allow cross-origin requests. Try downloading the PDF and using the file upload instead.');
+        }
+        throw error;
+      }
+    }
+
+    // Initialize from URL parameters
+    async function initializeFromUrl() {
+      const { pdfUrl, format } = parseUrlParams();
+
+      if (!pdfUrl) {
+        return; // No URL provided, use normal UI
+      }
+
+      currentPdfUrl = pdfUrl;
+
+      // Set format if specified
+      if (format && ['markdown', 'json', 'text'].includes(format)) {
+        currentFormat = format;
+        const formatRadio = document.getElementById(`format-${format}`);
+        if (formatRadio) {
+          formatRadio.checked = true;
+        }
+      }
+
+      try {
+        // Fetch and process the PDF
+        const file = await fetchPdfFromUrl(pdfUrl);
+        handleFile(file);
+
+        // Auto-trigger extraction after a short delay to show UI state
+        setTimeout(() => {
+          if (extractBtn && !extractBtn.disabled) {
+            extractBtn.click();
+          }
+        }, 500);
+
+      } catch (error) {
+        progress.innerHTML = `<span class="warning">⚠ Error loading PDF from URL: ${error.message}</span>`;
+        fileInfo.innerHTML = `<span class="warning">Failed to load: ${pdfUrl}</span>`;
+        console.error('URL fetch error:', error);
+      }
+    }
 
     // File handling
     drop.onclick = () => fileInput.click();
@@ -583,7 +678,11 @@
       return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
     }
 
+    // Initialize
     progress.textContent = 'Select a PDF file to begin';
+
+    // Check for URL parameters and auto-load if present
+    initializeFromUrl();
   </script>
 </body>
 </html>

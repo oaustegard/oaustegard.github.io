@@ -9,6 +9,68 @@ Unlike the Ghostscript WASM-based extractor in `pdf-compressor.html`, this tool:
 - Generates output optimized specifically for LLM consumption
 - Supports both full-context and RAG (Retrieval-Augmented Generation) workflows
 - Ensures LLMs can always reference the source filename and page number
+- **Works as a client-side URL API** - fetch and parse PDFs via URL parameters
+
+## URL API Usage
+
+The tool can fetch and parse PDFs directly from URLs via query parameters, making it work as a client-side API:
+
+### Basic Usage
+
+```
+https://austegard.com/web-utilities/pdf-text-extractor?url=https://arxiv.org/pdf/2406.11706
+```
+
+This will:
+1. Fetch the PDF from the specified URL
+2. Extract text in Markdown format (default)
+3. Display the output automatically
+
+### Short Form
+
+For convenience, you can omit the `url=` parameter:
+
+```
+https://austegard.com/web-utilities/pdf-text-extractor?https://arxiv.org/pdf/2406.11706
+```
+
+### Specify Output Format
+
+Add the `format` parameter to choose the output format:
+
+```
+https://austegard.com/web-utilities/pdf-text-extractor?url=https://arxiv.org/pdf/2406.11706&format=json
+```
+
+Available formats: `markdown` (default), `json`, `text`
+
+### Hash Format (Avoids Page Reload)
+
+Using hash (#) instead of query string (?):
+
+```
+https://austegard.com/web-utilities/pdf-text-extractor#url=https://arxiv.org/pdf/2406.11706&format=markdown
+```
+
+### CORS Limitations
+
+The tool fetches PDFs client-side, which means:
+- ✅ Works with CORS-enabled servers (like arxiv.org)
+- ❌ Fails with servers that don't allow cross-origin requests
+- 💡 For blocked PDFs: download and use drag/drop interface
+
+Common CORS-friendly PDF sources:
+- arxiv.org - Research papers
+- Many academic institutions
+- Public document repositories
+
+### Use Cases for URL API
+
+1. **Bookmarklet**: Create a browser bookmark to extract text from current PDF
+2. **Browser Extension**: Integrate with extensions to process PDFs
+3. **Documentation Links**: Add to documentation pointing to specific papers
+4. **Automated Workflows**: Use in scripts (though headless browsers needed)
+5. **Quick Reference**: Share links that auto-extract and format PDFs
 
 ## Output Formats
 
