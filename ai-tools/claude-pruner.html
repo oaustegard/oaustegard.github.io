@@ -216,6 +216,12 @@
             color: #666;
             margin: 10px 0;
         }
+
+        /* Trimmed content indicator */
+        [title="Content has been trimmed"] {
+            border-left: 3px solid #ff9800;
+            padding-left: 8px;
+        }
     </style>
     <script>
         /* Utility functions */
@@ -474,6 +480,50 @@
             });
         }
 
+        function trimBlocks() {
+            try {
+                const maxLengthInput = document.getElementById('max-length');
+                const maxLength = parseInt(maxLengthInput.value);
+
+                if (!maxLength || maxLength <= 0) {
+                    warn('No valid max length specified for trimming');
+                    return;
+                }
+
+                info(`Trimming blocks to max length: ${maxLength}`);
+
+                document.querySelectorAll('.message, .tool-use, .thinking').forEach(el => {
+                    // Trim text content in messages
+                    const contentDiv = el.querySelector('.content');
+                    if (contentDiv) {
+                        const textElements = contentDiv.querySelectorAll('.text-content');
+                        textElements.forEach(textEl => {
+                            const originalText = textEl.textContent;
+                            if (originalText.length > maxLength) {
+                                textEl.textContent = originalText.substring(0, maxLength) + '... [trimmed]';
+                                textEl.setAttribute('title', 'Content has been trimmed');
+                            }
+                        });
+                    }
+
+                    // Trim code blocks (tool params, results, thinking)
+                    const codeBlocks = el.querySelectorAll('pre code');
+                    codeBlocks.forEach(codeEl => {
+                        const originalText = codeEl.textContent;
+                        if (originalText.length > maxLength) {
+                            codeEl.textContent = originalText.substring(0, maxLength) + '\n... [trimmed]';
+                            codeEl.setAttribute('title', 'Content has been trimmed');
+                        }
+                    });
+                });
+
+                updateStats();
+                info('Trimming complete');
+            } catch (err) {
+                error(`Error in trimBlocks: ${err.message}`);
+            }
+        }
+
         function setupEventListeners() {
             try {
                 document.querySelectorAll('.message, .tool-use, .thinking').forEach(el => {
@@ -556,6 +606,10 @@
 
                 document.getElementById('collapse-toggled-off').onchange = () => {
                     updateCollapsedStates();
+                };
+
+                document.getElementById('apply-trim').onclick = () => {
+                    trimBlocks();
                 };
 
                 document.getElementById('copy-selected').onclick = () => {
@@ -768,6 +822,11 @@
                         <label><input type="radio" name="toggle-mode" value="before"> Before</label>
                         <label><input type="radio" name="toggle-mode" value="normal" checked> Clicked</label>
                         <label><input type="radio" name="toggle-mode" value="after"> After</label>
+                    </div>
+                    <div class="control-group">
+                        <label for="max-length">Max Length:</label>
+                        <input type="number" id="max-length" min="0" placeholder="unlimited" style="width: 80px;">
+                        <button id="apply-trim">Trim</button>
                     </div>
                     <button id="copy-selected">Copy</button>
                     <button id="download-selected">Download</button>
