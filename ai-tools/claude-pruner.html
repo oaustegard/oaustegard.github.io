@@ -350,30 +350,43 @@
             }
         }
 
+        function trimContent(content, maxLength) {
+            if (!maxLength || maxLength <= 0 || content.length <= maxLength) {
+                return content;
+            }
+            return content.substring(0, maxLength) + '\n... [trimmed]';
+        }
+
         function formatSelectedContent() {
             try {
+                const maxLengthInput = document.getElementById('max-length');
+                const maxLength = parseInt(maxLengthInput.value) || 0;
+
                 const selectedContent = [];
-                
+
                 // Add thinking blocks
                 document.querySelectorAll('.thinking.selected').forEach(el => {
-                    const content = el.getAttribute('data-content');
+                    let content = el.getAttribute('data-content');
+                    content = trimContent(content, maxLength);
                     selectedContent.push({
                         timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
                         content: `<Thinking>${content}</Thinking>`,
                         type: 'thinking'
                     });
                 });
-                
+
                 // Add messages
                 document.querySelectorAll('.message.selected').forEach(el => {
                     if (el.classList.contains('thinking')) return; // Skip thinking blocks
-                    
+
                     const role = el.classList.contains('human') ? 'Human' : 'Assistant';
-                    const textElements = Array.from(el.querySelectorAll('.text-content'))
+                    let textElements = Array.from(el.querySelectorAll('.text-content'))
                         .map(textEl => textEl.textContent.trim())
                         .filter(text => text)
                         .join('\n');
-                    
+
+                    textElements = trimContent(textElements, maxLength);
+
                     if (textElements) {
                         selectedContent.push({
                             timestamp: new Date(el.getAttribute('data-timestamp')).getTime(),
@@ -385,7 +398,18 @@
 
                 // Add tool uses
                 document.querySelectorAll('.tool-use.selected').forEach(tool => {
-                    const content = tool.getAttribute('data-content');
+                    let content = tool.getAttribute('data-content');
+
+                    // Extract and trim the content inside the tags
+                    const toolNameMatch = content.match(/^<(ToolUse|ToolResult) name="([^"]+)">/);
+                    if (toolNameMatch) {
+                        const tagType = toolNameMatch[1];
+                        const toolName = toolNameMatch[2];
+                        const innerContent = content.replace(/^<(ToolUse|ToolResult) name="[^"]+">([\s\S]*)<\/(ToolUse|ToolResult)>$/, '$2');
+                        const trimmedInner = trimContent(innerContent, maxLength);
+                        content = `<${tagType} name="${toolName}">${trimmedInner}</${tagType}>`;
+                    }
+
                     selectedContent.push({
                         timestamp: new Date(tool.getAttribute('data-timestamp')).getTime(),
                         content: content,
@@ -394,7 +418,7 @@
                 });
 
                 selectedContent.sort((a, b) => a.timestamp - b.timestamp);
-                
+
                 return selectedContent.map(item => item.content).join('\n\n');
             } catch (err) {
                 error(`Error in formatSelectedContent: ${err.message}`);
@@ -588,85 +612,113 @@
         function renderMessagePair(msg, { text, artifacts, toolUses, thinking }, container) {
             try {
                 info(`Rendering message: ${msg.uuid}`);
-                
+
                 const timestamp = msg.created_at;
                 const formattedTime = formatTimestamp(timestamp);
 
-                // Render thinking blocks
+                // Collect all blocks with timestamps for chronological ordering
+                const blocks = [];
+
+                // Add thinking blocks
                 thinking.forEach(({ content, summaries, timestamp: thinkingTimestamp }) => {
-                    info(`Rendering thinking block for message: ${msg.uuid}`);
-                    
-                    const thinkingDiv = document.createElement('div');
-                    thinkingDiv.className = 'thinking selected';
-                    thinkingDiv.setAttribute('data-content', content);
-                    thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
-                    
-                    let summaryHtml = '';
-                    if (summaries && summaries.length > 0) {
-                        summaryHtml = `<div class="thinking-summary">${summaries[0].summary}</div>`;
-                    }
-                    
-                    thinkingDiv.innerHTML = `
-                        <div class="message-header">
-                            <div><strong>Thinking</strong> <span class="toggle-collapse">▼</span></div>
-                            <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
-                        </div>
-                        ${summaryHtml}
-                        <pre><code>${content}</code></pre>
-                    `;
-                    container.appendChild(thinkingDiv);
+                    blocks.push({
+                        timestamp: thinkingTimestamp,
+                        type: 'thinking',
+                        render: () => {
+                            info(`Rendering thinking block for message: ${msg.uuid}`);
+
+                            const thinkingDiv = document.createElement('div');
+                            thinkingDiv.className = 'thinking selected';
+                            thinkingDiv.setAttribute('data-content', content);
+                            thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
+
+                            let summaryHtml = '';
+                            if (summaries && summaries.length > 0) {
+                                summaryHtml = `<div class="thinking-summary">${summaries[0].summary}</div>`;
+                            }
+
+                            thinkingDiv.innerHTML = `
+                                <div class="message-header">
+                                    <div><strong>Thinking</strong> <span class="toggle-collapse">▼</span></div>
+                                    <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
+                                </div>
+                                ${summaryHtml}
+                                <pre><code>${content}</code></pre>
+                            `;
+                            return thinkingDiv;
+                        }
+                    });
                 });
 
-                // Render tool uses with clear labels
+                // Add tool uses
                 toolUses.forEach(tool => {
-                    info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
-                    
-                    const toolDiv = document.createElement('div');
-                    toolDiv.className = 'tool-use selected';
-                    
                     const toolTimestamp = tool.timestamp || timestamp;
-                    toolDiv.setAttribute('data-timestamp', toolTimestamp);
-                    
-                    if (tool.isResult) {
-                        toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
-                        toolDiv.innerHTML = `
-                            <div class="message-header">
-                                <div><strong>Tool Result: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
-                                <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
-                            </div>
-                            <div class="tool-label">Result:</div>
-                            <pre class="tool-result"><code>${tool.result}</code></pre>
-                        `;
-                    } else {
-                        toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
-                        toolDiv.innerHTML = `
-                            <div class="message-header">
-                                <div><strong>Tool Use: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
-                                <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
-                            </div>
-                            <div class="tool-label">Message: ${tool.message}</div>
-                            <div class="tool-label">Input:</div>
-                            <pre class="tool-params"><code>${tool.input}</code></pre>
-                        `;
-                    }
-                    
-                    container.appendChild(toolDiv);
+                    blocks.push({
+                        timestamp: toolTimestamp,
+                        type: 'tool',
+                        render: () => {
+                            info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
+
+                            const toolDiv = document.createElement('div');
+                            toolDiv.className = 'tool-use selected';
+                            toolDiv.setAttribute('data-timestamp', toolTimestamp);
+
+                            if (tool.isResult) {
+                                toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
+                                toolDiv.innerHTML = `
+                                    <div class="message-header">
+                                        <div><strong>Tool Result: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
+                                        <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                                    </div>
+                                    <div class="tool-label">Result:</div>
+                                    <pre class="tool-result"><code>${tool.result}</code></pre>
+                                `;
+                            } else {
+                                toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
+                                toolDiv.innerHTML = `
+                                    <div class="message-header">
+                                        <div><strong>Tool Use: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
+                                        <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                                    </div>
+                                    <div class="tool-label">Message: ${tool.message}</div>
+                                    <div class="tool-label">Input:</div>
+                                    <pre class="tool-params"><code>${tool.input}</code></pre>
+                                `;
+                            }
+
+                            return toolDiv;
+                        }
+                    });
                 });
 
-                // Render main message if it has content
+                // Add main message if it has content
                 if (text.trim().length > 0) {
-                    const messageDiv = document.createElement('div');
-                    messageDiv.className = `message ${msg.sender} selected`;
-                    messageDiv.setAttribute('data-timestamp', timestamp);
-                    messageDiv.innerHTML = `
-                        <div class="message-header">
-                            <div><strong>${msg.sender}</strong> <span class="toggle-collapse">▼</span></div>
-                            <span class="timestamp">${formattedTime}</span>
-                        </div>
-                        <div class="content">${text}</div>
-                    `;
-                    container.appendChild(messageDiv);
+                    blocks.push({
+                        timestamp: timestamp,
+                        type: 'message',
+                        render: () => {
+                            const messageDiv = document.createElement('div');
+                            messageDiv.className = `message ${msg.sender} selected`;
+                            messageDiv.setAttribute('data-timestamp', timestamp);
+                            messageDiv.innerHTML = `
+                                <div class="message-header">
+                                    <div><strong>${msg.sender}</strong> <span class="toggle-collapse">▼</span></div>
+                                    <span class="timestamp">${formattedTime}</span>
+                                </div>
+                                <div class="content">${text}</div>
+                            `;
+                            return messageDiv;
+                        }
+                    });
                 }
+
+                // Sort blocks chronologically by timestamp (oldest to newest)
+                blocks.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                // Render blocks in chronological order
+                blocks.forEach(block => {
+                    container.appendChild(block.render());
+                });
 
             } catch (err) {
                 error(`Error in renderMessagePair: ${err.message}`);
@@ -740,6 +792,10 @@
                         <label><input type="radio" name="toggle-mode" value="before"> Before</label>
                         <label><input type="radio" name="toggle-mode" value="normal" checked> Clicked</label>
                         <label><input type="radio" name="toggle-mode" value="after"> After</label>
+                    </div>
+                    <div class="control-group">
+                        <label for="max-length" title="Limits character count when copying/downloading (leave empty for unlimited)">Max Length (copy/dl):</label>
+                        <input type="number" id="max-length" min="0" placeholder="unlimited" style="width: 100px;">
                     </div>
                     <button id="copy-selected">Copy</button>
                     <button id="download-selected">Download</button>
