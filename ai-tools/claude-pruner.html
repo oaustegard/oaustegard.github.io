@@ -588,85 +588,113 @@
         function renderMessagePair(msg, { text, artifacts, toolUses, thinking }, container) {
             try {
                 info(`Rendering message: ${msg.uuid}`);
-                
+
                 const timestamp = msg.created_at;
                 const formattedTime = formatTimestamp(timestamp);
 
-                // Render thinking blocks
+                // Collect all blocks with timestamps for chronological ordering
+                const blocks = [];
+
+                // Add thinking blocks
                 thinking.forEach(({ content, summaries, timestamp: thinkingTimestamp }) => {
-                    info(`Rendering thinking block for message: ${msg.uuid}`);
-                    
-                    const thinkingDiv = document.createElement('div');
-                    thinkingDiv.className = 'thinking selected';
-                    thinkingDiv.setAttribute('data-content', content);
-                    thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
-                    
-                    let summaryHtml = '';
-                    if (summaries && summaries.length > 0) {
-                        summaryHtml = `<div class="thinking-summary">${summaries[0].summary}</div>`;
-                    }
-                    
-                    thinkingDiv.innerHTML = `
-                        <div class="message-header">
-                            <div><strong>Thinking</strong> <span class="toggle-collapse">▼</span></div>
-                            <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
-                        </div>
-                        ${summaryHtml}
-                        <pre><code>${content}</code></pre>
-                    `;
-                    container.appendChild(thinkingDiv);
+                    blocks.push({
+                        timestamp: thinkingTimestamp,
+                        type: 'thinking',
+                        render: () => {
+                            info(`Rendering thinking block for message: ${msg.uuid}`);
+
+                            const thinkingDiv = document.createElement('div');
+                            thinkingDiv.className = 'thinking selected';
+                            thinkingDiv.setAttribute('data-content', content);
+                            thinkingDiv.setAttribute('data-timestamp', thinkingTimestamp);
+
+                            let summaryHtml = '';
+                            if (summaries && summaries.length > 0) {
+                                summaryHtml = `<div class="thinking-summary">${summaries[0].summary}</div>`;
+                            }
+
+                            thinkingDiv.innerHTML = `
+                                <div class="message-header">
+                                    <div><strong>Thinking</strong> <span class="toggle-collapse">▼</span></div>
+                                    <span class="timestamp">${formatTimestamp(thinkingTimestamp)}</span>
+                                </div>
+                                ${summaryHtml}
+                                <pre><code>${content}</code></pre>
+                            `;
+                            return thinkingDiv;
+                        }
+                    });
                 });
 
-                // Render tool uses with clear labels
+                // Add tool uses
                 toolUses.forEach(tool => {
-                    info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
-                    
-                    const toolDiv = document.createElement('div');
-                    toolDiv.className = 'tool-use selected';
-                    
                     const toolTimestamp = tool.timestamp || timestamp;
-                    toolDiv.setAttribute('data-timestamp', toolTimestamp);
-                    
-                    if (tool.isResult) {
-                        toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
-                        toolDiv.innerHTML = `
-                            <div class="message-header">
-                                <div><strong>Tool Result: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
-                                <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
-                            </div>
-                            <div class="tool-label">Result:</div>
-                            <pre class="tool-result"><code>${tool.result}</code></pre>
-                        `;
-                    } else {
-                        toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
-                        toolDiv.innerHTML = `
-                            <div class="message-header">
-                                <div><strong>Tool Use: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
-                                <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
-                            </div>
-                            <div class="tool-label">Message: ${tool.message}</div>
-                            <div class="tool-label">Input:</div>
-                            <pre class="tool-params"><code>${tool.input}</code></pre>
-                        `;
-                    }
-                    
-                    container.appendChild(toolDiv);
+                    blocks.push({
+                        timestamp: toolTimestamp,
+                        type: 'tool',
+                        render: () => {
+                            info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
+
+                            const toolDiv = document.createElement('div');
+                            toolDiv.className = 'tool-use selected';
+                            toolDiv.setAttribute('data-timestamp', toolTimestamp);
+
+                            if (tool.isResult) {
+                                toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
+                                toolDiv.innerHTML = `
+                                    <div class="message-header">
+                                        <div><strong>Tool Result: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
+                                        <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                                    </div>
+                                    <div class="tool-label">Result:</div>
+                                    <pre class="tool-result"><code>${tool.result}</code></pre>
+                                `;
+                            } else {
+                                toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
+                                toolDiv.innerHTML = `
+                                    <div class="message-header">
+                                        <div><strong>Tool Use: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
+                                        <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                                    </div>
+                                    <div class="tool-label">Message: ${tool.message}</div>
+                                    <div class="tool-label">Input:</div>
+                                    <pre class="tool-params"><code>${tool.input}</code></pre>
+                                `;
+                            }
+
+                            return toolDiv;
+                        }
+                    });
                 });
 
-                // Render main message if it has content
+                // Add main message if it has content
                 if (text.trim().length > 0) {
-                    const messageDiv = document.createElement('div');
-                    messageDiv.className = `message ${msg.sender} selected`;
-                    messageDiv.setAttribute('data-timestamp', timestamp);
-                    messageDiv.innerHTML = `
-                        <div class="message-header">
-                            <div><strong>${msg.sender}</strong> <span class="toggle-collapse">▼</span></div>
-                            <span class="timestamp">${formattedTime}</span>
-                        </div>
-                        <div class="content">${text}</div>
-                    `;
-                    container.appendChild(messageDiv);
+                    blocks.push({
+                        timestamp: timestamp,
+                        type: 'message',
+                        render: () => {
+                            const messageDiv = document.createElement('div');
+                            messageDiv.className = `message ${msg.sender} selected`;
+                            messageDiv.setAttribute('data-timestamp', timestamp);
+                            messageDiv.innerHTML = `
+                                <div class="message-header">
+                                    <div><strong>${msg.sender}</strong> <span class="toggle-collapse">▼</span></div>
+                                    <span class="timestamp">${formattedTime}</span>
+                                </div>
+                                <div class="content">${text}</div>
+                            `;
+                            return messageDiv;
+                        }
+                    });
                 }
+
+                // Sort blocks chronologically by timestamp (oldest to newest)
+                blocks.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+                // Render blocks in chronological order
+                blocks.forEach(block => {
+                    container.appendChild(block.render());
+                });
 
             } catch (err) {
                 error(`Error in renderMessagePair: ${err.message}`);
