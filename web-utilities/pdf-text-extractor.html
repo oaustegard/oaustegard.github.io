@@ -309,6 +309,19 @@
       margin: 0.25rem 0;
     }
 
+    .info-box p {
+      color: #4b5563;
+    }
+
+    code {
+      background: #e5e7eb;
+      padding: 0.125rem 0.375rem;
+      border-radius: 3px;
+      font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+      font-size: 0.85em;
+      color: #1f2937;
+    }
+
     /* Mobile Styles */
     @media (max-width: 768px) {
       body {
@@ -454,7 +467,7 @@
   <div id="input-section">
     <div id="drop">
       <div class="icon">📄</div>
-      <div><strong>Drop PDF here</strong> or click to browse</div>
+      <div><strong>Drop PDF or URL here</strong> or click to browse</div>
       <div style="font-size: 0.85rem; color: #6b7280; margin-top: 0.5rem;">
         Text extraction happens in your browser - no data leaves your device
       </div>
@@ -505,6 +518,16 @@
     </fieldset>
 
     <div id="progress">Select a PDF file to begin</div>
+
+    <div class="info-box" style="margin-top: 1rem;">
+      <h3>💡 URL API</h3>
+      <p style="margin: 0.5rem 0;">You can also fetch PDFs from URLs:</p>
+      <ul style="margin: 0.5rem 0 0 1.5rem;">
+        <li>Add <code>?url=https://arxiv.org/pdf/2406.11706</code> to this page's URL</li>
+        <li>Short form: <code>?https://arxiv.org/pdf/2406.11706</code></li>
+        <li>Or drag and drop a PDF URL into the box above</li>
+      </ul>
+    </div>
   </div>
 
   <div id="output-container">
@@ -648,10 +671,36 @@
     drop.onclick = () => fileInput.click();
     drop.ondragover = e => { e.preventDefault(); drop.classList.add('hover'); };
     drop.ondragleave = () => drop.classList.remove('hover');
-    drop.ondrop = e => {
+    drop.ondrop = async (e) => {
       e.preventDefault();
       drop.classList.remove('hover');
-      handleFile(e.dataTransfer.files[0]);
+
+      // Check if a URL was dragged
+      const url = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain');
+
+      if (url && (url.startsWith('http://') || url.startsWith('https://'))) {
+        // Handle URL drop
+        try {
+          const file = await fetchPdfFromUrl(url.trim());
+          handleFile(file);
+
+          // Auto-trigger extraction
+          setTimeout(() => {
+            if (extractBtn && !extractBtn.disabled) {
+              extractBtn.click();
+            }
+          }, 500);
+        } catch (error) {
+          progress.innerHTML = `<span class="warning">⚠ Error loading PDF from URL: ${error.message}</span>`;
+          fileInfo.innerHTML = `<span class="warning">Failed to load: ${url}</span>`;
+          console.error('URL drop error:', error);
+        }
+      } else if (e.dataTransfer.files.length > 0) {
+        // Handle file drop
+        handleFile(e.dataTransfer.files[0]);
+      } else {
+        alert('Please drop a PDF file or a URL to a PDF.');
+      }
     };
     fileInput.onchange = () => handleFile(fileInput.files[0]);
 
