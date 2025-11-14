@@ -39,6 +39,62 @@
     .prose strong { font-weight: 600; }
     .prose ul { list-style: disc; margin-left: 1.5rem; margin-bottom: 0.75rem; }
     .prose li { margin-bottom: 0.25rem; }
+
+    /* Table of Contents styles */
+    .toc-container {
+      position: fixed;
+      top: 2rem;
+      left: 2rem;
+      width: 240px;
+      max-height: calc(100vh - 4rem);
+      overflow-y: auto;
+      background: white;
+      border-radius: 0.5rem;
+      box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+      padding: 1.5rem;
+    }
+
+    .toc-link {
+      display: block;
+      padding: 0.5rem 0.75rem;
+      margin-bottom: 0.25rem;
+      color: #4b5563;
+      text-decoration: none;
+      border-radius: 0.375rem;
+      transition: all 0.15s;
+      font-size: 0.875rem;
+    }
+
+    .toc-link:hover {
+      background-color: #f3f4f6;
+      color: #1f2937;
+    }
+
+    .toc-link.active {
+      background-color: #dbeafe;
+      color: #1e40af;
+      font-weight: 500;
+    }
+
+    /* Main content margin to account for ToC */
+    .content-with-toc {
+      margin-left: 280px;
+    }
+
+    /* Smooth scrolling */
+    html {
+      scroll-behavior: smooth;
+    }
+
+    /* Responsive - hide ToC on smaller screens */
+    @media (max-width: 1024px) {
+      .toc-container {
+        display: none;
+      }
+      .content-with-toc {
+        margin-left: 0;
+      }
+    }
   </style>
 </head>
 <body>
@@ -54,6 +110,7 @@
       const releases = useSignal([]);
       const loading = useSignal(true);
       const error = useSignal(null);
+      const activeSection = useSignal('');
 
       // Fetch releases from GitHub API
       useEffect(() => {
@@ -76,6 +133,28 @@
 
         fetchReleases();
       }, []);
+
+      // Track active section on scroll
+      useEffect(() => {
+        if (loading.value || releases.value.length === 0) return;
+
+        const observer = new IntersectionObserver(
+          (entries) => {
+            entries.forEach((entry) => {
+              if (entry.isIntersecting) {
+                activeSection.value = entry.target.id;
+              }
+            });
+          },
+          { rootMargin: '-20% 0px -70% 0px' }
+        );
+
+        // Observe all release sections
+        const sections = document.querySelectorAll('[data-release-section]');
+        sections.forEach((section) => observer.observe(section));
+
+        return () => observer.disconnect();
+      }, [loading.value, releases.value.length]);
 
       // Sort releases alphabetically by tag name
       const sortedReleases = useComputed(() => {
@@ -118,54 +197,104 @@
       }
 
       return html`
-        <div class="min-h-screen bg-gray-100 py-8 px-4">
-          <div class="max-w-4xl mx-auto">
-            <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
-              <h1 class="text-3xl font-bold text-gray-800 mb-2">Claude Skills - Releases</h1>
-              <p class="text-gray-600">
-                Alphabetical listing of all releases from ${' '}
-                <a href="https://github.com/oaustegard/claude-skills"
-                   class="text-blue-500 hover:underline"
-                   target="_blank"
-                   rel="noopener noreferrer">
-                  oaustegard/claude-skills
-                </a>
-              </p>
-              <p class="text-sm text-gray-500 mt-2">
-                Total releases: ${sortedReleases.value.length}
-              </p>
-            </div>
+        <div>
+          <!-- Table of Contents -->
+          ${sortedReleases.value.length > 0 && html`
+            <${TableOfContents}
+              releases=${sortedReleases.value}
+              activeSection=${activeSection.value}
+            />
+          `}
 
-            <div class="space-y-4">
-              ${sortedReleases.value.map(release => {
-                // Find .zip assets
-                const zipAssets = (release.assets || []).filter(asset =>
-                  asset.name.toLowerCase().endsWith('.zip')
-                );
+          <!-- Main Content -->
+          <div class="min-h-screen bg-gray-100 py-8 px-4 ${sortedReleases.value.length > 0 ? 'content-with-toc' : ''}">
+            <div class="max-w-4xl mx-auto">
+              <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
+                <!-- Back Link -->
+                <div class="mb-4">
+                  <a href="/ai-tools" class="inline-flex items-center text-blue-500 hover:text-blue-600 transition-colors">
+                    <svg class="w-4 h-4 mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path>
+                    </svg>
+                    Back to AI Tools
+                  </a>
+                </div>
 
-                return html`
-                  <${ReleaseCard}
-                    key=${release.id}
-                    name=${release.name || release.tag_name}
-                    version=${release.tag_name}
-                    description=${release.body}
-                    zipAssets=${zipAssets}
-                  />
-                `;
-              })}
-            </div>
-
-            ${sortedReleases.value.length === 0 && html`
-              <div class="bg-white rounded-lg shadow-lg p-8 text-center">
-                <p class="text-gray-600">No releases found.</p>
+                <h1 class="text-3xl font-bold text-gray-800 mb-2">Claude Skills - Releases</h1>
+                <p class="text-gray-600">
+                  Alphabetical listing of all releases from ${' '}
+                  <a href="https://github.com/oaustegard/claude-skills"
+                     class="text-blue-500 hover:underline"
+                     target="_blank"
+                     rel="noopener noreferrer">
+                    oaustegard/claude-skills
+                  </a>
+                </p>
+                <p class="text-sm text-gray-500 mt-2">
+                  Total releases: ${sortedReleases.value.length}
+                </p>
               </div>
-            `}
+
+              <div class="space-y-4">
+                ${sortedReleases.value.map(release => {
+                  // Find .zip assets
+                  const zipAssets = (release.assets || []).filter(asset =>
+                    asset.name.toLowerCase().endsWith('.zip')
+                  );
+
+                  // Create a slug for the ID
+                  const id = `release-${release.tag_name}`;
+
+                  return html`
+                    <${ReleaseCard}
+                      key=${release.id}
+                      id=${id}
+                      name=${release.name || release.tag_name}
+                      version=${release.tag_name}
+                      description=${release.body}
+                      zipAssets=${zipAssets}
+                    />
+                  `;
+                })}
+              </div>
+
+              ${sortedReleases.value.length === 0 && html`
+                <div class="bg-white rounded-lg shadow-lg p-8 text-center">
+                  <p class="text-gray-600">No releases found.</p>
+                </div>
+              `}
+            </div>
           </div>
         </div>
       `;
     }
 
-    function ReleaseCard({ name, version, description, zipAssets }) {
+    function TableOfContents({ releases, activeSection }) {
+      return html`
+        <div class="toc-container">
+          <h3 class="text-sm font-bold text-gray-700 mb-4 uppercase tracking-wide">Table of Contents</h3>
+          <nav>
+            ${releases.map(release => {
+              const id = `release-${release.tag_name}`;
+              const name = release.name || release.tag_name;
+              const isActive = activeSection === id;
+
+              return html`
+                <a
+                  key=${release.id}
+                  href="#${id}"
+                  class="toc-link ${isActive ? 'active' : ''}"
+                >
+                  ${name}
+                </a>
+              `;
+            })}
+          </nav>
+        </div>
+      `;
+    }
+
+    function ReleaseCard({ id, name, version, description, zipAssets }) {
       // Truncate description at first horizontal rule (---)
       const truncatedDesc = description ? description.split(/\n---+\n/)[0].trim() : '';
 
@@ -173,7 +302,11 @@
       const descriptionHtml = truncatedDesc ? marked.parse(truncatedDesc) : '';
 
       return html`
-        <div class="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-6">
+        <div
+          id=${id}
+          data-release-section
+          class="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow p-6"
+        >
           <div class="flex items-start justify-between mb-3">
             <div>
               <h2 class="text-xl font-bold text-gray-800">${name}</h2>
