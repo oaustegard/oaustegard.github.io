@@ -93,7 +93,7 @@
     }
 
     #speed-display {
-      font-size: 35vmin;
+      font-size: 52.5vmin;
       font-weight: bold;
       line-height: 1;
       font-variant-numeric: tabular-nums;
@@ -102,7 +102,7 @@
     }
 
     #unit-display {
-      font-size: 8vmin;
+      font-size: 12vmin;
       color: #888;
       margin-top: 1.5rem;
     }
@@ -137,6 +137,7 @@
     let currentSpeed = 0; // in meters per second
     let watchId = null;
     let wakeLock = null;
+    let noSleepAudio = null;
 
     // DOM elements
     const permissionScreen = document.getElementById('permission-screen');
@@ -194,6 +195,35 @@
       } catch (err) {
         console.log('Wake lock failed:', err);
       }
+
+      // Fallback for iOS: use silent audio loop
+      // This technique works on older iOS versions and as backup
+      enableNoSleepAudio();
+    }
+
+    // Enable screen wake using silent audio (iOS fallback)
+    function enableNoSleepAudio() {
+      if (!noSleepAudio) {
+        // Create a silent audio file using data URI (Web Audio API)
+        // This is a tiny silent WebM audio file
+        const silentAudio = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4S/sTjCAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+
+        noSleepAudio = new Audio(silentAudio);
+        noSleepAudio.loop = true;
+
+        // Play the silent audio
+        noSleepAudio.play().catch(err => {
+          console.log('Silent audio play failed:', err);
+        });
+      }
+    }
+
+    // Disable the silent audio
+    function disableNoSleepAudio() {
+      if (noSleepAudio) {
+        noSleepAudio.pause();
+        noSleepAudio = null;
+      }
     }
 
     // Start tracking speed
@@ -248,12 +278,22 @@
       if (wakeLock !== null) {
         wakeLock.release();
       }
+      disableNoSleepAudio();
     });
 
-    // Handle visibility change to re-acquire wake lock
+    // Handle visibility change to re-acquire wake lock and restart audio
     document.addEventListener('visibilitychange', async () => {
-      if (wakeLock !== null && document.visibilityState === 'visible') {
-        await requestWakeLock();
+      if (document.visibilityState === 'visible') {
+        // Re-acquire wake lock
+        if (wakeLock !== null) {
+          await requestWakeLock();
+        }
+        // Restart silent audio if it was playing
+        if (noSleepAudio && noSleepAudio.paused) {
+          noSleepAudio.play().catch(err => {
+            console.log('Failed to restart audio:', err);
+          });
+        }
       }
     });
   </script>
