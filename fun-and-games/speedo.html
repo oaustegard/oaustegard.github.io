@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>HUD Speedometer</title>
+
+  <!-- Import Maps for Preact -->
+
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/*preact@10.23.1",
+        "preact/": "https://esm.sh/*preact@10.23.1/",
+        "@preact/signals": "https://esm.sh/*@preact/signals@1.3.0",
+        "htm/preact": "https://esm.sh/*htm@3.1.1/preact"
+      }
+    }
+  </script>
+
+  <!-- Tailwind CSS -->
+
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background: #000;
+    }
+    
+    /* HUD mode - mirror for windshield reflection */
+    .hud-mirror {
+      transform: scaleX(-1);
+    }
+    
+    /* Prevent selection and highlight */
+    * {
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+  </style>
+
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="module">
+    import { render } from 'preact';
+    import { useSignal, useComputed } from '@preact/signals';
+    import { useEffect } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    function HUDSpeedometer() {
+      // State
+      const speed = useSignal(0);
+      const maxSpeed = useSignal(0);
+      const unit = useSignal('mph'); // 'mph' or 'kmh'
+      const hudMode = useSignal(false);
+      const hasPermission = useSignal(false);
+      const error = useSignal(null);
+      const watchId = useSignal(null);
+
+      // Computed values
+      const displaySpeed = useComputed(() => {
+        const s = speed.value;
+        return unit.value === 'mph' 
+          ? Math.round(s * 2.23694) // m/s to mph
+          : Math.round(s * 3.6);    // m/s to km/h
+      });
+
+      const displayMaxSpeed = useComputed(() => {
+        const s = maxSpeed.value;
+        return unit.value === 'mph' 
+          ? Math.round(s * 2.23694)
+          : Math.round(s * 3.6);
+      });
+
+      // Request location permission and start watching
+      const startTracking = () => {
+        if (!navigator.geolocation) {
+          error.value = 'Geolocation not supported';
+          return;
+        }
+
+        const options = {
+          enableHighAccuracy: true,
+          timeout: 5000,
+          maximumAge: 0
+        };
+
+        const id = navigator.geolocation.watchPosition(
+          (position) => {
+            hasPermission.value = true;
+            error.value = null;
+            
+            // Get speed in m/s (null if not available)
+            const currentSpeed = position.coords.speed || 0;
+            speed.value = Math.max(0, currentSpeed); // Never negative
+            
+            // Track max speed
+            if (currentSpeed > maxSpeed.value) {
+              maxSpeed.value = currentSpeed;
+            }
+          },
+          (err) => {
+            error.value = err.message;
+            hasPermission.value = false;
+          },
+          options
+        );
+
+        watchId.value = id;
+      };
+
+      // Cleanup on unmount
+      useEffect(() => {
+        return () => {
+          if (watchId.value !== null) {
+            navigator.geolocation.clearWatch(watchId.value);
+          }
+        };
+      }, []);
+
+      // Auto-start tracking
+      useEffect(() => {
+        startTracking();
+      }, []);
+
+      // Keep screen awake and bright
+      useEffect(() => {
+        // Request wake lock if available
+        let wakeLock = null;
+        const requestWakeLock = async () => {
+          try {
+            if ('wakeLock' in navigator) {
+              wakeLock = await navigator.wakeLock.request('screen');
+            }
+          } catch (err) {
+            console.log('Wake lock failed:', err);
+          }
+        };
+        requestWakeLock();
+
+        return () => {
+          if (wakeLock) {
+            wakeLock.release();
+          }
+        };
+      }, []);
+
+      const toggleUnit = () => {
+        unit.value = unit.value === 'mph' ? 'kmh' : 'mph';
+      };
+
+      const toggleHUD = () => {
+        hudMode.value = !hudMode.value;
+      };
+
+      const resetMaxSpeed = () => {
+        maxSpeed.value = speed.value;
+      };
+
+      // Speed color indicator (green -> yellow -> red)
+      const getSpeedColor = () => {
+        const s = displaySpeed.value;
+        if (s < 30) return 'text-green-400';
+        if (s < 60) return 'text-yellow-400';
+        if (s < 80) return 'text-orange-400';
+        return 'text-red-400';
+      };
+
+      return html`
+        <div class="${hudMode.value ? 'hud-mirror' : ''} w-screen h-screen flex flex-col items-center justify-center bg-black text-white">
+          
+          ${error.value && html`
+            <div class="absolute top-4 left-4 right-4 bg-red-900/80 text-white p-4 rounded-lg">
+              <p class="text-sm">${error.value}</p>
+              <button 
+                onClick=${startTracking}
+                class="mt-2 px-4 py-2 bg-red-600 rounded hover:bg-red-700"
+              >
+                Retry
+              </button>
+            </div>
+          `}
+
+          <!-- Main speed display -->
+          <div class="text-center">
+            <div class="${getSpeedColor()} font-bold transition-colors duration-300" 
+                 style="font-size: 20rem; line-height: 1; font-variant-numeric: tabular-nums;">
+              ${displaySpeed}
+            </div>
+            <div class="text-6xl text-gray-400 mt-4">
+              ${unit.value.toUpperCase()}
+            </div>
+          </div>
+
+          <!-- Max speed -->
+          <div class="mt-8 text-3xl text-gray-500">
+            MAX: ${displayMaxSpeed} ${unit.value.toUpperCase()}
+          </div>
+
+          <!-- Controls (hidden in HUD mode for clean reflection) -->
+          ${!hudMode.value && html`
+            <div class="absolute bottom-8 left-0 right-0 flex justify-center gap-4 px-4">
+              <button 
+                onClick=${toggleUnit}
+                class="px-6 py-3 bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors"
+              >
+                Switch to ${unit.value === 'mph' ? 'KM/H' : 'MPH'}
+              </button>
+              
+              <button 
+                onClick=${resetMaxSpeed}
+                class="px-6 py-3 bg-purple-600 rounded-lg hover:bg-purple-700 transition-colors"
+              >
+                Reset Max
+              </button>
+              
+              <button 
+                onClick=${toggleHUD}
+                class="px-6 py-3 bg-green-600 rounded-lg hover:bg-green-700 transition-colors"
+              >
+                Enable HUD Mode
+              </button>
+            </div>
+          `}
+
+          <!-- HUD mode indicator and exit button -->
+          ${hudMode.value && html`
+            <div class="absolute top-4 right-4">
+              <button 
+                onClick=${toggleHUD}
+                class="px-4 py-2 bg-red-600/80 rounded-lg hover:bg-red-700 transition-colors text-sm"
+              >
+                Exit HUD
+              </button>
+            </div>
+            <div class="absolute bottom-4 left-0 right-0 text-center text-gray-600 text-sm">
+              Place phone under windshield for reflection
+            </div>
+          `}
+
+          <!-- Permission prompt -->
+          ${!hasPermission.value && !error.value && html`
+            <div class="absolute inset-0 flex items-center justify-center bg-black/90">
+              <div class="text-center max-w-md px-4">
+                <h2 class="text-3xl font-bold mb-4">Location Permission Required</h2>
+                <p class="text-gray-400 mb-6">
+                  This app needs access to your location to calculate your speed using GPS.
+                </p>
+                <button 
+                  onClick=${startTracking}
+                  class="px-8 py-4 bg-blue-600 rounded-lg hover:bg-blue-700 transition-colors text-lg"
+                >
+                  Enable Location
+                </button>
+              </div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // Render app
+    render(html`<${HUDSpeedometer} />`, document.getElementById('app'));
+  </script>
+
+</body>
+</html>
