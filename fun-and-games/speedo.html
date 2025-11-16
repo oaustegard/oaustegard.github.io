@@ -92,6 +92,16 @@
       transform: scaleX(-1);
     }
 
+    /* Rotate 180 for upside-down portrait mode */
+    #speedometer.rotated {
+      transform: rotate(180deg);
+    }
+
+    /* Combined: mirror + rotate */
+    #speedometer.hud-mode.rotated {
+      transform: scaleX(-1) rotate(180deg);
+    }
+
     #speed-display {
       font-size: 52.5vmin;
       font-weight: bold;
@@ -138,6 +148,7 @@
     let watchId = null;
     let wakeLock = null;
     let noSleepAudio = null;
+    let lastTapTime = 0;
 
     // DOM elements
     const permissionScreen = document.getElementById('permission-screen');
@@ -179,6 +190,10 @@
       };
 
       errorMessage.textContent = messages[error.code] || 'Error: ' + error.message;
+
+      // Show permission screen if location fails
+      permissionScreen.style.display = 'block';
+      speedometer.style.display = 'none';
     }
 
     // Request wake lock to keep screen on
@@ -265,9 +280,25 @@
     // Event listener for start button
     startButton.addEventListener('click', startTracking);
 
-    // Event listener for speed display - toggle HUD mode on tap
+    // Event listener for speed display - single tap = HUD, double tap = rotate
     speedDisplay.addEventListener('click', () => {
-      speedometer.classList.toggle('hud-mode');
+      const currentTime = new Date().getTime();
+      const tapGap = currentTime - lastTapTime;
+
+      if (tapGap < 300 && tapGap > 0) {
+        // Double tap - toggle rotation
+        speedometer.classList.toggle('rotated');
+      } else {
+        // Single tap - toggle HUD mode (with delay to detect double tap)
+        setTimeout(() => {
+          const checkTime = new Date().getTime();
+          if (checkTime - currentTime >= 300) {
+            speedometer.classList.toggle('hud-mode');
+          }
+        }, 300);
+      }
+
+      lastTapTime = currentTime;
     });
 
     // Cleanup on page unload
@@ -296,6 +327,13 @@
         }
       }
     });
+
+    // Auto-start: try to get location on page load
+    // If permission already granted, speedometer will appear automatically
+    // If not, user will see the permission button
+    permissionScreen.style.display = 'none';
+    speedometer.style.display = 'none';
+    startTracking();
   </script>
 </body>
 </html>
