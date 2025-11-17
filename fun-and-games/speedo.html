@@ -151,12 +151,14 @@
     <h1>Speedometer</h1>
     <p>Uses GPS to display your current speed</p>
     <div class="instructions">
+      <strong>Location Required:</strong> This app requires GPS access. All location data stays on your device—nothing is sent anywhere. <a href="speedo_README.md" style="color: #0066cc;">Learn more</a><br><br>
       <strong>Controls:</strong><br>
       Single tap speed = Toggle HUD mirror mode<br>
       Double tap speed = Rotate 180°
     </div>
     <div id="install-hint" class="install-hint" style="display: none;">
-      For best experience, add this page to your homescreen:<br>
+      <strong>⚠️ Installation Required:</strong><br>
+      For the location API to work, you must add this page to your homescreen:<br>
       <strong>Safari:</strong> Tap Share → Add to Home Screen
     </div>
     <button id="start-button">Start</button>
@@ -169,14 +171,18 @@
   </div>
 
   <script>
-    // State
-    let currentSpeed = 0; // in meters per second
-    let watchId = null;
-    let wakeLock = null;
-    let noSleepAudio = null;
-    let lastTapTime = 0;
+    // ============================================================================
+    // STATE MANAGEMENT
+    // ============================================================================
+    let currentSpeed = 0; // Speed in meters per second from GPS
+    let watchId = null; // Geolocation watch handle
+    let wakeLock = null; // Wake Lock API handle
+    let noSleepAudio = null; // Silent audio for iOS wake lock fallback
+    let lastTapTime = 0; // For detecting double-tap gestures
 
-    // DOM elements
+    // ============================================================================
+    // DOM REFERENCES
+    // ============================================================================
     const permissionScreen = document.getElementById('permission-screen');
     const speedometer = document.getElementById('speedometer');
     const speedDisplay = document.getElementById('speed-display');
@@ -184,41 +190,37 @@
     const startButton = document.getElementById('start-button');
     const installHint = document.getElementById('install-hint');
 
-    // Detect if running in standalone mode (added to homescreen)
+    // ============================================================================
+    // INITIALIZATION - Detect standalone mode and show install hint if needed
+    // ============================================================================
     const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
                         window.navigator.standalone ||
                         document.referrer.includes('android-app://');
 
-    // Show install hint only if NOT in standalone mode
     if (!isStandalone) {
       installHint.style.display = 'block';
     }
 
-    // Convert m/s to mph
+    // ============================================================================
+    // UTILITY FUNCTIONS - Speed conversion and display updates
+    // ============================================================================
     function toMph(metersPerSecond) {
       return Math.round(metersPerSecond * 2.23694);
     }
 
-    // Update display (called once per second)
     function updateDisplay() {
       const mph = toMph(currentSpeed);
       speedDisplay.textContent = mph;
     }
 
-    // Handle position updates (called as often as GPS provides data)
+    // ============================================================================
+    // GEOLOCATION HANDLING - GPS position updates and error handling
+    // ============================================================================
     function handlePosition(position) {
-      // Get speed in m/s (may be null if not available)
       const speed = position.coords.speed;
-
-      if (speed !== null && speed >= 0) {
-        currentSpeed = speed;
-      } else {
-        // If speed is not available from GPS, set to 0
-        currentSpeed = 0;
-      }
+      currentSpeed = (speed !== null && speed >= 0) ? speed : 0;
     }
 
-    // Handle geolocation errors
     function handleError(error) {
       const messages = {
         1: 'Location permission denied. Please allow location access and try again.',
@@ -227,58 +229,10 @@
       };
 
       errorMessage.textContent = messages[error.code] || 'Error: ' + error.message;
-
-      // Show permission screen if location fails
       permissionScreen.style.display = 'block';
       speedometer.style.display = 'none';
     }
 
-    // Request wake lock to keep screen on
-    async function requestWakeLock() {
-      try {
-        if ('wakeLock' in navigator) {
-          wakeLock = await navigator.wakeLock.request('screen');
-
-          // Re-acquire wake lock when visibility changes
-          wakeLock.addEventListener('release', () => {
-            console.log('Wake lock released');
-          });
-        }
-      } catch (err) {
-        console.log('Wake lock failed:', err);
-      }
-
-      // Fallback for iOS: use silent audio loop
-      // This technique works on older iOS versions and as backup
-      enableNoSleepAudio();
-    }
-
-    // Enable screen wake using silent audio (iOS fallback)
-    function enableNoSleepAudio() {
-      if (!noSleepAudio) {
-        // Create a silent audio file using data URI (Web Audio API)
-        // This is a tiny silent WebM audio file
-        const silentAudio = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4S/sTjCAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
-
-        noSleepAudio = new Audio(silentAudio);
-        noSleepAudio.loop = true;
-
-        // Play the silent audio
-        noSleepAudio.play().catch(err => {
-          console.log('Silent audio play failed:', err);
-        });
-      }
-    }
-
-    // Disable the silent audio
-    function disableNoSleepAudio() {
-      if (noSleepAudio) {
-        noSleepAudio.pause();
-        noSleepAudio = null;
-      }
-    }
-
-    // Start tracking speed
     function startTracking() {
       if (!navigator.geolocation) {
         errorMessage.textContent = 'Geolocation is not supported by your browser';
@@ -295,18 +249,12 @@
 
       watchId = navigator.geolocation.watchPosition(
         (position) => {
-          // Hide permission screen and show speedometer on first successful position
           if (permissionScreen.style.display !== 'none') {
             permissionScreen.style.display = 'none';
             speedometer.style.display = 'block';
-
-            // Request wake lock
             requestWakeLock();
-
-            // Start display updates (once per second)
             setInterval(updateDisplay, 1000);
           }
-
           handlePosition(position);
         },
         handleError,
@@ -314,10 +262,47 @@
       );
     }
 
-    // Event listener for start button
+    // ============================================================================
+    // WAKE LOCK MANAGEMENT - Prevent screen from sleeping during use
+    // ============================================================================
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          wakeLock = await navigator.wakeLock.request('screen');
+          wakeLock.addEventListener('release', () => {
+            console.log('Wake lock released');
+          });
+        }
+      } catch (err) {
+        console.log('Wake lock failed:', err);
+      }
+
+      enableNoSleepAudio();
+    }
+
+    function enableNoSleepAudio() {
+      if (!noSleepAudio) {
+        const silentAudio = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4S/sTjCAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+        noSleepAudio = new Audio(silentAudio);
+        noSleepAudio.loop = true;
+        noSleepAudio.play().catch(err => {
+          console.log('Silent audio play failed:', err);
+        });
+      }
+    }
+
+    function disableNoSleepAudio() {
+      if (noSleepAudio) {
+        noSleepAudio.pause();
+        noSleepAudio = null;
+      }
+    }
+
+    // ============================================================================
+    // EVENT HANDLERS - User interactions and gesture detection
+    // ============================================================================
     startButton.addEventListener('click', startTracking);
 
-    // Event listener for speed display - single tap = HUD, double tap = rotate
     speedDisplay.addEventListener('click', () => {
       const currentTime = new Date().getTime();
       const tapGap = currentTime - lastTapTime;
@@ -338,7 +323,9 @@
       lastTapTime = currentTime;
     });
 
-    // Cleanup on page unload
+    // ============================================================================
+    // LIFECYCLE MANAGEMENT - Cleanup and visibility handling
+    // ============================================================================
     window.addEventListener('beforeunload', () => {
       if (watchId !== null) {
         navigator.geolocation.clearWatch(watchId);
@@ -349,14 +336,11 @@
       disableNoSleepAudio();
     });
 
-    // Handle visibility change to re-acquire wake lock and restart audio
     document.addEventListener('visibilitychange', async () => {
       if (document.visibilityState === 'visible') {
-        // Re-acquire wake lock
         if (wakeLock !== null) {
           await requestWakeLock();
         }
-        // Restart silent audio if it was playing
         if (noSleepAudio && noSleepAudio.paused) {
           noSleepAudio.play().catch(err => {
             console.log('Failed to restart audio:', err);
