@@ -132,6 +132,7 @@
       font-size: 12vmin;
       color: #888;
       margin-top: 1.5rem;
+      cursor: pointer;
     }
 
     #error-message {
@@ -153,6 +154,7 @@
     <div class="instructions">
       <strong>Location Required:</strong> This app requires GPS access. All location data stays on your device—nothing is sent anywhere. <a href="speedo_README.md" style="color: #0066cc;">Learn more</a><br><br>
       <strong>Controls:</strong><br>
+      Tap unit (MPH) = Toggle pace mode (min/10mi)<br>
       Single tap speed = Toggle HUD mirror mode<br>
       Double tap speed = Rotate 180°
     </div>
@@ -179,6 +181,7 @@
     let wakeLock = null; // Wake Lock API handle
     let noSleepAudio = null; // Silent audio for iOS wake lock fallback
     let lastTapTime = 0; // For detecting double-tap gestures
+    let showPaceMode = false; // Toggle between MPH and MIN/10MI
 
     // ============================================================================
     // DOM REFERENCES
@@ -186,6 +189,7 @@
     const permissionScreen = document.getElementById('permission-screen');
     const speedometer = document.getElementById('speedometer');
     const speedDisplay = document.getElementById('speed-display');
+    const unitDisplay = document.getElementById('unit-display');
     const errorMessage = document.getElementById('error-message');
     const startButton = document.getElementById('start-button');
     const installHint = document.getElementById('install-hint');
@@ -210,7 +214,16 @@
 
     function updateDisplay() {
       const mph = toMph(currentSpeed);
-      speedDisplay.textContent = mph;
+
+      if (showPaceMode) {
+        // Minutes per 10 miles = 600 / MPH
+        const pace = mph > 0 ? Math.round(600 / mph) : 0;
+        speedDisplay.textContent = pace;
+        unitDisplay.textContent = 'MIN/10MI';
+      } else {
+        speedDisplay.textContent = mph;
+        unitDisplay.textContent = 'MPH';
+      }
     }
 
     // ============================================================================
@@ -219,6 +232,7 @@
     function handlePosition(position) {
       const speed = position.coords.speed;
       currentSpeed = (speed !== null && speed >= 0) ? speed : 0;
+      updateDisplay();
     }
 
     function handleError(error) {
@@ -253,7 +267,6 @@
             permissionScreen.style.display = 'none';
             speedometer.style.display = 'block';
             requestWakeLock();
-            setInterval(updateDisplay, 100); // 10Hz update rate for responsive display
           }
           handlePosition(position);
         },
@@ -302,6 +315,11 @@
     // EVENT HANDLERS - User interactions and gesture detection
     // ============================================================================
     startButton.addEventListener('click', startTracking);
+
+    unitDisplay.addEventListener('click', () => {
+      showPaceMode = !showPaceMode;
+      updateDisplay();
+    });
 
     speedDisplay.addEventListener('click', () => {
       const currentTime = new Date().getTime();
