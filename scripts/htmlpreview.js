@@ -2,9 +2,37 @@
 	// License © 2019 Jerzy Głowacki under Apache License 2.0.
 	// https://github.com/htmlpreview/htmlpreview.github.com#license
 
-	// edited by oaustegard to serve my own gists by guid
+	// edited by oaustegard to serve my own gists by guid and others via API
 	var previewForm = document.getElementById('previewform');
 	var url = location.search.substring(1);
+
+	// Helper functions for loading/error display
+	var showLoading = function(message) {
+		var loadingDiv = document.getElementById('loading-display');
+		var loadingMsg = document.getElementById('loading-message');
+		if (loadingDiv && loadingMsg) {
+			loadingMsg.innerText = message || 'Fetching content';
+			loadingDiv.style.display = 'block';
+		}
+	};
+
+	var hideLoading = function() {
+		var loadingDiv = document.getElementById('loading-display');
+		if (loadingDiv) {
+			loadingDiv.style.display = 'none';
+		}
+	};
+
+	var showError = function(error) {
+		var errorDiv = document.getElementById('error-display');
+		var errorMsg = document.getElementById('error-message');
+		if (errorDiv && errorMsg) {
+			errorMsg.innerText = error.message || error.toString();
+			errorDiv.style.display = 'block';
+		}
+		hideLoading();
+		console.error(error);
+	};
 
 	// Theme management
 	var themeManager = {
@@ -149,49 +177,116 @@
 		themeManager.init();
 	}
 
-	// Enhanced URL parsing for various gist formats
-	var parseGistUrl = function(inputUrl) {
-		// Remove protocol if present to make matching easier
-		var urlNormalized = inputUrl.replace(/^https?:\/\//, '');
+	var resolveUrl = function(inputUrl) {
+		return new Promise(function(resolve, reject) {
+			// Remove protocol if present to make matching easier
+			var urlNormalized = inputUrl.replace(/^https?:\/\//, '');
 
-		// Case 1: Just a 32-char hex GUID (existing functionality)
-		if (/^[0-9a-f]{32}$/i.test(urlNormalized)) {
-			return "https://gist.githubusercontent.com/oaustegard/" + urlNormalized + "/raw/";
-		}
+			// Case 1: Gist ID or Gist ID/Filename
+			// Matches: 32-char hex ID, optionally followed by /filename
+			// Note: This regex avoids matching gist.github.com/... because it starts with hex char
+			var idMatch = urlNormalized.match(/^([0-9a-f]{32})(?:\/(.+))?$/i);
 
-		// Case 2: gist.github.com URLs - various formats
-		// Format: gist.github.com/username/gistid or gist.github.com/username/gistid/filename.html
-		var gistMatch = urlNormalized.match(/gist\.github\.com\/([^\/]+)\/([0-9a-f]+)(?:\/([^\/\?#]+))?/i);
-		if (gistMatch) {
-			var username = gistMatch[1];
-			var gistId = gistMatch[2];
-			var filename = gistMatch[3] || ''; // Optional filename
+			if (idMatch) {
+				var gistId = idMatch[1];
+				var filename = idMatch[2]; // can be undefined
 
-			// Build raw URL
-			if (filename && !filename.includes('raw')) {
-				// Specific file requested
-				return "https://gist.githubusercontent.com/" + username + "/" + gistId + "/raw/" + filename;
-			} else {
-				// No specific file, return raw gist URL (will load first HTML file or index.html)
-				return "https://gist.githubusercontent.com/" + username + "/" + gistId + "/raw/";
+				showLoading('Resolving Gist ID ' + gistId + '...');
+
+				fetch('https://api.github.com/gists/' + gistId)
+					.then(function(res) {
+						if (!res.ok) {
+							if (res.status === 404) throw new Error('Gist not found: ' + gistId);
+							if (res.status === 403) throw new Error('GitHub API rate limit exceeded or access denied.');
+							throw new Error('Error fetching Gist: ' + res.statusText);
+						}
+						return res.json();
+					})
+					.then(function(data) {
+						var files = data.files;
+						if (!files || Object.keys(files).length === 0) {
+							throw new Error('No files found in Gist.');
+						}
+
+						var targetFile;
+						if (filename) {
+							// try to find exact match or URL decoded match
+							var decodedFilename = decodeURIComponent(filename);
+							targetFile = files[filename] || files[decodedFilename];
+
+							// Try case-insensitive lookup
+							if (!targetFile) {
+								var lowerFilename = decodedFilename.toLowerCase();
+								for (var key in files) {
+									if (key.toLowerCase() === lowerFilename) {
+										targetFile = files[key];
+										break;
+									}
+								}
+							}
+						} else {
+							// No filename specified, look for index.html or first html file
+							targetFile = files['index.html'];
+							if (!targetFile) {
+								for (var key in files) {
+									if (files[key].language === 'HTML') {
+										targetFile = files[key];
+										break;
+									}
+								}
+							}
+							// Fallback to first file
+							if (!targetFile) {
+								targetFile = files[Object.keys(files)[0]];
+							}
+						}
+
+						if (!targetFile) {
+							throw new Error('File not found in Gist: ' + (filename || 'default'));
+						}
+
+						resolve(targetFile.raw_url);
+					})
+					.catch(reject);
+				return;
 			}
-		}
 
-		// Case 3: Already a raw.githubusercontent.com gist URL
-		if (urlNormalized.includes('gist.githubusercontent.com')) {
-			return 'https://' + urlNormalized;
-		}
+			// Case 2: gist.github.com URLs
+			// Format: gist.github.com/username/gistid or gist.github.com/username/gistid/filename.html
+			var gistMatch = urlNormalized.match(/gist\.github\.com\/([^\/]+)\/([0-9a-f]+)(?:\/([^\/\?#]+))?/i);
+			if (gistMatch) {
+				var username = gistMatch[1];
+				var gistId = gistMatch[2];
+				var filename = gistMatch[3] || ''; // Optional filename
 
-		// Case 4: Regular GitHub URLs (existing functionality)
-		if (urlNormalized.includes('github.com')) {
-			return 'https://' + urlNormalized.replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/');
-		}
+				// Build raw URL
+				if (filename && !filename.includes('raw')) {
+					// Specific file requested
+					resolve("https://gist.githubusercontent.com/" + username + "/" + gistId + "/raw/" + filename);
+				} else {
+					// No specific file, return raw gist URL
+					resolve("https://gist.githubusercontent.com/" + username + "/" + gistId + "/raw/");
+				}
+				return;
+			}
 
-		// Case 5: Return as-is with protocol
-		return inputUrl.startsWith('http') ? inputUrl : 'https://' + inputUrl;
+			// Case 3: Already a raw.githubusercontent.com gist URL
+			if (urlNormalized.includes('gist.githubusercontent.com')) {
+				resolve('https://' + urlNormalized);
+				return;
+			}
+
+			// Case 4: Regular GitHub URLs
+			if (urlNormalized.includes('github.com')) {
+				resolve('https://' + urlNormalized.replace(/\/\/github\.com/, '//raw.githubusercontent.com').replace(/\/blob\//, '/'));
+				return;
+			}
+
+			// Case 5: Return as-is with protocol
+			resolve(inputUrl.startsWith('http') ? inputUrl : 'https://' + inputUrl);
+		});
 	};
 
-	url = parseGistUrl(url);
 	var replaceAssets = function () {
 		var frame, a, link, links = [], script, scripts = [], i, href, src;
 		//Framesets
@@ -344,37 +439,13 @@
 		})
 	};
 
-	// Helper functions for loading/error display
-	var showLoading = function(message) {
-		var loadingDiv = document.getElementById('loading-display');
-		var loadingMsg = document.getElementById('loading-message');
-		if (loadingDiv && loadingMsg) {
-			loadingMsg.innerText = message || 'Fetching content';
-			loadingDiv.style.display = 'block';
-		}
-	};
-
-	var hideLoading = function() {
-		var loadingDiv = document.getElementById('loading-display');
-		if (loadingDiv) {
-			loadingDiv.style.display = 'none';
-		}
-	};
-
-	var showError = function(error) {
-		var errorDiv = document.getElementById('error-display');
-		var errorMsg = document.getElementById('error-message');
-		if (errorDiv && errorMsg) {
-			errorMsg.innerText = error.message || error.toString();
-			errorDiv.style.display = 'block';
-		}
-		hideLoading();
-		console.error(error);
-	};
-
 	if (url && url.indexOf(location.hostname) < 0) {
-		showLoading('Fetching ' + url);
-		fetchProxy(url, null, 0).then(function(html) {
+		showLoading('Resolving URL...');
+		resolveUrl(url).then(function(resolvedUrl) {
+			url = resolvedUrl;
+			showLoading('Fetching content...');
+			return fetchProxy(url, null, 0);
+		}).then(function(html) {
 			hideLoading();
 			loadHTML(html);
 			// Save successful URL to localStorage
