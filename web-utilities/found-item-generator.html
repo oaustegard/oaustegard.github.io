@@ -18,15 +18,41 @@
     }
   }
   </script>
+  <style>
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #print-area, #print-area * {
+        visibility: visible;
+      }
+      #print-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
 </head>
 <body class="bg-gray-100 min-h-screen">
   <div id="app"></div>
-  
+
   <script type="module">
     import { render } from 'preact';
     import { useSignal } from '@preact/signals';
     import { useEffect, useRef } from 'preact/hooks';
     import { html } from 'htm/preact';
+
+    // Configuration - update these for your deployment
+    const APP_CONFIG = {
+      REPO: 'oaustegard/found-item',
+      BASE_URL: 'https://austegard.com/found',
+      // Alternative: 'https://oaustegard.github.io/found'
+    };
 
     // Crypto utilities using Web Crypto API
     const cryptoUtils = {
@@ -44,7 +70,7 @@
           keyMaterial,
           { name: 'AES-GCM', length: 256 },
           false,
-          ['encrypt', 'decrypt']
+          ['deriveKey']
         );
       },
 
@@ -73,16 +99,20 @@
         const array = new Uint8Array(length);
         window.crypto.getRandomValues(array);
         return Array.from(array, b => chars[b % chars.length]).join('');
+      },
+
+      encodeBase64(text) {
+        return btoa(text);
       }
     };
 
     // QR Code component
     function QRCodeCanvas({ text, size = 256 }) {
       const canvasRef = useRef(null);
-      
+
       useEffect(() => {
         if (!text || !canvasRef.current || !window.QRCode) return;
-        
+
         window.QRCode.toCanvas(canvasRef.current, text, {
           width: size,
           margin: 2,
@@ -91,57 +121,58 @@
           if (err) console.error('QR generation error:', err);
         });
       }, [text, size]);
-      
+
       return html`<canvas ref=${canvasRef} class="mx-auto" />`;
     }
 
     function App() {
+      // Setup state (one-time)
+      const pat = useSignal('');
+      const encodedPAT = useSignal('');
+      const showSetup = useSignal(false);
+
       // Form state
-      const pat = useSignal(localStorage.getItem('github-pat') || '');
-      const repo = useSignal(localStorage.getItem('github-repo') || 'oaustegard/found-item');
-      const baseUrl = useSignal(localStorage.getItem('base-url') || 'https://austegard.com/web-utilities/found');
       const itemName = useSignal('');
+      const ownerMessage = useSignal('');
       const secret = useSignal(cryptoUtils.generateSecret());
-      
+
       // Generated output
       const generatedUrl = useSignal('');
       const isGenerating = useSignal(false);
       const error = useSignal('');
 
-      // Save settings to localStorage
-      const saveSettings = () => {
-        localStorage.setItem('github-pat', pat.value);
-        localStorage.setItem('github-repo', repo.value);
-        localStorage.setItem('base-url', baseUrl.value);
+      // Encode PAT for setup
+      const encodePAT = () => {
+        if (!pat.value) {
+          encodedPAT.value = '';
+          return;
+        }
+        encodedPAT.value = cryptoUtils.encodeBase64(pat.value);
       };
 
       // Generate encrypted URL
       const generate = async () => {
-        if (!pat.value || !itemName.value) {
-          error.value = 'PAT and Item Name are required';
+        if (!itemName.value) {
+          error.value = 'Item Name is required';
           return;
         }
-        
+
         error.value = '';
         isGenerating.value = true;
-        
+
         try {
-          saveSettings();
-          
           const payload = JSON.stringify({
-            p: pat.value,           // PAT
-            r: repo.value,          // repo
-            n: itemName.value,      // item name
-            // message not included - uses default in found page
+            n: itemName.value,           // item name
+            m: ownerMessage.value || '',  // optional owner message
           });
-          
+
           // Use first 8 chars of secret as salt
           const salt = secret.value.substring(0, 8);
           const encrypted = await cryptoUtils.encrypt(payload, secret.value, salt);
-          
-          const url = `${baseUrl.value}?s=${encodeURIComponent(secret.value)}&d=${encodeURIComponent(encrypted)}`;
+
+          const url = `${APP_CONFIG.BASE_URL}?k=${encodeURIComponent(secret.value)}&d=${encodeURIComponent(encrypted)}`;
           generatedUrl.value = url;
-          
+
         } catch (e) {
           error.value = `Encryption failed: ${e.message}`;
         } finally {
@@ -158,6 +189,14 @@
         await navigator.clipboard.writeText(generatedUrl.value);
       };
 
+      const copyEncodedPAT = async () => {
+        await navigator.clipboard.writeText(encodedPAT.value);
+      };
+
+      const printQR = () => {
+        window.print();
+      };
+
       const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500";
       const labelClass = "block text-sm font-medium text-gray-700 mb-1";
       const btnPrimary = "px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 disabled:opacity-50";
@@ -165,126 +204,170 @@
 
       return html`
         <div class="max-w-2xl mx-auto p-6">
-          <h1 class="text-2xl font-bold text-gray-800 mb-2">Found Item QR Generator</h1>
-          <p class="text-gray-600 mb-6">Generate encrypted QR codes for item recovery. All encryption happens locally.</p>
-          
-          <!-- Settings Section -->
-          <div class="bg-white rounded-lg shadow p-4 mb-6">
-            <h2 class="font-semibold text-gray-700 mb-3">Settings (saved locally)</h2>
-            
-            <div class="space-y-4">
-              <div>
-                <label class=${labelClass}>GitHub PAT (issues:write scope)</label>
-                <input 
-                  type="password" 
-                  class=${inputClass}
-                  value=${pat.value}
-                  onInput=${e => pat.value = e.target.value}
-                  placeholder="ghp_xxxxxxxxxxxx"
-                />
-              </div>
-              
-              <div>
-                <label class=${labelClass}>GitHub Repo</label>
-                <input 
-                  type="text" 
-                  class=${inputClass}
-                  value=${repo.value}
-                  onInput=${e => repo.value = e.target.value}
-                  placeholder="username/repo"
-                />
-              </div>
-              
-              <div>
-                <label class=${labelClass}>Found Page Base URL</label>
-                <input 
-                  type="text" 
-                  class=${inputClass}
-                  value=${baseUrl.value}
-                  onInput=${e => baseUrl.value = e.target.value}
-                  placeholder="https://austegard.com/web-utilities/found"
-                />
-              </div>
+          <div class="no-print">
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">Found Item QR Generator</h1>
+            <p class="text-gray-600 mb-6">Generate compact QR codes for item recovery. All encryption happens locally.</p>
+
+            <!-- Setup Section (collapsible) -->
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <button
+                class="w-full flex items-center justify-between text-left"
+                onClick=${() => showSetup.value = !showSetup.value}
+              >
+                <div>
+                  <h2 class="font-semibold text-blue-900">⚙️ One-Time Setup</h2>
+                  <p class="text-sm text-blue-700">Configure your GitHub PAT (do this first)</p>
+                </div>
+                <span class="text-blue-900 text-xl">${showSetup.value ? '▼' : '▶'}</span>
+              </button>
+
+              ${showSetup.value && html`
+                <div class="mt-4 space-y-4">
+                  <div>
+                    <label class=${labelClass}>GitHub PAT (issues:write scope)</label>
+                    <input
+                      type="password"
+                      class=${inputClass}
+                      value=${pat.value}
+                      onInput=${e => { pat.value = e.target.value; encodePAT(); }}
+                      placeholder="ghp_xxxxxxxxxxxx"
+                    />
+                    <p class="text-xs text-gray-500 mt-1">
+                      This will be encoded and hardcoded in the found page. Only do this once during setup.
+                    </p>
+                  </div>
+
+                  ${encodedPAT.value && html`
+                    <div class="bg-white rounded-md p-3">
+                      <label class=${labelClass}>Encoded PAT (copy this to found page)</label>
+                      <div class="flex gap-2">
+                        <input
+                          type="text"
+                          class="${inputClass} font-mono text-xs"
+                          value=${encodedPAT.value}
+                          readonly
+                        />
+                        <button class=${btnSecondary} onClick=${copyEncodedPAT}>Copy</button>
+                      </div>
+                      <div class="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-xs">
+                        <strong>Next step:</strong> Open <code class="bg-yellow-100 px-1">/found/index.html</code>
+                        and replace <code class="bg-yellow-100 px-1">REPLACE_WITH_YOUR_ENCODED_PAT</code>
+                        with the value above.
+                      </div>
+                    </div>
+                  `}
+
+                  <div class="text-sm text-blue-700">
+                    <strong>Repository:</strong> ${APP_CONFIG.REPO}<br/>
+                    <strong>Found Page URL:</strong> ${APP_CONFIG.BASE_URL}
+                  </div>
+                </div>
+              `}
             </div>
-          </div>
-          
-          <!-- Item Section -->
-          <div class="bg-white rounded-lg shadow p-4 mb-6">
-            <h2 class="font-semibold text-gray-700 mb-3">New Item</h2>
-            
-            <div class="space-y-4">
-              <div>
-                <label class=${labelClass}>Item Name / Description</label>
-                <input 
-                  type="text" 
-                  class=${inputClass}
-                  value=${itemName.value}
-                  onInput=${e => itemName.value = e.target.value}
-                  placeholder="Blue Water Bottle"
-                />
-              </div>
-              
-              <div>
-                <label class=${labelClass}>Secret Key (unique per item)</label>
-                <div class="flex gap-2">
-                  <input 
-                    type="text" 
-                    class="${inputClass} font-mono text-sm"
-                    value=${secret.value}
-                    readonly
+
+            <!-- Item Section -->
+            <div class="bg-white rounded-lg shadow p-4 mb-6">
+              <h2 class="font-semibold text-gray-700 mb-3">New Item</h2>
+
+              <div class="space-y-4">
+                <div>
+                  <label class=${labelClass}>Item Name / Description *</label>
+                  <input
+                    type="text"
+                    class=${inputClass}
+                    value=${itemName.value}
+                    onInput=${e => itemName.value = e.target.value}
+                    placeholder="Blue Water Bottle"
                   />
-                  <button 
-                    class=${btnSecondary}
-                    onClick=${regenerateSecret}
-                    title="Regenerate secret"
-                  >↻</button>
+                </div>
+
+                <div>
+                  <label class=${labelClass}>Owner Message (optional)</label>
+                  <textarea
+                    class=${inputClass}
+                    value=${ownerMessage.value}
+                    onInput=${e => ownerMessage.value = e.target.value}
+                    placeholder="If found, please text me at..."
+                    rows="2"
+                  ></textarea>
+                  <p class="text-xs text-gray-500 mt-1">
+                    Custom message to show on the found page. Leave blank for default.
+                  </p>
+                </div>
+
+                <div>
+                  <label class=${labelClass}>Secret Key (unique per item)</label>
+                  <div class="flex gap-2">
+                    <input
+                      type="text"
+                      class="${inputClass} font-mono text-sm"
+                      value=${secret.value}
+                      readonly
+                    />
+                    <button
+                      class=${btnSecondary}
+                      onClick=${regenerateSecret}
+                      title="Regenerate secret"
+                    >↻</button>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
-          
-          <!-- Generate Button -->
-          <div class="flex gap-3 mb-6">
-            <button 
-              class=${btnPrimary}
-              onClick=${generate}
-              disabled=${isGenerating.value}
-            >
-              ${isGenerating.value ? 'Generating...' : 'Generate QR Code'}
-            </button>
-          </div>
-          
-          ${error.value && html`
-            <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4">
-              ${error.value}
+
+            <!-- Generate Button -->
+            <div class="flex gap-3 mb-6">
+              <button
+                class=${btnPrimary}
+                onClick=${generate}
+                disabled=${isGenerating.value}
+              >
+                ${isGenerating.value ? 'Generating...' : 'Generate QR Code'}
+              </button>
             </div>
-          `}
-          
+
+            ${error.value && html`
+              <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4">
+                ${error.value}
+              </div>
+            `}
+          </div>
+
           <!-- Output Section -->
           ${generatedUrl.value && html`
-            <div class="bg-white rounded-lg shadow p-4">
+            <div id="print-area" class="bg-white rounded-lg shadow p-6">
               <h2 class="font-semibold text-gray-700 mb-3">Generated QR Code</h2>
-              
-              <div class="mb-4">
-                <${QRCodeCanvas} text=${generatedUrl.value} size=${256} />
+
+              <div class="text-center mb-4">
+                <div class="text-sm text-gray-600 mb-2 font-medium">${itemName.value}</div>
+                <${QRCodeCanvas} text=${generatedUrl.value} size=${300} />
               </div>
-              
-              <div class="mt-4">
+
+              <div class="no-print mt-4">
                 <label class=${labelClass}>URL (${generatedUrl.value.length} chars)</label>
-                <div class="flex gap-2">
-                  <input 
-                    type="text" 
+                <div class="flex gap-2 mb-3">
+                  <input
+                    type="text"
                     class="${inputClass} font-mono text-xs"
                     value=${generatedUrl.value}
                     readonly
                   />
                   <button class=${btnSecondary} onClick=${copyUrl}>Copy</button>
                 </div>
+
+                <div class="flex gap-2">
+                  <button class=${btnPrimary} onClick=${printQR}>
+                    🖨️ Print QR Code
+                  </button>
+                  <button class=${btnSecondary} onClick=${() => generatedUrl.value = ''}>
+                    Generate Another
+                  </button>
+                </div>
+
+                <div class="mt-3 p-3 bg-green-50 border border-green-200 rounded text-sm">
+                  <strong>✨ Much shorter!</strong> The old URL format was ~250 chars, this is ~${generatedUrl.value.length} chars.
+                  Shorter URLs = simpler QR codes = easier to scan at small sizes.
+                </div>
               </div>
-              
-              <p class="text-sm text-gray-500 mt-3">
-                Right-click the QR code to save as image, or print this page.
-              </p>
             </div>
           `}
         </div>
