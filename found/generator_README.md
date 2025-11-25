@@ -41,12 +41,12 @@ Finder fills form → Files GitHub issue → Owner notified
 ## URL Format
 
 ```
-https://austegard.com/found?k=<decryption_key>&n=<item_name>&m=<optional_message>
+https://austegard.com/found/?k=<decryption_key>&n=<item_name>&m=<optional_message>
 ```
 
 **Example:**
 ```
-https://austegard.com/found?k=AbCd123XyZ456&n=Blue%20Water%20Bottle&m=Text%20me%20anytime
+https://austegard.com/found/?k=AbCd123XyZ456&n=Blue%20Water%20Bottle&m=Text%20me%20anytime
 ```
 
 **Length:** Typically 60-100 characters (vs. 200-250 in previous iterations)
