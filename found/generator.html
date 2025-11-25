@@ -1,0 +1,428 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Found Item QR Generator</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcode/build/qrcode.js"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "preact": "https://esm.sh/*preact@10.23.1",
+      "preact/": "https://esm.sh/*preact@10.23.1/",
+      "@preact/signals": "https://esm.sh/*@preact/signals@1.3.0",
+      "@preact/signals-core": "https://esm.sh/*@preact/signals-core@1.8.0",
+      "htm": "https://esm.sh/*htm@3.1.1",
+      "htm/preact": "https://esm.sh/*htm@3.1.1/preact"
+    }
+  }
+  </script>
+  <style>
+    @media print {
+      body * {
+        visibility: hidden;
+      }
+      #print-area, #print-area * {
+        visibility: visible;
+      }
+      #print-area {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+      }
+      .no-print {
+        display: none !important;
+      }
+    }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+  <div id="app"></div>
+
+  <script type="module">
+    import { render } from 'preact';
+    import { useSignal } from '@preact/signals';
+    import { useEffect, useRef } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    // Configuration
+    const APP_CONFIG = {
+      REPO: 'oaustegard/found-item',
+      BASE_URL: 'https://austegard.com/found',
+      // Alternative: 'https://oaustegard.github.io/found'
+    };
+
+    // Crypto utilities
+    const cryptoUtils = {
+      // Generate random key
+      generateKey(length = 24) {
+        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+        const array = new Uint8Array(length);
+        crypto.getRandomValues(array);
+        return Array.from(array, b => chars[b % chars.length]).join('');
+      },
+
+      // Derive AES key from password/key string
+      async deriveKey(keyString) {
+        const enc = new TextEncoder();
+        const keyMaterial = await crypto.subtle.importKey(
+          'raw',
+          enc.encode(keyString),
+          'PBKDF2',
+          false,
+          ['deriveKey']
+        );
+        return crypto.subtle.deriveKey(
+          {
+            name: 'PBKDF2',
+            salt: enc.encode('found-item-salt-v1'),
+            iterations: 100000,
+            hash: 'SHA-256'
+          },
+          keyMaterial,
+          { name: 'AES-GCM', length: 256 },
+          false,
+          ['encrypt']
+        );
+      },
+
+      // Encrypt data with key string, return hex
+      async encrypt(plaintext, keyString) {
+        const key = await this.deriveKey(keyString);
+        const iv = crypto.getRandomValues(new Uint8Array(12));
+        const enc = new TextEncoder();
+
+        const ciphertext = await crypto.subtle.encrypt(
+          { name: 'AES-GCM', iv },
+          key,
+          enc.encode(plaintext)
+        );
+
+        // Combine IV + ciphertext and convert to hex
+        const combined = new Uint8Array(iv.length + ciphertext.byteLength);
+        combined.set(iv);
+        combined.set(new Uint8Array(ciphertext), iv.length);
+
+        return Array.from(combined)
+          .map(b => b.toString(16).padStart(2, '0'))
+          .join('');
+      }
+    };
+
+    // QR Code component
+    function QRCodeCanvas({ text, size = 256 }) {
+      const canvasRef = useRef(null);
+
+      useEffect(() => {
+        if (!text || !canvasRef.current || !window.QRCode) return;
+
+        window.QRCode.toCanvas(canvasRef.current, text, {
+          width: size,
+          margin: 2,
+          color: { dark: '#1a5f4a', light: '#ffffff' }
+        }, (err) => {
+          if (err) console.error('QR generation error:', err);
+        });
+      }, [text, size]);
+
+      return html`<canvas ref=${canvasRef} class="mx-auto" />`;
+    }
+
+    function App() {
+      // Setup state
+      const decryptionKey = useSignal(localStorage.getItem('decryption-key') || '');
+      const pat = useSignal('');
+      const encryptedPAT = useSignal('');
+      const showSetup = useSignal(!localStorage.getItem('decryption-key'));
+      const isEncrypting = useSignal(false);
+
+      // Item state
+      const itemName = useSignal('');
+      const ownerMessage = useSignal('');
+
+      // Output state
+      const generatedUrl = useSignal('');
+      const error = useSignal('');
+
+      // Generate new decryption key
+      const generateDecryptionKey = () => {
+        const newKey = cryptoUtils.generateKey(24);
+        decryptionKey.value = newKey;
+        localStorage.setItem('decryption-key', newKey);
+        encryptedPAT.value = '';
+      };
+
+      // Encrypt PAT
+      const encryptPAT = async () => {
+        if (!pat.value || !decryptionKey.value) {
+          error.value = 'Please provide both PAT and decryption key';
+          return;
+        }
+
+        isEncrypting.value = true;
+        error.value = '';
+
+        try {
+          const encrypted = await cryptoUtils.encrypt(pat.value, decryptionKey.value);
+          encryptedPAT.value = encrypted;
+        } catch (e) {
+          error.value = `Encryption failed: ${e.message}`;
+        } finally {
+          isEncrypting.value = false;
+        }
+      };
+
+      // Generate QR code
+      const generate = () => {
+        if (!decryptionKey.value) {
+          error.value = 'Please complete setup first (generate decryption key)';
+          return;
+        }
+        if (!itemName.value) {
+          error.value = 'Item name is required';
+          return;
+        }
+
+        error.value = '';
+
+        // Build URL - super simple!
+        let url = `${APP_CONFIG.BASE_URL}?k=${encodeURIComponent(decryptionKey.value)}&n=${encodeURIComponent(itemName.value)}`;
+
+        if (ownerMessage.value) {
+          url += `&m=${encodeURIComponent(ownerMessage.value)}`;
+        }
+
+        generatedUrl.value = url;
+      };
+
+      const copyUrl = async () => {
+        await navigator.clipboard.writeText(generatedUrl.value);
+      };
+
+      const copyEncryptedPAT = async () => {
+        await navigator.clipboard.writeText(encryptedPAT.value);
+      };
+
+      const copyDecryptionKey = async () => {
+        await navigator.clipboard.writeText(decryptionKey.value);
+      };
+
+      const printQR = () => {
+        window.print();
+      };
+
+      const inputClass = "w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-teal-500";
+      const labelClass = "block text-sm font-medium text-gray-700 mb-1";
+      const btnPrimary = "px-4 py-2 bg-teal-600 text-white rounded-md hover:bg-teal-700 disabled:opacity-50";
+      const btnSecondary = "px-4 py-2 bg-gray-200 text-gray-700 rounded-md hover:bg-gray-300";
+
+      return html`
+        <div class="max-w-2xl mx-auto p-6">
+          <div class="no-print">
+            <h1 class="text-2xl font-bold text-gray-800 mb-2">Found Item QR Generator</h1>
+            <p class="text-gray-600 mb-6">Generate minimal QR codes for item recovery. Ultra-short URLs for better scanning.</p>
+
+            <!-- Setup Section -->
+            <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
+              <button
+                class="w-full flex items-center justify-between text-left"
+                onClick=${() => showSetup.value = !showSetup.value}
+              >
+                <div>
+                  <h2 class="font-semibold text-blue-900">⚙️ One-Time Setup</h2>
+                  <p class="text-sm text-blue-700">
+                    ${decryptionKey.value ? 'Setup complete ✓' : 'Required before generating QR codes'}
+                  </p>
+                </div>
+                <span class="text-blue-900 text-xl">${showSetup.value ? '▼' : '▶'}</span>
+              </button>
+
+              ${showSetup.value && html`
+                <div class="mt-4 space-y-4">
+                  <div class="p-3 bg-white rounded-md">
+                    <h3 class="font-semibold text-gray-800 mb-2">Step 1: Generate Decryption Key</h3>
+                    <div class="flex gap-2 mb-2">
+                      <input
+                        type="text"
+                        class="${inputClass} font-mono text-sm"
+                        value=${decryptionKey.value}
+                        readonly
+                        placeholder="Click generate..."
+                      />
+                      <button class=${btnSecondary} onClick=${generateDecryptionKey}>
+                        ${decryptionKey.value ? '↻ Regenerate' : 'Generate'}
+                      </button>
+                      ${decryptionKey.value && html`
+                        <button class=${btnSecondary} onClick=${copyDecryptionKey} title="Copy key">
+                          📋
+                        </button>
+                      `}
+                    </div>
+                    <p class="text-xs text-gray-500">
+                      This key will be stored in your browser and included in all QR codes.
+                    </p>
+                  </div>
+
+                  ${decryptionKey.value && html`
+                    <div class="p-3 bg-white rounded-md">
+                      <h3 class="font-semibold text-gray-800 mb-2">Step 2: Encrypt GitHub PAT</h3>
+                      <div class="mb-3">
+                        <label class=${labelClass}>GitHub PAT (issues:write scope)</label>
+                        <input
+                          type="password"
+                          class=${inputClass}
+                          value=${pat.value}
+                          onInput=${e => pat.value = e.target.value}
+                          placeholder="ghp_xxxxxxxxxxxx"
+                        />
+                      </div>
+                      <button
+                        class=${btnPrimary}
+                        onClick=${encryptPAT}
+                        disabled=${isEncrypting.value}
+                      >
+                        ${isEncrypting.value ? 'Encrypting...' : 'Encrypt PAT'}
+                      </button>
+                    </div>
+                  `}
+
+                  ${encryptedPAT.value && html`
+                    <div class="p-3 bg-green-50 border border-green-200 rounded-md">
+                      <h3 class="font-semibold text-green-900 mb-2">✓ Step 3: Update Found Page</h3>
+                      <label class=${labelClass}>Encrypted PAT (copy this)</label>
+                      <div class="flex gap-2 mb-3">
+                        <input
+                          type="text"
+                          class="${inputClass} font-mono text-xs"
+                          value=${encryptedPAT.value}
+                          readonly
+                        />
+                        <button class=${btnSecondary} onClick=${copyEncryptedPAT}>Copy</button>
+                      </div>
+                      <div class="text-sm text-green-800 bg-white rounded p-2 border border-green-300">
+                        <strong>Final step:</strong>
+                        <ol class="list-decimal ml-4 mt-1 space-y-1">
+                          <li>Open <code class="bg-green-100 px-1">/found/index.html</code></li>
+                          <li>Find: <code class="bg-green-100 px-1">REPLACE_WITH_ENCRYPTED_PAT_FROM_GENERATOR</code></li>
+                          <li>Replace with the encrypted PAT above</li>
+                          <li>Commit and push to GitHub</li>
+                        </ol>
+                      </div>
+                    </div>
+                  `}
+
+                  <div class="text-sm text-blue-700 p-2 bg-white rounded">
+                    <strong>Configuration:</strong><br/>
+                    Repository: <code class="bg-blue-50 px-1">${APP_CONFIG.REPO}</code><br/>
+                    Found Page: <code class="bg-blue-50 px-1">${APP_CONFIG.BASE_URL}</code>
+                  </div>
+                </div>
+              `}
+            </div>
+
+            ${!decryptionKey.value && html`
+              <div class="bg-yellow-50 border border-yellow-300 rounded-lg p-4 mb-6">
+                <p class="text-yellow-800">
+                  ⚠️ Please complete the one-time setup above before generating QR codes.
+                </p>
+              </div>
+            `}
+
+            <!-- Item Section -->
+            ${decryptionKey.value && html`
+              <div class="bg-white rounded-lg shadow p-4 mb-6">
+                <h2 class="font-semibold text-gray-700 mb-3">Generate QR Code</h2>
+
+                <div class="space-y-4">
+                  <div>
+                    <label class=${labelClass}>Item Name / Description *</label>
+                    <input
+                      type="text"
+                      class=${inputClass}
+                      value=${itemName.value}
+                      onInput=${e => itemName.value = e.target.value}
+                      placeholder="Blue Water Bottle"
+                    />
+                  </div>
+
+                  <div>
+                    <label class=${labelClass}>Owner Message (optional)</label>
+                    <textarea
+                      class=${inputClass}
+                      value=${ownerMessage.value}
+                      onInput=${e => ownerMessage.value = e.target.value}
+                      placeholder="If found, please text me at..."
+                      rows="2"
+                    ></textarea>
+                    <p class="text-xs text-gray-500 mt-1">
+                      Custom message shown on the found page. Leave blank for default.
+                    </p>
+                  </div>
+
+                  <button
+                    class=${btnPrimary}
+                    onClick=${generate}
+                  >
+                    Generate QR Code
+                  </button>
+                </div>
+              </div>
+            `}
+
+            ${error.value && html`
+              <div class="bg-red-100 border border-red-400 text-red-700 px-4 py-2 rounded mb-4">
+                ${error.value}
+              </div>
+            `}
+          </div>
+
+          <!-- Output Section -->
+          ${generatedUrl.value && html`
+            <div id="print-area" class="bg-white rounded-lg shadow p-6">
+              <h2 class="font-semibold text-gray-700 mb-3">Generated QR Code</h2>
+
+              <div class="text-center mb-4">
+                <div class="text-sm text-gray-600 mb-2 font-medium">${itemName.value}</div>
+                <${QRCodeCanvas} text=${generatedUrl.value} size=${300} />
+              </div>
+
+              <div class="no-print mt-4">
+                <label class=${labelClass}>URL (${generatedUrl.value.length} characters)</label>
+                <div class="flex gap-2 mb-3">
+                  <input
+                    type="text"
+                    class="${inputClass} font-mono text-xs"
+                    value=${generatedUrl.value}
+                    readonly
+                  />
+                  <button class=${btnSecondary} onClick=${copyUrl}>Copy</button>
+                </div>
+
+                <div class="flex gap-2 mb-3">
+                  <button class=${btnPrimary} onClick=${printQR}>
+                    🖨️ Print QR Code
+                  </button>
+                  <button class=${btnSecondary} onClick=${() => { generatedUrl.value = ''; itemName.value = ''; ownerMessage.value = ''; }}>
+                    Generate Another
+                  </button>
+                </div>
+
+                <div class="p-3 bg-green-50 border border-green-200 rounded text-sm">
+                  <strong>✨ Ultra-compact!</strong>
+                  URL is only ${generatedUrl.value.length} chars (vs. ~250 in previous versions).
+                  <br/>
+                  Shorter URLs = simpler QR codes = reliable scanning even at small sizes.
+                </div>
+              </div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    render(html`<${App} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>
