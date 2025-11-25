@@ -14,6 +14,7 @@
       width: 24px;
       height: 24px;
       animation: spin 1s linear infinite;
+      display: inline-block;
     }
     @keyframes spin {
       0% { transform: rotate(0deg); }
@@ -36,6 +37,15 @@
       <p class="text-gray-600">This QR code may be damaged or the link has expired.</p>
     </div>
     
+    <!-- Success state (shown after submit) -->
+    <div id="success" class="hidden text-center py-8">
+      <div class="bg-white rounded-xl shadow-lg p-6">
+        <div class="text-6xl mb-4">✅</div>
+        <h2 class="text-2xl font-bold text-gray-800 mb-3">Message Sent!</h2>
+        <p class="text-gray-600 text-lg">The owner has been notified. Thank you for helping reunite them with their item!</p>
+      </div>
+    </div>
+    
     <!-- Main content -->
     <div id="content" class="hidden">
       <div class="text-center mb-6">
@@ -51,7 +61,7 @@
         <div id="owner-message" class="text-gray-700"></div>
       </div>
       
-      <div class="bg-white rounded-xl shadow-lg p-5">
+      <div id="form-section" class="bg-white rounded-xl shadow-lg p-5">
         <h2 class="font-semibold text-gray-800 mb-4">Let the owner know you found it</h2>
         
         <div class="space-y-4">
@@ -80,7 +90,12 @@
             <label for="share-location" class="text-sm text-gray-700">Share my current location</label>
           </div>
           
-          <div id="location-status" class="text-sm text-gray-500 hidden"></div>
+          <div id="location-status" class="text-sm hidden">
+            <div id="location-text" class="text-gray-600"></div>
+            <div id="location-note" class="text-gray-400 text-xs mt-1 hidden">
+              Note: Location accuracy depends on your device. Desktop browsers may only provide approximate location.
+            </div>
+          </div>
           
           <button 
             id="submit-btn"
@@ -91,13 +106,6 @@
           
           <div id="submit-error" class="text-red-600 text-sm hidden"></div>
         </div>
-      </div>
-      
-      <!-- Success state -->
-      <div id="success" class="hidden bg-white rounded-xl shadow-lg p-5 text-center">
-        <div class="text-5xl mb-3">✅</div>
-        <h2 class="text-xl font-bold text-gray-800 mb-2">Message Sent!</h2>
-        <p class="text-gray-600">The owner has been notified. Thank you for helping reunite them with their item!</p>
       </div>
     </div>
   </div>
@@ -152,7 +160,7 @@
 
     // State
     let config = null;
-    let location = null;
+    let userLocation = null;
 
     // Initialize
     async function init() {
@@ -188,36 +196,63 @@
       }
     }
 
+    function getLocationErrorMessage(err) {
+      switch(err.code) {
+        case 1: // PERMISSION_DENIED
+          return 'Location permission denied. Please enable location access in your browser settings.';
+        case 2: // POSITION_UNAVAILABLE
+          return 'Location unavailable. Please try again or enter your location in the message.';
+        case 3: // TIMEOUT
+          return 'Location request timed out. Please try again.';
+        default:
+          return 'Could not get location: ' + err.message;
+      }
+    }
+
     function setupListeners() {
       // Location checkbox
       $('share-location').addEventListener('change', async (e) => {
         if (e.target.checked) {
-          $('location-status').textContent = 'Requesting location...';
+          $('location-text').textContent = '📍 Requesting location...';
           show('location-status');
+          hide('location-note');
           
           try {
             const pos = await new Promise((resolve, reject) => {
               navigator.geolocation.getCurrentPosition(resolve, reject, {
                 enableHighAccuracy: true,
-                timeout: 10000
+                timeout: 15000,
+                maximumAge: 0
               });
             });
             
-            location = {
+            userLocation = {
               lat: pos.coords.latitude,
               lng: pos.coords.longitude,
               accuracy: pos.coords.accuracy
             };
             
-            $('location-status').textContent = `📍 Location acquired (±${Math.round(location.accuracy)}m)`;
+            const accuracyText = userLocation.accuracy > 1000 
+              ? `±${(userLocation.accuracy / 1000).toFixed(1)}km` 
+              : `±${Math.round(userLocation.accuracy)}m`;
+            
+            $('location-text').textContent = `📍 Location acquired (${accuracyText})`;
+            $('location-text').className = 'text-green-600';
+            
+            // Show accuracy note if poor accuracy (> 500m)
+            if (userLocation.accuracy > 500) {
+              show('location-note');
+            }
+            
           } catch (err) {
-            $('location-status').textContent = '❌ Could not get location: ' + err.message;
+            $('location-text').textContent = '❌ ' + getLocationErrorMessage(err);
+            $('location-text').className = 'text-red-600';
             e.target.checked = false;
-            location = null;
+            userLocation = null;
           }
         } else {
           hide('location-status');
-          location = null;
+          userLocation = null;
         }
       });
 
@@ -231,7 +266,7 @@
       
       hide('submit-error');
       btn.disabled = true;
-      btn.innerHTML = '<div class="loader"></div> Sending...';
+      btn.innerHTML = '<span class="loader"></span> Sending...';
       
       try {
         const message = $('finder-message').value.trim();
@@ -249,8 +284,11 @@
           body += `**Contact Info:** ${contact}\n\n`;
         }
         
-        if (location) {
-          body += `**Location:** [${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}](https://www.google.com/maps?q=${location.lat},${location.lng}) (±${Math.round(location.accuracy)}m)\n`;
+        if (userLocation) {
+          const accuracyText = userLocation.accuracy > 1000 
+            ? `±${(userLocation.accuracy / 1000).toFixed(1)}km` 
+            : `±${Math.round(userLocation.accuracy)}m`;
+          body += `**Location:** [${userLocation.lat.toFixed(6)}, ${userLocation.lng.toFixed(6)}](https://www.google.com/maps?q=${userLocation.lat},${userLocation.lng}) (${accuracyText})\n`;
         }
         
         body += `\n---\n_Submitted via Found Item page_`;
@@ -275,17 +313,18 @@
           throw new Error(err.message || 'Failed to send message');
         }
         
-        // Show success
+        // Show success - hide form, show success message
         hide('content');
         show('success');
-        $('content').appendChild($('success'));
-        show('content');
+        
+        // Scroll to top
+        window.scrollTo({ top: 0, behavior: 'smooth' });
         
       } catch (e) {
         errorEl.textContent = e.message;
         show('submit-error');
         btn.disabled = false;
-        btn.textContent = 'Send Message';
+        btn.innerHTML = 'Send Message';
       }
     }
 
