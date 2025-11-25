@@ -8,7 +8,7 @@ This system allows you to generate QR codes for personal items that, when scanne
 
 ### Components
 
-1. **Generator** (`/found/generator/index.html`)
+1. **Generator** (`/found/generator.html`)
    - Browser-based QR code generator
    - One-time setup: encrypts GitHub PAT with a decryption key
    - Per-item generation: creates minimal URLs with item name
@@ -79,7 +79,7 @@ https://austegard.com/found?k=AbCd123XyZ456&n=Blue%20Water%20Bottle&m=Text%20me%
 
 3. **Separation:**
    - Encrypted PAT lives in `/found/index.html`
-   - Decryption key lives in `/found/generator/index.html`
+   - Decryption key lives in `/found/generator.html`
    - Not stored together with obvious labels
    - Requires understanding the relationship to exploit
 
@@ -158,7 +158,7 @@ Length: 60-100 characters
 ### One-Time Setup
 
 1. **Generate Decryption Key**
-   - Open `/found/generator/index.html`
+   - Open `/found/generator.html`
    - Expand "One-Time Setup" section
    - Click "Generate" to create a random 24-character key
    - Key is stored in browser localStorage
@@ -180,7 +180,7 @@ Length: 60-100 characters
 
 ### Generating QR Codes
 
-1. Open `/found/generator/index.html`
+1. Open `/found/generator.html`
 2. Enter item name (e.g., "Blue Water Bottle")
 3. Optionally add an owner message
 4. Click "Generate QR Code"
@@ -197,7 +197,7 @@ Length: 60-100 characters
 ## Configuration
 
 ### Generator Config
-Located at top of `/found/generator/index.html`:
+Located at top of `/found/generator.html`:
 
 ```javascript
 const APP_CONFIG = {
