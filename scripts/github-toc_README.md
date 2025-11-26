@@ -1,0 +1,132 @@
+# GitHub ToC Web Component
+
+A lightweight web component that generates a table of contents from a GitHub repository folder. Simply drop it into your page and configure the repository path and link prefix to create an automatically updating list of files.
+
+See it in action at [http://austegard.com/bsky/](http://austegard.com/bsky/)
+
+## Installation
+
+Add the web component script to your page:
+
+```html
+<script src="https://austegard.com/scripts/github-toc.js"></script>
+```
+
+## Usage
+
+Add the component to your HTML with the required attributes:
+
+```html
+<github-toc 
+    repo-path="https://github.com/username/repo/tree/branch/path"
+    link-prefix="https://your-site.com/path"
+    exclude="index.html, *.js, *.css"
+    include="*.html">
+</github-toc>
+```
+
+## Attributes
+
+| Attribute | Required | Description | Example |
+|-----------|----------|-------------|---------|
+| `repo-path` | Yes | Full GitHub URL to the repository folder | `"https://github.com/username/repo/tree/main/docs"` |
+| `link-prefix` | No | Base URL prefix for generated links. If omitted, links will point directly to the files on GitHub. | `"https://your-site.com/docs"` |
+| `exclude` | No | Comma-separated list of wildcard patterns to exclude | `"index*, *.js, *.css"` |
+| `include` | No | Comma-separated list of wildcard patterns to include. If omitted, all files not excluded will be included. | `"*.html, *.md"` |
+
+### Exclusion Patterns
+
+The `exclude` attribute supports wildcard patterns to filter out unwanted files.
+- Use `*` to match any sequence of characters
+- Separate multiple patterns with commas
+- Patterns are case-sensitive
+- Leading/trailing whitespace is ignored
+
+Examples:
+- `"index*"` - Excludes all files starting with "index"
+- `"*.js"` - Excludes all JavaScript files
+- `"temp*, *.bak"` - Excludes files starting with "temp" and ending with ".bak"
+
+### Inclusion Patterns
+
+The `include` attribute allows you to specify which files to show. If this attribute is not used, all files that are not excluded will be shown by default.
+- Use `*` to match any sequence of characters
+- Separate multiple patterns with commas
+- Patterns are case-sensitive
+- Leading/trailing whitespace is ignored
+
+Examples:
+- `"*.html"` - Includes only HTML files
+- `"project-*, doc-*"` - Includes files starting with "project-" or "doc-"
+
+## Features
+
+- Automatically fetches and displays repository contents
+- Sorts entries (directories first, then files)
+- Formats filenames for display (removes extensions, adds spaces between camel case)
+- Excludes hidden files (starting with . or _)
+- Supports custom inclusion and exclusion patterns with wildcards
+- Uses shadow DOM for style isolation
+- Handles errors gracefully with user feedback
+- Updates automatically when attributes change
+- Displays README links for files with associated documentation
+
+### README Links
+
+The component automatically detects and links to associated README files following this pattern:
+- For a file named `example.html`, it looks for `example_README.md` in the same directory
+- README links appear as a small "(readme)" label next to the filename
+- Links point directly to the GitHub source of the README file
+
+This feature makes it easy to provide and access documentation for individual files in your repository.
+
+## Example Implementation
+
+Complete HTML page example:
+
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repository Contents</title>
+    <script src="https://austegard.com/scripts/github-toc.js"></script>
+    <style>
+        body {
+            font-family: system-ui, sans-serif;
+            max-width: 800px;
+            margin: 2rem auto;
+            padding: 0 1rem;
+        }
+    </style>
+</head>
+<body>
+    <h1>Repository Contents</h1>
+    <github-toc 
+        repo-path="https://github.com/username/repo/tree/main/docs"
+        link-prefix="https://your-site.com/docs"
+        exclude="index*, *.js, *.css">
+    </github-toc>
+</body>
+</html>
+```
+
+## Browser Support
+
+Works in all modern browsers that support Web Components:
+- Chrome
+- Firefox
+- Safari
+- Edge
+
+## Limitations
+
+- Requires JavaScript to be enabled
+- Repository must be public
+- Subject to GitHub API rate limits
+- No support for nested directory traversal
+
+## License
+
+MIT License
