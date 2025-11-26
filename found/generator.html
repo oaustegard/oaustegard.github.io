@@ -134,7 +134,7 @@
       const decryptionKey = useSignal(localStorage.getItem('decryption-key') || '');
       const pat = useSignal('');
       const encryptedPAT = useSignal('');
-      const showSetup = useSignal(!localStorage.getItem('decryption-key'));
+      const showSetup = useSignal(true);
       const isEncrypting = useSignal(false);
 
       // Item state
@@ -151,6 +151,10 @@
         decryptionKey.value = newKey;
         localStorage.setItem('decryption-key', newKey);
         encryptedPAT.value = '';
+      };
+
+      const saveDecryptionKey = () => {
+        localStorage.setItem('decryption-key', decryptionKey.value);
       };
 
       // Encrypt PAT
@@ -225,33 +229,27 @@
 
             <!-- Setup Section -->
             <div class="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
-              <button
-                class="w-full flex items-center justify-between text-left"
-                onClick=${() => showSetup.value = !showSetup.value}
-              >
-                <div>
-                  <h2 class="font-semibold text-blue-900">⚙️ One-Time Setup</h2>
-                  <p class="text-sm text-blue-700">
-                    ${decryptionKey.value ? 'Setup complete ✓' : 'Required before generating QR codes'}
-                  </p>
-                </div>
-                <span class="text-blue-900 text-xl">${showSetup.value ? '▼' : '▶'}</span>
-              </button>
+              <div>
+                <h2 class="font-semibold text-blue-900">⚙️ One-Time Setup</h2>
+              </div>
 
               ${showSetup.value && html`
                 <div class="mt-4 space-y-4">
                   <div class="p-3 bg-white rounded-md">
-                    <h3 class="font-semibold text-gray-800 mb-2">Step 1: Generate Decryption Key</h3>
+                    <h3 class="font-semibold text-gray-800 mb-2">Step 1: Set Decryption Key</h3>
                     <div class="flex gap-2 mb-2">
                       <input
                         type="text"
                         class="${inputClass} font-mono text-sm"
                         value=${decryptionKey.value}
-                        readonly
-                        placeholder="Click generate..."
+                        onInput=${e => { decryptionKey.value = e.target.value; encryptedPAT.value = ''; }}
+                        placeholder="Generate or paste a key..."
                       />
                       <button class=${btnSecondary} onClick=${generateDecryptionKey}>
-                        ${decryptionKey.value ? '↻ Regenerate' : 'Generate'}
+                        Generate
+                      </button>
+                      <button class=${btnSecondary} onClick=${saveDecryptionKey} title="Save key to this browser's local storage">
+                        Save
                       </button>
                       ${decryptionKey.value && html`
                         <button class=${btnSecondary} onClick=${copyDecryptionKey} title="Copy key">
@@ -260,32 +258,31 @@
                       `}
                     </div>
                     <p class="text-xs text-gray-500">
-                      This key will be stored in your browser and included in all QR codes.
+                      To use across devices, generate a key, save it somewhere safe (like a password manager), and then paste it here on other devices.
                     </p>
                   </div>
 
-                  ${decryptionKey.value && html`
-                    <div class="p-3 bg-white rounded-md">
-                      <h3 class="font-semibold text-gray-800 mb-2">Step 2: Encrypt GitHub PAT</h3>
-                      <div class="mb-3">
-                        <label class=${labelClass}>GitHub PAT (issues:write scope)</label>
-                        <input
-                          type="password"
-                          class=${inputClass}
-                          value=${pat.value}
-                          onInput=${e => pat.value = e.target.value}
-                          placeholder="ghp_xxxxxxxxxxxx"
-                        />
-                      </div>
-                      <button
-                        class=${btnPrimary}
-                        onClick=${encryptPAT}
-                        disabled=${isEncrypting.value}
-                      >
-                        ${isEncrypting.value ? 'Encrypting...' : 'Encrypt PAT'}
-                      </button>
+                  <div class="p-3 bg-white rounded-md">
+                    <h3 class="font-semibold text-gray-800 mb-2">Step 2: Encrypt GitHub PAT</h3>
+                    <div class="mb-3">
+                      <label class=${labelClass}>GitHub PAT (issues:write scope)</label>
+                      <input
+                        type="password"
+                        class=${inputClass}
+                        value=${pat.value}
+                        onInput=${e => pat.value = e.target.value}
+                        placeholder=${decryptionKey.value ? "ghp_xxxxxxxxxxxx" : "Please set decryption key first"}
+                        disabled=${!decryptionKey.value}
+                      />
                     </div>
-                  `}
+                    <button
+                      class=${btnPrimary}
+                      onClick=${encryptPAT}
+                      disabled=${isEncrypting.value || !decryptionKey.value}
+                    >
+                      ${isEncrypting.value ? 'Encrypting...' : 'Encrypt PAT'}
+                    </button>
+                  </div>
 
                   ${encryptedPAT.value && html`
                     <div class="p-3 bg-green-50 border border-green-200 rounded-md">
