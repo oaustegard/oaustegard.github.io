@@ -28,7 +28,7 @@ let elements = {};
 /* Public API functions */
 export async function initializeBskyCore() {
     try {
-        const api = await import('https://esm.sh/@atproto/api@0.12.29');
+        const api = await import('https://esm.sh/@atproto/api@0.13.2');
         BskyAgent = api.BskyAgent;
         
         /* Initialize the public agent */
