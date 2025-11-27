@@ -119,9 +119,13 @@ export function initializeThreadProcessing() {
             
             /* Process thread or quotes based on button clicked */
             if (isQuoteProcessing) {
+                /* Get the selected sort order */
+                const sortOrder = document.querySelector('input[name="quote-sort"]:checked')?.value || 'popular';
+                updateQueryParam('sort', sortOrder);
+
                 /* Import quote processing module dynamically */
                 const quoteModule = await import('./bsky-quote.js');
-                const processedData = await quoteModule.processQuotes(postInfo);
+                const processedData = await quoteModule.processQuotes(postInfo, sortOrder);
                 displayOutput(processedData);
             } else {
                 const processedData = await processThread(postInfo);

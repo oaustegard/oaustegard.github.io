@@ -523,6 +523,14 @@ function loadStateFromUrl() {
         if (qspUrl !== elements.urlInput.value) {
             elements.urlInput.value = qspUrl || '';
         }
+
+        const qspSort = getQueryParam('sort');
+        if (qspSort) {
+            const sortRadio = document.querySelector(`input[name="quote-sort"][value="${qspSort}"]`);
+            if (sortRadio) {
+                sortRadio.checked = true;
+            }
+        }
     } else if (tab === 'search-tab') {
         const qspQuery = getQueryParam('q');
         if (qspQuery !== elements.searchInput.value) {
