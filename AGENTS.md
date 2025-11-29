@@ -35,10 +35,7 @@ This repository uses **code maps** (`_MAP.md` files) to provide navigable overvi
 #### How to regenerate:
 
 ```bash
-# Install dependencies (once per session)
-uv pip install --system tree-sitter==0.21.3 tree-sitter-languages==1.10.2
-
-# Regenerate all maps
+# Regenerate all maps (dependencies auto-install on first run)
 python .claude/skills/mapping-codebases/scripts/codemap.py .
 
 # Include updated maps in your commit
@@ -139,4 +136,3 @@ The repository is organized into thematic subdirectories containing standalone w
 - **Deployment**: The site is automatically built and deployed to GitHub Pages on every push to the `main` branch, as defined in `.github/workflows/main.yml`.
 - **Generated Sitemap**: The `sitemap.xml` file is generated automatically by the `jekyll-sitemap` plugin during the Jekyll build process. It is not stored in the repository but is available on the live site at `https://austegard.com/sitemap.xml`.
 - **No JS/CSS Bundling**: The project does not use a modern asset pipeline (like Webpack or Vite). Scripts and styles are included directly in the HTML files.
-- **SessionStart Hook**: For Claude Code on the web sessions, `.claude/hooks/session-start.sh` automatically installs npm dependencies, Playwright browsers, and Python tree-sitter libraries for code mapping.
