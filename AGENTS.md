@@ -2,6 +2,48 @@
 
 This document provides guidance for AI agents interacting with this repository. The information is based on an analysis of the existing codebase, structure, and workflows.
 
+## Code Maps - Navigation & Maintenance
+
+This repository uses **code maps** (`_MAP.md` files) to provide navigable overviews of the codebase structure without requiring you to read every file.
+
+### Using Code Maps
+
+1. **Start with the root map**: Read `_MAP.md` first to understand the overall structure
+2. **Navigate hierarchically**: Click through subdirectory links (e.g., `[bsky/](./bsky/_MAP.md)`) to explore specific areas
+3. **Understand dependencies**: Maps show exports/imports to reveal module relationships
+4. **Only read source files when needed**: Use maps to identify relevant files before reading them
+
+**Example workflow:**
+```
+1. Read _MAP.md (see 10 subdirectories)
+2. Read bsky/_MAP.md (see bsky-core.js exports 16 functions)
+3. Read bsky-quote.js (see it imports from bsky-core.js)
+4. Now read the actual source files only if needed
+```
+
+### Maintaining Code Maps
+
+**IMPORTANT**: When you modify code that affects exports or imports, you MUST regenerate the maps.
+
+#### When to regenerate:
+- ✅ After adding/removing exported functions, classes, or variables
+- ✅ After adding/removing import statements
+- ✅ After creating new files in the codebase
+- ✅ After renaming or moving files
+- ❌ Not needed for internal implementation changes that don't affect the module interface
+
+#### How to regenerate:
+
+```bash
+# Regenerate all maps (dependencies auto-install on first run)
+python .claude/skills/mapping-codebases/scripts/codemap.py .
+
+# Include updated maps in your commit
+git add '*/_MAP.md'
+```
+
+**Best practice**: Regenerate maps just before committing code changes that affect module interfaces.
+
 ## Dev Environment Tips
 
 This is a Jekyll-based static site published to GitHub Pages.
@@ -32,9 +74,12 @@ This is a Jekyll-based static site published to GitHub Pages.
 
 ## Testing Instructions
 
-- **No Automated Tests**: The repository does not contain an automated test suite.
-- **Manual Verification**: Testing is performed by running the site locally with `bundle exec jekyll serve` and manually verifying that pages render correctly and tools are functional.
-- **CI/CD**: The `.github/workflows/main.yml` workflow only builds the site; it does not run any tests.
+- **Playwright Tests**: The repository includes Playwright tests for testing web tools.
+  - Run tests: `npm test`
+  - Run headed: `npm run test:headed`
+  - Run UI mode: `npm run test:ui`
+- **Manual Verification**: Testing is also performed by running the site locally with `bundle exec jekyll serve` and manually verifying that pages render correctly and tools are functional.
+- **CI/CD**: The `.github/workflows/main.yml` workflow builds the site but does not run automated tests.
 
 ## Code Style
 
@@ -53,6 +98,11 @@ The repository is organized into thematic subdirectories containing standalone w
 - `/_site/`: This directory contains the generated static site after running `bundle exec jekyll build`. **Do not edit files in this directory manually**, as they will be overwritten.
 - `/ai-tools/`: A collection of web-based tools related to AI, such as log viewers and data processors.
 - `/bsky/`: Tools and utilities related to the BlueSky/AT Protocol social network.
+  - **bsky-core.js**: Core utilities (16 exports) - dependency for other modules
+  - **bsky-quote.js**: Quote post processing
+  - **bsky-search.js**: Search functionality with auto-processing
+  - **bsky-thread.js**: Thread processing and display
+  - See `bsky/_MAP.md` for the current module structure and dependencies.
 - `/fun-and-games/`: Interactive pages, curiosities, and small games.
 - `/web-utilities/`: General-purpose web tools like formatters, converters, and bookmarklets.
 - **Creating New Sections**: To create a new tool category, create a new directory (e.g., `/new-tools/`). Add an `index.html` file inside it, modeled after `/ai-tools/index.html`, which uses the `github-toc.js` component to list the tools in that directory. After creating a new section also make sure to update this file (AGENTS.md) accordingly!
@@ -60,10 +110,19 @@ The repository is organized into thematic subdirectories containing standalone w
 - `/scripts/`: Shared JavaScript files or scripts used by multiple pages.
 - `/styles/`: CSS stylesheets.
 
+## Development Workflow
+
+1. **Understand first**: Read relevant `_MAP.md` files before making changes to understand code structure
+2. **Make changes**: Implement requested features or fixes
+3. **Update maps**: Regenerate if you changed exports/imports in JavaScript files
+4. **Test**: Run tests if applicable (`npm test`)
+5. **Commit**: Include updated `_MAP.md` files in commits when relevant
+
 ## Do / Don't
 
 - **Do**: Follow the `tool-name.html` + `tool-name_README.md` pattern when creating new tools.
 - **Do**: Use hyphen-separated names for new files to maintain consistency.
+- **Do**: Regenerate code maps after changing JavaScript module exports/imports.
 - **Don't**: Edit any files in the `_site/` directory directly, as it is a build artifact.
 - **Don't**: Commit generated files like `sitemap.xml` to the repository. It is generated during the build process.
 
