@@ -2,6 +2,21 @@
 
 This document provides guidance for AI agents interacting with this repository. The information is based on an analysis of the existing codebase, structure, and workflows.
 
+## Skills Management
+
+To install or update Claude skills from the [claude-skills repository](https://github.com/oaustegard/claude-skills):
+
+**Option 1: Run locally**
+```bash
+bash .claude/install-skills.sh
+```
+
+**Option 2: Trigger GitHub Actions**
+- Go to Actions tab → "Install Claude Skills" → Run workflow
+- Changes are automatically committed and pushed
+
+**To add/remove skills**: Edit the `SKILLS` array in `.claude/install-skills.sh`
+
 ## Code Maps - Navigation & Maintenance
 
 This repository uses **code maps** (`_MAP.md` files) to provide navigable overviews of the codebase structure without requiring you to read every file.
