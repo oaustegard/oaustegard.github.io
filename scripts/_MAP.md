@@ -1,7 +1,8 @@
 # scripts/
-*Files: 2*
+*Files: 3*
 
 ## Files
 
 - **github-toc.js**
+- **github-toc_README.md**
 - **htmlpreview.js**
