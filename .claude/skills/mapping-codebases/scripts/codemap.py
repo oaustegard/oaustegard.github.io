@@ -26,6 +26,9 @@ EXT_TO_LANG = {
 # Default directories to skip
 DEFAULT_SKIP_DIRS = {'.git', 'node_modules', '__pycache__', '.venv', 'venv', 'dist', 'build', '.next'}
 
+# Additional extensions to include without parsing
+INCLUDE_EXTS = {'.html', '.css', '.sh', '.md'}
+
 @dataclass
 class FileInfo:
     name: str
@@ -315,6 +318,8 @@ def generate_map_for_directory(dirpath: Path, skip_dirs: set[str]) -> str | None
             info = analyze_file(entry)
             if info:
                 files_info.append(info)
+            elif entry.suffix in INCLUDE_EXTS:
+                files_info.append(FileInfo(name=entry.name))
     
     if not files_info and not subdirs:
         return None
