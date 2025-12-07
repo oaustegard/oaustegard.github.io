@@ -1,0 +1,904 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <title>Car Dashboard</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html {
+      background: #000;
+      -webkit-text-size-adjust: 100%;
+      text-size-adjust: 100%;
+    }
+
+    body {
+      background: #000;
+      color: #fff;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+      min-height: 100vh;
+      min-height: -webkit-fill-available;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+    }
+
+    /* Permission Screen */
+    #permission-screen {
+      text-align: center;
+      padding: 2rem;
+      max-width: 500px;
+    }
+
+    #permission-screen h1 {
+      font-size: 2rem;
+      margin-bottom: 1rem;
+    }
+
+    #permission-screen p {
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+      color: #aaa;
+    }
+
+    #permission-screen .features {
+      text-align: left;
+      font-size: 0.9rem;
+      color: #888;
+      margin-bottom: 1.5rem;
+      line-height: 1.6;
+    }
+
+    #permission-screen .features li {
+      margin-bottom: 0.3rem;
+    }
+
+    .install-hint {
+      font-size: 0.85rem;
+      color: #666;
+      margin-bottom: 1.5rem;
+      padding: 1rem;
+      border: 1px solid #333;
+      border-radius: 0.5rem;
+      background: #111;
+    }
+
+    #start-button {
+      background: #0066cc;
+      color: white;
+      border: none;
+      padding: 1.5rem 3rem;
+      font-size: 1.3rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+      font-weight: 600;
+      transition: background 0.2s;
+    }
+
+    #start-button:hover {
+      background: #0052a3;
+    }
+
+    #error-message {
+      color: #ff4444;
+      margin-top: 1rem;
+      font-size: 1rem;
+    }
+
+    #error-message:empty {
+      display: none;
+    }
+
+    /* Dashboard Container */
+    #dashboard {
+      display: none;
+      width: 100%;
+      height: 100%;
+      padding: 1rem;
+      flex-direction: column;
+    }
+
+    #dashboard.hud-mode {
+      transform: scaleX(-1);
+    }
+
+    /* Top Row: Clock */
+    .top-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 10%;
+    }
+
+    #clock {
+      font-size: 6vmin;
+      font-weight: 300;
+      color: #888;
+      font-variant-numeric: tabular-nums;
+    }
+
+    /* Main Speed Display */
+    .speed-row {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .speed-container {
+      text-align: center;
+    }
+
+    #speed-display {
+      font-size: 38vmin;
+      font-weight: bold;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: -0.05em;
+    }
+
+    #unit-display {
+      font-size: 8vmin;
+      color: #666;
+      margin-top: 0.5rem;
+    }
+
+    /* Info Rows */
+    .info-row {
+      display: flex;
+      justify-content: space-around;
+      align-items: center;
+      height: 12%;
+      border-top: 1px solid #222;
+      padding-top: 0.5rem;
+    }
+
+    .info-item {
+      text-align: center;
+      flex: 1;
+    }
+
+    .info-value {
+      font-size: 5vmin;
+      font-weight: 600;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .info-label {
+      font-size: 2.5vmin;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    /* Bottom Status Row */
+    .status-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 8%;
+      padding-top: 0.5rem;
+      border-top: 1px solid #222;
+    }
+
+    .status-item {
+      font-size: 3vmin;
+      color: #555;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .status-item.charging {
+      color: #4a4;
+    }
+
+    .status-item.low-battery {
+      color: #a44;
+    }
+
+    /* GPS Signal Indicator */
+    .gps-indicator {
+      display: flex;
+      align-items: center;
+      gap: 0.3rem;
+    }
+
+    .gps-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #444;
+    }
+
+    .gps-dot.active {
+      background: #4a4;
+    }
+
+    .gps-dot.weak {
+      background: #aa4;
+    }
+
+    /* Heading colors */
+    .heading-value {
+      color: #6af;
+    }
+
+    /* Grade colors */
+    .grade-positive {
+      color: #f84;
+    }
+
+    .grade-negative {
+      color: #4f8;
+    }
+
+    /* Settings Panel */
+    #settings-panel {
+      display: none;
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.95);
+      padding: 2rem;
+      z-index: 100;
+    }
+
+    #settings-panel.visible {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+
+    #settings-panel h2 {
+      font-size: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .setting-group {
+      margin-bottom: 1.5rem;
+      text-align: center;
+    }
+
+    .setting-label {
+      font-size: 1rem;
+      color: #888;
+      margin-bottom: 0.5rem;
+    }
+
+    .setting-buttons {
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .setting-btn {
+      background: #222;
+      color: #fff;
+      border: 1px solid #444;
+      padding: 0.75rem 1.5rem;
+      font-size: 1rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+    }
+
+    .setting-btn.active {
+      background: #0066cc;
+      border-color: #0066cc;
+    }
+
+    #close-settings {
+      margin-top: 2rem;
+      background: #333;
+      color: #fff;
+      border: none;
+      padding: 1rem 2rem;
+      font-size: 1rem;
+      border-radius: 0.5rem;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <!-- Permission/Start Screen -->
+  <div id="permission-screen">
+    <h1>Car Dashboard</h1>
+    <p>A passive HUD for vehicles without instrument clusters</p>
+    <ul class="features">
+      <li>Speed, heading, and altitude from GPS</li>
+      <li>Trip odometer and elapsed time</li>
+      <li>Average and max speed tracking</li>
+      <li>Phone battery indicator</li>
+      <li>HUD mirror mode for windshield reflection</li>
+    </ul>
+    <div id="install-hint" class="install-hint" style="display: none;">
+      <strong>For best experience:</strong> Add to homescreen for fullscreen mode.<br>
+      <strong>Safari:</strong> Tap Share > Add to Home Screen
+    </div>
+    <button id="start-button">Start Dashboard</button>
+    <div id="error-message"></div>
+  </div>
+
+  <!-- Main Dashboard -->
+  <div id="dashboard">
+    <!-- Top: Clock -->
+    <div class="top-row">
+      <div id="clock">--:--</div>
+    </div>
+
+    <!-- Center: Speed -->
+    <div class="speed-row">
+      <div class="speed-container">
+        <div id="speed-display">--</div>
+        <div id="unit-display">MPH</div>
+      </div>
+    </div>
+
+    <!-- Info Row 1: Heading, Altitude, Grade -->
+    <div class="info-row">
+      <div class="info-item">
+        <div class="info-value heading-value" id="heading-display">--</div>
+        <div class="info-label">Heading</div>
+      </div>
+      <div class="info-item">
+        <div class="info-value" id="altitude-display">--</div>
+        <div class="info-label">Altitude</div>
+      </div>
+      <div class="info-item">
+        <div class="info-value" id="grade-display">--</div>
+        <div class="info-label">Grade</div>
+      </div>
+    </div>
+
+    <!-- Info Row 2: Trip Stats -->
+    <div class="info-row">
+      <div class="info-item">
+        <div class="info-value" id="trip-display">0.0</div>
+        <div class="info-label">Trip (mi)</div>
+      </div>
+      <div class="info-item">
+        <div class="info-value" id="elapsed-display">0:00</div>
+        <div class="info-label">Elapsed</div>
+      </div>
+      <div class="info-item">
+        <div class="info-value" id="avg-speed-display">--</div>
+        <div class="info-label">Avg MPH</div>
+      </div>
+      <div class="info-item">
+        <div class="info-value" id="max-speed-display">0</div>
+        <div class="info-label">Max MPH</div>
+      </div>
+    </div>
+
+    <!-- Bottom: Status -->
+    <div class="status-row">
+      <div class="status-item gps-indicator">
+        <span class="gps-dot" id="gps-dot"></span>
+        <span id="gps-accuracy">GPS</span>
+      </div>
+      <div class="status-item" id="battery-status">
+        <span id="battery-icon">--</span>
+        <span id="battery-level">--%</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Settings Panel (accessed via long-press on clock) -->
+  <div id="settings-panel">
+    <h2>Settings</h2>
+    <div class="setting-group">
+      <div class="setting-label">Speed Unit</div>
+      <div class="setting-buttons">
+        <button class="setting-btn active" data-unit="mph">MPH</button>
+        <button class="setting-btn" data-unit="kph">KM/H</button>
+      </div>
+    </div>
+    <div class="setting-group">
+      <div class="setting-label">Altitude Unit</div>
+      <div class="setting-buttons">
+        <button class="setting-btn active" data-alt="ft">Feet</button>
+        <button class="setting-btn" data-alt="m">Meters</button>
+      </div>
+    </div>
+    <div class="setting-group">
+      <div class="setting-label">Display Mode</div>
+      <div class="setting-buttons">
+        <button class="setting-btn active" data-hud="off">Normal</button>
+        <button class="setting-btn" data-hud="on">HUD Mirror</button>
+      </div>
+    </div>
+    <button id="close-settings">Close</button>
+    <p style="margin-top: 1rem; color: #666; font-size: 0.9rem;">Long-press clock to open settings</p>
+  </div>
+
+  <script>
+    // ============================================================================
+    // STATE
+    // ============================================================================
+    const state = {
+      // Current readings
+      speed: 0,           // m/s from GPS
+      heading: null,      // degrees (0-360)
+      altitude: null,     // meters
+      accuracy: null,     // meters
+      lastPosition: null, // for distance calc
+
+      // Trip stats
+      tripDistance: 0,    // meters
+      tripStartTime: null,
+      maxSpeed: 0,        // m/s
+      movingTime: 0,      // ms spent moving (speed > 1 m/s)
+      lastUpdateTime: null,
+
+      // For grade calculation
+      altitudeHistory: [], // [{altitude, distance}]
+
+      // Settings
+      speedUnit: 'mph',   // 'mph' or 'kph'
+      altUnit: 'ft',      // 'ft' or 'm'
+      hudMode: false,
+
+      // System
+      watchId: null,
+      wakeLock: null,
+      noSleepAudio: null,
+      clockInterval: null,
+      batteryRef: null
+    };
+
+    // ============================================================================
+    // DOM REFERENCES
+    // ============================================================================
+    const dom = {
+      permissionScreen: document.getElementById('permission-screen'),
+      dashboard: document.getElementById('dashboard'),
+      startButton: document.getElementById('start-button'),
+      errorMessage: document.getElementById('error-message'),
+      installHint: document.getElementById('install-hint'),
+      settingsPanel: document.getElementById('settings-panel'),
+
+      // Displays
+      clock: document.getElementById('clock'),
+      speedDisplay: document.getElementById('speed-display'),
+      unitDisplay: document.getElementById('unit-display'),
+      headingDisplay: document.getElementById('heading-display'),
+      altitudeDisplay: document.getElementById('altitude-display'),
+      gradeDisplay: document.getElementById('grade-display'),
+      tripDisplay: document.getElementById('trip-display'),
+      elapsedDisplay: document.getElementById('elapsed-display'),
+      avgSpeedDisplay: document.getElementById('avg-speed-display'),
+      maxSpeedDisplay: document.getElementById('max-speed-display'),
+      gpsDot: document.getElementById('gps-dot'),
+      gpsAccuracy: document.getElementById('gps-accuracy'),
+      batteryStatus: document.getElementById('battery-status'),
+      batteryIcon: document.getElementById('battery-icon'),
+      batteryLevel: document.getElementById('battery-level')
+    };
+
+    // ============================================================================
+    // INITIALIZATION
+    // ============================================================================
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+                         window.navigator.standalone ||
+                         document.referrer.includes('android-app://');
+
+    if (!isStandalone) {
+      dom.installHint.style.display = 'block';
+    }
+
+    // ============================================================================
+    // CONVERSION UTILITIES
+    // ============================================================================
+    function msToMph(ms) {
+      return ms * 2.23694;
+    }
+
+    function msToKph(ms) {
+      return ms * 3.6;
+    }
+
+    function metersToFeet(m) {
+      return m * 3.28084;
+    }
+
+    function metersToMiles(m) {
+      return m * 0.000621371;
+    }
+
+    function metersToKm(m) {
+      return m / 1000;
+    }
+
+    function formatSpeed(ms) {
+      const speed = state.speedUnit === 'mph' ? msToMph(ms) : msToKph(ms);
+      return Math.round(speed);
+    }
+
+    function formatAltitude(m) {
+      if (m === null) return '--';
+      const alt = state.altUnit === 'ft' ? metersToFeet(m) : m;
+      return Math.round(alt).toLocaleString();
+    }
+
+    function formatDistance(m) {
+      const dist = state.speedUnit === 'mph' ? metersToMiles(m) : metersToKm(m);
+      return dist.toFixed(1);
+    }
+
+    function headingToCardinal(deg) {
+      if (deg === null) return '--';
+      const directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+      const index = Math.round(deg / 45) % 8;
+      return directions[index];
+    }
+
+    function formatElapsed(ms) {
+      const totalSeconds = Math.floor(ms / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+
+      if (hours > 0) {
+        return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+      }
+      return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    // ============================================================================
+    // CLOCK
+    // ============================================================================
+    function updateClock() {
+      const now = new Date();
+      const hours = now.getHours();
+      const minutes = now.getMinutes().toString().padStart(2, '0');
+      const h12 = hours % 12 || 12;
+      const ampm = hours < 12 ? 'AM' : 'PM';
+      dom.clock.textContent = `${h12}:${minutes} ${ampm}`;
+    }
+
+    // ============================================================================
+    // BATTERY
+    // ============================================================================
+    async function initBattery() {
+      if ('getBattery' in navigator) {
+        try {
+          state.batteryRef = await navigator.getBattery();
+          updateBattery();
+          state.batteryRef.addEventListener('levelchange', updateBattery);
+          state.batteryRef.addEventListener('chargingchange', updateBattery);
+        } catch (e) {
+          console.log('Battery API not available:', e);
+        }
+      }
+    }
+
+    function updateBattery() {
+      if (!state.batteryRef) {
+        dom.batteryLevel.textContent = 'N/A';
+        return;
+      }
+
+      const level = Math.round(state.batteryRef.level * 100);
+      const charging = state.batteryRef.charging;
+
+      dom.batteryLevel.textContent = `${level}%`;
+      dom.batteryIcon.textContent = charging ? 'CHG' : 'BAT';
+
+      dom.batteryStatus.classList.toggle('charging', charging);
+      dom.batteryStatus.classList.toggle('low-battery', level < 20 && !charging);
+    }
+
+    // ============================================================================
+    // GEOLOCATION
+    // ============================================================================
+    function calculateDistance(lat1, lon1, lat2, lon2) {
+      // Haversine formula
+      const R = 6371000; // Earth radius in meters
+      const dLat = (lat2 - lat1) * Math.PI / 180;
+      const dLon = (lon2 - lon1) * Math.PI / 180;
+      const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                Math.sin(dLon/2) * Math.sin(dLon/2);
+      const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      return R * c;
+    }
+
+    function calculateGrade() {
+      const history = state.altitudeHistory;
+      if (history.length < 2) return null;
+
+      // Use last ~100m of travel for grade calculation
+      const recent = history.slice(-10);
+      if (recent.length < 2) return null;
+
+      const first = recent[0];
+      const last = recent[recent.length - 1];
+      const altChange = last.altitude - first.altitude;
+      const distChange = last.distance - first.distance;
+
+      if (distChange < 10) return null; // Need at least 10m
+
+      return (altChange / distChange) * 100;
+    }
+
+    function handlePosition(position) {
+      const now = Date.now();
+      const coords = position.coords;
+
+      // Update current readings
+      state.speed = (coords.speed !== null && coords.speed >= 0) ? coords.speed : 0;
+      state.heading = coords.heading;
+      state.altitude = coords.altitude;
+      state.accuracy = coords.accuracy;
+
+      // Track max speed
+      if (state.speed > state.maxSpeed) {
+        state.maxSpeed = state.speed;
+      }
+
+      // Calculate distance traveled
+      if (state.lastPosition) {
+        const dist = calculateDistance(
+          state.lastPosition.lat, state.lastPosition.lon,
+          coords.latitude, coords.longitude
+        );
+
+        // Only add if reasonable (< 500m between updates, filters GPS jumps)
+        if (dist < 500) {
+          state.tripDistance += dist;
+
+          // Track altitude for grade calculation
+          if (coords.altitude !== null) {
+            state.altitudeHistory.push({
+              altitude: coords.altitude,
+              distance: state.tripDistance
+            });
+            // Keep only last 20 readings
+            if (state.altitudeHistory.length > 20) {
+              state.altitudeHistory.shift();
+            }
+          }
+        }
+      }
+
+      // Track moving time (for average speed calc)
+      if (state.lastUpdateTime && state.speed > 1) { // > 1 m/s (~2 mph)
+        state.movingTime += now - state.lastUpdateTime;
+      }
+
+      state.lastPosition = { lat: coords.latitude, lon: coords.longitude };
+      state.lastUpdateTime = now;
+
+      updateDisplay();
+    }
+
+    function updateDisplay() {
+      // Speed
+      const speedValue = formatSpeed(state.speed);
+      dom.speedDisplay.textContent = speedValue;
+      dom.unitDisplay.textContent = state.speedUnit.toUpperCase();
+
+      // Heading
+      const cardinal = headingToCardinal(state.heading);
+      const degrees = state.heading !== null ? Math.round(state.heading) + '°' : '';
+      dom.headingDisplay.textContent = cardinal + (degrees ? ` ${degrees}` : '');
+
+      // Altitude
+      dom.altitudeDisplay.textContent = formatAltitude(state.altitude);
+
+      // Grade
+      const grade = calculateGrade();
+      if (grade !== null) {
+        const gradeStr = (grade >= 0 ? '+' : '') + grade.toFixed(1) + '%';
+        dom.gradeDisplay.textContent = gradeStr;
+        dom.gradeDisplay.className = 'info-value ' + (grade >= 0 ? 'grade-positive' : 'grade-negative');
+      } else {
+        dom.gradeDisplay.textContent = '--';
+        dom.gradeDisplay.className = 'info-value';
+      }
+
+      // Trip distance
+      dom.tripDisplay.textContent = formatDistance(state.tripDistance);
+
+      // Elapsed time
+      if (state.tripStartTime) {
+        const elapsed = Date.now() - state.tripStartTime;
+        dom.elapsedDisplay.textContent = formatElapsed(elapsed);
+      }
+
+      // Average speed (based on moving time)
+      if (state.movingTime > 10000) { // At least 10 seconds of movement
+        const avgMs = state.tripDistance / (state.movingTime / 1000);
+        dom.avgSpeedDisplay.textContent = formatSpeed(avgMs);
+      }
+
+      // Max speed
+      dom.maxSpeedDisplay.textContent = formatSpeed(state.maxSpeed);
+
+      // GPS accuracy indicator
+      if (state.accuracy !== null) {
+        dom.gpsDot.classList.add('active');
+        dom.gpsDot.classList.toggle('weak', state.accuracy > 20);
+        dom.gpsAccuracy.textContent = `GPS ±${Math.round(state.accuracy)}m`;
+      }
+    }
+
+    function handleError(error) {
+      const messages = {
+        1: 'Location permission denied. Please allow location access.',
+        2: 'Location unavailable. Check device settings.',
+        3: 'Location request timeout.'
+      };
+      dom.errorMessage.textContent = messages[error.code] || 'Error: ' + error.message;
+      dom.permissionScreen.style.display = 'block';
+      dom.dashboard.style.display = 'none';
+    }
+
+    function startTracking() {
+      if (!navigator.geolocation) {
+        dom.errorMessage.textContent = 'Geolocation not supported';
+        return;
+      }
+
+      dom.errorMessage.textContent = '';
+      state.tripStartTime = Date.now();
+
+      const options = {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 0
+      };
+
+      state.watchId = navigator.geolocation.watchPosition(
+        (position) => {
+          if (dom.permissionScreen.style.display !== 'none') {
+            dom.permissionScreen.style.display = 'none';
+            dom.dashboard.style.display = 'flex';
+            requestWakeLock();
+            initBattery();
+            state.clockInterval = setInterval(updateClock, 1000);
+            updateClock();
+          }
+          handlePosition(position);
+        },
+        handleError,
+        options
+      );
+    }
+
+    // ============================================================================
+    // WAKE LOCK
+    // ============================================================================
+    async function requestWakeLock() {
+      try {
+        if ('wakeLock' in navigator) {
+          state.wakeLock = await navigator.wakeLock.request('screen');
+        }
+      } catch (err) {
+        console.log('Wake lock failed:', err);
+      }
+      enableNoSleepAudio();
+    }
+
+    function enableNoSleepAudio() {
+      if (!state.noSleepAudio) {
+        const silentAudio = 'data:audio/mp3;base64,SUQzBAAAAAAAI1RTU0UAAAAPAAADTGF2ZjU4Ljc2LjEwMAAAAAAAAAAAAAAA//tQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWGluZwAAAA8AAAACAAADhAC7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7u7//////////////////////////////////////////////////////////////////8AAAAATGF2YzU4LjEzAAAAAAAAAAAAAAAAJAAAAAAAAAAAA4S/sTjCAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAD/+xDEAAPAAAGkAAAAIAAANIAAAARMQU1FMy4xMDAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=';
+        state.noSleepAudio = new Audio(silentAudio);
+        state.noSleepAudio.loop = true;
+        state.noSleepAudio.play().catch(() => {});
+      }
+    }
+
+    // ============================================================================
+    // SETTINGS
+    // ============================================================================
+    let clockPressTimer = null;
+
+    dom.clock.addEventListener('touchstart', (e) => {
+      clockPressTimer = setTimeout(() => {
+        dom.settingsPanel.classList.add('visible');
+      }, 800);
+    });
+
+    dom.clock.addEventListener('touchend', () => {
+      clearTimeout(clockPressTimer);
+    });
+
+    dom.clock.addEventListener('mousedown', () => {
+      clockPressTimer = setTimeout(() => {
+        dom.settingsPanel.classList.add('visible');
+      }, 800);
+    });
+
+    dom.clock.addEventListener('mouseup', () => {
+      clearTimeout(clockPressTimer);
+    });
+
+    document.getElementById('close-settings').addEventListener('click', () => {
+      dom.settingsPanel.classList.remove('visible');
+    });
+
+    // Setting buttons
+    document.querySelectorAll('.setting-btn[data-unit]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.setting-btn[data-unit]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.speedUnit = btn.dataset.unit;
+        updateDisplay();
+      });
+    });
+
+    document.querySelectorAll('.setting-btn[data-alt]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.setting-btn[data-alt]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.altUnit = btn.dataset.alt;
+        updateDisplay();
+      });
+    });
+
+    document.querySelectorAll('.setting-btn[data-hud]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.setting-btn[data-hud]').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        state.hudMode = btn.dataset.hud === 'on';
+        dom.dashboard.classList.toggle('hud-mode', state.hudMode);
+      });
+    });
+
+    // ============================================================================
+    // EVENT HANDLERS
+    // ============================================================================
+    dom.startButton.addEventListener('click', startTracking);
+
+    window.addEventListener('beforeunload', () => {
+      if (state.watchId !== null) {
+        navigator.geolocation.clearWatch(state.watchId);
+      }
+      if (state.wakeLock !== null) {
+        state.wakeLock.release();
+      }
+      if (state.noSleepAudio) {
+        state.noSleepAudio.pause();
+      }
+      if (state.clockInterval) {
+        clearInterval(state.clockInterval);
+      }
+    });
+
+    document.addEventListener('visibilitychange', async () => {
+      if (document.visibilityState === 'visible') {
+        if (state.wakeLock !== null) {
+          await requestWakeLock();
+        }
+        if (state.noSleepAudio && state.noSleepAudio.paused) {
+          state.noSleepAudio.play().catch(() => {});
+        }
+      }
+    });
+  </script>
+</body>
+</html>
