@@ -35,17 +35,12 @@ Modern EVs like the Tesla Model 3 and Volvo EX30 have moved the speedometer to a
 - **Phone Battery**: Level and charging status via Battery API
 - **GPS Signal**: Accuracy indicator with color coding
 
-### Display Modes
-- **Normal**: Standard display
-- **HUD Mirror**: Horizontally flipped for windshield reflection
-
 ## Settings
 
 Long-press the clock to access settings:
 
 - **Speed Unit**: MPH or KM/H
 - **Altitude Unit**: Feet or Meters
-- **Display Mode**: Normal or HUD Mirror
 
 Settings are applied immediately; close panel to return to dashboard.
 
