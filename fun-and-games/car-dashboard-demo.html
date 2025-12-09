@@ -180,10 +180,6 @@
       gap: 0.5rem;
     }
 
-    .status-item.charging {
-      color: #4a4;
-    }
-
     /* GPS Signal Indicator */
     .gps-indicator {
       display: flex;
@@ -211,6 +207,52 @@
     .grade-negative {
       color: #4f8;
     }
+
+    /* Compass Arrow */
+    .compass-arrow {
+      display: inline-block;
+      font-size: 1.2em;
+      transition: transform 0.3s ease;
+    }
+
+    /* Speed Histogram */
+    .histogram-row {
+      display: flex;
+      justify-content: space-around;
+      align-items: flex-end;
+      height: 10%;
+      border-top: 1px solid #222;
+      padding: 0.5rem 1rem;
+      gap: 0.5rem;
+    }
+
+    .histogram-bar {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .histogram-bar-fill {
+      width: 100%;
+      background: linear-gradient(to top, #0066cc, #4a9eff);
+      border-radius: 2px 2px 0 0;
+      transition: height 0.3s ease;
+      min-height: 2px;
+    }
+
+    .histogram-label {
+      font-size: 2vmin;
+      color: #666;
+      white-space: nowrap;
+    }
+
+    .histogram-value {
+      font-size: 2vmin;
+      color: #888;
+      font-variant-numeric: tabular-nums;
+    }
   </style>
 </head>
 <body>
@@ -234,7 +276,10 @@
 
     <div class="info-row">
       <div class="info-item">
-        <div class="info-value heading-value" id="heading-display">--</div>
+        <div class="info-value heading-value" id="heading-display">
+          <span class="compass-arrow" id="compass-arrow">↑</span>
+          <span id="heading-text">--</span>
+        </div>
         <div class="info-label">Heading</div>
       </div>
       <div class="info-item">
@@ -266,14 +311,34 @@
       </div>
     </div>
 
+    <!-- Speed Histogram -->
+    <div class="histogram-row">
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-0" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-0">0%</div>
+        <div class="histogram-label">0-25</div>
+      </div>
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-1" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-1">0%</div>
+        <div class="histogram-label">25-50</div>
+      </div>
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-2" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-2">0%</div>
+        <div class="histogram-label">50-70</div>
+      </div>
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-3" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-3">0%</div>
+        <div class="histogram-label">70+</div>
+      </div>
+    </div>
+
     <div class="status-row">
       <div class="status-item gps-indicator">
         <span class="gps-dot"></span>
         <span>GPS ±3m (simulated)</span>
-      </div>
-      <div class="status-item charging">
-        <span>CHG</span>
-        <span>87%</span>
       </div>
     </div>
   </div>
@@ -329,6 +394,15 @@
       maxSpeed: 0,
       movingTime: 0,        // ms
 
+      // Speed histogram: time spent in each range (ms)
+      speedHistogram: [0, 0, 0, 0], // [0-25, 25-50, 50-70, 70+]
+      speedRanges: [
+        { min: 0, max: 25 },
+        { min: 25, max: 50 },
+        { min: 50, max: 70 },
+        { min: 70, max: Infinity }
+      ],
+
       // For grade calculation
       altitudeHistory: [],  // {altitude, distance}
       lastAltitude: 150,
@@ -346,12 +420,18 @@
       speedDisplay: document.getElementById('speed-display'),
       unitDisplay: document.getElementById('unit-display'),
       headingDisplay: document.getElementById('heading-display'),
+      headingText: document.getElementById('heading-text'),
+      compassArrow: document.getElementById('compass-arrow'),
       altitudeDisplay: document.getElementById('altitude-display'),
       gradeDisplay: document.getElementById('grade-display'),
       tripDisplay: document.getElementById('trip-display'),
       elapsedDisplay: document.getElementById('elapsed-display'),
       avgSpeedDisplay: document.getElementById('avg-speed-display'),
       maxSpeedDisplay: document.getElementById('max-speed-display'),
+
+      // Histogram
+      histBars: [0, 1, 2, 3].map(i => document.getElementById(`hist-bar-${i}`)),
+      histVals: [0, 1, 2, 3].map(i => document.getElementById(`hist-val-${i}`)),
     };
 
     // ============================================================================
@@ -425,6 +505,7 @@
         state.tripDistance = 0;
         state.maxSpeed = 0;
         state.movingTime = 0;
+        state.speedHistogram = [0, 0, 0, 0];
         state.altitudeHistory = [];
         state.tripStartTime = Date.now();
       }
@@ -475,6 +556,15 @@
         state.movingTime += deltaTime * state.simSpeed;
       }
 
+      // Track speed histogram
+      for (let i = 0; i < state.speedRanges.length; i++) {
+        const range = state.speedRanges[i];
+        if (state.speed >= range.min && state.speed < range.max) {
+          state.speedHistogram[i] += deltaTime * state.simSpeed;
+          break;
+        }
+      }
+
       // Track altitude for grade
       state.altitudeHistory.push({
         altitude: state.altitude,
@@ -514,9 +604,10 @@
       // Speed
       dom.speedDisplay.textContent = Math.round(state.speed);
 
-      // Heading
+      // Heading with compass arrow
       const cardinal = headingToCardinal(state.heading);
-      dom.headingDisplay.textContent = `${cardinal} ${Math.round(state.heading)}°`;
+      dom.headingText.textContent = `${cardinal} ${Math.round(state.heading)}°`;
+      dom.compassArrow.style.transform = `rotate(${state.heading}deg)`;
 
       // Altitude
       dom.altitudeDisplay.textContent = metersToFeet(state.altitude).toLocaleString();
@@ -546,6 +637,18 @@
 
       // Max speed
       dom.maxSpeedDisplay.textContent = Math.round(state.maxSpeed);
+
+      // Speed histogram
+      const totalTime = state.speedHistogram.reduce((a, b) => a + b, 0);
+      if (totalTime > 0) {
+        const maxPercentage = Math.max(...state.speedHistogram.map(t => (t / totalTime) * 100));
+        state.speedHistogram.forEach((time, i) => {
+          const percentage = (time / totalTime) * 100;
+          const heightPercentage = maxPercentage > 0 ? (percentage / maxPercentage) * 80 : 0;
+          dom.histBars[i].style.height = `${heightPercentage}%`;
+          dom.histVals[i].textContent = `${Math.round(percentage)}%`;
+        });
+      }
     }
 
     // ============================================================================
