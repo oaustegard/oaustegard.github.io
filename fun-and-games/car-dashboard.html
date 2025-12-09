@@ -210,14 +210,6 @@
       gap: 0.5rem;
     }
 
-    .status-item.charging {
-      color: #4a4;
-    }
-
-    .status-item.low-battery {
-      color: #a44;
-    }
-
     /* GPS Signal Indicator */
     .gps-indicator {
       display: flex;
@@ -377,7 +369,7 @@
       <li>Speed, heading, and altitude from GPS</li>
       <li>Trip odometer and elapsed time</li>
       <li>Average and max speed tracking</li>
-      <li>Phone battery indicator</li>
+      <li>Speed distribution histogram</li>
       <li>HUD mirror mode for windshield reflection</li>
     </ul>
     <div id="install-hint" class="install-hint" style="display: none;">
@@ -472,10 +464,6 @@
         <span class="gps-dot" id="gps-dot"></span>
         <span id="gps-accuracy">GPS</span>
       </div>
-      <div class="status-item" id="battery-status">
-        <span id="battery-icon">--</span>
-        <span id="battery-level">--%</span>
-      </div>
     </div>
   </div>
 
@@ -551,8 +539,7 @@
       watchId: null,
       wakeLock: null,
       noSleepAudio: null,
-      clockInterval: null,
-      batteryRef: null
+      clockInterval: null
     };
 
     // ============================================================================
@@ -581,9 +568,6 @@
       maxSpeedDisplay: document.getElementById('max-speed-display'),
       gpsDot: document.getElementById('gps-dot'),
       gpsAccuracy: document.getElementById('gps-accuracy'),
-      batteryStatus: document.getElementById('battery-status'),
-      batteryIcon: document.getElementById('battery-icon'),
-      batteryLevel: document.getElementById('battery-level'),
 
       // Histogram
       histBars: [0, 1, 2, 3].map(i => document.getElementById(`hist-bar-${i}`)),
@@ -672,43 +656,6 @@
       const h12 = hours % 12 || 12;
       const ampm = hours < 12 ? 'AM' : 'PM';
       dom.clock.textContent = `${h12}:${minutes} ${ampm}`;
-    }
-
-    // ============================================================================
-    // BATTERY
-    // ============================================================================
-    async function initBattery() {
-      if ('getBattery' in navigator) {
-        try {
-          state.batteryRef = await navigator.getBattery();
-          updateBattery();
-          state.batteryRef.addEventListener('levelchange', updateBattery);
-          state.batteryRef.addEventListener('chargingchange', updateBattery);
-        } catch (e) {
-          console.log('Battery API not available:', e);
-          dom.batteryLevel.textContent = 'N/A';
-        }
-      } else {
-        // Fallback: try to check periodically if running in standalone mode
-        dom.batteryLevel.textContent = 'N/A';
-      }
-    }
-
-    function updateBattery() {
-      if (!state.batteryRef) {
-        dom.batteryLevel.textContent = 'N/A';
-        dom.batteryIcon.textContent = 'BAT';
-        return;
-      }
-
-      const level = Math.round(state.batteryRef.level * 100);
-      const charging = state.batteryRef.charging;
-
-      dom.batteryLevel.textContent = `${level}%`;
-      dom.batteryIcon.textContent = charging ? 'CHG' : 'BAT';
-
-      dom.batteryStatus.classList.toggle('charging', charging);
-      dom.batteryStatus.classList.toggle('low-battery', level < 20 && !charging);
     }
 
     // ============================================================================
@@ -921,7 +868,6 @@
             dom.permissionScreen.style.display = 'none';
             dom.dashboard.style.display = 'flex';
             requestWakeLock();
-            initBattery();
             state.clockInterval = setInterval(updateClock, 1000);
             updateClock();
           }
