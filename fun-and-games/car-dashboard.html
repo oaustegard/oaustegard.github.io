@@ -254,6 +254,52 @@
       color: #4f8;
     }
 
+    /* Compass Arrow */
+    .compass-arrow {
+      display: inline-block;
+      font-size: 1.2em;
+      transition: transform 0.3s ease;
+    }
+
+    /* Speed Histogram */
+    .histogram-row {
+      display: flex;
+      justify-content: space-around;
+      align-items: flex-end;
+      height: 10%;
+      border-top: 1px solid #222;
+      padding: 0.5rem 1rem;
+      gap: 0.5rem;
+    }
+
+    .histogram-bar {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.25rem;
+    }
+
+    .histogram-bar-fill {
+      width: 100%;
+      background: linear-gradient(to top, #0066cc, #4a9eff);
+      border-radius: 2px 2px 0 0;
+      transition: height 0.3s ease;
+      min-height: 2px;
+    }
+
+    .histogram-label {
+      font-size: 2vmin;
+      color: #666;
+      white-space: nowrap;
+    }
+
+    .histogram-value {
+      font-size: 2vmin;
+      color: #888;
+      font-variant-numeric: tabular-nums;
+    }
+
     /* Settings Panel */
     #settings-panel {
       display: none;
@@ -360,7 +406,10 @@
     <!-- Info Row 1: Heading, Altitude, Grade -->
     <div class="info-row">
       <div class="info-item">
-        <div class="info-value heading-value" id="heading-display">--</div>
+        <div class="info-value heading-value" id="heading-display">
+          <span class="compass-arrow" id="compass-arrow">↑</span>
+          <span id="heading-text">--</span>
+        </div>
         <div class="info-label">Heading</div>
       </div>
       <div class="info-item">
@@ -390,6 +439,30 @@
       <div class="info-item">
         <div class="info-value" id="max-speed-display">0</div>
         <div class="info-label">Max MPH</div>
+      </div>
+    </div>
+
+    <!-- Speed Histogram -->
+    <div class="histogram-row">
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-0" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-0">0%</div>
+        <div class="histogram-label">0-25</div>
+      </div>
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-1" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-1">0%</div>
+        <div class="histogram-label">25-50</div>
+      </div>
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-2" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-2">0%</div>
+        <div class="histogram-label">50-70</div>
+      </div>
+      <div class="histogram-bar">
+        <div class="histogram-bar-fill" id="hist-bar-3" style="height: 0%"></div>
+        <div class="histogram-value" id="hist-val-3">0%</div>
+        <div class="histogram-label">70+</div>
       </div>
     </div>
 
@@ -430,6 +503,10 @@
         <button class="setting-btn" data-hud="on">HUD Mirror</button>
       </div>
     </div>
+    <div class="setting-group">
+      <div class="setting-label">Trip Reset</div>
+      <button id="reset-trip-btn" class="setting-btn" style="background: #a44; border-color: #a44;">Reset Trip Data</button>
+    </div>
     <button id="close-settings">Close</button>
     <p style="margin-top: 1rem; color: #666; font-size: 0.9rem;">Long-press clock to open settings</p>
   </div>
@@ -452,6 +529,15 @@
       maxSpeed: 0,        // m/s
       movingTime: 0,      // ms spent moving (speed > 1 m/s)
       lastUpdateTime: null,
+
+      // Speed histogram: time spent in each range (ms)
+      speedHistogram: [0, 0, 0, 0], // [0-25, 25-50, 50-70, 70+]
+      speedRanges: [
+        { min: 0, max: 25 },
+        { min: 25, max: 50 },
+        { min: 50, max: 70 },
+        { min: 70, max: Infinity }
+      ],
 
       // For grade calculation
       altitudeHistory: [], // [{altitude, distance}]
@@ -485,6 +571,8 @@
       speedDisplay: document.getElementById('speed-display'),
       unitDisplay: document.getElementById('unit-display'),
       headingDisplay: document.getElementById('heading-display'),
+      headingText: document.getElementById('heading-text'),
+      compassArrow: document.getElementById('compass-arrow'),
       altitudeDisplay: document.getElementById('altitude-display'),
       gradeDisplay: document.getElementById('grade-display'),
       tripDisplay: document.getElementById('trip-display'),
@@ -495,7 +583,14 @@
       gpsAccuracy: document.getElementById('gps-accuracy'),
       batteryStatus: document.getElementById('battery-status'),
       batteryIcon: document.getElementById('battery-icon'),
-      batteryLevel: document.getElementById('battery-level')
+      batteryLevel: document.getElementById('battery-level'),
+
+      // Histogram
+      histBars: [0, 1, 2, 3].map(i => document.getElementById(`hist-bar-${i}`)),
+      histVals: [0, 1, 2, 3].map(i => document.getElementById(`hist-val-${i}`)),
+
+      // Settings
+      resetTripBtn: document.getElementById('reset-trip-btn')
     };
 
     // ============================================================================
@@ -591,13 +686,18 @@
           state.batteryRef.addEventListener('chargingchange', updateBattery);
         } catch (e) {
           console.log('Battery API not available:', e);
+          dom.batteryLevel.textContent = 'N/A';
         }
+      } else {
+        // Fallback: try to check periodically if running in standalone mode
+        dom.batteryLevel.textContent = 'N/A';
       }
     }
 
     function updateBattery() {
       if (!state.batteryRef) {
         dom.batteryLevel.textContent = 'N/A';
+        dom.batteryIcon.textContent = 'BAT';
         return;
       }
 
@@ -609,6 +709,19 @@
 
       dom.batteryStatus.classList.toggle('charging', charging);
       dom.batteryStatus.classList.toggle('low-battery', level < 20 && !charging);
+    }
+
+    // ============================================================================
+    // TRIP RESET
+    // ============================================================================
+    function resetTrip() {
+      state.tripDistance = 0;
+      state.tripStartTime = Date.now();
+      state.maxSpeed = 0;
+      state.movingTime = 0;
+      state.speedHistogram = [0, 0, 0, 0];
+      state.altitudeHistory = [];
+      updateDisplay();
     }
 
     // ============================================================================
@@ -685,8 +798,21 @@
       }
 
       // Track moving time (for average speed calc)
+      const deltaTime = state.lastUpdateTime ? now - state.lastUpdateTime : 0;
       if (state.lastUpdateTime && state.speed > 1) { // > 1 m/s (~2 mph)
-        state.movingTime += now - state.lastUpdateTime;
+        state.movingTime += deltaTime;
+      }
+
+      // Track speed histogram
+      if (state.lastUpdateTime && deltaTime > 0) {
+        const speedMph = msToMph(state.speed);
+        for (let i = 0; i < state.speedRanges.length; i++) {
+          const range = state.speedRanges[i];
+          if (speedMph >= range.min && speedMph < range.max) {
+            state.speedHistogram[i] += deltaTime;
+            break;
+          }
+        }
       }
 
       state.lastPosition = { lat: coords.latitude, lon: coords.longitude };
@@ -701,10 +827,15 @@
       dom.speedDisplay.textContent = speedValue;
       dom.unitDisplay.textContent = state.speedUnit.toUpperCase();
 
-      // Heading
+      // Heading with compass arrow
       const cardinal = headingToCardinal(state.heading);
       const degrees = state.heading !== null ? Math.round(state.heading) + '°' : '';
-      dom.headingDisplay.textContent = cardinal + (degrees ? ` ${degrees}` : '');
+      dom.headingText.textContent = cardinal + (degrees ? ` ${degrees}` : '');
+
+      // Rotate compass arrow to point in heading direction
+      if (state.heading !== null) {
+        dom.compassArrow.style.transform = `rotate(${state.heading}deg)`;
+      }
 
       // Altitude
       dom.altitudeDisplay.textContent = formatAltitude(state.altitude);
@@ -743,6 +874,18 @@
         dom.gpsDot.classList.add('active');
         dom.gpsDot.classList.toggle('weak', state.accuracy > 20);
         dom.gpsAccuracy.textContent = `GPS ±${Math.round(state.accuracy)}m`;
+      }
+
+      // Speed histogram
+      const totalTime = state.speedHistogram.reduce((a, b) => a + b, 0);
+      if (totalTime > 0) {
+        const maxPercentage = Math.max(...state.speedHistogram.map(t => (t / totalTime) * 100));
+        state.speedHistogram.forEach((time, i) => {
+          const percentage = (time / totalTime) * 100;
+          const heightPercentage = maxPercentage > 0 ? (percentage / maxPercentage) * 80 : 0;
+          dom.histBars[i].style.height = `${heightPercentage}%`;
+          dom.histVals[i].textContent = `${Math.round(percentage)}%`;
+        });
       }
     }
 
@@ -867,6 +1010,14 @@
         state.hudMode = btn.dataset.hud === 'on';
         dom.dashboard.classList.toggle('hud-mode', state.hudMode);
       });
+    });
+
+    // Trip reset button
+    dom.resetTripBtn.addEventListener('click', () => {
+      if (confirm('Reset all trip data?')) {
+        resetTrip();
+        dom.settingsPanel.classList.remove('visible');
+      }
     });
 
     // ============================================================================
