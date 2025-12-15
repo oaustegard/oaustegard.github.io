@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bluesky Zeitgeist</title>
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/*preact@10.23.1",
+        "preact/": "https://esm.sh/*preact@10.23.1/",
+        "@preact/signals": "https://esm.sh/*@preact/signals@1.3.0",
+        "@preact/signals-core": "https://esm.sh/*@preact/signals-core@1.8.0",
+        "htm": "https://esm.sh/*htm@3.1.1",
+        "htm/preact": "https://esm.sh/*htm@3.1.1/preact"
+      }
+    }
+  </script>
+  
+  <script>
+    // Tailwind config for dark theme
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            bsky: { 400: '#38bdf8', 500: '#0ea5e9', 600: '#0284c7' }
+          }
+        }
+      }
+    }
+  </script>
+  
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+    body { font-family: 'JetBrains Mono', monospace; }
+    @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+    .animate-pulse-slow { animation: pulse 1.5s ease-in-out infinite; }
+  </style>
+</head>
+<body class="bg-gray-950 text-gray-200 min-h-screen">
+  <div id="app"></div>
+  
+  <script type="module">
+    import { render } from 'preact';
+    import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
+    import { signal, computed } from '@preact/signals';
+    import { html } from 'htm/preact';
+
+    // ========================================================================
+    // CONSTANTS
+    // ========================================================================
+    
+    const BSKY_API = 'https://public.api.bsky.app/xrpc';
+    
+    // High-activity accounts for sampling
+    const SAMPLE_ACCOUNTS = [
+      'bsky.app', 'jay.bsky.team', 'pfrazee.com',
+      'arstechnica.com', 'theverge.com', 'wired.com', 'engadget.com',
+      'nytimes.com', 'washingtonpost.com', 'bbc.com', 'reuters.com',
+      'cnn.com', 'npr.org', 'apnews.com',
+      'techcrunch.com', 'mashable.com',
+      'simonwillison.net', 'swyx.io'
+    ];
+    
+    // Stopwords for filtering
+    const STOPWORDS = new Set([
+      'the', 'a', 'an', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+      'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
+      'should', 'may', 'might', 'must', 'and', 'but', 'or', 'for', 'to',
+      'of', 'in', 'on', 'at', 'by', 'with', 'from', 'this', 'that', 'it',
+      'i', 'you', 'he', 'she', 'we', 'they', 'my', 'your', 'his', 'her',
+      'its', 'our', 'their', 'me', 'him', 'us', 'them', 'what', 'which',
+      'who', 'when', 'where', 'why', 'how', 'all', 'each', 'every', 'both',
+      'few', 'more', 'most', 'other', 'some', 'such', 'no', 'not', 'only',
+      'same', 'so', 'than', 'too', 'very', 'just', 'also', 'now', 'here',
+      'https', 'http', 'www', 'com', 'org', 'net', 'bsky', 'social',
+      'lol', 'lmao', 'omg', 'gonna', 'gotta', 'wanna', 'yeah', 'yes', 'nope',
+      'really', 'actually', 'literally', 'like', 'think', 'know', 'get', 'got',
+      'going', 'want', 'need', 'see', 'look', 'come', 'make', 'take', 'give',
+      'today', 'yesterday', 'tomorrow', 'tonight', 'morning', 'night', 'day',
+      'week', 'month', 'year', 'time', 'now', 'still', 'already', 'always',
+      'good', 'bad', 'great', 'best', 'better', 'much', 'many', 'well',
+      'thing', 'things', 'something', 'anything', 'everything', 'nothing',
+      'one', 'two', 'first', 'last', 'new', 'old', 'right', 'way', 'back',
+      'people', 'person', 'man', 'woman', 'life', 'world', 'work', 'even',
+      'say', 'said', 'tell', 'told', 'ask', 'asked', 'put', 'use', 'used',
+      'try', 'call', 'called', 'feel', 'keep', 'let', 'begin', 'seem',
+      'help', 'show', 'hear', 'play', 'run', 'move', 'live', 'believe',
+      'read', 'via', 'amp', 'news', 'just', 'dont', "don't", 'cant', "can't",
+      'about', 'into', 'over', 'after', 'before', 'between', 'under', 'again',
+      'there', 'then', 'once', 'here', 'why', 'how', 'any', 'both', 'each',
+      'few', 'more', 'most', 'other', 'some', 'such', 'own', 'same', 'than',
+    ]);
+
+    // ========================================================================
+    // YAKE-LIKE KEYWORD EXTRACTOR (Pure JS)
+    // ========================================================================
+    
+    /**
+     * Simplified YAKE-inspired keyword extraction
+     * Features: TF weighting, position bias, casing detection, n-gram extraction
+     */
+    class KeywordExtractor {
+      constructor(options = {}) {
+        this.maxNgram = options.n || 3;
+        this.top = options.top || 20;
+        this.dedupThreshold = options.dedupLim || 0.8;
+        this.stopwords = options.stopwords || STOPWORDS;
+      }
+      
+      tokenize(text) {
+        return text
+          .replace(/https?:\/\/\S+/g, ' ')
+          .replace(/[^\w\s'-]/g, ' ')
+          .split(/\s+/)
+          .filter(w => w.length > 1);
+      }
+      
+      isStopword(word) {
+        return this.stopwords.has(word.toLowerCase());
+      }
+      
+      // Calculate word features
+      calculateWordFeatures(tokens) {
+        const features = {};
+        const totalTokens = tokens.length;
+        const wordPositions = {};
+        const wordCasing = {};
+        
+        tokens.forEach((token, idx) => {
+          const lower = token.toLowerCase();
+          if (this.isStopword(lower) || /^\d+$/.test(token)) return;
+          
+          // Track frequency
+          features[lower] = (features[lower] || 0) + 1;
+          
+          // Track first position (earlier = better)
+          if (!(lower in wordPositions)) {
+            wordPositions[lower] = idx / totalTokens;
+          }
+          
+          // Track casing (capitalized words score higher)
+          if (/^[A-Z]/.test(token)) {
+            wordCasing[lower] = (wordCasing[lower] || 0) + 1;
+          }
+        });
+        
+        // Calculate scores (lower = better, YAKE-style)
+        const scores = {};
+        for (const word in features) {
+          const freq = features[word];
+          const position = wordPositions[word] || 0.5;
+          const caseBoost = wordCasing[word] ? 0.8 : 1.0;
+          
+          // YAKE-inspired: combine TF inverse, position, casing
+          // Lower score = more important
+          const tfComponent = 1 / (1 + Math.log(1 + freq));
+          const posComponent = 0.5 + position * 0.5;
+          
+          scores[word] = tfComponent * posComponent * caseBoost;
+        }
+        
+        return { features, scores, wordCasing };
+      }
+      
+      // Extract n-grams and score them
+      extractNgrams(tokens, wordScores) {
+        const ngrams = {};
+        const ngramPositions = {};
+        
+        for (let n = 1; n <= this.maxNgram; n++) {
+          for (let i = 0; i <= tokens.length - n; i++) {
+            const gram = tokens.slice(i, i + n);
+            const gramLower = gram.map(t => t.toLowerCase());
+            
+            // Skip if starts/ends with stopword
+            if (this.isStopword(gramLower[0]) || this.isStopword(gramLower[gramLower.length - 1])) {
+              continue;
+            }
+            
+            // Skip if all stopwords
+            if (gramLower.every(w => this.isStopword(w) || /^\d+$/.test(w))) {
+              continue;
+            }
+            
+            const key = gramLower.join(' ');
+            ngrams[key] = (ngrams[key] || 0) + 1;
+            
+            if (!(key in ngramPositions)) {
+              ngramPositions[key] = i / tokens.length;
+            }
+          }
+        }
+        
+        // Score n-grams
+        const ngramScores = {};
+        for (const ngram in ngrams) {
+          const words = ngram.split(' ');
+          const freq = ngrams[ngram];
+          
+          // Aggregate word scores
+          let wordScoreSum = 0;
+          let validWords = 0;
+          for (const w of words) {
+            if (wordScores[w] !== undefined) {
+              wordScoreSum += wordScores[w];
+              validWords++;
+            }
+          }
+          
+          if (validWords === 0) continue;
+          
+          const avgWordScore = wordScoreSum / validWords;
+          const position = ngramPositions[ngram] || 0.5;
+          const lengthBonus = words.length > 1 ? 0.9 : 1.0; // Prefer phrases
+          const freqBonus = 1 / (1 + Math.log(1 + freq));
+          
+          ngramScores[ngram] = avgWordScore * freqBonus * lengthBonus * (0.7 + position * 0.3);
+        }
+        
+        return { ngrams, ngramScores };
+      }
+      
+      // Deduplicate similar keywords
+      deduplicate(keywords) {
+        const result = [];
+        const seen = new Set();
+        
+        for (const [kw, score] of keywords) {
+          const words = new Set(kw.split(' '));
+          let dominated = false;
+          
+          for (const [existing] of result) {
+            const existingWords = new Set(existing.split(' '));
+            
+            // Check overlap
+            const intersection = [...words].filter(w => existingWords.has(w));
+            const similarity = intersection.length / Math.max(words.size, existingWords.size);
+            
+            if (similarity >= this.dedupThreshold) {
+              dominated = true;
+              break;
+            }
+          }
+          
+          if (!dominated) {
+            result.push([kw, score]);
+          }
+        }
+        
+        return result;
+      }
+      
+      extract(text) {
+        const tokens = this.tokenize(text);
+        if (tokens.length < 10) return [];
+        
+        const { scores: wordScores, wordCasing } = this.calculateWordFeatures(tokens);
+        const { ngramScores } = this.extractNgrams(tokens, wordScores);
+        
+        // Sort by score (lower = better)
+        let keywords = Object.entries(ngramScores)
+          .filter(([_, score]) => !isNaN(score))
+          .sort((a, b) => a[1] - b[1]);
+        
+        // Deduplicate
+        keywords = this.deduplicate(keywords);
+        
+        return keywords.slice(0, this.top);
+      }
+    }
+
+    // ========================================================================
+    // ENTITY EXTRACTION
+    // ========================================================================
+    
+    function extractEntities(text) {
+      // Match multi-word capitalized phrases (likely proper nouns)
+      const matches = text.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/g) || [];
+      return matches.filter(m => 
+        !['The', 'This', 'That', 'What', 'When', 'Where', 'How', 'Why', 'Who', 
+          'New', 'Just', 'Read', 'More', 'See', 'Get', 'But', 'And', 'For'].some(s => m.startsWith(s))
+      );
+    }
+
+    // ========================================================================
+    // API HELPERS
+    // ========================================================================
+    
+    async function fetchAuthorFeed(handle, limit = 30) {
+      try {
+        const url = `${BSKY_API}/app.bsky.feed.getAuthorFeed?actor=${handle}&limit=${limit}&filter=posts_no_replies`;
+        const resp = await fetch(url);
+        if (!resp.ok) return [];
+        const data = await resp.json();
+        return data.feed || [];
+      } catch (e) {
+        console.warn(`Failed to fetch ${handle}:`, e.message);
+        return [];
+      }
+    }
+
+    // ========================================================================
+    // GLOBAL STATE (Signals)
+    // ========================================================================
+    
+    const phase = signal('idle'); // idle | sampling | analyzing | monitoring
+    const error = signal(null);
+    const progress = signal({ current: 0, total: 0, account: '' });
+    
+    const stats = signal({ posts: 0, accounts: 0 });
+    const collectedPosts = signal([]);
+    const keywords = signal([]);
+    const entities = signal({});
+    const languages = signal({});
+    
+    const selectedTopics = signal([]); // Topics chosen for monitoring
+    const monitoringData = signal({}); // { topicName: { count, posts } }
+    const monitoringHistory = signal([]); // Time series for chart
+
+    // ========================================================================
+    // MAIN APP COMPONENT
+    // ========================================================================
+    
+    function App() {
+      const chartRef = useRef(null);
+      const chartInstance = useRef(null);
+      const abortRef = useRef(null);
+      const monitorIntervalRef = useRef(null);
+
+      // Cleanup on unmount
+      useEffect(() => {
+        return () => {
+          if (abortRef.current) abortRef.current.cancelled = true;
+          if (monitorIntervalRef.current) clearInterval(monitorIntervalRef.current);
+          if (chartInstance.current) chartInstance.current.destroy();
+        };
+      }, []);
+
+      // Update chart when monitoring history changes
+      useEffect(() => {
+        if (phase.value !== 'monitoring' || !chartRef.current) return;
+        
+        const history = monitoringHistory.value;
+        const topics = selectedTopics.value;
+        
+        if (chartInstance.current) {
+          chartInstance.current.destroy();
+        }
+        
+        const colors = ['#22d3ee', '#f472b6', '#a78bfa', '#34d399', '#fbbf24', '#f87171'];
+        
+        chartInstance.current = new Chart(chartRef.current, {
+          type: 'line',
+          data: {
+            labels: history.map(h => h.time + 's'),
+            datasets: topics.map((topic, i) => ({
+              label: topic.name,
+              data: history.map(h => h[topic.name] || 0),
+              borderColor: colors[i % colors.length],
+              backgroundColor: colors[i % colors.length] + '20',
+              tension: 0.3,
+              fill: false,
+            }))
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+              legend: { 
+                position: 'bottom',
+                labels: { color: '#9ca3af', font: { family: 'JetBrains Mono' } }
+              }
+            },
+            scales: {
+              x: { 
+                grid: { color: '#333' },
+                ticks: { color: '#6b7280' }
+              },
+              y: { 
+                grid: { color: '#333' },
+                ticks: { color: '#6b7280' },
+                beginAtZero: true
+              }
+            }
+          }
+        });
+      }, [monitoringHistory.value, phase.value]);
+
+      // ======================================================================
+      // SAMPLING
+      // ======================================================================
+      
+      const startSampling = async () => {
+        phase.value = 'sampling';
+        error.value = null;
+        progress.value = { current: 0, total: SAMPLE_ACCOUNTS.length, account: '' };
+        
+        const posts = [];
+        const seenUris = new Set();
+        const entityCounts = {};
+        const langCounts = {};
+        
+        abortRef.current = { cancelled: false };
+        
+        for (let i = 0; i < SAMPLE_ACCOUNTS.length; i++) {
+          if (abortRef.current.cancelled) break;
+          
+          const handle = SAMPLE_ACCOUNTS[i];
+          progress.value = { current: i + 1, total: SAMPLE_ACCOUNTS.length, account: handle };
+          
+          const feed = await fetchAuthorFeed(handle, 50);
+          
+          for (const item of feed) {
+            const post = item.post;
+            if (!post?.record?.text) continue;
+            if (seenUris.has(post.uri)) continue;
+            seenUris.add(post.uri);
+            
+            const text = post.record.text;
+            posts.push({ text, author: post.author?.handle, uri: post.uri });
+            
+            // Extract entities
+            const ents = extractEntities(text);
+            for (const e of ents) {
+              entityCounts[e] = (entityCounts[e] || 0) + 1;
+            }
+            
+            // Track languages
+            for (const lang of (post.record.langs || [])) {
+              langCounts[lang] = (langCounts[lang] || 0) + 1;
+            }
+          }
+          
+          // Update state incrementally
+          stats.value = { posts: posts.length, accounts: i + 1 };
+          entities.value = { ...entityCounts };
+          languages.value = { ...langCounts };
+          
+          await new Promise(r => setTimeout(r, 150));
+        }
+        
+        if (!abortRef.current.cancelled) {
+          collectedPosts.value = posts;
+          
+          // Run keyword extraction
+          const allText = posts.map(p => p.text).join('\n');
+          const extractor = new KeywordExtractor({ n: 3, top: 30, dedupLim: 0.7 });
+          keywords.value = extractor.extract(allText);
+          
+          phase.value = 'analyzing';
+        }
+      };
+
+      const stopSampling = () => {
+        if (abortRef.current) abortRef.current.cancelled = true;
+        phase.value = 'analyzing';
+      };
+
+      // ======================================================================
+      // TOPIC SELECTION & MONITORING
+      // ======================================================================
+      
+      const toggleTopic = (topic) => {
+        const current = selectedTopics.value;
+        const exists = current.find(t => t.name === topic.name);
+        
+        if (exists) {
+          selectedTopics.value = current.filter(t => t.name !== topic.name);
+        } else if (current.length < 6) {
+          selectedTopics.value = [...current, topic];
+        }
+      };
+
+      const startMonitoring = () => {
+        if (selectedTopics.value.length === 0) return;
+        
+        phase.value = 'monitoring';
+        const initialData = {};
+        selectedTopics.value.forEach(topic => {
+          initialData[topic.name] = { count: 0, posts: [] };
+        });
+        monitoringData.value = initialData;
+        monitoringHistory.value = [];
+        
+        const state = { 
+          data: { ...initialData }, 
+          startTime: Date.now(),
+          seenUris: new Set()
+        };
+        
+        const poll = async () => {
+          const shuffled = [...SAMPLE_ACCOUNTS].sort(() => Math.random() - 0.5);
+          const accounts = shuffled.slice(0, 5);
+          
+          for (const handle of accounts) {
+            const feed = await fetchAuthorFeed(handle, 20);
+            
+            for (const item of feed) {
+              const post = item.post;
+              if (!post?.record?.text) continue;
+              if (state.seenUris.has(post.uri)) continue;
+              state.seenUris.add(post.uri);
+              
+              const text = post.record.text;
+              const textLower = text.toLowerCase();
+              
+              selectedTopics.value.forEach(topic => {
+                const matched = topic.variants.some(v => textLower.includes(v.toLowerCase()));
+                if (matched) {
+                  state.data[topic.name].count++;
+                  state.data[topic.name].posts.unshift({ text, author: post.author?.handle });
+                  if (state.data[topic.name].posts.length > 5) {
+                    state.data[topic.name].posts.pop();
+                  }
+                }
+              });
+            }
+          }
+          
+          const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
+          monitoringData.value = { ...state.data };
+          
+          const historyPoint = { time: elapsed };
+          selectedTopics.value.forEach(topic => {
+            historyPoint[topic.name] = state.data[topic.name].count;
+          });
+          monitoringHistory.value = [...monitoringHistory.value, historyPoint].slice(-30);
+        };
+        
+        poll();
+        monitorIntervalRef.current = setInterval(poll, 5000);
+      };
+
+      const stopMonitoring = () => {
+        if (monitorIntervalRef.current) clearInterval(monitorIntervalRef.current);
+        phase.value = 'analyzing';
+      };
+
+      const reset = () => {
+        phase.value = 'idle';
+        stats.value = { posts: 0, accounts: 0 };
+        keywords.value = [];
+        entities.value = {};
+        selectedTopics.value = [];
+        monitoringData.value = {};
+        monitoringHistory.value = [];
+      };
+
+      // ======================================================================
+      // DERIVED DATA
+      // ======================================================================
+      
+      const topEntities = computed(() => 
+        Object.entries(entities.value)
+          .filter(([_, n]) => n >= 2)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 15)
+      );
+
+      const topKeywords = computed(() => keywords.value.slice(0, 20));
+
+      // Convert keywords and entities to selectable topics
+      const availableTopics = computed(() => {
+        const topics = [];
+        
+        // Add top entities as topics
+        topEntities.value.slice(0, 8).forEach(([name, count]) => {
+          const variants = [name.toLowerCase()];
+          const words = name.split(' ');
+          if (words.length > 1) {
+            words.forEach(w => { if (w.length > 3) variants.push(w.toLowerCase()); });
+          }
+          topics.push({ name, count, variants, type: 'entity' });
+        });
+        
+        // Add top keyword phrases
+        topKeywords.value.slice(0, 8).forEach(([phrase, score]) => {
+          if (topics.some(t => t.name.toLowerCase() === phrase)) return;
+          const variants = [phrase];
+          const words = phrase.split(' ');
+          if (words.length > 1) {
+            words.forEach(w => { if (w.length > 3 && !STOPWORDS.has(w)) variants.push(w); });
+          }
+          topics.push({ name: phrase, score, variants, type: 'keyword' });
+        });
+        
+        return topics.slice(0, 12);
+      });
+
+      const langData = computed(() => 
+        Object.entries(languages.value)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 6)
+      );
+
+      // ======================================================================
+      // RENDER
+      // ======================================================================
+
+      return html`
+        <div class="max-w-6xl mx-auto p-4">
+          <!-- Header -->
+          <div class="flex items-center justify-between mb-6 pb-4 border-b border-gray-800">
+            <div>
+              <h1 class="text-2xl font-bold bg-gradient-to-r from-cyan-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">
+                BLUESKY ZEITGEIST
+              </h1>
+              <p class="text-xs text-gray-500 tracking-wider mt-1">
+                FEED SAMPLING • YAKE EXTRACTION • TOPIC TRACKING
+              </p>
+            </div>
+            
+            <div class="flex gap-3">
+              ${phase.value === 'idle' && html`
+                <button 
+                  onClick=${startSampling}
+                  class="bg-gradient-to-r from-cyan-500 to-blue-500 text-black font-semibold px-5 py-2 rounded-lg text-sm hover:opacity-90 transition-opacity"
+                >
+                  ▶ SAMPLE FEEDS
+                </button>
+              `}
+              
+              ${phase.value === 'sampling' && html`
+                <button 
+                  onClick=${stopSampling}
+                  class="bg-gradient-to-r from-red-500 to-red-600 text-white font-semibold px-5 py-2 rounded-lg text-sm"
+                >
+                  ■ STOP
+                </button>
+              `}
+              
+              ${phase.value === 'analyzing' && html`
+                <button 
+                  onClick=${startMonitoring}
+                  disabled=${selectedTopics.value.length === 0}
+                  class="bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold px-5 py-2 rounded-lg text-sm disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  ▶ TRACK SELECTED (${selectedTopics.value.length})
+                </button>
+                <button 
+                  onClick=${reset}
+                  class="bg-gray-800 text-gray-300 font-medium px-4 py-2 rounded-lg text-sm border border-gray-700 hover:bg-gray-700"
+                >
+                  ↺ RESET
+                </button>
+              `}
+              
+              ${phase.value === 'monitoring' && html`
+                <button 
+                  onClick=${stopMonitoring}
+                  class="bg-gradient-to-r from-yellow-500 to-orange-500 text-black font-semibold px-5 py-2 rounded-lg text-sm"
+                >
+                  ■ STOP TRACKING
+                </button>
+              `}
+            </div>
+          </div>
+
+          ${error.value && html`
+            <div class="bg-red-900/30 border border-red-700/50 rounded-lg px-4 py-3 mb-4 text-red-400 text-sm">
+              ⚠ ${error.value}
+            </div>
+          `}
+
+          <!-- Idle State -->
+          ${phase.value === 'idle' && html`
+            <div class="flex flex-col items-center justify-center py-20">
+              <div class="w-24 h-24 rounded-full bg-gradient-to-br from-cyan-500/20 to-purple-500/20 border-2 border-cyan-500/30 flex items-center justify-center text-5xl mb-6">
+                🦋
+              </div>
+              <h2 class="text-lg text-gray-300 font-medium">Ready to Analyze</h2>
+              <p class="text-gray-500 text-sm mt-2 text-center max-w-md">
+                Samples posts from ${SAMPLE_ACCOUNTS.length} active Bluesky accounts, extracts keywords using YAKE algorithm, then lets you track selected topics.
+              </p>
+            </div>
+          `}
+
+          <!-- Sampling / Analyzing -->
+          ${(phase.value === 'sampling' || phase.value === 'analyzing') && html`
+            <div class="grid grid-cols-2 gap-4">
+              <!-- Left Column -->
+              <div class="space-y-4">
+                <!-- Stats -->
+                <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
+                  <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xs font-semibold text-cyan-400 tracking-wider">COLLECTION STATS</h3>
+                    ${phase.value === 'sampling' && html`
+                      <span class="flex items-center gap-1.5 px-2 py-0.5 bg-cyan-500/10 rounded-full text-[10px] text-cyan-400">
+                        <span class="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse-slow"></span>
+                        SAMPLING
+                      </span>
+                    `}
+                  </div>
+                  
+                  <div class="grid grid-cols-3 gap-4">
+                    <div>
+                      <div class="text-2xl font-bold text-white">${stats.value.posts.toLocaleString()}</div>
+                      <div class="text-[10px] text-gray-500">POSTS</div>
+                    </div>
+                    <div>
+                      <div class="text-2xl font-bold text-white">${stats.value.accounts}</div>
+                      <div class="text-[10px] text-gray-500">ACCOUNTS</div>
+                    </div>
+                    <div>
+                      <div class="text-2xl font-bold text-white">${Object.keys(entities.value).length}</div>
+                      <div class="text-[10px] text-gray-500">ENTITIES</div>
+                    </div>
+                  </div>
+                  
+                  ${phase.value === 'sampling' && html`
+                    <div class="mt-4">
+                      <div class="flex justify-between text-[11px] text-gray-500 mb-1.5">
+                        <span>Fetching: ${progress.value.account}</span>
+                        <span>${progress.value.current}/${progress.value.total}</span>
+                      </div>
+                      <div class="h-1 bg-gray-800 rounded overflow-hidden">
+                        <div 
+                          class="h-full bg-gradient-to-r from-cyan-500 to-purple-500 transition-all duration-300"
+                          style="width: ${(progress.value.current / progress.value.total) * 100}%"
+                        ></div>
+                      </div>
+                    </div>
+                  `}
+                  
+                  ${langData.value.length > 0 && html`
+                    <div class="mt-4">
+                      <div class="text-[10px] text-gray-500 mb-2">LANGUAGES</div>
+                      <div class="flex flex-wrap gap-1.5">
+                        ${langData.value.map(([lang, count]) => html`
+                          <span key=${lang} class="px-2 py-0.5 bg-gray-800 rounded text-[11px] text-gray-400">
+                            ${lang} <span class="text-cyan-400">${stats.value.posts > 0 ? ((count / stats.value.posts) * 100).toFixed(0) : 0}%</span>
+                          </span>
+                        `)}
+                      </div>
+                    </div>
+                  `}
+                </div>
+
+                <!-- Keywords (YAKE) -->
+                <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
+                  <h3 class="text-xs font-semibold text-green-400 tracking-wider mb-3">YAKE KEYWORDS</h3>
+                  <div class="flex flex-wrap gap-1.5">
+                    ${topKeywords.value.length === 0 
+                      ? html`<span class="text-gray-500 text-sm">Extracting...</span>`
+                      : topKeywords.value.map(([kw, score], i) => html`
+                        <span 
+                          key=${kw}
+                          class="px-2 py-1 rounded text-[11px] cursor-default ${i < 5 ? 'bg-green-500/15 text-green-400' : 'bg-gray-800 text-gray-400'}"
+                          title="Score: ${score.toFixed(4)}"
+                        >
+                          ${kw}
+                        </span>
+                      `)
+                    }
+                  </div>
+                </div>
+              </div>
+
+              <!-- Right Column -->
+              <div class="space-y-4">
+                <!-- Entities -->
+                <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
+                  <h3 class="text-xs font-semibold text-pink-400 tracking-wider mb-3">DETECTED ENTITIES</h3>
+                  <div class="space-y-1 max-h-48 overflow-y-auto">
+                    ${topEntities.value.length === 0 
+                      ? html`<span class="text-gray-500 text-sm">Detecting...</span>`
+                      : topEntities.value.map(([entity, count], i) => html`
+                        <div 
+                          key=${entity}
+                          class="flex justify-between items-center px-2 py-1.5 rounded ${i === 0 ? 'bg-pink-500/10 border-l-2 border-pink-500' : 'hover:bg-gray-800'}"
+                        >
+                          <span class="text-sm ${i === 0 ? 'text-pink-400' : 'text-gray-300'}">
+                            ${i === 0 ? '🔥 ' : ''}${entity}
+                          </span>
+                          <span class="text-xs text-gray-500">${count}</span>
+                        </div>
+                      `)
+                    }
+                  </div>
+                </div>
+
+                <!-- Topic Selection -->
+                ${phase.value === 'analyzing' && availableTopics.value.length > 0 && html`
+                  <div class="bg-purple-500/10 rounded-lg p-4 border border-purple-500/30">
+                    <h3 class="text-xs font-semibold text-purple-400 tracking-wider mb-3">
+                      SELECT TOPICS TO TRACK (max 6)
+                    </h3>
+                    <div class="space-y-1.5">
+                      ${availableTopics.value.map(topic => {
+                        const isSelected = selectedTopics.value.some(t => t.name === topic.name);
+                        return html`
+                          <button
+                            key=${topic.name}
+                            onClick=${() => toggleTopic(topic)}
+                            class="w-full flex justify-between items-center px-3 py-2 rounded text-left transition-colors ${
+                              isSelected 
+                                ? 'bg-purple-500/30 border border-purple-500' 
+                                : 'bg-gray-800/50 border border-transparent hover:bg-gray-800'
+                            }"
+                          >
+                            <div class="flex items-center gap-2">
+                              <span class="text-[10px] px-1.5 py-0.5 rounded ${
+                                topic.type === 'entity' ? 'bg-pink-500/20 text-pink-400' : 'bg-green-500/20 text-green-400'
+                              }">
+                                ${topic.type === 'entity' ? 'ENT' : 'KW'}
+                              </span>
+                              <span class="text-sm text-gray-200">${topic.name}</span>
+                            </div>
+                            <span class="text-xs text-gray-500">
+                              ${topic.count || ''} ${isSelected ? '✓' : ''}
+                            </span>
+                          </button>
+                        `;
+                      })}
+                    </div>
+                    ${selectedTopics.value.length > 0 && html`
+                      <div class="mt-3 text-[11px] text-gray-400">
+                        Tracking variants: ${selectedTopics.value.flatMap(t => t.variants).slice(0, 10).join(', ')}
+                        ${selectedTopics.value.flatMap(t => t.variants).length > 10 ? '...' : ''}
+                      </div>
+                    `}
+                  </div>
+                `}
+              </div>
+            </div>
+          `}
+
+          <!-- Monitoring -->
+          ${phase.value === 'monitoring' && html`
+            <div class="space-y-4">
+              <!-- Status -->
+              <div class="bg-cyan-500/10 rounded-lg px-4 py-3 border border-cyan-500/30 flex items-center gap-3">
+                <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse-slow"></span>
+                <span class="text-cyan-400 font-medium text-sm">TRACKING ${selectedTopics.value.length} TOPICS</span>
+                <span class="text-gray-500 text-sm">• Polling feeds every 5 seconds</span>
+              </div>
+
+              <!-- Chart -->
+              <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
+                <h3 class="text-xs font-semibold text-cyan-400 tracking-wider mb-3">TOPIC MATCHES OVER TIME</h3>
+                <div class="h-56">
+                  <canvas ref=${chartRef}></canvas>
+                </div>
+              </div>
+
+              <!-- Topic Cards -->
+              <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
+                ${selectedTopics.value.map((topic, i) => {
+                  const data = monitoringData.value[topic.name] || { count: 0, posts: [] };
+                  const colors = ['border-cyan-500', 'border-pink-500', 'border-purple-500', 'border-green-500', 'border-yellow-500', 'border-red-500'];
+                  const textColors = ['text-cyan-400', 'text-pink-400', 'text-purple-400', 'text-green-400', 'text-yellow-400', 'text-red-400'];
+                  
+                  return html`
+                    <div key=${topic.name} class="bg-gray-900/60 rounded-lg p-3 border border-gray-800 border-t-2 ${colors[i % colors.length]}">
+                      <div class="flex justify-between items-center mb-2">
+                        <span class="font-medium text-white text-sm truncate">${topic.name}</span>
+                        <span class="text-xl font-bold ${textColors[i % textColors.length]}">${data.count}</span>
+                      </div>
+                      
+                      <div class="text-[10px] text-gray-500 mb-2">
+                        ${topic.variants.slice(0, 3).join(', ')}
+                      </div>
+                      
+                      ${data.posts.length > 0 && html`
+                        <div class="space-y-1">
+                          ${data.posts.slice(0, 2).map((post, j) => html`
+                            <div key=${j} class="text-[11px] text-gray-400 bg-gray-800/50 rounded px-2 py-1 truncate">
+                              <span class="text-gray-500">@${post.author}: </span>
+                              ${post.text?.slice(0, 50)}...
+                            </div>
+                          `)}
+                        </div>
+                      `}
+                    </div>
+                  `;
+                })}
+              </div>
+            </div>
+          `}
+
+          <!-- Footer -->
+          <div class="mt-8 pt-4 border-t border-gray-800 text-center text-[11px] text-gray-600">
+            Bluesky Zeitgeist • YAKE keyword extraction • No AI APIs required
+          </div>
+        </div>
+      `;
+    }
+
+    // Mount app
+    render(html`<${App} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>
