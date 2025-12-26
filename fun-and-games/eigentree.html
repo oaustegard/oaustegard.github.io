@@ -2,13 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Eigentree - Spectral Christmas Tree</title>
+    <title>Spectral Tree</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js"></script>
     <style>
         body { margin: 0; background-color: #000; color: #eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
         canvas { display: block; cursor: crosshair; }
         #ui {
-            position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.75);
+            position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.6);
             padding: 20px; border-radius: 12px; border: 1px solid #444; width: 280px;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5); pointer-events: auto; z-index: 10;
             backdrop-filter: blur(5px);
@@ -17,10 +17,10 @@
         label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
         input[type=range] { width: 100%; cursor: pointer; accent-color: #ff3e3e; }
         h1 { font-size: 1.2rem; margin: 0 0 15px 0; color: #fff; font-weight: 300; }
-        .stats { font-size: 0.75rem; color: #888; margin-top: 10px; line-height: 1.4; }
-        button { width: 100%; padding: 10px; cursor: pointer; background: #333; color: white; border: 1px solid #555; border-radius: 4px; font-size: 0.9rem; }
+        .stats { font-size: 0.7rem; color: #666; margin-top: 10px; }
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; font-style: italic; color: gold; z-index: 20; pointer-events: none;}
+        button { width: 100%; padding: 8px; cursor: pointer; background: #333; color: white; border: 1px solid #555; border-radius: 4px; margin-bottom: 8px; }
         button:hover { background: #444; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; font-style: italic; color: gold; z-index: 20; pointer-events: none; font-size: 1.2rem; }
 
         /* Info panel for clicked branch */
         #info-panel {
@@ -36,32 +36,34 @@
         #info-panel .math { font-family: 'Courier New', monospace; color: #8f8; background: rgba(0,100,0,0.2); padding: 2px 6px; border-radius: 3px; }
         #info-panel .eigenvalue { color: #ff8; font-weight: bold; }
         #info-panel .matrix-info { color: #aaf; }
+        #info-panel hr { border-color: #444; margin: 10px 0; }
     </style>
 </head>
 <body>
 
 <div id="ui">
-    <h1>Spectral Tree Animator</h1>
+    <h1>Spectral Tree</h1>
 
     <div class="control-group">
-        <label id="label-n">Branches: 200</label>
-        <input type="range" id="nodes" min="50" max="400" value="200" step="10">
+        <label id="label-n">Branches: 400</label>
+        <input type="range" id="nodes" min="100" max="600" value="400" step="10">
     </div>
 
     <div class="control-group">
         <label id="label-wiggle">Curvature: 0.08</label>
-        <input type="range" id="wiggle" min="0" max="30" value="8">
+        <input type="range" id="wiggle" min="0" max="20" value="8">
     </div>
 
     <div class="control-group">
-        <label id="label-speed">Growth Speed: Very Slow</label>
-        <input type="range" id="speed" min="0" max="10" value="0">
+        <label id="label-speed">Rotation Speed: Medium</label>
+        <input type="range" id="speed" min="0" max="10" value="3">
     </div>
 
-    <button id="regenerate">Regenerate Math</button>
+    <button id="regenerate">Regenerate Tree</button>
 
     <div class="stats">
-        Animating eigenvalue trajectories of <span class="math">$M(t) = (1-t)A + tB$</span>.
+        Visualizing eigenvalue trajectories of M(t) = (1-t)A + tB.<br>
+        <span style="color: #888;">Click on a star to see the math!</span>
     </div>
 </div>
 
@@ -71,7 +73,7 @@
     <div id="info-content"></div>
 </div>
 
-<div id="loading">Computing Eigenvalues...</div>
+<div id="loading">Solving Eigenvalues...</div>
 <canvas id="treeCanvas"></canvas>
 
 <script>
@@ -82,240 +84,205 @@
     const infoContent = document.getElementById('info-content');
 
     // Configuration
-    let N = 200; // Number of eigenvalue pairs (branches)
-    const steps = 150; // Interpolation steps for smooth curves
+    let N = 400;
+    const steps = 80;
     let couplingStrength = 0.08;
-    let growthSpeed = 0; // 0 = instant, higher = slower animation
+    let treeWidthFactor = 0.9;
+    let rotationSpeed = 0.005;
 
     // Animation State
     let animationFrameId;
-    let currentStep = steps; // Start fully drawn
-    let isGrowing = false;
+    let rotationAngle = 0;
 
     // Data Storage
-    let trajectories = null; // [step][branchIndex] = {re, im}
-    let matrixA_diag = null;
-    let matrixB_diag = null;
-    let branchData = null; // Store metadata for each branch
+    let activeTrajectories = null;
+    let activeHeights = null;
+    let branchAngles = null;
+    let A_diag_stored = null;
+    let B_diag_stored = null;
+    let selectedBranch = null;
 
     function resize() {
         canvas.width = window.innerWidth;
         canvas.height = window.innerHeight;
-        if (trajectories) draw();
     }
     window.addEventListener('resize', resize);
     resize();
 
-    // Color mapping: X position (real part) -> spectral colors
-    // Left (negative real) = magenta/red, Right (positive real) = green/yellow
-    function getColorForX(x, maxWidth) {
+    // Color mapping: X position -> full spectral rainbow
+    // Left (negative X) = magenta/red, Center = blue, Right (positive X) = green/yellow
+    function getHueForX(x, maxWidth) {
         // Normalize x from [-maxWidth, maxWidth] to [0, 1]
-        const normalized = (x + maxWidth) / (2 * maxWidth);
-        // Map to hue: 300 (magenta) -> 60 (yellow) through red, orange, yellow, green
-        // We want: left=magenta(300), center=blue(240), right=green/yellow(60-120)
-        // Actually looking at original: left is red/magenta, right is green/yellow
-        // Hue spectrum: 0=red, 60=yellow, 120=green, 180=cyan, 240=blue, 300=magenta
-        // We want reversed rainbow: 300 (left) -> 0 -> 60 -> 120 (right)
-        const hue = 300 - (normalized * 240); // 300 to 60
+        const normalized = (x / maxWidth + 1) / 2; // 0 = far left, 1 = far right
+        // Map to full rainbow: 300 (magenta) -> 240 (blue) -> 120 (green) -> 60 (yellow)
+        // Reversed direction: left=magenta(300), right=yellow/green(60-120)
+        const hue = 300 - normalized * 240;
         return hue < 0 ? hue + 360 : hue;
     }
 
-    // --- CORE MATH: Design matrices so eigenvalues form a tree ---
+    // --- CORE MATH ---
     async function computeTreeData() {
         if (animationFrameId) cancelAnimationFrame(animationFrameId);
         loading.style.display = 'block';
+        selectedBranch = null;
+        closeInfoPanel();
 
-        await new Promise(r => setTimeout(r, 30));
+        await new Promise(r => setTimeout(r, 20));
 
-        trajectories = [];
-        matrixA_diag = [];
-        matrixB_diag = [];
-        branchData = [];
-
-        // Initialize trajectory storage
-        for (let s = 0; s <= steps; s++) {
-            trajectories[s] = [];
-        }
-
-        // Design matrices A and B using Gershgorin theorem principles
-        // Matrix A: eigenvalues clustered near the trunk (small real parts)
-        // Matrix B: eigenvalues spread out to form branch tips
+        const trajectories = [];
+        const heights = [];
+        const A_diag = [];
+        const B_diag = [];
+        branchAngles = new Float32Array(N);
 
         for (let i = 0; i < N; i++) {
-            // Height along tree (imaginary part) - distribute from bottom to top
-            const heightNorm = i / N;
-            const height = heightNorm * 0.85 + 0.05; // Range 0.05 to 0.9
+            const h = (i / N);
+            heights.push(h);
+            branchAngles[i] = Math.random() * Math.PI * 2;
 
-            // Tree width decreases toward top (conical shape)
-            const maxWidthAtHeight = Math.pow(1 - heightNorm, 1.3) * 0.9;
-
-            // Matrix A eigenvalue: near the trunk
-            const aReal = (Math.random() - 0.5) * 0.06;
-            const aImag = height + (Math.random() - 0.5) * 0.02;
-            matrixA_diag.push(math.complex(aReal, aImag));
-
-            // Matrix B eigenvalue: at branch tip
+            const maxWidth = Math.pow(1.1 - h, 1.5) * treeWidthFactor;
             const side = Math.random() > 0.5 ? 1 : -1;
-            const bReal = side * (0.3 + Math.random() * 0.7) * maxWidthAtHeight;
-            const bImag = height + (Math.random() - 0.5) * 0.015;
-            matrixB_diag.push(math.complex(bReal, bImag));
 
-            // Store branch metadata
-            branchData.push({
-                index: i,
-                heightNorm: heightNorm,
-                side: side > 0 ? 'right' : 'left',
-                aEigenvalue: math.complex(aReal, aImag),
-                bEigenvalue: math.complex(bReal, bImag),
-                maxWidth: maxWidthAtHeight
-            });
+            // Matrix A (Trunk cluster)
+            A_diag.push(math.complex(Math.random() * 0.04 - 0.02, h));
+            // Matrix B (Branch tips)
+            B_diag.push(math.complex(side * (Math.random() * 0.4 + 0.6) * maxWidth, h + (Math.random() * 0.02 - 0.01)));
         }
 
-        // Generate coupling matrices for curvature (2x2 blocks)
-        const couplingBlocks = [];
+        // Store for info panel
+        A_diag_stored = A_diag.slice();
+        B_diag_stored = B_diag.slice();
+
+        // Generate Block Coupling (Pairwise)
+        const C_blocks = [];
         for (let i = 0; i < N; i += 2) {
-            const strength = couplingStrength;
-            couplingBlocks.push({
-                c01: math.complex((Math.random()-0.5)*strength, (Math.random()-0.5)*strength),
-                c10: math.complex((Math.random()-0.5)*strength, (Math.random()-0.5)*strength)
-            });
+             const blk = [
+                 [math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength),
+                  math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength)],
+                 [math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength),
+                  math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength)]
+             ];
+             C_blocks.push(blk);
         }
 
-        // Compute eigenvalue trajectories for t from 0 to 1
+        // Solve Eigenvalues
         for (let s = 0; s <= steps; s++) {
             const t = s / steps;
+            let currentStepEvals = [];
 
             for (let i = 0; i < N; i += 2) {
                 if (i + 1 < N) {
-                    // 2x2 block for coupled eigenvalues
-                    const d1 = math.add(
-                        math.multiply(matrixA_diag[i], 1 - t),
-                        math.multiply(matrixB_diag[i], t)
-                    );
-                    const d2 = math.add(
-                        math.multiply(matrixA_diag[i+1], 1 - t),
-                        math.multiply(matrixB_diag[i+1], t)
-                    );
+                    const d1 = math.add(math.multiply(A_diag[i], 1 - t), math.multiply(B_diag[i], t));
+                    const d2 = math.add(math.multiply(A_diag[i+1], 1 - t), math.multiply(B_diag[i+1], t));
+                    const cBlk = C_blocks[Math.floor(i/2)];
 
-                    const block = couplingBlocks[Math.floor(i/2)];
+                    const m00 = math.add(d1, cBlk[0][0]);
+                    const m01 = cBlk[0][1];
+                    const m10 = cBlk[1][0];
+                    const m11 = math.add(d2, cBlk[1][1]);
 
-                    // 2x2 matrix: [[d1, c01], [c10, d2]]
-                    const M = [
-                        [d1, block.c01],
-                        [block.c10, d2]
-                    ];
-
-                    try {
-                        const result = math.eigs(M);
-                        const vals = result.values.toArray ? result.values.toArray() : result.values;
-                        trajectories[s][i] = vals[0];
-                        trajectories[s][i+1] = vals[1];
-                    } catch (e) {
-                        // Fallback to interpolated diagonal
-                        trajectories[s][i] = d1;
-                        trajectories[s][i+1] = d2;
-                    }
+                    const M_small = [[m00, m01], [m10, m11]];
+                    const res = math.eigs(M_small);
+                    const vals = res.values.toArray ? res.values.toArray() : res.values;
+                    currentStepEvals.push(vals[0], vals[1]);
                 } else {
-                    // Odd branch - simple interpolation
-                    trajectories[s][i] = math.add(
-                        math.multiply(matrixA_diag[i], 1 - t),
-                        math.multiply(matrixB_diag[i], t)
-                    );
+                    const d = math.add(math.multiply(A_diag[i], 1 - t), math.multiply(B_diag[i], t));
+                    currentStepEvals.push(d);
                 }
             }
+
+            // Sort by imaginary part for continuity
+            currentStepEvals.sort((a, b) => {
+                const imA = typeof a === 'number' ? 0 : a.im;
+                const imB = typeof b === 'number' ? 0 : b.im;
+                return imA - imB;
+            });
+            trajectories.push(currentStepEvals);
         }
 
+        activeTrajectories = trajectories;
+        activeHeights = heights;
         loading.style.display = 'none';
-
-        // Start animation
-        if (growthSpeed > 0) {
-            currentStep = 0;
-            isGrowing = true;
-            animate();
-        } else {
-            currentStep = steps;
-            isGrowing = false;
-            draw();
-        }
+        animate();
     }
 
-    // --- DRAWING ---
-    function draw() {
+    // --- ANIMATION LOOP ---
+    function animate() {
+        if (!activeTrajectories) return;
+
+        ctx.globalCompositeOperation = 'source-over';
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-        if (!trajectories) return;
-
-        const centerX = canvas.width / 2;
-        const bottomY = canvas.height * 0.92;
-        const scaleY = canvas.height * 0.85;
-        const scaleX = canvas.width * 0.48;
-        const maxWidth = 0.9; // For color normalization
-
-        // Use additive blending for glow effect
         ctx.globalCompositeOperation = 'lighter';
 
-        // Draw all branch trajectories
-        for (let j = 0; j < N; j++) {
-            // Determine color based on final X position
-            const finalEv = trajectories[steps][j];
-            const finalX = typeof finalEv === 'number' ? finalEv : finalEv.re;
-            const hue = getColorForX(finalX, maxWidth);
+        const centerX = canvas.width / 2;
+        const bottomY = canvas.height * 0.9;
+        const scale = canvas.height * 0.75;
+        const widthScale = canvas.width * 0.45;
+        const maxWidth = treeWidthFactor;
 
-            ctx.strokeStyle = `hsla(${hue}, 85%, 55%, 0.5)`;
-            ctx.lineWidth = 1;
+        // Draw all branches
+        for (let j = 0; j < N; j++) {
+            const phi = branchAngles[j];
+            const cosRot = Math.cos(rotationAngle + phi);
+
+            // Get the final X position for color (at t=1)
+            const finalEv = activeTrajectories[steps][j];
+            const finalRe = typeof finalEv === 'number' ? finalEv : finalEv.re;
+            // Project final position with rotation
+            const projectedX = finalRe * cosRot;
+            const hue = getHueForX(projectedX, maxWidth);
+
+            // Determine if this branch is selected
+            const isSelected = (selectedBranch === j);
+
+            if (isSelected) {
+                ctx.strokeStyle = 'rgba(255, 255, 255, 0.95)';
+                ctx.lineWidth = 2.5;
+            } else {
+                ctx.strokeStyle = `hsla(${hue}, 90%, 60%, 0.6)`;
+                ctx.lineWidth = 0.6;
+            }
+
             ctx.beginPath();
 
-            // Draw trajectory from step 0 to currentStep
-            const maxS = Math.min(currentStep, steps);
-            for (let s = 0; s <= maxS; s++) {
-                const ev = trajectories[s][j];
+            for (let s = 0; s <= steps; s++) {
+                const ev = activeTrajectories[s][j];
                 const re = typeof ev === 'number' ? ev : ev.re;
                 const im = typeof ev === 'number' ? 0 : ev.im;
 
-                const x = centerX + re * scaleX;
-                const y = bottomY - im * scaleY;
+                const x = centerX + (re * cosRot) * widthScale;
+                const y = bottomY - im * scale;
 
                 if (s === 0) ctx.moveTo(x, y);
                 else ctx.lineTo(x, y);
             }
             ctx.stroke();
-        }
 
-        // Draw endpoint stars (eigenvalues of A at bottom, B at tips)
-        ctx.globalCompositeOperation = 'source-over';
+            // Draw tip star
+            const endNode = activeTrajectories[steps][j];
+            const reEnd = typeof endNode === 'number' ? endNode : endNode.re;
+            const imEnd = typeof endNode === 'number' ? 0 : endNode.im;
+            const xEnd = centerX + (reEnd * cosRot) * widthScale;
+            const yEnd = bottomY - imEnd * scale;
 
-        // Draw starting points (Matrix A eigenvalues) - small yellow dots
-        if (currentStep >= 0) {
-            for (let j = 0; j < N; j++) {
-                const ev = trajectories[0][j];
-                const re = typeof ev === 'number' ? ev : ev.re;
-                const im = typeof ev === 'number' ? 0 : ev.im;
-                const x = centerX + re * scaleX;
-                const y = bottomY - im * scaleY;
-
-                drawStar(x, y, 2, 'rgba(255, 220, 50, 0.9)');
+            if (isSelected) {
+                drawStar(xEnd, yEnd, 4, 'rgba(255, 255, 255, 1)');
+            } else {
+                drawStar(xEnd, yEnd, 1.5, `hsla(${hue}, 100%, 80%, 0.9)`);
             }
         }
 
-        // Draw ending points (Matrix B eigenvalues) - larger yellow stars
-        if (currentStep >= steps) {
-            for (let j = 0; j < N; j++) {
-                const ev = trajectories[steps][j];
-                const re = typeof ev === 'number' ? ev : ev.re;
-                const im = typeof ev === 'number' ? 0 : ev.im;
-                const x = centerX + re * scaleX;
-                const y = bottomY - im * scaleY;
+        rotationAngle += rotationSpeed;
 
-                drawStar(x, y, 3, 'rgba(255, 230, 80, 1)');
-            }
-        }
-
-        // Attribution
+        // Signature
         ctx.globalCompositeOperation = 'source-over';
-        ctx.fillStyle = 'rgba(200, 50, 50, 0.6)';
-        ctx.font = '14px sans-serif';
-        ctx.fillText('Simone Conradi, 2025', canvas.width - 150, canvas.height - 25);
+        ctx.fillStyle = 'rgba(200, 50, 50, 0.5)';
+        ctx.font = '12px sans-serif';
+        ctx.fillText('Simone Conradi, 2025', canvas.width - 130, canvas.height - 20);
+
+        animationFrameId = requestAnimationFrame(animate);
     }
 
     function drawStar(x, y, radius, color) {
@@ -323,59 +290,36 @@
         ctx.beginPath();
         ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fill();
-
-        // Add glow
-        const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius * 3);
-        gradient.addColorStop(0, color);
-        gradient.addColorStop(1, 'transparent');
-        ctx.fillStyle = gradient;
-        ctx.beginPath();
-        ctx.arc(x, y, radius * 3, 0, Math.PI * 2);
-        ctx.fill();
-    }
-
-    // --- ANIMATION ---
-    function animate() {
-        if (!isGrowing) return;
-
-        draw();
-
-        if (currentStep < steps) {
-            // Speed: 0=instant, 1=very slow, 10=fast
-            const stepIncrement = Math.max(1, Math.floor((11 - growthSpeed) / 2));
-            currentStep = Math.min(currentStep + stepIncrement, steps);
-            animationFrameId = requestAnimationFrame(animate);
-        } else {
-            isGrowing = false;
-        }
     }
 
     // --- INTERACTIVITY: Click to explain math ---
     canvas.addEventListener('click', handleCanvasClick);
 
     function handleCanvasClick(event) {
-        if (!trajectories || !branchData) return;
+        if (!activeTrajectories) return;
 
         const rect = canvas.getBoundingClientRect();
         const clickX = event.clientX - rect.left;
         const clickY = event.clientY - rect.top;
 
         const centerX = canvas.width / 2;
-        const bottomY = canvas.height * 0.92;
-        const scaleY = canvas.height * 0.85;
-        const scaleX = canvas.width * 0.48;
+        const bottomY = canvas.height * 0.9;
+        const scale = canvas.height * 0.75;
+        const widthScale = canvas.width * 0.45;
 
-        // Find nearest branch endpoint
         let nearestBranch = null;
         let nearestDist = Infinity;
-        const hitRadius = 15;
+        const hitRadius = 20;
 
         for (let j = 0; j < N; j++) {
-            const ev = trajectories[steps][j];
+            const phi = branchAngles[j];
+            const cosRot = Math.cos(rotationAngle + phi);
+
+            const ev = activeTrajectories[steps][j];
             const re = typeof ev === 'number' ? ev : ev.re;
             const im = typeof ev === 'number' ? 0 : ev.im;
-            const x = centerX + re * scaleX;
-            const y = bottomY - im * scaleY;
+            const x = centerX + (re * cosRot) * widthScale;
+            const y = bottomY - im * scale;
 
             const dist = Math.sqrt((clickX - x) ** 2 + (clickY - y) ** 2);
             if (dist < hitRadius && dist < nearestDist) {
@@ -385,17 +329,19 @@
         }
 
         if (nearestBranch !== null) {
+            selectedBranch = nearestBranch;
             showBranchInfo(nearestBranch);
         } else {
+            selectedBranch = null;
             closeInfoPanel();
         }
     }
 
     function showBranchInfo(branchIndex) {
-        const data = branchData[branchIndex];
-        const aEv = data.aEigenvalue;
-        const bEv = data.bEigenvalue;
-        const finalEv = trajectories[steps][branchIndex];
+        const aEv = A_diag_stored[branchIndex];
+        const bEv = B_diag_stored[branchIndex];
+        const heightNorm = activeHeights[branchIndex];
+        const side = bEv.re > 0 ? 'right' : 'left';
 
         const formatComplex = (c) => {
             const re = c.re.toFixed(4);
@@ -405,116 +351,60 @@
         };
 
         infoContent.innerHTML = `
-            <p><strong>Branch #${branchIndex + 1}</strong> (${data.side} side)</p>
-            <p>Height: ${(data.heightNorm * 100).toFixed(1)}% up the tree</p>
-            <hr style="border-color: #444; margin: 10px 0;">
+            <p><strong>Branch #${branchIndex + 1}</strong> (${side} side)</p>
+            <p>Height: ${(heightNorm * 100).toFixed(1)}% up the tree</p>
+            <hr>
             <p><strong>Matrix Interpolation:</strong></p>
             <p class="math">M(t) = (1-t)A + tB</p>
-            <p>As t goes from 0 to 1, eigenvalues trace paths.</p>
-            <hr style="border-color: #444; margin: 10px 0;">
+            <p>As t goes from 0→1, eigenvalues trace curved paths from trunk to tips.</p>
+            <hr>
             <p><strong>Eigenvalue at t=0 (Matrix A):</strong></p>
             <p class="eigenvalue matrix-info">${formatComplex(aEv)}</p>
             <p style="color: #888; font-size: 0.75rem;">Near trunk center (small real part)</p>
-            <hr style="border-color: #444; margin: 10px 0;">
+            <hr>
             <p><strong>Eigenvalue at t=1 (Matrix B):</strong></p>
             <p class="eigenvalue">${formatComplex(bEv)}</p>
-            <p style="color: #888; font-size: 0.75rem;">Branch tip (larger real part = wider)</p>
-            <hr style="border-color: #444; margin: 10px 0;">
+            <p style="color: #888; font-size: 0.75rem;">Branch tip (larger |real part| = wider)</p>
+            <hr>
             <p><strong>Gershgorin's Theorem:</strong></p>
             <p style="font-size: 0.8rem; color: #aaa;">
                 Each eigenvalue lies within a disc centered at a diagonal entry.
                 By designing diagonal entries to form a tree shape, the eigenvalue
                 trajectories create this spectral Christmas tree!
             </p>
+            <hr>
+            <p><strong>3D Effect:</strong></p>
+            <p style="font-size: 0.8rem; color: #aaa;">
+                Each branch has a random angle φ. The rotation projects
+                the real part as: x·cos(θ + φ), creating the illusion
+                of a rotating 3D cone.
+            </p>
         `;
 
         infoPanel.style.display = 'block';
-
-        // Highlight the selected branch
-        highlightBranch(branchIndex);
-    }
-
-    function highlightBranch(branchIndex) {
-        draw(); // Redraw base
-
-        if (!trajectories) return;
-
-        const centerX = canvas.width / 2;
-        const bottomY = canvas.height * 0.92;
-        const scaleY = canvas.height * 0.85;
-        const scaleX = canvas.width * 0.48;
-
-        // Draw highlighted branch
-        ctx.globalCompositeOperation = 'source-over';
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.9)';
-        ctx.lineWidth = 3;
-        ctx.beginPath();
-
-        for (let s = 0; s <= steps; s++) {
-            const ev = trajectories[s][branchIndex];
-            const re = typeof ev === 'number' ? ev : ev.re;
-            const im = typeof ev === 'number' ? 0 : ev.im;
-            const x = centerX + re * scaleX;
-            const y = bottomY - im * scaleY;
-
-            if (s === 0) ctx.moveTo(x, y);
-            else ctx.lineTo(x, y);
-        }
-        ctx.stroke();
-
-        // Mark endpoints
-        const startEv = trajectories[0][branchIndex];
-        const endEv = trajectories[steps][branchIndex];
-
-        const startX = centerX + (typeof startEv === 'number' ? startEv : startEv.re) * scaleX;
-        const startY = bottomY - (typeof startEv === 'number' ? 0 : startEv.im) * scaleY;
-        const endX = centerX + (typeof endEv === 'number' ? endEv : endEv.re) * scaleX;
-        const endY = bottomY - (typeof endEv === 'number' ? 0 : endEv.im) * scaleY;
-
-        // Start point (A)
-        ctx.fillStyle = 'cyan';
-        ctx.beginPath();
-        ctx.arc(startX, startY, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'white';
-        ctx.font = 'bold 10px sans-serif';
-        ctx.fillText('A', startX + 10, startY + 4);
-
-        // End point (B)
-        ctx.fillStyle = 'lime';
-        ctx.beginPath();
-        ctx.arc(endX, endY, 6, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = 'white';
-        ctx.fillText('B', endX + 10, endY + 4);
     }
 
     function closeInfoPanel() {
         infoPanel.style.display = 'none';
-        draw(); // Redraw without highlight
+        selectedBranch = null;
     }
 
-    // --- UI EVENT LISTENERS ---
+    // UI Event Listeners
     document.getElementById('nodes').oninput = (e) => {
         N = parseInt(e.target.value);
         document.getElementById('label-n').innerText = `Branches: ${N}`;
     };
-
     document.getElementById('wiggle').oninput = (e) => {
         couplingStrength = e.target.value / 100;
         document.getElementById('label-wiggle').innerText = `Curvature: ${couplingStrength.toFixed(2)}`;
     };
-
     document.getElementById('speed').oninput = (e) => {
-        growthSpeed = parseInt(e.target.value);
-        const speedLabels = ['Instant', 'Very Slow', 'Slow', 'Medium-Slow', 'Medium', 'Medium', 'Medium-Fast', 'Fast', 'Very Fast', 'Ultra Fast', 'Maximum'];
-        document.getElementById('label-speed').innerText = `Growth Speed: ${speedLabels[growthSpeed]}`;
+        const val = parseInt(e.target.value);
+        rotationSpeed = val * 0.002;
+        const labels = ['Stopped', 'Very Slow', 'Slow', 'Medium', 'Medium', 'Medium-Fast', 'Fast', 'Fast', 'Very Fast', 'Ultra Fast', 'Maximum'];
+        document.getElementById('label-speed').innerText = `Rotation Speed: ${labels[val]}`;
     };
-
-    document.getElementById('regenerate').onclick = () => {
-        closeInfoPanel();
-        computeTreeData();
-    };
+    document.getElementById('regenerate').onclick = computeTreeData;
 
     // Initial run
     computeTreeData();
