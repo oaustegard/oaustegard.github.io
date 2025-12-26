@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Spectral Christmas Tree - Eigenvalue Trajectories</title>
+    <title>Animated Spectral Christmas Tree</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/11.8.0/math.js"></script>
     <style>
         body { margin: 0; background-color: #000; color: #eee; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; overflow: hidden; }
@@ -10,45 +10,44 @@
         #ui {
             position: absolute; top: 20px; left: 20px; background: rgba(0, 0, 0, 0.85);
             padding: 20px; border-radius: 12px; border: 1px solid #444; width: 280px;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5); pointer-events: auto;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.5); pointer-events: auto; z-index: 10;
         }
         .control-group { margin-bottom: 15px; }
         label { display: block; font-size: 0.8rem; margin-bottom: 5px; color: #aaa; text-transform: uppercase; letter-spacing: 1px; }
         input[type=range] { width: 100%; cursor: pointer; accent-color: #ff3e3e; }
         h1 { font-size: 1.2rem; margin: 0 0 15px 0; color: #fff; font-weight: 300; }
         .stats { font-size: 0.7rem; color: #666; margin-top: 10px; }
-        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; font-style: italic; color: gold; }
+        #loading { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; font-style: italic; color: gold; z-index: 20; pointer-events: none;}
     </style>
 </head>
 <body>
 
 <div id="ui">
-    <h1>Spectral Tree Designer</h1>
+    <h1>Spectral Tree Animator</h1>
     
     <div class="control-group">
-        <label id="label-n">Branches (Matrix Size): 120</label>
-        <input type="range" id="nodes" min="20" max="250" value="120">
+        <label id="label-n">Branches: 120</label>
+        <input type="range" id="nodes" min="20" max="200" value="120">
     </div>
 
     <div class="control-group">
-        <label id="label-wiggle">Curvature (Coupling): 0.05</label>
+        <label id="label-wiggle">Curvature: 0.05</label>
         <input type="range" id="wiggle" min="0" max="20" value="5">
     </div>
 
     <div class="control-group">
-        <label id="label-width">Tree Width: 0.8</label>
-        <input type="range" id="width" min="10" max="150" value="80">
+        <label id="label-speed">Growth Speed: Medium</label>
+        <input type="range" id="speed" min="1" max="5" value="3">
     </div>
 
-    <button id="regenerate" style="width:100%; padding: 8px; cursor: pointer; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">Regenerate Tree</button>
+    <button id="regenerate" style="width:100%; padding: 8px; cursor: pointer; background: #333; color: white; border: 1px solid #555; border-radius: 4px;">Regenerate Math</button>
 
     <div class="stats">
-        Logic: $M(t) = (1-t)A + tB$<br>
-        Using Gershgorin's Theorem for placement.
+        Animating eigenvalue trajectories of $M(t) = (1-t)A + tB$.
     </div>
 </div>
 
-<div id="loading">Calculating Eigenvalues...</div>
+<div id="loading">Calculating Matrix Eigenvalues...</div>
 <canvas id="treeCanvas"></canvas>
 
 <script>
@@ -56,10 +55,22 @@
     const ctx = canvas.getContext('2d');
     const loading = document.getElementById('loading');
     
+    // Configuration
     let N = 120;
-    let steps = 40;
+    const steps = 60; // More steps for smoother animation
     let couplingStrength = 0.05;
     let treeWidthFactor = 0.8;
+    let animationSpeed = 3; // Steps per frame
+
+    // Animation State
+    let animationFrameId;
+    let currentDrawStep = 0;
+    let holdCounter = 0;
+    const holdFrames = 90; // How long to pause when fully grown
+
+    // Data Storage
+    let activeTrajectories = null;
+    let activeHeights = null;
 
     function resize() {
         canvas.width = window.innerWidth;
@@ -68,49 +79,49 @@
     window.addEventListener('resize', resize);
     resize();
 
-    // Matrix calculation can be heavy, we wrap it in an async function
-    async function computeTree() {
+    // --- CORE MATH (Heavy lifting) ---
+    async function computeTreeData() {
+        // Stop previous animation if running
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
         loading.style.display = 'block';
         
-        // Give UI a moment to show loading
-        await new Promise(r => setTimeout(r, 10));
+        // Small delay to allow UI to update
+        await new Promise(r => setTimeout(r, 20));
 
-        const trajectories = []; // Array of arrays: [step][eigenvalue_index]
-        
-        // 1. Create Baseline Matrices
+        const trajectories = []; 
+        const heights = [];
         const A_diag = [];
         const B_diag = [];
-        const heights = [];
 
+        // 1. Design Matrices based on Gershgorin circles
         for (let i = 0; i < N; i++) {
             const h = (i / N);
             heights.push(h);
+            // Power function for conical shape
             const maxWidth = Math.pow(1.1 - h, 1.5) * treeWidthFactor;
             const side = Math.random() > 0.5 ? 1 : -1;
 
-            // Matrix A (Trunk)
-            A_diag.push(math.complex(Math.random() * 0.05 - 0.025, h));
-            // Matrix B (Tips)
-            B_diag.push(math.complex(side * (Math.random() * 0.5 + 0.5) * maxWidth, h + (Math.random() * 0.02 - 0.01)));
+            // Matrix A (Trunk cluster)
+            A_diag.push(math.complex(Math.random() * 0.04 - 0.02, h));
+            // Matrix B (Branch tips)
+            B_diag.push(math.complex(side * (Math.random() * 0.4 + 0.6) * maxWidth, h + (Math.random() * 0.02 - 0.01)));
         }
 
         const A = math.diag(A_diag);
         const B = math.diag(B_diag);
 
-        // Add Coupling (the "wiggle" factor)
+        // Add complex coupling for organic curves
         const C = math.map(math.random([N, N]), v => math.complex((v - 0.5) * couplingStrength, (Math.random() - 0.5) * couplingStrength));
         const finalA = math.add(A, C);
         const finalB = math.add(B, C);
 
-        // 2. Interpolate and Solve
+        // 2. Interpolate and Solve Eigenvalues
         for (let s = 0; s <= steps; s++) {
             const t = s / steps;
             const M = math.add(math.multiply(finalA, 1 - t), math.multiply(finalB, t));
-            
-            // Numerical Eigenvalues
             const evals = math.eigs(M).values.toArray();
             
-            // Sort by imaginary part (height) to maintain line continuity
+            // CRITICAL: Sort by imaginary part to ensure continuity across steps
             evals.sort((a, b) => {
                 const imA = typeof a === 'number' ? 0 : a.im;
                 const imB = typeof b === 'number' ? 0 : b.im;
@@ -119,12 +130,22 @@
             trajectories.push(evals);
         }
 
-        draw(trajectories, heights);
+        // Store data globally and start animation
+        activeTrajectories = trajectories;
+        activeHeights = heights;
+        currentDrawStep = 0;
+        holdCounter = 0;
         loading.style.display = 'none';
+        animate();
     }
 
-    function draw(trajectories, heights) {
+    // --- ANIMATION LOOP ---
+    function animate() {
+        if (!activeTrajectories) return;
+
+        // 1. Clear Screen
         ctx.fillStyle = 'black';
+        // Use a slight opacity for a motion trail effect if desired, e.g., 'rgba(0,0,0,0.9)'
         ctx.fillRect(0, 0, canvas.width, canvas.height);
 
         const centerX = canvas.width / 2;
@@ -132,18 +153,19 @@
         const scale = canvas.height * 0.75;
         const widthScale = canvas.width * 0.4;
 
-        // Draw paths
+        // 2. Draw Branches up to current step
         for (let j = 0; j < N; j++) {
-            const hue = (heights[j] * 280); // 0 to 280 (Red to Purple/Blue)
-            ctx.strokeStyle = `hsla(${hue}, 80%, 60%, 0.6)`;
-            ctx.lineWidth = 1;
+            // Color mapping based on height
+            const hue = (activeHeights[j] * 280); 
+            ctx.strokeStyle = `hsla(${hue}, 85%, 60%, 0.7)`;
+            ctx.lineWidth = 1.5;
             ctx.beginPath();
 
-            for (let s = 0; s <= steps; s++) {
-                const ev = trajectories[s][j];
+            // Draw segment by segment until currentDrawStep
+            for (let s = 0; s <= currentDrawStep; s++) {
+                const ev = activeTrajectories[s][j];
                 const re = typeof ev === 'number' ? ev : ev.re;
                 const im = typeof ev === 'number' ? 0 : ev.im;
-
                 const x = centerX + re * widthScale;
                 const y = bottomY - im * scale;
 
@@ -152,43 +174,80 @@
             }
             ctx.stroke();
 
-            // Draw endpoint stars
-            const startNode = trajectories[0][j];
-            const endNode = trajectories[steps][j];
-            drawStar(centerX + (startNode.re || 0) * widthScale, bottomY - (startNode.im || 0) * scale);
-            drawStar(centerX + (endNode.re || 0) * widthScale, bottomY - (endNode.im || 0) * scale);
+            // 3. Draw "Leading Edge" Star (the current eigenvalue position)
+            if (currentDrawStep < steps && currentDrawStep > 0) {
+                 const evStr = activeTrajectories[currentDrawStep][j];
+                 const reStr = typeof evStr === 'number' ? evStr : evStr.re;
+                 const imStr = typeof evStr === 'number' ? 0 : evStr.im;
+                 // Brighter, slightly larger star at the tip
+                 drawStar(centerX + reStr * widthScale, bottomY - imStr * scale, 2, `hsla(${hue}, 100%, 80%, 1)`);
+            }
+        }
+
+        // 4. Draw Fixed Endpoint Stars (Trunk base)
+        for (let j = 0; j < N; j++) {
+             const startNode = activeTrajectories[0][j];
+             drawStar(centerX + (startNode.re || 0) * widthScale, bottomY - (startNode.im || 0) * scale, 1.5, '#FFD700');
+        }
+        
+        // 5. Animation Lifecycle Logic
+        if (currentDrawStep < steps) {
+            // Growing phase
+            currentDrawStep = Math.min(steps, currentDrawStep + animationSpeed);
+        } else {
+            // Holding phase (fully grown)
+            holdCounter++;
+            // Draw Final tip stars while holding
+             for (let j = 0; j < N; j++) {
+                 const endNode = activeTrajectories[steps][j];
+                 drawStar(centerX + (endNode.re || 0) * widthScale, bottomY - (endNode.im || 0) * scale, 2, '#FFD700');
+            }
+
+            if (holdCounter > holdFrames) {
+                // Reset to start loop again
+                currentDrawStep = 0;
+                holdCounter = 0;
+            }
         }
 
         // Signature
-        ctx.fillStyle = 'rgba(255, 50, 50, 0.5)';
-        ctx.font = '14px Georgia';
-        ctx.fillText('Spectral Matrix Interpolation, 2025', canvas.width - 250, canvas.height - 30);
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.font = '12px Georgia';
+        ctx.fillText('Eigenvalue Trajectory Animation', canvas.width - 200, canvas.height - 20);
+
+        animationFrameId = requestAnimationFrame(animate);
     }
 
-    function drawStar(x, y) {
-        ctx.fillStyle = '#FFD700';
+    function drawStar(x, y, radius, color) {
+        ctx.fillStyle = color;
         ctx.beginPath();
-        ctx.arc(x, y, 1.5, 0, Math.PI * 2);
+        ctx.arc(x, y, radius, 0, Math.PI * 2);
         ctx.fill();
+        // Optional: Add a tiny glow
+        ctx.shadowBlur = 4;
+        ctx.shadowColor = color;
+        ctx.fill();
+        ctx.shadowBlur = 0;
     }
 
     // UI Event Listeners
     document.getElementById('nodes').oninput = (e) => {
         N = parseInt(e.target.value);
-        document.getElementById('label-n').innerText = `Branches (Matrix Size): ${N}`;
+        document.getElementById('label-n').innerText = `Branches: ${N}`;
     };
     document.getElementById('wiggle').oninput = (e) => {
         couplingStrength = e.target.value / 100;
-        document.getElementById('label-wiggle').innerText = `Curvature (Coupling): ${couplingStrength.toFixed(2)}`;
+        document.getElementById('label-wiggle').innerText = `Curvature: ${couplingStrength.toFixed(2)}`;
     };
-    document.getElementById('width').oninput = (e) => {
-        treeWidthFactor = e.target.value / 100;
-        document.getElementById('label-width').innerText = `Tree Width: ${treeWidthFactor.toFixed(1)}`;
+    document.getElementById('speed').oninput = (e) => {
+        animationSpeed = parseInt(e.target.value);
+         const labels = ['Very Slow', 'Slow', 'Medium', 'Fast', 'Very Fast'];
+        document.getElementById('label-speed').innerText = `Growth Speed: ${labels[animationSpeed-1]}`;
     };
-    document.getElementById('regenerate').onclick = computeTree;
+    document.getElementById('regenerate').onclick = computeTreeData;
 
     // Initial run
-    computeTree();
+    computeTreeData();
 
 </script>
 </body>
