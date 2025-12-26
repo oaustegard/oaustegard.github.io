@@ -107,27 +107,63 @@
             B_diag.push(math.complex(side * (Math.random() * 0.4 + 0.6) * maxWidth, h + (Math.random() * 0.02 - 0.01)));
         }
 
-        const A = math.diag(A_diag);
-        const B = math.diag(B_diag);
+        // Generate Block Coupling (Pairwise) to avoid solving 120x120 dense matrices
+        // which causes math.eigs to hang/fail to converge.
+        const C_blocks = [];
+        for (let i = 0; i < N; i += 2) {
+             // 2x2 random complex matrix for each pair
+             const blk = [
+                 [math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength),
+                  math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength)],
+                 [math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength),
+                  math.complex((Math.random()-0.5)*couplingStrength, (Math.random()-0.5)*couplingStrength)]
+             ];
+             C_blocks.push(blk);
+        }
 
-        // Add complex coupling for organic curves
-        const C = math.map(math.random([N, N]), v => math.complex((v - 0.5) * couplingStrength, (Math.random() - 0.5) * couplingStrength));
-        const finalA = math.add(A, C);
-        const finalB = math.add(B, C);
-
-        // 2. Interpolate and Solve Eigenvalues
+        // 2. Interpolate and Solve Eigenvalues (Block-wise)
         for (let s = 0; s <= steps; s++) {
             const t = s / steps;
-            const M = math.add(math.multiply(finalA, 1 - t), math.multiply(finalB, t));
-            const evals = math.eigs(M).values.toArray();
+            let currentStepEvals = [];
+
+            for (let i = 0; i < N; i += 2) {
+                if (i + 1 < N) {
+                    // Construct 2x2 interpolated matrix
+                    // Diagonals: (1-t)A + tB
+                    const d1 = math.add(math.multiply(A_diag[i], 1 - t), math.multiply(B_diag[i], t));
+                    const d2 = math.add(math.multiply(A_diag[i+1], 1 - t), math.multiply(B_diag[i+1], t));
+
+                    // Coupling block
+                    const cBlk = C_blocks[Math.floor(i/2)];
+
+                    // M = Diag + Coupling
+                    const m00 = math.add(d1, cBlk[0][0]);
+                    const m01 = cBlk[0][1];
+                    const m10 = cBlk[1][0];
+                    const m11 = math.add(d2, cBlk[1][1]);
+
+                    const M_small = [[m00, m01], [m10, m11]];
+
+                    // Solve 2x2
+                    const res = math.eigs(M_small);
+                    // Handle output (Array or DenseMatrix)
+                    const vals = res.values.toArray ? res.values.toArray() : res.values;
+                    currentStepEvals.push(vals[0], vals[1]);
+                } else {
+                    // Odd one out (1x1 block)
+                    const d = math.add(math.multiply(A_diag[i], 1 - t), math.multiply(B_diag[i], t));
+                    // 1x1 eigenvalue is just the value (plus self-coupling if we want, ignoring for edge)
+                    currentStepEvals.push(d);
+                }
+            }
             
             // CRITICAL: Sort by imaginary part to ensure continuity across steps
-            evals.sort((a, b) => {
+            currentStepEvals.sort((a, b) => {
                 const imA = typeof a === 'number' ? 0 : a.im;
                 const imB = typeof b === 'number' ? 0 : b.im;
                 return imA - imB;
             });
-            trajectories.push(evals);
+            trajectories.push(currentStepEvals);
         }
 
         // Store data globally and start animation
