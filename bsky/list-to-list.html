@@ -156,16 +156,35 @@
         <h2>Step 2: Select Lists to Merge</h2>
         <div class="form-group">
             <label>Source List (list to merge from):</label>
-            <div class="dropdown-container">
-                <div class="dropdown" id="sourceListDropdown">
-                    <span id="selectedSourceList">Select source list</span>
+            <div style="margin-bottom: 1rem;">
+                <label style="display: inline-flex; align-items: center; margin-right: 1.5rem; font-weight: normal;">
+                    <input type="radio" name="sourceType" value="myLists" checked style="width: auto; margin-right: 0.5rem;">
+                    My Lists
+                </label>
+                <label style="display: inline-flex; align-items: center; font-weight: normal;">
+                    <input type="radio" name="sourceType" value="urlInput" style="width: auto; margin-right: 0.5rem;">
+                    Another User's List URL
+                </label>
+            </div>
+
+            <div id="myListsSource">
+                <div class="dropdown-container">
+                    <div class="dropdown" id="sourceListDropdown">
+                        <span id="selectedSourceList">Select source list</span>
+                    </div>
+                    <div class="dropdown-menu" id="sourceDropdownMenu"></div>
                 </div>
-                <div class="dropdown-menu" id="sourceDropdownMenu"></div>
+            </div>
+
+            <div id="urlInputSource" style="display: none;">
+                <input type="text" id="sourceListUrl" placeholder="https://bsky.app/profile/did:plc:.../lists/...">
+                <button id="loadListBtn" style="margin-top: 0.5rem; width: auto; padding: 0.5rem 1rem;">Load List</button>
+                <div id="loadedListInfo" style="margin-top: 0.5rem; font-size: 0.9rem; color: #666;"></div>
             </div>
         </div>
-        
+
         <div class="form-group">
-            <label>Target List (list to merge into):</label>
+            <label>Target List (list to merge into - must be one of your lists):</label>
             <div class="dropdown-container">
                 <div class="dropdown" id="targetListDropdown">
                     <span id="selectedTargetList">Select target list</span>
@@ -231,17 +250,71 @@
             async getListMembers(listUri) {
                 let members = [];
                 let cursor = null;
-                
+
                 do {
                     const params = new URLSearchParams({ list: listUri, limit: '100' });
                     if (cursor) params.append('cursor', cursor);
-                    
+
                     const data = await this.request(`app.bsky.graph.getList?${params}`);
                     members = members.concat(data.items);
                     cursor = data.cursor;
                 } while (cursor);
 
                 return members;
+            }
+
+            async getPublicListMembers(listUri) {
+                // Fetch list members from public API (no auth required)
+                let members = [];
+                let cursor = null;
+
+                do {
+                    const params = new URLSearchParams({ list: listUri, limit: '100' });
+                    if (cursor) params.append('cursor', cursor);
+
+                    const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.graph.getList?${params}`);
+
+                    if (!response.ok) {
+                        throw new Error(`Failed to fetch list: ${response.statusText}`);
+                    }
+
+                    const data = await response.json();
+                    members = members.concat(data.items);
+                    cursor = data.cursor;
+                } while (cursor);
+
+                return members;
+            }
+
+            parseListUrl(url) {
+                // Parse Bluesky list URL
+                // Format: https://bsky.app/profile/{did or handle}/lists/{rkey}
+                const match = url.match(/bsky\.app\/profile\/([^/]+)\/lists\/([^/?]+)/);
+                if (!match) {
+                    throw new Error('Invalid Bluesky list URL. Expected format: https://bsky.app/profile/{did or handle}/lists/{rkey}');
+                }
+
+                const actorIdentifier = match[1];
+                const rkey = match[2];
+
+                // Construct the list URI
+                // If actorIdentifier is a DID, use it directly
+                // If it's a handle, we'll need to resolve it
+                if (actorIdentifier.startsWith('did:')) {
+                    return `at://${actorIdentifier}/app.bsky.graph.list/${rkey}`;
+                } else {
+                    // Return the info needed to resolve the handle
+                    return { handle: actorIdentifier, rkey: rkey, needsResolve: true };
+                }
+            }
+
+            async resolveHandle(handle) {
+                const response = await fetch(`https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${handle}`);
+                if (!response.ok) {
+                    throw new Error(`Failed to resolve handle: ${response.statusText}`);
+                }
+                const data = await response.json();
+                return data.did;
             }
 
             async addMemberToList(listUri, memberDid) {
@@ -261,6 +334,7 @@
         const api = new BlueskyApi();
         let selectedSourceListUri = null;
         let selectedTargetListUri = null;
+        let loadedExternalListData = null;
 
         function showStatus(message, isError = false) {
             const statusDiv = document.getElementById('status');
@@ -306,6 +380,92 @@
         document.addEventListener('click', (e) => {
             if (!e.target.closest('.dropdown-container')) {
                 document.querySelectorAll('.dropdown-menu').forEach(menu => menu.classList.remove('show'));
+            }
+        });
+
+        // Handle source type radio button changes
+        document.querySelectorAll('input[name="sourceType"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const myListsSource = document.getElementById('myListsSource');
+                const urlInputSource = document.getElementById('urlInputSource');
+
+                if (e.target.value === 'myLists') {
+                    myListsSource.style.display = 'block';
+                    urlInputSource.style.display = 'none';
+                    selectedSourceListUri = null;
+                    loadedExternalListData = null;
+                    document.getElementById('loadedListInfo').textContent = '';
+                } else {
+                    myListsSource.style.display = 'none';
+                    urlInputSource.style.display = 'block';
+                    selectedSourceListUri = null;
+                    document.getElementById('selectedSourceList').textContent = 'Select source list';
+                }
+            });
+        });
+
+        // Handle Load List button
+        document.getElementById('loadListBtn').addEventListener('click', async (e) => {
+            e.preventDefault();
+            const btn = e.target;
+            const urlInput = document.getElementById('sourceListUrl');
+            const listUrl = urlInput.value.trim();
+            const infoDiv = document.getElementById('loadedListInfo');
+
+            if (!listUrl) {
+                showStatus('Please enter a list URL', true);
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Loading...';
+            infoDiv.textContent = '';
+
+            try {
+                // Parse the URL
+                const parseResult = api.parseListUrl(listUrl);
+                let listUri;
+
+                if (parseResult.needsResolve) {
+                    // Need to resolve handle to DID
+                    infoDiv.textContent = `Resolving handle ${parseResult.handle}...`;
+                    const did = await api.resolveHandle(parseResult.handle);
+                    listUri = `at://${did}/app.bsky.graph.list/${parseResult.rkey}`;
+                } else {
+                    listUri = parseResult;
+                }
+
+                // Fetch the list details
+                infoDiv.textContent = 'Loading list details...';
+                const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.graph.getList?list=${listUri}&limit=1`);
+                if (!response.ok) {
+                    throw new Error(`Failed to fetch list: ${response.statusText}`);
+                }
+
+                const listData = await response.json();
+
+                // Store the list data
+                loadedExternalListData = listData;
+                selectedSourceListUri = listUri;
+
+                // Display list info
+                const listName = listData.list?.name || 'Unknown List';
+                const memberCount = listData.list?.listItemCount || 0;
+                const creator = listData.list?.creator?.handle || 'Unknown';
+
+                infoDiv.innerHTML = `<strong>${listName}</strong> by @${creator} (${memberCount} members)`;
+                infoDiv.style.color = '#16a34a';
+
+                showStatus(`Successfully loaded list: ${listName}`, false);
+
+            } catch (error) {
+                infoDiv.textContent = '';
+                showStatus(error.message, true);
+                selectedSourceListUri = null;
+                loadedExternalListData = null;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Load List';
             }
         });
 
@@ -365,15 +525,33 @@
                 if (!selectedTargetListUri) throw new Error('Please select a target list');
                 if (selectedSourceListUri === selectedTargetListUri) throw new Error('Source and target lists must be different');
 
-                updateProgress('Loading source list members...');
-                const sourceMembers = await api.getListMembers(selectedSourceListUri);
-                
+                // Determine which method to use based on source type
+                const sourceType = document.querySelector('input[name="sourceType"]:checked').value;
+                let sourceMembers;
+
+                if (sourceType === 'urlInput') {
+                    // Use public API for external lists
+                    updateProgress('Loading source list members (public)...');
+                    sourceMembers = await api.getPublicListMembers(selectedSourceListUri);
+                } else {
+                    // Use authenticated API for user's own lists
+                    updateProgress('Loading source list members...');
+                    sourceMembers = await api.getListMembers(selectedSourceListUri);
+                }
+
                 updateProgress('Loading target list members...');
                 const targetMembers = await api.getListMembers(selectedTargetListUri);
-                
+
                 // Find members that are in source but not in target
                 const targetMemberDids = new Set(targetMembers.map(m => m.subject.did));
                 const newMembers = sourceMembers.filter(m => !targetMemberDids.has(m.subject.did));
+
+                if (newMembers.length === 0) {
+                    showStatus('No new members to add - all members from source list are already in the target list.', false);
+                    btn.disabled = false;
+                    btn.textContent = 'Merge Lists';
+                    return;
+                }
 
                 updateProgress(`Adding ${newMembers.length} new members to target list...`);
                 for (let i = 0; i < newMembers.length; i++) {
