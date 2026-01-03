@@ -13,39 +13,48 @@ A client-side encryption/decryption tool for securely sharing content via GitHub
 
 ## How to Use
 
-### Encrypting Content
+### Quick Start
 
-1. Visit [austegard.com/web-utilities/gist-encryption.html](https://austegard.com/web-utilities/gist-encryption.html)
-2. Optionally enter a salt (metadata that won't be encrypted, like version or description)
-3. Enter the text you want to encrypt
-4. Click "🔒 Encrypt"
-5. **Save the encryption key** - you won't be able to decrypt without it!
-6. Copy the encrypted text (JSON format)
-7. Create a new GitHub Gist and paste the encrypted text
+1. **Encrypt**: Visit [gist-encryption.html](https://austegard.com/web-utilities/gist-encryption.html)
+   - Enter your text
+   - Click "🔒 Encrypt"
+   - Copy the key (save it!)
+   - Copy the encrypted JSON
 
-### Sharing Encrypted Gists
+2. **Share**: Create a [GitHub Gist](https://gist.github.com)
+   - Paste the encrypted JSON as the gist content
+   - Copy the gist ID from the URL
 
-After creating a gist with encrypted content:
+3. **Generate Link**: Back in the encryption tool
+   - Paste the gist ID in step 3
+   - Click "Generate Share URL"
+   - Copy and share the URL
 
-1. Get your gist ID (e.g., `a1902d995b5c6157a9eaf69afa355723`)
-2. Share using the pv.html viewer with the key in the URL fragment:
-   ```
-   https://austegard.com/pv.html?a1902d995b5c6157a9eaf69afa355723#key=YOUR_ENCRYPTION_KEY
-   ```
+### How pv.html Decryption Works
 
-The key after the `#` is never sent to any server - it stays in the browser only.
+When someone visits a URL like:
+```
+https://austegard.com/pv.html?GIST_ID#key=YOUR_KEY
+```
 
-### Decrypting Content
+Here's what happens:
 
-**Option 1: Via pv.html (Automatic)**
-- Visit the pv.html URL with the key fragment (as shown above)
-- The content will be automatically decrypted and displayed
+1. **pv.html** fetches the gist content from GitHub
+2. It detects if the content is encrypted (JSON with `iv` and `data` fields)
+3. It extracts the decryption key from the URL fragment (`#key=...`)
+4. It decrypts the content using the Web Crypto API
+5. It displays the decrypted HTML/text
 
-**Option 2: Manual Decryption**
-1. Visit the gist-encryption tool
+**Important**: The key in the URL fragment (`#key=...`) is never sent to any server - it stays in the browser only. This is a fundamental feature of URL fragments.
+
+### Manual Decryption
+
+If you prefer not to use pv.html, you can manually decrypt:
+
+1. Open the gist-encryption tool
 2. Scroll to the "Decrypt" section
 3. Paste the encryption key
-4. Paste the encrypted text (JSON)
+4. Paste the encrypted JSON
 5. Click "🔓 Decrypt"
 
 ## Client-Side API
@@ -117,11 +126,12 @@ Encrypted content is stored as JSON:
 
 ```json
 {
-  "salt": "optional metadata (plaintext)",
   "iv": "base64-encoded initialization vector",
   "data": "base64-encoded encrypted content"
 }
 ```
+
+**What is the IV?** The Initialization Vector is a random 96-bit value that ensures the same plaintext encrypts to different ciphertext each time. It's safe to store publicly alongside the encrypted data.
 
 ### Security Considerations
 
@@ -162,6 +172,58 @@ Encrypted content is stored as JSON:
    The recipient clicks the link and sees the decrypted content automatically!
    ```
 
+## Self-Hosting
+
+You can easily copy this tool to your own repository or use it locally. This is recommended if you don't want to rely on austegard.com or want to customize the functionality.
+
+### Copy to Your Own GitHub Pages Repo
+
+1. **Copy the files**:
+   - `web-utilities/gist-encryption.html` (the encryption tool)
+   - `pv.html` (the gist viewer)
+   - `scripts/htmlpreview.js` (pv.html's JavaScript with decryption support)
+
+2. **Commit to your repo**:
+   ```bash
+   git add web-utilities/gist-encryption.html pv.html scripts/htmlpreview.js
+   git commit -m "Add gist encryption tools"
+   git push
+   ```
+
+3. **Update the URLs**: Edit `gist-encryption.html` and change line 541:
+   ```javascript
+   // Change this:
+   const url = `https://austegard.com/pv.html?${gistId}#key=${encodeURIComponent(key)}`;
+
+   // To this (replace YOUR_USERNAME):
+   const url = `https://YOUR_USERNAME.github.io/pv.html?${gistId}#key=${encodeURIComponent(key)}`;
+   ```
+
+4. **Deploy**: If you have GitHub Pages enabled, your tools will be available at:
+   - `https://YOUR_USERNAME.github.io/web-utilities/gist-encryption.html`
+   - `https://YOUR_USERNAME.github.io/pv.html`
+
+### Use Locally (No Server Required)
+
+1. **Download the files** from this repo
+2. **Open `gist-encryption.html` directly** in your browser (file:// works fine)
+3. **For decryption**:
+   - You can use the manual decrypt section in the tool
+   - Or set up a local server: `python -m http.server 8000`
+   - Then use `http://localhost:8000/pv.html?GIST_ID#key=...`
+
+**Note**: If using locally, you'll need to manually update the URL in step 3 of the encryption tool to point to your local pv.html.
+
+### Why Self-Host?
+
+- **Trust**: You control the code running in your browser
+- **Privacy**: No reliance on third-party domains
+- **Customization**: Modify the UI, add features, etc.
+- **Offline**: Works without internet (after initial download)
+- **Security**: Audit the code yourself to verify it's safe
+
+The files are completely standalone - no build process, no dependencies beyond a modern browser.
+
 ## Inspiration
 
 This tool was inspired by [agentexport](https://github.com/nicosuave/agentexport), which uses similar encryption techniques for sharing AI agent conversations.
@@ -169,9 +231,10 @@ This tool was inspired by [agentexport](https://github.com/nicosuave/agentexport
 ## Privacy
 
 - **All encryption/decryption happens in your browser**
-- No data is sent to austegard.com servers
+- No data is sent to any server (austegard.com or otherwise)
 - No analytics or tracking
 - Open source - inspect the code yourself
+- Self-hostable for maximum privacy
 
 ## Browser Support
 
