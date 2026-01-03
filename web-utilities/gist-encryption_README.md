@@ -8,7 +8,6 @@ A client-side encryption/decryption tool for securely sharing content via GitHub
 - **Client-Side Only**: All cryptographic operations happen in your browser
 - **Gist Integration**: Designed to work seamlessly with GitHub Gists and the pv.html viewer
 - **URL Fragment Keys**: Share decryption keys safely via URL fragments (never transmitted to servers)
-- **Optional Salt**: Include unencrypted metadata with your encrypted content
 - **Theme Support**: Light, dark, and auto themes
 
 ## How to Use
