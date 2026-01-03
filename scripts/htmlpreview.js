@@ -6,6 +6,16 @@
 	var previewForm = document.getElementById('previewform');
 	var url = location.search.substring(1);
 
+	// Extract decryption key from URL hash
+	var decryptionKey = null;
+	if (location.hash) {
+		var hashMatch = location.hash.match(/^#key=(.+)$/);
+		if (hashMatch) {
+			decryptionKey = decodeURIComponent(hashMatch[1]);
+			console.log('[Decryption] Key found in URL hash');
+		}
+	}
+
 	// Helper functions for loading/error display
 	var showLoading = function(message) {
 		var loadingDiv = document.getElementById('loading-display');
@@ -342,6 +352,44 @@
 		});
 	};
 
+	// Crypto utilities for decryption
+	var cryptoUtils = {
+		async importKey(keyString) {
+			var keyData = this.base64ToArrayBuffer(keyString);
+			return await window.crypto.subtle.importKey(
+				'raw',
+				keyData,
+				{ name: 'AES-GCM', length: 256 },
+				false,
+				['decrypt']
+			);
+		},
+
+		async decrypt(keyString, encryptedData) {
+			var key = await this.importKey(keyString);
+			var iv = this.base64ToArrayBuffer(encryptedData.iv);
+			var data = this.base64ToArrayBuffer(encryptedData.data);
+
+			var decrypted = await window.crypto.subtle.decrypt(
+				{ name: 'AES-GCM', iv: iv },
+				key,
+				data
+			);
+
+			var decoder = new TextDecoder();
+			return decoder.decode(decrypted);
+		},
+
+		base64ToArrayBuffer(base64) {
+			var binary = atob(base64);
+			var bytes = new Uint8Array(binary.length);
+			for (var i = 0; i < binary.length; i++) {
+				bytes[i] = binary.charCodeAt(i);
+			}
+			return bytes.buffer;
+		}
+	};
+
 	var loadHTML = function (data) {
 		if (data) {
 			data = data.replace(/<head([^>]*)>/i, '<head$1><base href="' + url + '">').replace(/<script(\s*src=["'][^"']*["'])?(\s*type=["'](text|application)\/javascript["'])?/gi, '<script type="text/htmlpreview"$1'); //Add <base> just after <head> and replace <script type="text/javascript"> with <script type="text/htmlpreview">
@@ -445,9 +493,47 @@
 			url = resolvedUrl;
 			showLoading('Fetching content...');
 			return fetchProxy(url, null, 0);
-		}).then(function(html) {
+		}).then(function(content) {
+			// Check if content is encrypted (JSON with iv and data fields)
+			var trimmedContent = content.trim();
+			if (trimmedContent.startsWith('{') && trimmedContent.includes('"iv"') && trimmedContent.includes('"data"')) {
+				console.log('[Decryption] Content appears to be encrypted');
+
+				try {
+					var encryptedData = JSON.parse(trimmedContent);
+
+					if (encryptedData.iv && encryptedData.data) {
+						if (!decryptionKey) {
+							throw new Error('This content is encrypted. Please provide a decryption key in the URL: #key=YOUR_KEY');
+						}
+
+						showLoading('Decrypting content...');
+						console.log('[Decryption] Attempting to decrypt with provided key');
+
+						return cryptoUtils.decrypt(decryptionKey, encryptedData).then(function(decrypted) {
+							console.log('[Decryption] Content decrypted successfully');
+							hideLoading();
+							loadHTML(decrypted);
+							// Save successful URL to localStorage
+							try {
+								localStorage.setItem('pv-last-url', location.search.substring(1));
+							} catch(e) {
+								console.warn('Could not save last URL:', e);
+							}
+						});
+					}
+				} catch(parseError) {
+					// If it's not valid JSON or decryption fails, treat it as regular content
+					if (parseError.message && parseError.message.includes('encrypted')) {
+						throw parseError;
+					}
+					console.log('[Decryption] Content is not encrypted, proceeding normally');
+				}
+			}
+
+			// Not encrypted or failed to detect encryption - proceed normally
 			hideLoading();
-			loadHTML(html);
+			loadHTML(content);
 			// Save successful URL to localStorage
 			try {
 				localStorage.setItem('pv-last-url', location.search.substring(1));
