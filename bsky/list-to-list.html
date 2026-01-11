@@ -199,139 +199,18 @@
         <button id="mergeBtn">Merge Lists</button>
     </div>
 
-    <script>
-        class BlueskyApi {
-            constructor() {
-                this.apiUri = 'https://bsky.social/xrpc/';
-                this.accountDid = null;
-                this.apiKey = null;
-            }
+    <script type="module">
+        import {
+            login,
+            getLists,
+            getListMembers,
+            addMemberToList,
+            resolveSkyLink,
+            getAuthAgent,
+            getPublicAgent,
+            initializeLib
+        } from './bsky-lib.js';
 
-            async login(handle, password) {
-                const response = await fetch(`${this.apiUri}com.atproto.server.createSession`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ identifier: handle, password })
-                });
-
-                if (!response.ok) {
-                    throw new Error('Login failed - check your credentials');
-                }
-
-                const data = await response.json();
-                this.accountDid = data.did;
-                this.apiKey = data.accessJwt;
-                return data;
-            }
-
-            async request(endpoint, method = 'GET', body = null) {
-                const headers = {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json'
-                };
-
-                const response = await fetch(`${this.apiUri}${endpoint}`, {
-                    method,
-                    headers,
-                    body: body ? JSON.stringify(body) : null
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Request failed: ${response.statusText}`);
-                }
-
-                return response.json();
-            }
-
-            async getUserLists() {
-                return this.request(`app.bsky.graph.getLists?actor=${this.accountDid}&limit=100`);
-            }
-
-            async getListMembers(listUri) {
-                let members = [];
-                let cursor = null;
-
-                do {
-                    const params = new URLSearchParams({ list: listUri, limit: '100' });
-                    if (cursor) params.append('cursor', cursor);
-
-                    const data = await this.request(`app.bsky.graph.getList?${params}`);
-                    members = members.concat(data.items);
-                    cursor = data.cursor;
-                } while (cursor);
-
-                return members;
-            }
-
-            async getPublicListMembers(listUri) {
-                // Fetch list members from public API (no auth required)
-                let members = [];
-                let cursor = null;
-
-                do {
-                    const params = new URLSearchParams({ list: listUri, limit: '100' });
-                    if (cursor) params.append('cursor', cursor);
-
-                    const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.graph.getList?${params}`);
-
-                    if (!response.ok) {
-                        throw new Error(`Failed to fetch list: ${response.statusText}`);
-                    }
-
-                    const data = await response.json();
-                    members = members.concat(data.items);
-                    cursor = data.cursor;
-                } while (cursor);
-
-                return members;
-            }
-
-            parseListUrl(url) {
-                // Parse Bluesky list URL
-                // Format: https://bsky.app/profile/{did or handle}/lists/{rkey}
-                const match = url.match(/bsky\.app\/profile\/([^/]+)\/lists\/([^/?]+)/);
-                if (!match) {
-                    throw new Error('Invalid Bluesky list URL. Expected format: https://bsky.app/profile/{did or handle}/lists/{rkey}');
-                }
-
-                const actorIdentifier = match[1];
-                const rkey = match[2];
-
-                // Construct the list URI
-                // If actorIdentifier is a DID, use it directly
-                // If it's a handle, we'll need to resolve it
-                if (actorIdentifier.startsWith('did:')) {
-                    return `at://${actorIdentifier}/app.bsky.graph.list/${rkey}`;
-                } else {
-                    // Return the info needed to resolve the handle
-                    return { handle: actorIdentifier, rkey: rkey, needsResolve: true };
-                }
-            }
-
-            async resolveHandle(handle) {
-                const response = await fetch(`https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${handle}`);
-                if (!response.ok) {
-                    throw new Error(`Failed to resolve handle: ${response.statusText}`);
-                }
-                const data = await response.json();
-                return data.did;
-            }
-
-            async addMemberToList(listUri, memberDid) {
-                return this.request('com.atproto.repo.createRecord', 'POST', {
-                    collection: 'app.bsky.graph.listitem',
-                    repo: this.accountDid,
-                    record: {
-                        subject: memberDid,
-                        list: listUri,
-                        createdAt: new Date().toISOString(),
-                        '$type': 'app.bsky.graph.listitem'
-                    }
-                });
-            }
-        }
-
-        const api = new BlueskyApi();
         let selectedSourceListUri = null;
         let selectedTargetListUri = null;
         let loadedExternalListData = null;
@@ -360,16 +239,56 @@
             document.getElementById(id).classList.toggle('show');
         }
 
-        function selectSourceList(uri, name) {
+        window.selectSourceList = function(uri, name) {
             document.getElementById('selectedSourceList').textContent = name;
             document.getElementById('sourceDropdownMenu').classList.remove('show');
             selectedSourceListUri = uri;
         }
 
-        function selectTargetList(uri, name) {
+        window.selectTargetList = function(uri, name) {
             document.getElementById('selectedTargetList').textContent = name;
             document.getElementById('targetDropdownMenu').classList.remove('show');
             selectedTargetListUri = uri;
+        }
+
+        function parseListUrl(url) {
+            // Parse Bluesky list URL
+            // Format: https://bsky.app/profile/{did or handle}/lists/{rkey}
+            const match = url.match(/bsky\.app\/profile\/([^/]+)\/lists\/([^/?]+)/);
+            if (!match) {
+                throw new Error('Invalid Bluesky list URL. Expected format: https://bsky.app/profile/{did or handle}/lists/{rkey}');
+            }
+
+            const actorIdentifier = match[1];
+            const rkey = match[2];
+
+            // Construct the list URI
+            // If actorIdentifier is a DID, use it directly
+            // If it's a handle, we'll need to resolve it
+            if (actorIdentifier.startsWith('did:')) {
+                return `at://${actorIdentifier}/app.bsky.graph.list/${rkey}`;
+            } else {
+                // Return the info needed to resolve the handle
+                return { handle: actorIdentifier, rkey: rkey, needsResolve: true };
+            }
+        }
+
+        async function resolveHandle(handle) {
+            // Use public agent for resolution if possible, or public API directly
+            // BskyAgent has resolveHandle
+            const agent = getPublicAgent() || getAuthAgent();
+            if (agent) {
+                const res = await agent.resolveHandle({ handle });
+                return res.data.did;
+            } else {
+                // Fallback to fetch if agent not ready (should generally be ready if lib initialized)
+                 const response = await fetch(`https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=${handle}`);
+                 if (!response.ok) {
+                     throw new Error(`Failed to resolve handle: ${response.statusText}`);
+                 }
+                 const data = await response.json();
+                 return data.did;
+            }
         }
 
         // Setup event listeners
@@ -382,6 +301,9 @@
                 document.querySelectorAll('.dropdown-menu').forEach(menu => menu.classList.remove('show'));
             }
         });
+
+        // Initialize library
+        initializeLib();
 
         // Handle source type radio button changes
         document.querySelectorAll('input[name="sourceType"]').forEach(radio => {
@@ -409,7 +331,7 @@
             e.preventDefault();
             const btn = e.target;
             const urlInput = document.getElementById('sourceListUrl');
-            const listUrl = urlInput.value.trim();
+            let listUrl = urlInput.value.trim();
             const infoDiv = document.getElementById('loadedListInfo');
 
             if (!listUrl) {
@@ -422,27 +344,30 @@
             infoDiv.textContent = '';
 
             try {
+                // Resolve short link if needed
+                listUrl = await resolveSkyLink(listUrl);
+
                 // Parse the URL
-                const parseResult = api.parseListUrl(listUrl);
+                const parseResult = parseListUrl(listUrl);
                 let listUri;
 
                 if (parseResult.needsResolve) {
                     // Need to resolve handle to DID
                     infoDiv.textContent = `Resolving handle ${parseResult.handle}...`;
-                    const did = await api.resolveHandle(parseResult.handle);
+                    const did = await resolveHandle(parseResult.handle);
                     listUri = `at://${did}/app.bsky.graph.list/${parseResult.rkey}`;
                 } else {
                     listUri = parseResult;
                 }
 
                 // Fetch the list details
+                // Use public agent if available
+                const agent = getPublicAgent() || getAuthAgent();
                 infoDiv.textContent = 'Loading list details...';
-                const response = await fetch(`https://public.api.bsky.app/xrpc/app.bsky.graph.getList?list=${listUri}&limit=1`);
-                if (!response.ok) {
-                    throw new Error(`Failed to fetch list: ${response.statusText}`);
-                }
 
-                const listData = await response.json();
+                // Using agent
+                const response = await agent.app.bsky.graph.getList({ list: listUri, limit: 1 });
+                const listData = response.data;
 
                 // Store the list data
                 loadedExternalListData = listData;
@@ -482,12 +407,12 @@
                     .replace('bsky.app', 'bsky.social');
                 const password = document.getElementById('apppassword').value;
 
-                await api.login(handle, password);
+                await login(handle, password);
                 showStatus('Login successful!');
 
                 // Load user's lists
-                const listsData = await api.getUserLists();
-                const lists = listsData.lists;
+                const listsData = await getLists(getAuthAgent().session.did);
+                const lists = listsData.data.lists;
 
                 // Populate both dropdowns
                 const sourceDropdown = document.getElementById('sourceDropdownMenu');
@@ -529,18 +454,11 @@
                 const sourceType = document.querySelector('input[name="sourceType"]:checked').value;
                 let sourceMembers;
 
-                if (sourceType === 'urlInput') {
-                    // Use public API for external lists
-                    updateProgress('Loading source list members (public)...');
-                    sourceMembers = await api.getPublicListMembers(selectedSourceListUri);
-                } else {
-                    // Use authenticated API for user's own lists
-                    updateProgress('Loading source list members...');
-                    sourceMembers = await api.getListMembers(selectedSourceListUri);
-                }
+                updateProgress('Loading source list members...');
+                sourceMembers = await getListMembers(selectedSourceListUri);
 
                 updateProgress('Loading target list members...');
-                const targetMembers = await api.getListMembers(selectedTargetListUri);
+                const targetMembers = await getListMembers(selectedTargetListUri);
 
                 // Find members that are in source but not in target
                 const targetMemberDids = new Set(targetMembers.map(m => m.subject.did));
@@ -555,12 +473,12 @@
 
                 updateProgress(`Adding ${newMembers.length} new members to target list...`);
                 for (let i = 0; i < newMembers.length; i++) {
-                    await api.addMemberToList(selectedTargetListUri, newMembers[i].subject.did);
+                    await addMemberToList(selectedTargetListUri, newMembers[i].subject.did);
                     updateProgress(`Added ${i + 1} of ${newMembers.length} members...`);
                 }
 
                 const rkey = selectedTargetListUri.split('/').pop();
-                const listUrl = `https://bsky.app/profile/${api.accountDid}/lists/${rkey}`;
+                const listUrl = `https://bsky.app/profile/${getAuthAgent().session.did}/lists/${rkey}`;
 
                 // Clear any previous status messages
                 const statusDiv = document.getElementById('status');
