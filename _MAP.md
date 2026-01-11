@@ -1,5 +1,5 @@
 # oaustegard.github.io/
-*Files: 6 | Subdirectories: 10*
+*Files: 6 | Subdirectories: 12*
 
 ## Subdirectories
 
@@ -9,8 +9,10 @@
 - [found/](./found/_MAP.md)
 - [fun-and-games/](./fun-and-games/_MAP.md)
 - [images/](./images/_MAP.md)
+- [playwright-report/](./playwright-report/_MAP.md)
 - [scripts/](./scripts/_MAP.md)
 - [styles/](./styles/_MAP.md)
+- [test-results/](./test-results/_MAP.md)
 - [tests/](./tests/_MAP.md)
 - [web-utilities/](./web-utilities/_MAP.md)
 

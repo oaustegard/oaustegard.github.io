@@ -1,11 +1,12 @@
 # web-utilities/
-*Files: 10*
+*Files: 11*
 
 ## Files
 
 - **aws-ping.html** — exports: `initializeMap, addDatacenters, selectRegion, clearSelection, showTooltip, updateRegionList, updateStats`
-- **bookmarklet-installer.html** — exports: `updateURLState, getBookmarkletFromURL, fetchBookmarklets, updateSourceLinks, handleBookmarkletSelect, createBookmarkletUrl, updateBookmarklet`
+- **bookmarklet-installer.html** — exports (25): `extractMetadata, hasMetadata, validateMetadata, injectMetadata, fetchBookmarklets, renderMetadataInfo, populateDropdown, populateDomainFilter`...
 - **csv-to-xslx.html** — exports: `handleCSVData, readFile, handlePaste, convertCSVToExcel, showDropOverlay, hideDropOverlay`
+- **gist-encryption.html** — exports: `extractGistId`
 - **index.html**
 - **onenote.html** — exports: `getFullQueryString, getOneNoteLink, updateLinks, handleFormSubmit`
 - **pdf-compressor.html** — exports: `handleFile, cleanupPDFText, resetUI, format` — imports: `gs.mjs`
