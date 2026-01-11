@@ -57,7 +57,11 @@ python .claude/skills/mapping-codebases/scripts/codemap.py .
 git add '*/_MAP.md'
 ```
 
-**Best practice**: Regenerate maps just before committing code changes that affect module interfaces.
+#### Update Code Maps workflow (GitHub Actions)
+
+You can run the **Update Code Maps** workflow from GitHub Actions. It lives in `.github/workflows/update-code-maps.yml` and currently runs via `workflow_dispatch` (manual).
+
+**Best practice**: Regenerate maps just before committing code changes that affect module interfaces. You can also use the Update Code Maps workflow after changes that alter imports/exports, in addition to the local `codemap.py` command.
 
 ## Dev Environment Tips
 
