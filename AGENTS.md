@@ -40,6 +40,11 @@ This repository uses **code maps** (`_MAP.md` files) to provide navigable overvi
 
 **IMPORTANT**: When you modify code that affects exports or imports, you MUST regenerate the maps.
 
+#### GitHub Action: Update Code Maps
+
+- Trigger the "Update Code Maps" workflow from the Actions tab to regenerate maps and auto-commit updates.
+- The workflow also runs automatically on pushes to `main`.
+
 #### When to regenerate:
 - ✅ After adding/removing exported functions, classes, or variables
 - ✅ After adding/removing import statements
