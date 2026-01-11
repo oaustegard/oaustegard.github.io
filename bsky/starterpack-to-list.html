@@ -179,7 +179,7 @@
     <div id="packSection" class="input-section">
         <h2>Step 2: Convert Pack to List</h2>
         <div class="form-group">
-            <label>Starter Pack URL:</label>
+            <label>Starter Pack URL (or go.bsky.app short link):</label>
             <input type="text" id="packurl" placeholder="https://bsky.app/starter-pack/user.bsky.social/3l6stg6xfrc23" required>
         </div>
         
@@ -202,111 +202,20 @@
         <button id="convertBtn">Convert Pack to List</button>
     </div>
 
-    <script>
-        class BlueskyApi {
-            constructor() {
-                this.apiUri = 'https://bsky.social/xrpc/';
-                this.accountDid = null;
-                this.apiKey = null;
-            }
+    <script type="module">
+        import {
+            login,
+            getLists,
+            getStarterPack,
+            getListMembers,
+            createList,
+            addMemberToList,
+            resolveSkyLink,
+            getAuthAgent,
+            initializeLib,
+            getActorStarterPacks
+        } from './bsky-lib.js';
 
-            async login(handle, password) {
-                const response = await fetch(`${this.apiUri}com.atproto.server.createSession`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ identifier: handle, password })
-                });
-
-                if (!response.ok) {
-                    throw new Error('Login failed - check your credentials');
-                }
-
-                const data = await response.json();
-                this.accountDid = data.did;
-                this.apiKey = data.accessJwt;
-                return data;
-            }
-
-            async request(endpoint, method = 'GET', body = null) {
-                const headers = {
-                    'Authorization': `Bearer ${this.apiKey}`,
-                    'Content-Type': 'application/json'
-                };
-
-                const response = await fetch(`${this.apiUri}${endpoint}`, {
-                    method,
-                    headers,
-                    body: body ? JSON.stringify(body) : null
-                });
-
-                if (!response.ok) {
-                    throw new Error(`Request failed: ${response.statusText}`);
-                }
-
-                return response.json();
-            }
-
-            async getUserLists() {
-                return this.request(`app.bsky.graph.getLists?actor=${this.accountDid}&limit=100`);
-            }
-
-            async getStarterPackInfo(userHandle, packId) {
-                const data = await this.request(`app.bsky.graph.getActorStarterPacks?actor=${userHandle}`);
-                const pack = data.starterPacks.find(p => {
-                    const parts = p.uri.split('/');
-                    return parts[parts.length - 1] === packId;
-                });
-
-                if (!pack) throw new Error('Starter Pack not found');
-
-                const packData = await this.request(`app.bsky.graph.getStarterPack?starterPack=${pack.uri}`);
-                return packData.starterPack;
-            }
-
-            async createNewList(name) {
-                return this.request('com.atproto.repo.createRecord', 'POST', {
-                    collection: 'app.bsky.graph.list',
-                    repo: this.accountDid,
-                    record: {
-                        name,
-                        purpose: 'app.bsky.graph.defs#curatelist',
-                        createdAt: new Date().toISOString(),
-                        '$type': 'app.bsky.graph.list'
-                    }
-                });
-            }
-
-            async getListMembers(listUri) {
-                let members = [];
-                let cursor = null;
-                
-                do {
-                    const params = new URLSearchParams({ list: listUri, limit: '100' });
-                    if (cursor) params.append('cursor', cursor);
-                    
-                    const data = await this.request(`app.bsky.graph.getList?${params}`);
-                    members = members.concat(data.items);
-                    cursor = data.cursor;
-                } while (cursor);
-
-                return members;
-            }
-
-            async addMemberToList(listUri, memberDid) {
-                return this.request('com.atproto.repo.createRecord', 'POST', {
-                    collection: 'app.bsky.graph.listitem',
-                    repo: this.accountDid,
-                    record: {
-                        subject: memberDid,
-                        list: listUri,
-                        createdAt: new Date().toISOString(),
-                        '$type': 'app.bsky.graph.listitem'
-                    }
-                });
-            }
-        }
-
-        const api = new BlueskyApi();
         let selectedListUri = null;
         let listCreationMode = false;
 
@@ -334,7 +243,7 @@
             document.getElementById('dropdownMenu').classList.toggle('show');
         }
 
-        function selectList(uri, name) {
+        window.selectList = function(uri, name) {
             document.getElementById('selectedList').textContent = name;
             document.getElementById('dropdownMenu').classList.remove('show');
             document.getElementById('newListInput').classList.remove('show');
@@ -342,7 +251,7 @@
             listCreationMode = false;
         }
 
-        function showNewListInput() {
+        window.showNewListInput = function() {
             document.getElementById('selectedList').textContent = 'Create New List';
             document.getElementById('newListInput').classList.add('show');
             document.getElementById('dropdownMenu').classList.remove('show');
@@ -360,6 +269,9 @@
             }
         });
 
+        // Initialize library
+        initializeLib();
+
         // Login handling
         document.getElementById('loginBtn').addEventListener('click', async (e) => {
             e.preventDefault();
@@ -373,13 +285,13 @@
                     .replace('bsky.app', 'bsky.social');
                 const password = document.getElementById('apppassword').value;
 
-                await api.login(handle, password);
+                await login(handle, password);
                 showStatus('Login successful!');
 
                 // Load user's lists
-                const listsData = await api.getUserLists();
+                const listsData = await getLists(getAuthAgent().session.did);
                 const dropdownMenu = document.getElementById('dropdownMenu');
-                dropdownMenu.innerHTML = listsData.lists.map(list => `
+                dropdownMenu.innerHTML = listsData.data.lists.map(list => `
                     <div class="dropdown-item" onclick="selectList('${list.uri}', '${list.name}')">
                         ${list.name}
                     </div>
@@ -406,16 +318,44 @@
             btn.textContent = 'Converting...';
 
             try {
-                const packUrl = document.getElementById('packurl').value.trim();
+                let packUrl = document.getElementById('packurl').value.trim();
+
+                // Resolve short link if needed
+                updateProgress('Resolving URL...');
+                packUrl = await resolveSkyLink(packUrl);
                 
                 // Parse pack URL
                 const packParts = packUrl.split('/');
-                const userHandle = packParts[packParts.length - 2];
                 const packId = packParts[packParts.length - 1];
+                // Handle is index 4 if format is https://bsky.app/starter-pack/{handle}/{id}
+                const userHandle = packParts[packParts.length - 2];
 
-                updateProgress('Loading starter pack members...');
-                const packInfo = await api.getStarterPackInfo(userHandle, packId);
-                const members = await api.getListMembers(packInfo.list.uri);
+                // We need the pack URI. We can fetch it via getActorStarterPacks or if we know the DID.
+                // The easier way given the lib structure is to implement a specific fetch or just use raw agent call.
+                // But wait, the original code used getActorStarterPacks.
+
+                // Let's rely on the pack URI construction if we can, but starter packs are "app.bsky.graph.starterpack".
+                // We need to resolve the handle to DID first to construct the URI, OR use getActorStarterPacks.
+
+                // Let's use getActorStarterPacks like the original code did, but using the lib.
+                // We need to import getActorStarterPacks from lib. I should add it to lib.
+
+                updateProgress('Loading starter pack info...');
+
+                // Since I didn't add getActorStarterPacks to lib yet, I will add it now or use the agent directly.
+                // I'll assume I can access the agent.
+                const agent = getAuthAgent();
+
+                const starterPacks = await getActorStarterPacks(userHandle);
+                const pack = starterPacks.find(p => {
+                    const parts = p.uri.split('/');
+                    return parts[parts.length - 1] === packId;
+                });
+
+                if (!pack) throw new Error('Starter Pack not found');
+
+                const packData = await getStarterPack(pack.uri);
+                const members = await getListMembers(packData.list.uri);
 
                 let targetListUri;
                 let listUrl;
@@ -423,21 +363,21 @@
                     const newListName = document.getElementById('newListName').value.trim();
                     if (!newListName) throw new Error('Please enter a list name');
                     updateProgress('Creating new list...');
-                    const newList = await api.createNewList(newListName);
-                    targetListUri = newList.uri;
+                    const newList = await createList(newListName);
+                    targetListUri = newList.data.uri;
                     // Extract rkey from URI for URL construction
-                    const rkey = newList.uri.split('/').pop();
-                    listUrl = `https://bsky.app/profile/${api.accountDid}/lists/${rkey}`;
+                    const rkey = newList.data.uri.split('/').pop();
+                    listUrl = `https://bsky.app/profile/${agent.session.did}/lists/${rkey}`;
                 } else {
                     if (!selectedListUri) throw new Error('Please select a list or create a new one');
-targetListUri = selectedListUri;
+                    targetListUri = selectedListUri;
                     const rkey = selectedListUri.split('/').pop();
-                    listUrl = `https://bsky.app/profile/${api.accountDid}/lists/${rkey}`;
+                    listUrl = `https://bsky.app/profile/${agent.session.did}/lists/${rkey}`;
                 }
 
                 updateProgress(`Adding ${members.length} members to list...`);
                 for (let i = 0; i < members.length; i++) {
-                    await api.addMemberToList(targetListUri, members[i].subject.did);
+                    await addMemberToList(targetListUri, members[i].subject.did);
                     updateProgress(`Added ${i + 1} of ${members.length} members...`);
                 }
 

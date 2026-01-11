@@ -1,16 +1,19 @@
 /* bsky-core.js - Core module for Bluesky API interactions and common functionality */
 
-/* Import BskyAgent from the API module */
-let BskyAgent;
+import {
+    initializeLib,
+    login,
+    logout,
+    checkStoredSession,
+    getPublicAgent,
+    getAuthAgent,
+    getProfile
+} from './bsky-lib.js';
 
 /* Global state for consistently anonymizing users across all operations */
 const userMap = new Map();
 let userCounter = 0;
 let postCounter = 0;
-
-/* Agent instances */
-let publicAgent = null;  /* For unauthenticated public API access */
-let authAgent = null;    /* For authenticated API calls */
 
 /* Debug logging capabilities */
 const debugLog = {
@@ -28,13 +31,8 @@ let elements = {};
 /* Public API functions */
 export async function initializeBskyCore() {
     try {
-        const api = await import('https://esm.sh/@atproto/api@0.18.3');
-        BskyAgent = api.BskyAgent;
-        
-        /* Initialize the public agent */
-        publicAgent = new BskyAgent({
-            service: 'https://public.api.bsky.app'
-        });
+        const success = await initializeLib();
+        if (!success) throw new Error('Failed to load Bsky Lib');
         
         /* Cache DOM elements */
         cacheElements();
@@ -43,7 +41,12 @@ export async function initializeBskyCore() {
         initializeTabs();
         
         /* Check for stored auth session */
-        await checkStoredSession();
+        const session = await checkStoredSession();
+        if (session) {
+            /* Fetch profile to verify auth works */
+            const profile = await getProfile(session.did);
+            showAuthSuccess(profile.data);
+        }
         
         /* Set up event handlers */
         setupEventHandlers();
@@ -221,16 +224,7 @@ export function updateQueryParam(param, value) {
 
 /* Authentication functions */
 export function isAuthenticated() {
-    return authAgent !== null;
-}
-
-/* Expose agent instances through getter functions */
-export function getPublicAgent() {
-    return publicAgent;
-}
-
-export function getAuthAgent() {
-    return authAgent;
+    return getAuthAgent() !== null;
 }
 
 /* Display output with error handling */
@@ -323,40 +317,6 @@ function initializeTabs() {
     });
 }
 
-async function checkStoredSession() {
-    try {
-        const storedSession = localStorage.getItem('bsky_session');
-        if (storedSession) {
-            const sessionData = JSON.parse(storedSession);
-            
-            /* Create new authenticated agent */
-            const newAuthAgent = new BskyAgent({
-                service: 'https://bsky.social'
-            });
-            
-            /* Resume session */
-            await newAuthAgent.resumeSession(sessionData);
-            
-            /* Fetch profile to verify auth works */
-            const profile = await newAuthAgent.getProfile({
-                actor: sessionData.did
-            });
-            
-            /* Set authenticated agent */
-            authAgent = newAuthAgent;
-            
-            /* Show authenticated state */
-            showAuthSuccess(profile.data);
-        }
-    } catch (err) {
-        debugLog.add('session_resume_error', err);
-        console.error('Failed to resume session:', err);
-        
-        /* Clear any stored session data */
-        localStorage.removeItem('bsky_session');
-    }
-}
-
 function showAuthSuccess(profile) {
     /* Hide auth section */
     elements.searchAuthSection.style.display = 'none';
@@ -418,43 +378,13 @@ function setupEventHandlers() {
         elements.authError.style.display = 'none';
         
         try {
-            /* Create new authenticated agent */
-            const newAuthAgent = new BskyAgent({
-                service: 'https://bsky.social'  /* Use main API for authentication */
-            });
+            /* Attempt to login using shared lib */
+            const loginData = await login(handle, password);
             
-            /* Attempt to login */
-            const loginResult = await newAuthAgent.login({
-                identifier: handle,
-                password: password
-            });
-            
-            debugLog.add('login_result', loginResult);
-            
-            if (!loginResult.success) {
-                throw new Error('Authentication failed');
-            }
-            
-            /* Store authentication data */
-            authAgent = newAuthAgent;
-            const sessionData = {
-                did: loginResult.data.did,
-                handle: loginResult.data.handle,
-                accessJwt: loginResult.data.accessJwt,
-                refreshJwt: loginResult.data.refreshJwt,
-            };
-            
-            /* Save session data to localStorage */
-            try {
-                localStorage.setItem('bsky_session', JSON.stringify(sessionData));
-            } catch (err) {
-                console.error('Failed to store session:', err);
-            }
+            debugLog.add('login_result', loginData);
             
             /* Fetch and display profile */
-            const profile = await authAgent.getProfile({
-                actor: loginResult.data.did
-            });
+            const profile = await getProfile(loginData.did);
             
             debugLog.add('profile', profile);
             
@@ -468,7 +398,6 @@ function setupEventHandlers() {
         } catch (err) {
             debugLog.add('auth_error', err);
             showAuthError(`Authentication failed: ${err.message}`);
-            authAgent = null;
         } finally {
             elements.authButton.disabled = false;
             elements.authButton.innerHTML = 'Authenticate';
@@ -478,8 +407,7 @@ function setupEventHandlers() {
     /* Logout Button Handler */
     elements.logoutButton.addEventListener('click', () => {
         /* Clear auth session */
-        authAgent = null;
-        localStorage.removeItem('bsky_session');
+        logout();
         
         /* Reset UI */
         elements.searchAuthSection.style.display = 'block';
@@ -575,4 +503,4 @@ function loadStateFromUrl() {
 }
 
 /* Export debug object for development use */
-export { debugLog };
+export { debugLog, getPublicAgent, getAuthAgent };

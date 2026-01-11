@@ -1,0 +1,49 @@
+name: Update Code Maps
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update-codemaps:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: "latest"
+          enable-cache: true
+          cache-dependency-glob: .github/workflows/update-codemaps.yml
+
+      - name: Install codemap dependencies
+        run: |
+          uv pip install --system tree_sitter==0.20.1 tree_sitter_languages==1.10.2
+
+      - name: Generate code maps
+        run: |
+          python .claude/skills/mapping-codebases/scripts/codemap.py .
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if git diff --quiet -- '*_MAP.md'; then
+            echo "No code map changes to commit"
+          else
+            git add -- '*_MAP.md'
+            git commit -m "chore: Update code maps"
+            git push
+          fi
