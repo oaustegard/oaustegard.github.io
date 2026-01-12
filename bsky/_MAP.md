@@ -16,4 +16,4 @@
 - **list-to-list.html** — exports: `showStatus, showSection, updateProgress, toggleDropdown, parseListUrl, resolveHandle` — imports: `bsky-lib.js`
 - **processor.html** — imports (7): `bsky-core.js, bsky-thread.js, bsky-quote.js, bsky-search.js, bsky-core.js`...
 - **report.html** — imports: `BlueReport.js`
-- **starterpack-to-list.html** — exports: `showStatus, showSection, updateProgress, toggleDropdown` — imports: `bsky-lib.js`
+- **starterpack-to-list.html** — exports: `followRedirectUrl, findStarterPackFromUrl, showStatus, showSection, updateProgress, toggleDropdown` — imports: `bsky-lib.js`
