@@ -218,6 +218,47 @@
 
         let selectedListUri = null;
         let listCreationMode = false;
+        const MAX_STARTERPACK_REDIRECTS = 2;
+
+        async function followRedirectUrl(url) {
+            if (!url) return url;
+            try {
+                const response = await fetch(url, { method: 'GET', redirect: 'follow' });
+                return response.url || url;
+            } catch (error) {
+                console.warn('Failed to follow redirect for starter pack URL:', error);
+                return url;
+            }
+        }
+
+        async function findStarterPackFromUrl(initialUrl) {
+            let packUrl = initialUrl;
+
+            for (let attempt = 0; attempt < MAX_STARTERPACK_REDIRECTS; attempt += 1) {
+                const packParts = packUrl.split('/');
+                const packId = packParts[packParts.length - 1];
+                const userHandle = packParts[packParts.length - 2];
+
+                const starterPacks = await getActorStarterPacks(userHandle);
+                const pack = starterPacks.find(p => {
+                    const parts = p.uri.split('/');
+                    return parts[parts.length - 1] === packId;
+                });
+
+                if (pack) {
+                    return { pack, packUrl };
+                }
+
+                const redirectedUrl = await followRedirectUrl(packUrl);
+                if (!redirectedUrl || redirectedUrl === packUrl) {
+                    break;
+                }
+
+                packUrl = redirectedUrl;
+            }
+
+            throw new Error('Starter Pack not found');
+        }
 
         function showStatus(message, isError = false) {
             const statusDiv = document.getElementById('status');
@@ -323,36 +364,12 @@
                 // Resolve short link if needed
                 updateProgress('Resolving URL...');
                 packUrl = await resolveSkyLink(packUrl);
-                
-                // Parse pack URL
-                const packParts = packUrl.split('/');
-                const packId = packParts[packParts.length - 1];
-                // Handle is index 4 if format is https://bsky.app/starter-pack/{handle}/{id}
-                const userHandle = packParts[packParts.length - 2];
-
-                // We need the pack URI. We can fetch it via getActorStarterPacks or if we know the DID.
-                // The easier way given the lib structure is to implement a specific fetch or just use raw agent call.
-                // But wait, the original code used getActorStarterPacks.
-
-                // Let's rely on the pack URI construction if we can, but starter packs are "app.bsky.graph.starterpack".
-                // We need to resolve the handle to DID first to construct the URI, OR use getActorStarterPacks.
-
-                // Let's use getActorStarterPacks like the original code did, but using the lib.
-                // We need to import getActorStarterPacks from lib. I should add it to lib.
 
                 updateProgress('Loading starter pack info...');
 
-                // Since I didn't add getActorStarterPacks to lib yet, I will add it now or use the agent directly.
-                // I'll assume I can access the agent.
                 const agent = getAuthAgent();
-
-                const starterPacks = await getActorStarterPacks(userHandle);
-                const pack = starterPacks.find(p => {
-                    const parts = p.uri.split('/');
-                    return parts[parts.length - 1] === packId;
-                });
-
-                if (!pack) throw new Error('Starter Pack not found');
+                const { pack, packUrl: resolvedPackUrl } = await findStarterPackFromUrl(packUrl);
+                packUrl = resolvedPackUrl;
 
                 const packData = await getStarterPack(pack.uri);
                 const members = await getListMembers(packData.list.uri);

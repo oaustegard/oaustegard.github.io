@@ -115,7 +115,7 @@ export async function resolveSkyLink(url) {
     // Check if it's a go.bsky.app link
     if (url.includes('go.bsky.app/')) {
         try {
-            const response = await fetch(url, { method: 'HEAD', redirect: 'follow' });
+            const response = await fetch(url, { method: 'GET', redirect: 'follow' });
             return response.url;
         } catch (err) {
             console.warn('Failed to resolve go.bsky.app link:', err);
