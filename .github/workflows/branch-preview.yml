@@ -1,0 +1,145 @@
+# Build and deploy preview sites for non-main branches
+name: Branch Preview
+
+on:
+  push:
+    branches-ignore:
+      - main
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+  # Allow manual trigger
+  workflow_dispatch:
+
+# Cancel in-progress runs for the same branch
+concurrency:
+  group: preview-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-preview:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: true
+
+      - name: Cache Jekyll
+        uses: actions/cache@v4
+        with:
+          path: |
+            .jekyll-cache
+            _site
+          key: ${{ runner.os }}-jekyll-preview-${{ hashFiles('**/*.md', '**/*.html', '_config.yml') }}
+
+      - name: Generate preview URL
+        id: preview-url
+        run: |
+          # Create a URL-safe branch name
+          BRANCH_NAME="${GITHUB_HEAD_REF:-${GITHUB_REF#refs/heads/}}"
+          SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-30)
+          PREVIEW_DOMAIN="${SAFE_BRANCH}-austegard-preview.surge.sh"
+          echo "domain=$PREVIEW_DOMAIN" >> $GITHUB_OUTPUT
+          echo "url=https://$PREVIEW_DOMAIN" >> $GITHUB_OUTPUT
+          echo "branch=$BRANCH_NAME" >> $GITHUB_OUTPUT
+
+      - name: Build with Jekyll
+        run: bundle exec jekyll build --baseurl ""
+        env:
+          JEKYLL_ENV: preview
+          JEKYLL_BASEURL: ""
+
+      - name: Install Surge
+        run: npm install -g surge
+
+      - name: Deploy to Surge
+        run: surge --project ./_site --domain ${{ steps.preview-url.outputs.domain }}
+        env:
+          SURGE_LOGIN: ${{ secrets.SURGE_LOGIN }}
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const previewUrl = '${{ steps.preview-url.outputs.url }}';
+            const branchName = '${{ steps.preview-url.outputs.branch }}';
+
+            // Find existing preview comment
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const botComment = comments.find(comment =>
+              comment.user.type === 'Bot' &&
+              comment.body.includes('<!-- branch-preview -->')
+            );
+
+            const body = `<!-- branch-preview -->
+            ## 🔍 Preview Deployment
+
+            | Branch | Preview URL | Status |
+            |--------|-------------|--------|
+            | \`${branchName}\` | ${previewUrl} | ✅ Ready |
+
+            > Preview updates automatically on each push to this branch.
+            `;
+
+            if (botComment) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: botComment.id,
+                body: body
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body
+              });
+            }
+
+      - name: Output preview URL
+        run: |
+          echo "## 🔍 Preview Deployed!" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** \`${{ steps.preview-url.outputs.branch }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Preview URL:** ${{ steps.preview-url.outputs.url }}" >> $GITHUB_STEP_SUMMARY
+
+  # Optional: Clean up preview when PR is closed
+  cleanup-preview:
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request' && github.event.action == 'closed'
+    steps:
+      - name: Generate preview URL
+        id: preview-url
+        run: |
+          BRANCH_NAME="${GITHUB_HEAD_REF}"
+          SAFE_BRANCH=$(echo "$BRANCH_NAME" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]' | cut -c1-30)
+          PREVIEW_DOMAIN="${SAFE_BRANCH}-austegard-preview.surge.sh"
+          echo "domain=$PREVIEW_DOMAIN" >> $GITHUB_OUTPUT
+
+      - name: Install Surge
+        run: npm install -g surge
+
+      - name: Teardown preview
+        run: surge teardown ${{ steps.preview-url.outputs.domain }}
+        env:
+          SURGE_LOGIN: ${{ secrets.SURGE_LOGIN }}
+          SURGE_TOKEN: ${{ secrets.SURGE_TOKEN }}
+        continue-on-error: true

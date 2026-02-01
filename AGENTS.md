@@ -72,7 +72,7 @@ You can run the **Update Code Maps** workflow from GitHub Actions. It lives in `
 
 This is a Jekyll-based static site published to GitHub Pages.
 
-- **Ruby Version**: The project uses **Ruby 3.1**, as specified in the `.github/workflows/main.yml` file.
+- **Ruby Version**: The project uses **Ruby 3.3**, as specified in the `.github/workflows/main.yml` file.
 - **Setup**: To set up the development environment, run the following commands:
   ```bash
   # Install the correct Ruby version (if not already installed)
@@ -104,6 +104,37 @@ This is a Jekyll-based static site published to GitHub Pages.
   - Run UI mode: `npm run test:ui`
 - **Manual Verification**: Testing is also performed by running the site locally with `bundle exec jekyll serve` and manually verifying that pages render correctly and tools are functional.
 - **CI/CD**: The `.github/workflows/main.yml` workflow builds the site but does not run automated tests.
+
+## Branch Preview Builds
+
+The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches.
+
+### How It Works
+
+1. **Automatic triggers**: Deploys on pushes to any branch except `main`, and on pull requests
+2. **Unique URLs**: Each branch gets a preview at `https://<branch-name>-austegard-preview.surge.sh`
+3. **PR comments**: For pull requests, a comment is posted with the preview URL
+4. **Auto-cleanup**: Preview sites are torn down when PRs are closed
+
+### Setup Requirements
+
+To enable branch previews, add these secrets to the repository:
+
+1. **Create a Surge.sh account** (free): https://surge.sh
+2. **Get your token**: Run `npx surge token` locally after logging in
+3. **Add repository secrets** (Settings → Secrets and variables → Actions):
+   - `SURGE_LOGIN`: Your Surge.sh email
+   - `SURGE_TOKEN`: Your Surge.sh token
+
+### Manual Trigger
+
+You can also manually trigger the workflow from the Actions tab → "Branch Preview" → Run workflow.
+
+### Preview URL Format
+
+Branch names are sanitized for URLs:
+- `feature/add-login` → `https://feature-add-login-austegard-preview.surge.sh`
+- `claude/my-feature-ABC123` → `https://claude-my-feature-abc123-austegard-preview.surge.sh`
 
 ## Code Style
 
@@ -154,6 +185,7 @@ The repository is organized into thematic subdirectories containing standalone w
 
 - The repository does not have a `CONTRIBUTING.md` file with explicit instructions.
 - The CI/CD workflow is configured to run on every push to the `main` branch. For significant changes, it is advisable to work on a separate branch and create a Pull Request.
+- **Preview builds**: When you create a PR, a preview site is automatically deployed (see [Branch Preview Builds](#branch-preview-builds)). The preview URL is posted as a comment on the PR.
 
 ## Additional Context
 
