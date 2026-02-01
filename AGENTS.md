@@ -107,14 +107,26 @@ This is a Jekyll-based static site published to GitHub Pages.
 
 ## Branch Preview Builds
 
-The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches using [Surge.sh](https://surge.sh) (no account required).
+The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches using [Surge.sh](https://surge.sh).
 
 ### How It Works
 
 1. **Automatic triggers**: Deploys on pushes to any branch except `main`, and on pull requests
 2. **Unique URLs**: Each branch gets a preview at `https://<branch-name>-austegard-preview.surge.sh`
 3. **PR comments**: For pull requests, a comment is posted with the preview URL
-4. **No setup required**: Uses anonymous Surge.sh publishing
+
+### One-Time Setup
+
+To enable branch previews, add the `SURGE_TOKEN` secret to the repository:
+
+1. **Get a Surge token** (run locally):
+   ```bash
+   npx surge login    # Create account or login
+   npx surge token    # Copy the token displayed
+   ```
+2. **Add repository secret**: Go to Settings → Secrets and variables → Actions → New repository secret
+   - Name: `SURGE_TOKEN`
+   - Value: paste the token from step 1
 
 ### Manual Trigger
 
