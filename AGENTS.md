@@ -107,24 +107,14 @@ This is a Jekyll-based static site published to GitHub Pages.
 
 ## Branch Preview Builds
 
-The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches.
+The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches using [Surge.sh](https://surge.sh) (no account required).
 
 ### How It Works
 
 1. **Automatic triggers**: Deploys on pushes to any branch except `main`, and on pull requests
 2. **Unique URLs**: Each branch gets a preview at `https://<branch-name>-austegard-preview.surge.sh`
 3. **PR comments**: For pull requests, a comment is posted with the preview URL
-4. **Auto-cleanup**: Preview sites are torn down when PRs are closed
-
-### Setup Requirements
-
-To enable branch previews, add these secrets to the repository:
-
-1. **Create a Surge.sh account** (free): https://surge.sh
-2. **Get your token**: Run `npx surge token` locally after logging in
-3. **Add repository secrets** (Settings → Secrets and variables → Actions):
-   - `SURGE_LOGIN`: Your Surge.sh email
-   - `SURGE_TOKEN`: Your Surge.sh token
+4. **No setup required**: Uses anonymous Surge.sh publishing
 
 ### Manual Trigger
 
@@ -132,7 +122,7 @@ You can also manually trigger the workflow from the Actions tab → "Branch Prev
 
 ### Preview URL Format
 
-Branch names are sanitized for URLs:
+Branch names are sanitized for URLs (lowercased, special chars replaced with dashes, truncated to 30 chars):
 - `feature/add-login` → `https://feature-add-login-austegard-preview.surge.sh`
 - `claude/my-feature-ABC123` → `https://claude-my-feature-abc123-austegard-preview.surge.sh`
 
