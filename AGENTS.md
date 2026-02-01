@@ -138,6 +138,10 @@ Branch names are sanitized for URLs (lowercased, special chars replaced with das
 - `feature/add-login` → `https://feature-add-login-austegard-preview.surge.sh`
 - `claude/my-feature-ABC123` → `https://claude-my-feature-abc123-austegard-preview.surge.sh`
 
+### Verifying Preview Deployments
+
+When checking if a preview deployment succeeded, the workflow typically takes 45-90 seconds to complete. If checking the preview URL returns a 404, wait and retry - you may need to poll multiple times until the workflow finishes.
+
 ## Code Style
 
 - **Naming Conventions**:
