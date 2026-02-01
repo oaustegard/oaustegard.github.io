@@ -9,7 +9,7 @@
 - **bsky-lib.js** — exports (15): `initializeLib, login, logout, checkStoredSession, getAgent, getAuthAgent, getPublicAgent, resolveSkyLink`...
 - **bsky-quote.js** — exports: `processQuotes` — imports: `bsky-core.js`
 - **bsky-search.js** — exports: `initializeSearchProcessing, autoProcessSearch` — imports: `bsky-core.js`
-- **bsky-thread.js** — exports: `processThread, initializeThreadProcessing, autoProcessThread` — imports: `bsky-core.js`
+- **bsky-thread.js** — exports: `processThread, processReverseThread, initializeThreadProcessing, autoProcessThread` — imports: `bsky-core.js`
 - **bsky-zeitgeist.html** — exports (9): `extractEntities, expandEntity, App, startSampling, stopSampling, startTracking, stopTracking, reset`... — imports: `preact, hooks, signals, preact`
 - **github-search.html** — exports: `sanitizeHTML, get3DaysAgoISO, extractLinksFromFacets, displayPost`
 - **index.html**
