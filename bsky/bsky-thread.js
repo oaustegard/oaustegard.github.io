@@ -1,16 +1,17 @@
 /* bsky-thread.js - Module for processing Bluesky thread data */
 
-import { 
-    getPublicAgent, 
-    processPost, 
-    formatPostForOutput, 
-    safeGetCreatedAt, 
+import {
+    getPublicAgent,
+    processPost,
+    formatPostForOutput,
+    safeGetCreatedAt,
     debugLog,
     resetProcessing,
     extractPostInfo,
     displayOutput,
     setLoading,
-    updateQueryParam
+    updateQueryParam,
+    getQueryParam
 } from './bsky-core.js';
 
 /* Process thread in the default way (recursively processing replies) */
@@ -127,6 +128,66 @@ export async function processThread(postInfo, filterMode = 'all') {
     }
 }
 
+/* Process a reverse thread - traverse from leaf node back to root, presented chronologically */
+export async function processReverseThread(postInfo) {
+    debugLog.clear();
+    debugLog.add('process_reverse_thread_start', postInfo);
+
+    /* Reset processing state */
+    resetProcessing();
+
+    try {
+        const agent = getPublicAgent();
+        const threadData = await agent.getPostThread({
+            uri: `at://${postInfo.handle}/app.bsky.feed.post/${postInfo.postId}`,
+            depth: 0, /* We don't need replies for reverse thread */
+            parentHeight: 1000 /* Get full parent chain */
+        });
+
+        debugLog.add('reverse_thread_data', threadData);
+
+        if (!threadData?.data?.thread?.post) {
+            throw new Error('Invalid thread data received');
+        }
+
+        /* Collect all posts from leaf to root by walking up the parent chain */
+        const posts = [];
+        let currentNode = threadData.data.thread;
+
+        while (currentNode?.post) {
+            const rawPost = processPost(currentNode.post);
+            if (rawPost) {
+                posts.push(rawPost);
+            }
+            currentNode = currentNode.parent;
+        }
+
+        /* Reverse to get chronological order (root first, leaf last) */
+        posts.reverse();
+
+        if (posts.length === 0) {
+            throw new Error('No posts found in thread');
+        }
+
+        /* Use the root post time as the base for relative delays */
+        const rootTime = posts[0].createdAt;
+
+        /* Format all posts for output */
+        const result = posts.map(rawPost => formatPostForOutput(rawPost, rootTime));
+
+        /* Return as a flat array representing the conversation branch */
+        return {
+            type: 'reverse_thread',
+            postCount: result.length,
+            posts: result
+        };
+    } catch (err) {
+        debugLog.add('reverse_thread_error', err);
+        console.error('Reverse thread processing error:', err);
+        throw new Error(`Failed to fetch reverse thread: ${err.message}`);
+    }
+}
+
 /* Initialize thread processing functionality */
 export function initializeThreadProcessing() {
     const postForm = document.getElementById('processor-form');
@@ -135,30 +196,31 @@ export function initializeThreadProcessing() {
     /* Post Form Submit Handler */
     postForm.addEventListener('submit', async (e) => {
         e.preventDefault();
-        
+
         displayOutput('', false); // Clear output
-        
+
         /* Determine which button was clicked */
         const isQuoteProcessing = e.submitter?.id === 'process-quotes';
-        const processButtonId = isQuoteProcessing ? 'process-quotes' : 'process-replies';
-        
-        /* Set loading state */
+        const isReverseThread = e.submitter?.id === 'process-reverse';
+
+        /* Set loading state on all buttons */
         setLoading('process-replies', true);
         setLoading('process-quotes', true);
-        
+        setLoading('process-reverse', true);
+
         const currentInput = urlInput.value.trim();
         updateQueryParam('url', currentInput);
-        updateQueryParam('quotes', isQuoteProcessing ? 'true' : 'false');
-        
+
         try {
             if (!currentInput) {
                 throw new Error('Please enter a Bluesky post URL');
             }
-            
+
             const postInfo = extractPostInfo(currentInput);
-            
-            /* Process thread or quotes based on button clicked */
+
+            /* Process based on button clicked */
             if (isQuoteProcessing) {
+                updateQueryParam('mode', 'quotes');
                 /* Get the selected sort order */
                 const sortOrder = document.querySelector('input[name="quote-sort"]:checked')?.value || 'popular';
                 updateQueryParam('sort', sortOrder);
@@ -167,7 +229,12 @@ export function initializeThreadProcessing() {
                 const quoteModule = await import('./bsky-quote.js');
                 const processedData = await quoteModule.processQuotes(postInfo, sortOrder);
                 displayOutput(processedData);
+            } else if (isReverseThread) {
+                updateQueryParam('mode', 'reverse');
+                const processedData = await processReverseThread(postInfo);
+                displayOutput(processedData);
             } else {
+                updateQueryParam('mode', 'replies');
                 /* Get the selected reply filter */
                 const filterMode = document.querySelector('input[name="reply-filter"]:checked')?.value || 'all';
                 updateQueryParam('filter', filterMode);
@@ -180,6 +247,7 @@ export function initializeThreadProcessing() {
         } finally {
             setLoading('process-replies', false);
             setLoading('process-quotes', false);
+            setLoading('process-reverse', false);
         }
     });
 }
@@ -190,7 +258,15 @@ export function autoProcessThread() {
     const currentUrl = urlInput.value.trim();
 
     if (currentUrl) {
-        const processType = location.search.includes('quotes=true') ? 'process-quotes' : 'process-replies';
+        const mode = getQueryParam('mode');
+        let processType = 'process-replies'; /* default */
+
+        if (mode === 'quotes') {
+            processType = 'process-quotes';
+        } else if (mode === 'reverse') {
+            processType = 'process-reverse';
+        }
+
         const button = document.getElementById(processType);
 
         if (button && !button.disabled) {
