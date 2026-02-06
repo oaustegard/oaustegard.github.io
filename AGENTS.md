@@ -192,6 +192,7 @@ The repository is organized into thematic subdirectories containing standalone w
 - The repository does not have a `CONTRIBUTING.md` file with explicit instructions.
 - The CI/CD workflow is configured to run on every push to the `main` branch. For significant changes, it is advisable to work on a separate branch and create a Pull Request.
 - **Preview builds**: When you create a PR, a preview site is automatically deployed (see [Branch Preview Builds](#branch-preview-builds)). The preview URL is posted as a comment on the PR.
+- **Include preview link in PR description**: When creating a PR, compute and include the Surge.sh preview URL in the PR body. Use the same sanitization logic as the workflow: lowercase the branch name, replace non-alphanumeric characters with `-`, truncate to 30 characters, then append `-austegard-preview.surge.sh`. For example, branch `claude/my-feature-ABC123` becomes `https://claude-my-feature-abc123-austegard-preview.surge.sh`.
 
 ## Additional Context
 
