@@ -19,6 +19,7 @@
     URL API Support:
     - Can fetch and parse PDFs from URLs via query parameters
     - Example: ?url=https://arxiv.org/pdf/2406.11706&format=markdown
+    - With page range: ?url=https://arxiv.org/pdf/2406.11706&pages=1-3,5
     - Short form: ?https://arxiv.org/pdf/2406.11706 (defaults to markdown)
     - Hash format: #url=https://arxiv.org/pdf/2406.11706 (avoids page reload)
 
@@ -320,6 +321,7 @@
       body {
         margin: 1rem auto;
         padding: 0 0.75rem;
+        padding-bottom: 0;
       }
 
       h1 {
@@ -367,14 +369,28 @@
         font-size: 0.95rem;
       }
 
-      .button-row {
+      #output-container .button-row {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        background: white;
+        padding: 0.75rem;
+        box-shadow: 0 -2px 8px rgba(0, 0, 0, 0.15);
         gap: 0.5rem;
+        margin: 0;
       }
 
-      .button-row button {
+      #output-container .button-row button {
         flex: 1;
         padding: 0.75rem 0.5rem;
         font-size: 0.9rem;
+        margin: 0;
+      }
+
+      #output-container fieldset {
+        padding-bottom: 5rem;
       }
 
       #result-controls {
@@ -437,7 +453,7 @@
         font-size: 0.8rem;
       }
 
-      .button-row button {
+      #output-container .button-row button {
         font-size: 0.85rem;
         padding: 0.75rem 0.25rem;
       }
@@ -502,6 +518,12 @@
         </div>
       </div>
 
+      <div id="page-range-group" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+        <label for="page-range" style="font-weight: 600; color: var(--accent); display: block; margin-bottom: 0.5rem;">Page Range <span style="font-weight: normal; color: #6b7280; font-size: 0.85rem;">(optional)</span></label>
+        <input type="text" id="page-range" placeholder="e.g. 1-3, 5, 8-12 (leave empty for all pages)" style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem; background: white;">
+        <div id="page-range-info" style="font-size: 0.8rem; color: #6b7280; margin-top: 0.25rem;">Leave empty to extract all pages</div>
+      </div>
+
       <button id="extract-btn" disabled>Extract Text</button>
     </fieldset>
 
@@ -513,6 +535,7 @@
       <ul style="margin: 0.5rem 0 0 1.5rem;">
         <li>Add <code>?url=https://arxiv.org/pdf/2406.11706</code> to this page's URL</li>
         <li>Short form: <code>?https://arxiv.org/pdf/2406.11706</code></li>
+        <li>With page range: <code>?url=...&amp;pages=1-3,5</code></li>
         <li>Or drag and drop a PDF URL into the box above</li>
       </ul>
     </div>
@@ -559,6 +582,8 @@
     const downloadBtn = document.getElementById('download-btn');
     const resultFormat = document.getElementById('result-format');
     const newPdfBtn = document.getElementById('new-pdf-btn');
+    const pageRangeInput = document.getElementById('page-range');
+    const pageRangeInfo = document.getElementById('page-range-info');
 
     let currentFile = null;
     let extractedText = '';
@@ -583,8 +608,9 @@
       }
 
       const format = params.get('format') || 'markdown';
+      const pages = params.get('pages') || '';
 
-      return { pdfUrl, format };
+      return { pdfUrl, format, pages };
     }
 
     // Fetch PDF from URL
@@ -619,7 +645,7 @@
 
     // Initialize from URL parameters
     async function initializeFromUrl() {
-      const { pdfUrl, format } = parseUrlParams();
+      const { pdfUrl, format, pages } = parseUrlParams();
 
       if (!pdfUrl) {
         return; // No URL provided, use normal UI
@@ -634,6 +660,11 @@
         if (formatRadio) {
           formatRadio.checked = true;
         }
+      }
+
+      // Set page range if specified
+      if (pages) {
+        pageRangeInput.value = pages;
       }
 
       try {
@@ -716,6 +747,47 @@
       window.scrollTo({ top: 0, behavior: 'smooth' });
     };
 
+    // Parse page range string into sorted, deduplicated array of page numbers
+    // Supports: "1-3, 5, 8-12" -> [1, 2, 3, 5, 8, 9, 10, 11, 12]
+    function parsePageRange(rangeStr, maxPage) {
+      if (!rangeStr || !rangeStr.trim()) return null; // null means "all pages"
+
+      const pages = new Set();
+      const parts = rangeStr.split(',');
+
+      for (const part of parts) {
+        const trimmed = part.trim();
+        if (!trimmed) continue;
+
+        const rangeMatch = trimmed.match(/^(\d+)\s*-\s*(\d+)$/);
+        if (rangeMatch) {
+          let start = parseInt(rangeMatch[1], 10);
+          let end = parseInt(rangeMatch[2], 10);
+          if (start > end) [start, end] = [end, start];
+          start = Math.max(1, start);
+          end = Math.min(maxPage, end);
+          for (let i = start; i <= end; i++) pages.add(i);
+        } else {
+          const num = parseInt(trimmed, 10);
+          if (!isNaN(num) && num >= 1 && num <= maxPage) {
+            pages.add(num);
+          }
+        }
+      }
+
+      if (pages.size === 0) return null;
+      return [...pages].sort((a, b) => a - b);
+    }
+
+    // Update page range info when PDF page count is known
+    function updatePageRangeInfo(pageCount) {
+      if (pageCount) {
+        pageRangeInfo.textContent = `PDF has ${pageCount} pages. Leave empty to extract all.`;
+      } else {
+        pageRangeInfo.textContent = 'Leave empty to extract all pages';
+      }
+    }
+
     function handleFile(file) {
       if (!file || file.type !== 'application/pdf') {
         alert('Please select a PDF file.');
@@ -761,10 +833,23 @@
           console.warn('Could not extract PDF metadata:', e);
         }
 
-        // Extract text from all pages
+        // Determine which pages to extract
+        const selectedPages = parsePageRange(pageRangeInput.value, pdf.numPages);
+        const pagesToExtract = selectedPages || Array.from({ length: pdf.numPages }, (_, i) => i + 1);
+        const totalToExtract = pagesToExtract.length;
+
+        if (selectedPages) {
+          metadata.extractedPages = selectedPages;
+          metadata.extractedPageCount = selectedPages.length;
+        }
+
+        updatePageRangeInfo(pdf.numPages);
+
+        // Extract text from selected pages
         const pages = [];
-        for (let i = 1; i <= pdf.numPages; i++) {
-          progress.innerHTML = `<div class="spinner"></div>Extracting page ${i} of ${pdf.numPages}...`;
+        for (let idx = 0; idx < pagesToExtract.length; idx++) {
+          const i = pagesToExtract[idx];
+          progress.innerHTML = `<div class="spinner"></div>Extracting page ${i} of ${pdf.numPages} (${idx + 1}/${totalToExtract})...`;
 
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
@@ -821,7 +906,10 @@
         // Scroll to results
         window.scrollTo({ top: 0, behavior: 'smooth' });
 
-        progress.innerHTML = `<span class="success">✓ Successfully extracted text from ${pdf.numPages} pages</span>`;
+        const pageMsg = selectedPages
+          ? `${selectedPages.length} of ${pdf.numPages} pages (${pageRangeInput.value.trim()})`
+          : `${pdf.numPages} pages`;
+        progress.innerHTML = `<span class="success">✓ Successfully extracted text from ${pageMsg}</span>`;
 
       } catch (error) {
         progress.innerHTML = `<span class="warning">⚠ Error: ${error.message}</span>`;
@@ -853,6 +941,9 @@
       if (metadata.author) output += `**Author:** ${metadata.author}\n`;
       if (metadata.subject) output += `**Subject:** ${metadata.subject}\n`;
       output += `**Pages:** ${metadata.pageCount}\n`;
+      if (metadata.extractedPages) {
+        output += `**Extracted Pages:** ${metadata.extractedPages.join(', ')} (${metadata.extractedPageCount} of ${metadata.pageCount})\n`;
+      }
       output += `**Extracted:** ${new Date(metadata.extractedAt).toLocaleString()}\n\n`;
       output += `---\n\n`;
 
@@ -890,6 +981,9 @@
       output += `Source: ${metadata.filename}\n`;
       if (metadata.author) output += `Author: ${metadata.author}\n`;
       output += `Pages: ${metadata.pageCount}\n`;
+      if (metadata.extractedPages) {
+        output += `Extracted Pages: ${metadata.extractedPages.join(', ')} (${metadata.extractedPageCount} of ${metadata.pageCount})\n`;
+      }
       output += `Extracted: ${new Date(metadata.extractedAt).toLocaleString()}\n`;
       output += `====================================\n\n`;
 
