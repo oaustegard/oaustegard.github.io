@@ -126,7 +126,7 @@
             user-select: none;
         }
 
-        .collapsed .content, .collapsed pre, .collapsed .tool-params, .collapsed .tool-result, .collapsed .thinking-summary {
+        .collapsed .content, .collapsed pre, .collapsed .tool-params, .collapsed .tool-result, .collapsed .tool-section, .collapsed .thinking-summary {
             display: none;
         }
 
@@ -204,6 +204,23 @@
             font-size: 0.9em;
         }
 
+        .tool-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px dashed #ce93d8;
+        }
+
+        .tool-section:first-of-type {
+            border-top: none;
+            margin-top: 4px;
+            padding-top: 0;
+        }
+
+        .tool-result-error {
+            background: #fff0f0;
+            border: 1px solid #ff4444;
+        }
+
         .tool-label {
             font-weight: bold;
             color: #666;
@@ -271,38 +288,42 @@
                 const artifacts = [];
                 const toolUses = [];
                 const thinking = [];
-                
+                // Map tool_use id -> index in toolUses for linking results
+                const toolUseIdMap = {};
+
                 message.content.forEach((part, index) => {
                     info(`Processing content part ${index}, type: ${part.type}`);
-                    
+
                     if (part.type === 'text') {
                         const text = part.text.trim();
                         if (text) {
                             elements.push(`<div class="text-content">${text}</div>`);
                         }
                     }
-                    
+
                     // Handle tool use
                     if (part.type === 'tool_use') {
-                        info(`Found tool use: ${part.name}`);
+                        info(`Found tool use: ${part.name} (id: ${part.id})`);
                         const toolInputJson = JSON.stringify(part.input, null, 2)
                             .replace(/&/g, '&amp;')
                             .replace(/</g, '&lt;')
                             .replace(/>/g, '&gt;');
-                        
+
                         const toolElement = {
+                            id: part.id,
                             name: part.name,
                             message: part.message || part.name,
                             input: toolInputJson,
                             timestamp: part.start_timestamp || message.created_at
                         };
-                        
+
+                        toolUseIdMap[part.id] = toolUses.length;
                         toolUses.push(toolElement);
                     }
-                    
-                    // Handle tool results
+
+                    // Handle tool results — link to matching tool_use by tool_use_id
                     if (part.type === 'tool_result') {
-                        info(`Found tool result: ${part.name}`);
+                        info(`Found tool result: ${part.name} (tool_use_id: ${part.tool_use_id})`);
                         let resultContent = '';
                         if (part.content && Array.isArray(part.content)) {
                             part.content.forEach(resultPart => {
@@ -315,20 +336,31 @@
                         } else if (part.output) {
                             resultContent = part.output;
                         }
-                        
+
                         const resultHtml = (resultContent || '')
                             .replace(/&/g, '&amp;')
                             .replace(/</g, '&lt;')
                             .replace(/>/g, '&gt;');
-                        
-                        toolUses.push({
-                            name: part.name,
-                            result: resultHtml,
-                            timestamp: part.start_timestamp || message.created_at,
-                            isResult: true
-                        });
+
+                        // Try to merge with matching tool_use
+                        const matchIdx = toolUseIdMap[part.tool_use_id];
+                        if (matchIdx !== undefined) {
+                            info(`Linked tool result to tool use: ${part.tool_use_id}`);
+                            toolUses[matchIdx].result = resultHtml;
+                            toolUses[matchIdx].isError = part.is_error || false;
+                        } else {
+                            // Orphan result — display standalone
+                            warn(`No matching tool_use for tool_result with tool_use_id: ${part.tool_use_id}`);
+                            toolUses.push({
+                                name: part.name,
+                                result: resultHtml,
+                                timestamp: part.start_timestamp || message.created_at,
+                                isResult: true,
+                                isError: part.is_error || false
+                            });
+                        }
                     }
-                    
+
                     // Handle thinking blocks
                     if (part.type === 'thinking') {
                         info('Found thinking block');
@@ -396,19 +428,18 @@
                     }
                 });
 
-                // Add tool uses
+                // Add tool uses (may contain combined ToolUse+ToolResult)
                 document.querySelectorAll('.tool-use.selected').forEach(tool => {
                     let content = tool.getAttribute('data-content');
 
-                    // Extract and trim the content inside the tags
-                    const toolNameMatch = content.match(/^<(ToolUse|ToolResult) name="([^"]+)">/);
-                    if (toolNameMatch) {
-                        const tagType = toolNameMatch[1];
-                        const toolName = toolNameMatch[2];
-                        const innerContent = content.replace(/^<(ToolUse|ToolResult) name="[^"]+">([\s\S]*)<\/(ToolUse|ToolResult)>$/, '$2');
-                        const trimmedInner = trimContent(innerContent, maxLength);
-                        content = `<${tagType} name="${toolName}">${trimmedInner}</${tagType}>`;
-                    }
+                    // Trim content inside each ToolUse/ToolResult tag
+                    content = content.replace(
+                        /<(ToolUse|ToolResult) name="([^"]+)">([\s\S]*?)<\/\1>/g,
+                        (match, tagType, toolName, innerContent) => {
+                            const trimmedInner = trimContent(innerContent, maxLength);
+                            return `<${tagType} name="${toolName}">${trimmedInner}</${tagType}>`;
+                        }
+                    );
 
                     selectedContent.push({
                         timestamp: new Date(tool.getAttribute('data-timestamp')).getTime(),
@@ -650,20 +681,20 @@
                     });
                 });
 
-                // Add tool uses
+                // Add tool uses (with linked results when available)
                 toolUses.forEach(tool => {
                     const toolTimestamp = tool.timestamp || timestamp;
                     blocks.push({
                         timestamp: toolTimestamp,
                         type: 'tool',
                         render: () => {
-                            info(`Rendering tool ${tool.isResult ? 'result' : 'use'}: ${tool.name}`);
-
                             const toolDiv = document.createElement('div');
                             toolDiv.className = 'tool-use selected';
                             toolDiv.setAttribute('data-timestamp', toolTimestamp);
 
                             if (tool.isResult) {
+                                // Orphan result with no matching tool_use
+                                info(`Rendering orphan tool result: ${tool.name}`);
                                 toolDiv.setAttribute('data-content', `<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
                                 toolDiv.innerHTML = `
                                     <div class="message-header">
@@ -673,7 +704,30 @@
                                     <div class="tool-label">Result:</div>
                                     <pre class="tool-result"><code>${tool.result}</code></pre>
                                 `;
+                            } else if (tool.result !== undefined) {
+                                // Combined tool_use + tool_result
+                                info(`Rendering linked tool use+result: ${tool.name}`);
+                                toolDiv.setAttribute('data-content',
+                                    `<ToolUse name="${tool.name}">${tool.input}</ToolUse>\n<ToolResult name="${tool.name}">${tool.result}</ToolResult>`);
+                                const errorClass = tool.isError ? ' tool-result-error' : '';
+                                toolDiv.innerHTML = `
+                                    <div class="message-header">
+                                        <div><strong>Tool: ${tool.name}</strong> <span class="toggle-collapse">▼</span></div>
+                                        <span class="timestamp">${formatTimestamp(toolTimestamp)}</span>
+                                    </div>
+                                    <div class="tool-label">Message: ${tool.message}</div>
+                                    <div class="tool-section">
+                                        <div class="tool-label">Input:</div>
+                                        <pre class="tool-params"><code>${tool.input}</code></pre>
+                                    </div>
+                                    <div class="tool-section">
+                                        <div class="tool-label">Result${tool.isError ? ' (error)' : ''}:</div>
+                                        <pre class="tool-result${errorClass}"><code>${tool.result}</code></pre>
+                                    </div>
+                                `;
                             } else {
+                                // Tool use without a result (no matching tool_result found)
+                                info(`Rendering tool use (no result): ${tool.name}`);
                                 toolDiv.setAttribute('data-content', `<ToolUse name="${tool.name}">${tool.input}</ToolUse>`);
                                 toolDiv.innerHTML = `
                                     <div class="message-header">
