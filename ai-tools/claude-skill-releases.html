@@ -106,6 +106,37 @@
     import { useEffect } from 'preact/hooks';
     import { html } from 'htm/preact';
 
+    function parseRelease(release) {
+      let skillName = release.name || release.tag_name;
+      let version = 'unknown';
+
+      const name = release.name || '';
+      const tag = release.tag_name || '';
+
+      // Try splitting by ' v' in name first (e.g. 'Skill Name v1.0.0')
+      if (name.includes(' v')) {
+        const lastVIndex = name.lastIndexOf(' v');
+        if (lastVIndex !== -1) {
+             const candidateName = name.substring(0, lastVIndex);
+             const candidateVer = name.substring(lastVIndex + 2); // skip ' v'
+             if (/^\d/.test(candidateVer)) {
+                 skillName = candidateName;
+                 version = 'v' + candidateVer;
+                 return { ...release, skillName, version };
+             }
+        }
+      }
+
+      // Try regex on tag_name (e.g. 'skill-name-v1.0.0')
+      const match = /-(v\d+\.\d+\.\d+.*)$/.exec(tag);
+      if (match) {
+        version = match[1];
+        skillName = tag.substring(0, match.index);
+      }
+
+      return { ...release, skillName, version };
+    }
+
     function App() {
       const releases = useSignal([]);
       const loading = useSignal(true);
@@ -140,14 +171,27 @@
       useEffect(() => {
         async function fetchReleases() {
           try {
-            const response = await fetch('https://api.github.com/repos/oaustegard/claude-skills/releases');
+            let allReleases = [];
+            let page = 1;
+            let hasMore = true;
 
-            if (!response.ok) {
-              throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+            while (hasMore) {
+              const response = await fetch(`https://api.github.com/repos/oaustegard/claude-skills/releases?page=${page}&per_page=100`);
+
+              if (!response.ok) {
+                throw new Error(`GitHub API error: ${response.status} ${response.statusText}`);
+              }
+
+              const data = await response.json();
+              if (data.length === 0) {
+                hasMore = false;
+              } else {
+                allReleases = [...allReleases, ...data];
+                page++;
+              }
             }
 
-            const data = await response.json();
-            releases.value = data;
+            releases.value = allReleases.map(parseRelease);
             loading.value = false;
           } catch (err) {
             error.value = err.message;
@@ -158,9 +202,47 @@
         fetchReleases();
       }, []);
 
+      const groupedReleases = useComputed(() => {
+        const groups = {};
+
+        releases.value.forEach(release => {
+            const skill = release.skillName;
+            if (!groups[skill]) {
+                groups[skill] = {
+                    skillName: skill,
+                    releases: [],
+                    lastUpdate: new Date(0)
+                };
+            }
+            groups[skill].releases.push(release);
+            const pubDate = new Date(release.published_at);
+            if (pubDate > groups[skill].lastUpdate) {
+                groups[skill].lastUpdate = pubDate;
+            }
+        });
+
+        const groupsArray = Object.values(groups);
+
+        // Sort groups
+        groupsArray.sort((a, b) => {
+            if (sortMode.value === 'latest') {
+                return b.lastUpdate - a.lastUpdate;
+            } else {
+                return a.skillName.localeCompare(b.skillName);
+            }
+        });
+
+        // Sort releases within groups
+        groupsArray.forEach(group => {
+            group.releases.sort((a, b) => new Date(b.published_at) - new Date(a.published_at));
+        });
+
+        return groupsArray;
+      });
+
       // Track active section on scroll
       useEffect(() => {
-        if (loading.value || releases.value.length === 0) return;
+        if (loading.value || groupedReleases.value.length === 0) return;
 
         const observer = new IntersectionObserver(
           (entries) => {
@@ -173,29 +255,12 @@
           { rootMargin: '-20% 0px -70% 0px' }
         );
 
-        // Observe all release sections
-        const sections = document.querySelectorAll('[data-release-section]');
+        // Observe all skill sections
+        const sections = document.querySelectorAll('[data-skill-section]');
         sections.forEach((section) => observer.observe(section));
 
         return () => observer.disconnect();
-      }, [loading.value, releases.value.length]);
-
-      // Sort releases based on current sort mode
-      const sortedReleases = useComputed(() => {
-        return [...releases.value].sort((a, b) => {
-          if (sortMode.value === 'latest') {
-            // Sort by published date (most recent first)
-            const dateA = new Date(a.published_at);
-            const dateB = new Date(b.published_at);
-            return dateB - dateA;
-          } else {
-            // Sort alphabetically by tag name
-            const nameA = (a.tag_name || a.name || '').toLowerCase();
-            const nameB = (b.tag_name || b.name || '').toLowerCase();
-            return nameA.localeCompare(nameB);
-          }
-        });
-      });
+      }, [loading.value, groupedReleases.value]);
 
       // Loading state
       if (loading.value) {
@@ -231,15 +296,15 @@
       return html`
         <div>
           <!-- Table of Contents -->
-          ${sortedReleases.value.length > 0 && html`
+          ${groupedReleases.value.length > 0 && html`
             <${TableOfContents}
-              releases=${sortedReleases.value}
+              groups=${groupedReleases.value}
               activeSection=${activeSection.value}
             />
           `}
 
           <!-- Main Content -->
-          <div class="min-h-screen bg-gray-100 py-8 px-4 ${sortedReleases.value.length > 0 ? 'content-with-toc' : ''}">
+          <div class="min-h-screen bg-gray-100 py-8 px-4 ${groupedReleases.value.length > 0 ? 'content-with-toc' : ''}">
             <div class="max-w-4xl mx-auto">
               <div class="bg-white rounded-lg shadow-lg p-6 mb-6">
                 <!-- Back Link -->
@@ -282,34 +347,48 @@
                   </a>
                 </p>
                 <p class="text-sm text-gray-500 mt-2">
-                  Total releases: ${sortedReleases.value.length}
+                  Total skills: ${groupedReleases.value.length} (Total releases: ${releases.value.length})
                 </p>
               </div>
 
-              <div class="space-y-4">
-                ${sortedReleases.value.map(release => {
-                  // Find .zip assets
-                  const zipAssets = (release.assets || []).filter(asset =>
-                    asset.name.toLowerCase().endsWith('.zip')
-                  );
-
-                  // Create a slug for the ID
-                  const id = `release-${release.tag_name}`;
+              <div class="space-y-8">
+                ${groupedReleases.value.map(group => {
+                  const sectionId = `skill-${group.skillName.replace(/\s+/g, '-')}`;
 
                   return html`
-                    <${ReleaseCard}
-                      key=${release.id}
-                      id=${id}
-                      name=${release.name || release.tag_name}
-                      publishedAt=${release.published_at}
-                      description=${release.body}
-                      zipAssets=${zipAssets}
-                    />
+                    <div id=${sectionId} data-skill-section=${group.skillName} class="scroll-mt-8">
+                        <h2 class="text-2xl font-bold text-gray-800 mb-4 sticky top-0 bg-gray-100 py-2 z-10">
+                            ${group.skillName}
+                            <span class="text-sm font-normal text-gray-500 ml-2">(${group.releases.length} versions)</span>
+                        </h2>
+                        <div class="space-y-4">
+                        ${group.releases.map(release => {
+                          // Find .zip assets
+                          const zipAssets = (release.assets || []).filter(asset =>
+                            asset.name.toLowerCase().endsWith('.zip')
+                          );
+
+                          // Create a slug for the ID
+                          const id = `release-${release.tag_name}`;
+
+                          return html`
+                            <${ReleaseCard}
+                              key=${release.id}
+                              id=${id}
+                              name=${release.name || release.tag_name}
+                              publishedAt=${release.published_at}
+                              description=${release.body}
+                              zipAssets=${zipAssets}
+                            />
+                          `;
+                        })}
+                        </div>
+                    </div>
                   `;
                 })}
               </div>
 
-              ${sortedReleases.value.length === 0 && html`
+              ${groupedReleases.value.length === 0 && html`
                 <div class="bg-white rounded-lg shadow-lg p-8 text-center">
                   <p class="text-gray-600">No releases found.</p>
                 </div>
@@ -320,19 +399,19 @@
       `;
     }
 
-    function TableOfContents({ releases, activeSection }) {
+    function TableOfContents({ groups, activeSection }) {
       return html`
         <div class="toc-container">
           <h3 class="text-sm font-bold text-gray-700 mb-4 uppercase tracking-wide">Table of Contents</h3>
           <nav>
-            ${releases.map(release => {
-              const id = `release-${release.tag_name}`;
-              const name = release.name || release.tag_name;
+            ${groups.map(group => {
+              const id = `skill-${group.skillName.replace(/\s+/g, '-')}`;
+              const name = group.skillName;
               const isActive = activeSection === id;
 
               return html`
                 <a
-                  key=${release.id}
+                  key=${id}
                   href="#${id}"
                   class="toc-link ${isActive ? 'active' : ''}"
                 >
