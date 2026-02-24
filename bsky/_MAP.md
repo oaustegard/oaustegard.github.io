@@ -1,5 +1,5 @@
 # bsky/
-*Files: 14*
+*Files: 15*
 
 ## Files
 
@@ -17,3 +17,4 @@
 - **processor.html** — imports (7): `bsky-core.js, bsky-thread.js, bsky-quote.js, bsky-search.js, bsky-core.js`...
 - **report.html** — imports: `BlueReport.js`
 - **starterpack-to-list.html** — exports: `followRedirectUrl, findStarterPackFromUrl, showStatus, showSection, updateProgress, toggleDropdown` — imports: `bsky-lib.js`
+- **thread-reader.html** — exports (20): `avatarHue, parseBskyUrl, resolveToAtUri, fetchThread, timeAgo, postUrl, countAll, DynImg`... — imports: `preact, hooks, preact`
