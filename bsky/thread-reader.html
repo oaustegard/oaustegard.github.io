@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bluesky Thread Viewer</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/*preact@10.23.1",
+        "preact/": "https://esm.sh/*preact@10.23.1/",
+        "htm": "https://esm.sh/*htm@3.1.1",
+        "htm/preact": "https://esm.sh/*htm@3.1.1/preact",
+        "@preact/signals": "https://esm.sh/*@preact/signals@1.3.0"
+      }
+    }
+  </script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .post-text { overflow-wrap: anywhere; word-break: break-word; }
+
+    /* Avatar: always show colored letter; img overlays it when loaded */
+    .avatar-wrap {
+      position: relative;
+      width: 36px; height: 36px;
+      border-radius: 50%;
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 600; font-size: 0.875rem; color: white;
+    }
+    .avatar-wrap img {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; object-fit: cover;
+      /* hide until loaded */
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .avatar-wrap img.loaded { opacity: 1; }
+
+    .avatar-sm {
+      width: 20px; height: 20px;
+      font-size: 0.65rem;
+    }
+  </style>
+</head>
+<body class="bg-gray-50 min-h-screen">
+  <div id="app"><div style="padding:2rem;color:#888">Loading…</div></div>
+  <div id="err" style="display:none;padding:1rem;background:#fee;color:#900;font-family:monospace;white-space:pre-wrap;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow:auto;z-index:9999"></div>
+  <script>
+    window.onerror = (msg,s,l,c,e) => {
+      document.getElementById('err').style.display='block';
+      document.getElementById('err').textContent='Error: '+msg+'\n'+(e&&e.stack||'');
+    };
+    window.addEventListener('unhandledrejection',e=>{
+      document.getElementById('err').style.display='block';
+      document.getElementById('err').textContent+='Rejection: '+(e.reason&&e.reason.stack||e.reason)+'\n';
+    });
+
+    // Deterministic hue from a DID string — inline so usable from CSS via inline style
+    function avatarHue(str) {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+      return Math.abs(hash) % 360;
+    }
+    window.avatarHue = avatarHue;
+  </script>
+
+  <script type="module">
+    import { render } from 'preact';
+    import { useState, useEffect, useRef } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    function parseBskyUrl(url) {
+      const m = url.match(/bsky\.app\/profile\/([^/?# \t]+)\/post\/([^/?# \t]+)/);
+      return m ? { actor: m[1], rkey: m[2] } : null;
+    }
+
+    async function resolveToAtUri(input) {
+      input = input.trim();
+      if (input.startsWith('at://')) return input;
+      const parsed = parseBskyUrl(input);
+      if (!parsed) throw new Error('Paste a bsky.app post URL or an at:// URI');
+      let did = parsed.actor;
+      if (!did.startsWith('did:')) {
+        const r = await fetch('https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle='+encodeURIComponent(did));
+        if (!r.ok) throw new Error('Could not resolve handle: '+did);
+        did = (await r.json()).did;
+      }
+      return 'at://'+did+'/app.bsky.feed.post/'+parsed.rkey;
+    }
+
+    async function fetchThread(atUri) {
+      const r = await fetch('https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri='+encodeURIComponent(atUri)+'&depth=1000&parentHeight=0');
+      if (!r.ok) {
+        const b = await r.json().catch(()=>({}));
+        throw new Error(b.message || 'API error '+r.status);
+      }
+      return (await r.json()).thread;
+    }
+
+    function timeAgo(iso) {
+      const diff = Date.now() - new Date(iso).getTime();
+      const m=Math.floor(diff/60000), h=Math.floor(diff/3600000), d=Math.floor(diff/86400000);
+      if (m<1) return 'now';
+      if (h<1) return m+'m';
+      if (d<1) return h+'h';
+      if (d<30) return d+'d';
+      return new Date(iso).toLocaleDateString();
+    }
+
+    function postUrl(p) {
+      return 'https://bsky.app/profile/'+p.author.did+'/post/'+p.uri.split('/').pop();
+    }
+
+    function countAll(node) {
+      if (!node.replies) return 0;
+      const v = node.replies.filter(r=>r.$type==='app.bsky.feed.defs#threadViewPost');
+      return v.reduce((n,r)=>n+1+countAll(r),0);
+    }
+
+    // ── DynImg ────────────────────────────────────────────────────────────────
+    // Sets URL via setAttribute in useEffect.
+    // Prop named 'url' NOT 'src' — Preact special-cases 'src' and resolves it
+    // relative to the document during vdom diff, mangling absolute URLs on some platforms.
+    // style passed as object, not string (Preact requirement for DOM elements).
+
+    function DynImg({ url, alt, styleObj, cls }) {
+      const ref = useRef(null);
+      useEffect(() => {
+        if (ref.current && url) ref.current.setAttribute('src', url);
+      }, [url]);
+      return html`<img ref=${ref} alt=${alt||''} class=${cls||''}
+        style=${styleObj||{}} onError=${e=>e.target.style.display='none'} />`;
+    }
+
+    // ── Avatar ────────────────────────────────────────────────────────────────
+
+    function Avatar({ author, small }) {
+      const hue = window.avatarHue(author.did || author.handle || '');
+      const bg = `hsl(${hue},60%,45%)`;
+      const letter = (author.displayName || author.handle || '?')[0].toUpperCase();
+      const coverStyle = { position:'absolute', inset:0, width:'100%', height:'100%', objectFit:'cover' };
+      return html`
+        <div class=${'avatar-wrap'+(small?' avatar-sm':'')} style=${'background:'+bg}>
+          <span>${letter}</span>
+          ${author.avatar && html`<${DynImg} url=${author.avatar} cls="loaded" styleObj=${coverStyle} />`}
+        </div>
+      `;
+    }
+
+
+    function ImageGrid({ images }) {
+      if (!images?.length) return null;
+      return html`
+        <div class=${`mt-2 grid gap-1 rounded-lg overflow-hidden ${images.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+          ${images.map((img, i) => {
+            const ar = img.aspectRatio ? img.aspectRatio.width+'/'+img.aspectRatio.height : '16/9';
+            return html`
+              <a key=${i} href="${img.fullsize}" target="_blank" rel="noopener" class="block">
+                <${DynImg} url=${img.thumb} alt=${img.alt||''} cls="w-full object-cover max-h-48"
+                  styleObj=${{aspectRatio:ar, objectFit:'cover', width:'100%'}} />
+              </a>`;
+          })}
+        </div>
+      `;
+    }
+
+    function VideoThumb({ embed }) {
+      // HLS not supported natively in most browsers; show thumbnail linking to bsky
+      return html`
+        <div class="mt-2 relative rounded-lg overflow-hidden bg-black cursor-pointer"
+          style="aspect-ratio: ${embed.aspectRatio ? embed.aspectRatio.width+'/'+embed.aspectRatio.height : '16/9'}; max-height: 300px">
+          <${DynImg} url=${embed.thumbnail} alt="Video" cls="w-full h-full"
+            styleObj=${{width:'100%', height:'100%', objectFit:'cover', opacity:0.8}} />
+          <div class="absolute inset-0 flex items-center justify-center">
+            <div class="bg-black bg-opacity-60 rounded-full w-12 h-12 flex items-center justify-center">
+              <span style="font-size:1.5rem">▶</span>
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function ExternalCard({ external }) {
+      return html`
+        <a href="${external.uri}" target="_blank" rel="noopener"
+          class="block mt-2 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors overflow-hidden no-underline">
+          ${external.thumb && html`<${DynImg} url=${external.thumb} cls="w-full object-cover max-h-32"
+            styleObj=${{width:'100%', objectFit:'cover', maxHeight:'8rem'}} />`}
+          <div class="p-2">
+            <div class="text-xs font-semibold text-gray-800 post-text">${external.title}</div>
+            ${external.description && html`<div class="text-xs text-gray-500 post-text mt-0.5 line-clamp-2">${external.description}</div>`}
+            <div class="text-xs text-gray-400 mt-1 truncate">${external.uri}</div>
+          </div>
+        </a>
+      `;
+    }
+
+    function QuotedPost({ record }) {
+      if (!record || record.$type !== 'app.bsky.embed.record#viewRecord') return null;
+      const qUrl = 'https://bsky.app/profile/'+record.author.did+'/post/'+record.uri.split('/').pop();
+      return html`
+        <a href="${qUrl}" target="_blank" rel="noopener"
+          class="block mt-2 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 p-3 no-underline transition-colors">
+          <div class="flex items-center gap-2 mb-1">
+            <${Avatar} author=${record.author} small=${true} />
+            <span class="text-xs font-semibold text-gray-700 truncate">${record.author.displayName||record.author.handle}</span>
+            <span class="text-xs text-gray-400 truncate">@${record.author.handle}</span>
+            <span class="text-xs text-gray-400 ml-auto flex-shrink-0">${timeAgo(record.indexedAt||record.value?.createdAt||'')}</span>
+          </div>
+          <p class="text-xs text-gray-700 post-text leading-relaxed">${record.value?.text||''}</p>
+        </a>
+      `;
+    }
+
+    // Dispatch all embed types from a post's embed field
+    function PostEmbed({ embed }) {
+      if (!embed) return null;
+      const t = embed.$type;
+
+      if (t === 'app.bsky.embed.images#view')
+        return html`<${ImageGrid} images=${embed.images} />`;
+
+      if (t === 'app.bsky.embed.video#view')
+        return html`<${VideoThumb} embed=${embed} />`;
+
+      if (t === 'app.bsky.embed.external#view')
+        return html`<${ExternalCard} external=${embed.external} />`;
+
+      if (t === 'app.bsky.embed.record#view')
+        return html`<${QuotedPost} record=${embed.record} />`;
+
+      if (t === 'app.bsky.embed.recordWithMedia#view') {
+        const media = embed.media;
+        const record = embed.record?.record;
+        return html`
+          <div>
+            <${PostEmbed} embed=${media} />
+            <${QuotedPost} record=${record} />
+          </div>
+        `;
+      }
+
+      return null;
+    }
+
+    // ── Post card ─────────────────────────────────────────────────────────────
+
+    const MAX_INDENT = 4;
+
+    function PostCard({ node, isRoot, depth }) {
+      const [collapsed, setCollapsed] = useState(false);
+      const p = node.post;
+      const replies = (node.replies||[]).filter(r=>r.$type==='app.bsky.feed.defs#threadViewPost');
+      const sorted = [...replies].sort((a,b)=>(b.post.likeCount||0)-(a.post.likeCount||0));
+      const desc = countAll(node);
+
+      return html`
+        <div>
+          <div class=${`rounded-xl border p-3 ${isRoot?'bg-white border-blue-200 shadow-sm':'bg-white border-gray-100'}`}>
+            <div class="flex gap-2 min-w-0">
+              <${Avatar} author=${p.author} />
+              <div class="flex-1 min-w-0">
+                <div class="flex items-baseline gap-1 flex-wrap mb-1">
+                  <span class="font-semibold text-gray-900 text-sm truncate max-w-[130px]">${p.author.displayName||p.author.handle}</span>
+                  <span class="text-gray-400 text-xs truncate">@${p.author.handle}</span>
+                  <a href="${postUrl(p)}" target="_blank" rel="noopener"
+                    class="text-gray-400 text-xs hover:text-sky-500 ml-auto flex-shrink-0">
+                    ${timeAgo(p.record.createdAt)}
+                  </a>
+                </div>
+                <p class="text-gray-800 text-sm post-text leading-relaxed">${p.record.text}</p>
+                ${p.embed && html`<${PostEmbed} embed=${p.embed} />`}
+                <div class="flex items-center gap-3 mt-2 text-gray-400 text-xs">
+                  <span>💬 ${p.replyCount||0}</span>
+                  <span>🔁 ${p.repostCount||0}</span>
+                  <span>❤️ ${p.likeCount||0}</span>
+                  ${replies.length>0 && html`
+                    <button class="ml-auto text-sky-500 hover:text-sky-700 font-medium"
+                      onClick=${()=>setCollapsed(c=>!c)}>
+                      ${collapsed ? `▶ ${desc} repl${desc===1?'y':'ies'}` : '▼ collapse'}
+                    </button>
+                  `}
+                </div>
+              </div>
+            </div>
+          </div>
+          ${replies.length>0 && !collapsed && html`
+            <div class=${`mt-1 space-y-2 ${depth < MAX_INDENT ? 'ml-4 pl-3 border-l-2 border-gray-200' : 'ml-1 pl-1 border-l border-gray-100'}`}>
+              ${sorted.map(r=>html`<${PostCard} key=${r.post.uri} node=${r} isRoot=${false} depth=${depth+1} />`)}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    // ── URL helpers ───────────────────────────────────────────────────────────
+
+    function getParam() { return new URLSearchParams(window.location.search).get('url')||''; }
+    function setParam(val) {
+      const p=new URLSearchParams(window.location.search);
+      if(val) p.set('url',val); else p.delete('url');
+      window.history.replaceState({},'',window.location.pathname+(p.toString()?'?'+p.toString():''));
+    }
+
+    // ── App ───────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [input, setInput] = useState(getParam());
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [thread, setThread] = useState(null);
+      const [shareUrl, setShareUrl] = useState('');
+      const [copied, setCopied] = useState(false);
+
+      useEffect(()=>{ const v=getParam(); if(v) doLoad(v); },[]);
+
+      async function doLoad(raw) {
+        raw=(raw||input).trim();
+        if(!raw) return;
+        setLoading(true); setError(''); setThread(null); setShareUrl('');
+        try {
+          const atUri = await resolveToAtUri(raw);
+          const result = await fetchThread(atUri);
+          if(result.$type!=='app.bsky.feed.defs#threadViewPost') throw new Error('Thread not found or post is private');
+          setThread(result);
+          setParam(raw);
+          setShareUrl(window.location.href);
+        } catch(e) {
+          setError(e.message);
+        } finally {
+          setLoading(false);
+        }
+      }
+
+      function copy() {
+        navigator.clipboard.writeText(shareUrl).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),2000); });
+      }
+
+      const total = thread ? 1+countAll(thread) : 0;
+
+      return html`
+        <div class="max-w-2xl mx-auto px-4 py-8">
+          <div class="mb-6">
+            <h1 class="text-2xl font-bold text-gray-900">🦋 Thread Viewer</h1>
+            <p class="text-gray-500 text-sm mt-1">Full branching tree of any Bluesky thread</p>
+          </div>
+          <div class="flex gap-2 mb-4">
+            <input
+              type="text"
+              value=${input}
+              placeholder="https://bsky.app/profile/…/post/…"
+              onInput=${e=>setInput(e.target.value)}
+              onKeyDown=${e=>e.key==='Enter'&&doLoad(input)}
+              class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 bg-white"
+            />
+            <button onClick=${()=>doLoad(input)} disabled=${loading}
+              class="px-5 py-2 bg-sky-600 text-white rounded-lg text-sm font-medium hover:bg-sky-700 disabled:opacity-50 transition-colors">
+              ${loading ? '…' : 'Load'}
+            </button>
+          </div>
+          ${error && html`<div class="mb-4 px-4 py-3 bg-red-50 border border-red-200 rounded-lg text-red-700 text-sm">${error}</div>`}
+          ${shareUrl && thread && html`
+            <div class="mb-5 flex items-center gap-2 px-3 py-2 bg-sky-50 border border-sky-200 rounded-lg text-xs">
+              <span class="text-sky-700 flex-1 truncate">${shareUrl}</span>
+              <button onClick=${copy} class="text-sky-600 hover:text-sky-800 font-medium flex-shrink-0">
+                ${copied ? '✓ Copied' : 'Copy link'}
+              </button>
+            </div>
+          `}
+          ${thread && html`
+            <div class="text-xs text-gray-400 mb-3">${total} post${total!==1?'s':''} in thread</div>
+            <${PostCard} node=${thread} isRoot=${true} depth=${0} />
+          `}
+          ${!thread && !loading && !error && html`
+            <div class="text-center py-20 text-gray-400">
+              <div class="text-5xl mb-3">🌿</div>
+              <p class="text-sm">Paste a Bluesky post URL above</p>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    try {
+      render(html`<${App} />`, document.getElementById('app'));
+    } catch(e) {
+      document.getElementById('err').style.display='block';
+      document.getElementById('err').textContent='Render failed: '+e.message+'\n'+e.stack;
+    }
+  </script>
+</body>
+</html>
