@@ -167,24 +167,25 @@
       return hasOp;
     }
 
-    // Returns a Set of URIs where the searched user appears anywhere in the subtree
-    function computeUserSubtreeSet(node, query, set) {
+    // Returns a Set of URIs where the search query matches anywhere in the subtree
+    function computeSearchSubtreeSet(node, query, set) {
       const replies = validReplies(node);
-      let hasUser = matchesUserSearch(node.post, query);
+      let hasMatch = matchesSearch(node.post, query);
       for (const r of replies) {
-        if (computeUserSubtreeSet(r, query, set)) hasUser = true;
+        if (computeSearchSubtreeSet(r, query, set)) hasMatch = true;
       }
-      if (hasUser) set.add(node.post.uri);
-      return hasUser;
+      if (hasMatch) set.add(node.post.uri);
+      return hasMatch;
     }
 
-    // ── User search matching ───────────────────────────────────────────────────
+    // ── Search matching (author handle/name and post text) ────────────────────
 
-    function matchesUserSearch(post, query) {
+    function matchesSearch(post, query) {
       if (!query) return false;
       const q = query.toLowerCase().replace(/^@/, '');
       return (post.author.handle||'').toLowerCase().includes(q) ||
-             (post.author.displayName||'').toLowerCase().includes(q);
+             (post.author.displayName||'').toLowerCase().includes(q) ||
+             (post.record?.text||'').toLowerCase().includes(q);
     }
 
     // ── DynImg ────────────────────────────────────────────────────────────────
@@ -340,9 +341,9 @@
       const allReplies = validReplies(node);
       let visibleReplies = allReplies;
 
-      // User search: only show branches containing the searched user
-      if (filters.userSearch && filters.userSubtreeSet) {
-        visibleReplies = visibleReplies.filter(r => filters.userSubtreeSet.has(r.post.uri));
+      // Search filter: only show branches containing the search match
+      if (filters.search && filters.searchSubtreeSet) {
+        visibleReplies = visibleReplies.filter(r => filters.searchSubtreeSet.has(r.post.uri));
       }
 
       // Hide stubs: filter out leaf nodes (no visible children)
@@ -362,7 +363,7 @@
       const desc = countAll(node);
       const hiddenByFilters = allReplies.length - visibleReplies.length;
 
-      const isHighlighted = !!filters.userSearch && matchesUserSearch(p, filters.userSearch);
+      const isHighlighted = !!filters.search && matchesSearch(p, filters.search);
       const isLongestBranch = !!longestBranchUri && p.uri === longestBranchUri;
 
       const cardClass = [
@@ -443,51 +444,76 @@
 
     // ── URL param helpers ─────────────────────────────────────────────────────
 
-    function getParam() { return new URLSearchParams(window.location.search).get('url')||''; }
-    function setParam(val) {
-      const p=new URLSearchParams(window.location.search);
-      if(val) p.set('url',val); else p.delete('url');
-      window.history.replaceState({},'',window.location.pathname+(p.toString()?'?'+p.toString():''));
+    function getParams() {
+      const p = new URLSearchParams(window.location.search);
+      return {
+        url:            p.get('url')  || '',
+        hideStubs:      p.get('hs')   === '1',
+        collapseNonOP:  p.get('cnop') === '1',
+        minLikes:       p.get('ml')   || '',
+        minReplies:     p.get('mr')   || '',
+        search:         p.get('q')    || '',
+      };
+    }
+    function setParams(vals) {
+      const p = new URLSearchParams();
+      if (vals.url) p.set('url', vals.url);
+      if (vals.hideStubs) p.set('hs', '1');
+      if (vals.collapseNonOP) p.set('cnop', '1');
+      if (vals.minLikes && parseInt(vals.minLikes) > 0) p.set('ml', String(parseInt(vals.minLikes)));
+      if (vals.minReplies && parseInt(vals.minReplies) > 0) p.set('mr', String(parseInt(vals.minReplies)));
+      if (vals.search && vals.search.trim()) p.set('q', vals.search.trim());
+      const qs = p.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? '?' + qs : ''));
     }
 
     // ── App ───────────────────────────────────────────────────────────────────
 
     function App() {
-      const [input, setInput] = useState(getParam());
+      // Initialize all state from QSPs so filters survive page loads / are shareable
+      const [input, setInput] = useState(() => getParams().url);
       const [loading, setLoading] = useState(false);
       const [error, setError] = useState('');
       const [thread, setThread] = useState(null);
       const [shareUrl, setShareUrl] = useState('');
       const [copied, setCopied] = useState(false);
 
-      // Filter state
-      const [hideStubs, setHideStubs] = useState(false);
-      const [collapseNonOP, setCollapseNonOP] = useState(false);
-      const [minLikes, setMinLikes] = useState('');
-      const [minReplies, setMinReplies] = useState('');
-      const [userSearch, setUserSearch] = useState('');
+      // Filter state — initialised from QSPs
+      const [hideStubs, setHideStubs] = useState(() => getParams().hideStubs);
+      const [collapseNonOP, setCollapseNonOP] = useState(() => getParams().collapseNonOP);
+      const [minLikes, setMinLikes] = useState(() => getParams().minLikes);
+      const [minReplies, setMinReplies] = useState(() => getParams().minReplies);
+      const [search, setSearch] = useState(() => getParams().search);
 
       // Global expand/collapse signals (incrementing triggers PostCard effects)
       const [collapseKey, setCollapseKey] = useState(0);
       const [expandKey, setExpandKey] = useState(0);
 
-      useEffect(()=>{ const v=getParam(); if(v) doLoad(v); },[]);
+      // Initial load from QSP (preserves filters already in URL)
+      useEffect(() => { const v = getParams().url; if (v) doLoad(v, false); }, []);
 
-      async function doLoad(raw) {
-        raw=(raw||input).trim();
-        if(!raw) return;
+      // Sync all filter state → QSP whenever anything changes
+      useEffect(() => {
+        setParams({ url: input, hideStubs, collapseNonOP, minLikes, minReplies, search });
+        if (thread) setShareUrl(window.location.href);
+      }, [input, hideStubs, collapseNonOP, minLikes, minReplies, search, thread]);
+
+      async function doLoad(raw, resetFilters = true) {
+        raw = (raw || input).trim();
+        if (!raw) return;
         setLoading(true); setError(''); setThread(null); setShareUrl('');
-        // Reset all filters on new load
-        setHideStubs(false); setCollapseNonOP(false);
-        setMinLikes(''); setMinReplies(''); setUserSearch('');
-        setCollapseKey(0); setExpandKey(0);
+        if (resetFilters) {
+          // Reset all filters when the user loads a brand-new thread
+          setHideStubs(false); setCollapseNonOP(false);
+          setMinLikes(''); setMinReplies(''); setSearch('');
+          setCollapseKey(0); setExpandKey(0);
+        }
         try {
           const atUri = await resolveToAtUri(raw);
           const result = await fetchThread(atUri);
-          if(result.$type!=='app.bsky.feed.defs#threadViewPost') throw new Error('Thread not found or post is private');
+          if (result.$type !== 'app.bsky.feed.defs#threadViewPost') throw new Error('Thread not found or post is private');
           setThread(result);
-          setParam(raw);
-          setShareUrl(window.location.href);
+          // QSP + shareUrl are updated by the useEffect above when thread/state change
         } catch(e) {
           setError(e.message);
         } finally {
@@ -496,7 +522,7 @@
       }
 
       function copy() {
-        navigator.clipboard.writeText(shareUrl).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),2000); });
+        navigator.clipboard.writeText(window.location.href).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); });
       }
 
       function collapseAll() { setCollapseKey(k => k + 1); }
@@ -504,7 +530,7 @@
 
       function clearFilters() {
         setHideStubs(false); setCollapseNonOP(false);
-        setMinLikes(''); setMinReplies(''); setUserSearch('');
+        setMinLikes(''); setMinReplies(''); setSearch('');
       }
 
       function jumpToLongest() {
@@ -526,26 +552,26 @@
         return set;
       }, [thread, collapseNonOP, rootAuthorDid]);
 
-      const userSubtreeSet = useMemo(() => {
-        const q = userSearch.trim();
+      const searchSubtreeSet = useMemo(() => {
+        const q = search.trim();
         if (!thread || !q) return null;
         const set = new Set();
-        computeUserSubtreeSet(thread, q, set);
+        computeSearchSubtreeSet(thread, q, set);
         return set;
-      }, [thread, userSearch]);
+      }, [thread, search]);
 
       const filters = useMemo(() => ({
         hideStubs,
         collapseNonOP,
         minLikes: parseInt(minLikes) || 0,
         minReplies: parseInt(minReplies) || 0,
-        userSearch: userSearch.trim(),
+        search: search.trim(),
         opSubtreeSet,
-        userSubtreeSet,
-      }), [hideStubs, collapseNonOP, minLikes, minReplies, userSearch, opSubtreeSet, userSubtreeSet]);
+        searchSubtreeSet,
+      }), [hideStubs, collapseNonOP, minLikes, minReplies, search, opSubtreeSet, searchSubtreeSet]);
 
       const anyFilterActive = hideStubs || collapseNonOP ||
-        (parseInt(minLikes) > 0) || (parseInt(minReplies) > 0) || userSearch.trim();
+        (parseInt(minLikes) > 0) || (parseInt(minReplies) > 0) || search.trim();
 
       return html`
         <div class="max-w-2xl mx-auto px-4 py-8">
@@ -559,10 +585,10 @@
               value=${input}
               placeholder="https://bsky.app/profile/…/post/…"
               onInput=${e=>setInput(e.target.value)}
-              onKeyDown=${e=>e.key==='Enter'&&doLoad(input)}
+              onKeyDown=${e=>e.key==='Enter'&&doLoad(input, true)}
               class="flex-1 px-4 py-2 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 bg-white"
             />
-            <button onClick=${()=>doLoad(input)} disabled=${loading}
+            <button onClick=${()=>doLoad(input, true)} disabled=${loading}
               class="px-5 py-2 bg-sky-600 text-white rounded-lg text-sm font-medium hover:bg-sky-700 disabled:opacity-50 transition-colors">
               ${loading ? '…' : 'Load'}
             </button>
@@ -629,12 +655,12 @@
                   class="w-14 px-1.5 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-sky-300 bg-white"
                   placeholder="0" />
               </div>
-              <div class="flex items-center gap-1 text-xs text-gray-500" title="Show only posts from this user (handle or display name)">
-                <span>👤</span>
-                <input type="text" value=${userSearch}
-                  onInput=${e=>setUserSearch(e.target.value)}
+              <div class="flex items-center gap-1 text-xs text-gray-500" title="Search post text, author handle, or display name">
+                <span>🔍</span>
+                <input type="text" value=${search}
+                  onInput=${e=>setSearch(e.target.value)}
                   class="w-28 px-1.5 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-sky-300 bg-white"
-                  placeholder="@username" />
+                  placeholder="search…" />
               </div>
               ${anyFilterActive && html`
                 <button onClick=${clearFilters}
