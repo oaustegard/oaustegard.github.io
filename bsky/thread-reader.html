@@ -11,8 +11,7 @@
         "preact": "https://esm.sh/*preact@10.23.1",
         "preact/": "https://esm.sh/*preact@10.23.1/",
         "htm": "https://esm.sh/*htm@3.1.1",
-        "htm/preact": "https://esm.sh/*htm@3.1.1/preact",
-        "@preact/signals": "https://esm.sh/*@preact/signals@1.3.0"
+        "htm/preact": "https://esm.sh/*htm@3.1.1/preact"
       }
     }
   </script>
@@ -33,7 +32,6 @@
     .avatar-wrap img {
       position: absolute; inset: 0;
       width: 100%; height: 100%; object-fit: cover;
-      /* hide until loaded */
       opacity: 0;
       transition: opacity 0.15s;
     }
@@ -42,6 +40,18 @@
     .avatar-sm {
       width: 20px; height: 20px;
       font-size: 0.65rem;
+    }
+
+    /* User search highlight */
+    .post-highlighted {
+      border-color: #f59e0b !important;
+      background-color: #fffbeb !important;
+      box-shadow: 0 0 0 2px #fcd34d44;
+    }
+
+    /* Longest branch indicator */
+    .longest-branch-card {
+      border-color: #818cf8 !important;
     }
   </style>
 </head>
@@ -69,10 +79,10 @@
 
   <script type="module">
     import { render } from 'preact';
-    import { useState, useEffect, useRef } from 'preact/hooks';
+    import { useState, useEffect, useRef, useMemo } from 'preact/hooks';
     import { html } from 'htm/preact';
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    // ── URL / API helpers ─────────────────────────────────────────────────────
 
     function parseBskyUrl(url) {
       const m = url.match(/bsky\.app\/profile\/([^/?# \t]+)\/post\/([^/?# \t]+)/);
@@ -102,6 +112,8 @@
       return (await r.json()).thread;
     }
 
+    // ── Display helpers ───────────────────────────────────────────────────────
+
     function timeAgo(iso) {
       const diff = Date.now() - new Date(iso).getTime();
       const m=Math.floor(diff/60000), h=Math.floor(diff/3600000), d=Math.floor(diff/86400000);
@@ -116,17 +128,66 @@
       return 'https://bsky.app/profile/'+p.author.did+'/post/'+p.uri.split('/').pop();
     }
 
+    // ── Tree helpers ──────────────────────────────────────────────────────────
+
+    function validReplies(node) {
+      return (node.replies||[]).filter(r=>r.$type==='app.bsky.feed.defs#threadViewPost');
+    }
+
     function countAll(node) {
-      if (!node.replies) return 0;
-      const v = node.replies.filter(r=>r.$type==='app.bsky.feed.defs#threadViewPost');
-      return v.reduce((n,r)=>n+1+countAll(r),0);
+      const v = validReplies(node);
+      return v.reduce((n,r)=>n+1+countAll(r), 0);
+    }
+
+    function branchPostCount(node) {
+      return 1 + validReplies(node).reduce((n,r) => n + branchPostCount(r), 0);
+    }
+
+    function findLongestBranch(thread) {
+      const replies = validReplies(thread);
+      if (!replies.length) return null;
+      let best = null, bestCount = 0;
+      for (const r of replies) {
+        const count = branchPostCount(r);
+        if (count > bestCount) { bestCount = count; best = r; }
+      }
+      return best ? { node: best, postCount: bestCount } : null;
+    }
+
+    // ── Pre-computation helpers (O(n) single traversals) ─────────────────────
+
+    // Returns a Set of URIs where the OP (opDid) is present anywhere in the subtree
+    function computeOpSubtreeSet(node, opDid, set) {
+      const replies = validReplies(node);
+      let hasOp = node.post?.author?.did === opDid;
+      for (const r of replies) {
+        if (computeOpSubtreeSet(r, opDid, set)) hasOp = true;
+      }
+      if (hasOp) set.add(node.post.uri);
+      return hasOp;
+    }
+
+    // Returns a Set of URIs where the searched user appears anywhere in the subtree
+    function computeUserSubtreeSet(node, query, set) {
+      const replies = validReplies(node);
+      let hasUser = matchesUserSearch(node.post, query);
+      for (const r of replies) {
+        if (computeUserSubtreeSet(r, query, set)) hasUser = true;
+      }
+      if (hasUser) set.add(node.post.uri);
+      return hasUser;
+    }
+
+    // ── User search matching ───────────────────────────────────────────────────
+
+    function matchesUserSearch(post, query) {
+      if (!query) return false;
+      const q = query.toLowerCase().replace(/^@/, '');
+      return (post.author.handle||'').toLowerCase().includes(q) ||
+             (post.author.displayName||'').toLowerCase().includes(q);
     }
 
     // ── DynImg ────────────────────────────────────────────────────────────────
-    // Sets URL via setAttribute in useEffect.
-    // Prop named 'url' NOT 'src' — Preact special-cases 'src' and resolves it
-    // relative to the document during vdom diff, mangling absolute URLs on some platforms.
-    // style passed as object, not string (Preact requirement for DOM elements).
 
     function DynImg({ url, alt, styleObj, cls }) {
       const ref = useRef(null);
@@ -152,6 +213,7 @@
       `;
     }
 
+    // ── Embed components ──────────────────────────────────────────────────────
 
     function ImageGrid({ images }) {
       if (!images?.length) return null;
@@ -170,7 +232,6 @@
     }
 
     function VideoThumb({ embed }) {
-      // HLS not supported natively in most browsers; show thumbnail linking to bsky
       return html`
         <div class="mt-2 relative rounded-lg overflow-hidden bg-black cursor-pointer"
           style="aspect-ratio: ${embed.aspectRatio ? embed.aspectRatio.width+'/'+embed.aspectRatio.height : '16/9'}; max-height: 300px">
@@ -217,7 +278,6 @@
       `;
     }
 
-    // Dispatch all embed types from a post's embed field
     function PostEmbed({ embed }) {
       if (!embed) return null;
       const t = embed.$type;
@@ -252,22 +312,85 @@
 
     const MAX_INDENT = 4;
 
-    function PostCard({ node, isRoot, depth }) {
-      const [collapsed, setCollapsed] = useState(false);
+    function PostCard({ node, isRoot, depth, rootAuthorDid, filters, collapseKey, expandKey, longestBranchUri }) {
       const p = node.post;
-      const replies = (node.replies||[]).filter(r=>r.$type==='app.bsky.feed.defs#threadViewPost');
-      const sorted = [...replies].sort((a,b)=>(b.post.likeCount||0)-(a.post.likeCount||0));
+      const rkey = p.uri.split('/').pop();
+
+      // Determine if this node is a non-OP branch (no OP anywhere in its subtree)
+      const nonOpBranch = !isRoot && filters.collapseNonOP &&
+        !!filters.opSubtreeSet && !filters.opSubtreeSet.has(p.uri);
+
+      // userCollapsed: null = use auto state, true/false = user override
+      const [userCollapsed, setUserCollapsed] = useState(null);
+
+      // Derived collapsed state: user override takes priority, fallback to nonOpBranch
+      const collapsed = userCollapsed !== null ? userCollapsed : nonOpBranch;
+
+      // Global Collapse All / Expand All signals
+      useEffect(() => { if (collapseKey > 0) setUserCollapsed(true); }, [collapseKey]);
+      useEffect(() => { if (expandKey > 0) setUserCollapsed(false); }, [expandKey]);
+
+      // Reset user override when collapseNonOP filter changes so auto-state takes effect
+      useEffect(() => { setUserCollapsed(null); }, [filters.collapseNonOP]);
+
+      function toggle() { setUserCollapsed(!collapsed); }
+
+      // ── Apply filters to replies ──────────────────────────────────────────
+
+      const allReplies = validReplies(node);
+      let visibleReplies = allReplies;
+
+      // User search: only show branches containing the searched user
+      if (filters.userSearch && filters.userSubtreeSet) {
+        visibleReplies = visibleReplies.filter(r => filters.userSubtreeSet.has(r.post.uri));
+      }
+
+      // Hide stubs: filter out leaf nodes (no visible children)
+      if (filters.hideStubs) {
+        visibleReplies = visibleReplies.filter(r => validReplies(r).length > 0);
+      }
+
+      // Engagement filters
+      if (filters.minLikes > 0) {
+        visibleReplies = visibleReplies.filter(r => (r.post?.likeCount||0) >= filters.minLikes);
+      }
+      if (filters.minReplies > 0) {
+        visibleReplies = visibleReplies.filter(r => (r.post?.replyCount||0) >= filters.minReplies);
+      }
+
+      const sorted = [...visibleReplies].sort((a,b) => (b.post.likeCount||0) - (a.post.likeCount||0));
       const desc = countAll(node);
+      const hiddenByFilters = allReplies.length - visibleReplies.length;
+
+      const isHighlighted = !!filters.userSearch && matchesUserSearch(p, filters.userSearch);
+      const isLongestBranch = !!longestBranchUri && p.uri === longestBranchUri;
+
+      const cardClass = [
+        'rounded-xl border p-3',
+        isRoot ? 'bg-white border-blue-200 shadow-sm' : 'bg-white border-gray-100',
+        isHighlighted ? 'post-highlighted' : '',
+        isLongestBranch ? 'longest-branch-card' : '',
+      ].filter(Boolean).join(' ');
 
       return html`
-        <div>
-          <div class=${`rounded-xl border p-3 ${isRoot?'bg-white border-blue-200 shadow-sm':'bg-white border-gray-100'}`}>
+        <div id=${'post-'+rkey}>
+          <div class=${cardClass}>
             <div class="flex gap-2 min-w-0">
               <${Avatar} author=${p.author} />
               <div class="flex-1 min-w-0">
                 <div class="flex items-baseline gap-1 flex-wrap mb-1">
                   <span class="font-semibold text-gray-900 text-sm truncate max-w-[130px]">${p.author.displayName||p.author.handle}</span>
                   <span class="text-gray-400 text-xs truncate">@${p.author.handle}</span>
+                  ${isLongestBranch && html`
+                    <span class="text-xs bg-indigo-100 text-indigo-600 px-1.5 py-0.5 rounded-full font-medium ml-1 whitespace-nowrap">
+                      📈 longest
+                    </span>
+                  `}
+                  ${nonOpBranch && html`
+                    <span class="text-xs bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full ml-1 whitespace-nowrap">
+                      no OP
+                    </span>
+                  `}
                   <a href="${postUrl(p)}" target="_blank" rel="noopener"
                     class="text-gray-400 text-xs hover:text-sky-500 ml-auto flex-shrink-0">
                     ${timeAgo(p.record.createdAt)}
@@ -279,26 +402,46 @@
                   <span>💬 ${p.replyCount||0}</span>
                   <span>🔁 ${p.repostCount||0}</span>
                   <span>❤️ ${p.likeCount||0}</span>
-                  ${replies.length>0 && html`
+                  ${sorted.length > 0 && html`
                     <button class="ml-auto text-sky-500 hover:text-sky-700 font-medium"
-                      onClick=${()=>setCollapsed(c=>!c)}>
-                      ${collapsed ? `▶ ${desc} repl${desc===1?'y':'ies'}` : '▼ collapse'}
+                      onClick=${toggle}>
+                      ${collapsed
+                        ? `▶ ${desc} repl${desc===1?'y':'ies'}`
+                        : `▼ collapse (${sorted.length})`}
                     </button>
                   `}
+                  ${sorted.length === 0 && allReplies.length > 0 && html`
+                    <span class="ml-auto text-gray-300 italic text-xs">${allReplies.length} filtered out</span>
+                  `}
                 </div>
+                ${hiddenByFilters > 0 && html`
+                  <p class="text-xs text-gray-400 mt-1 italic">
+                    ${hiddenByFilters} ${hiddenByFilters===1?'reply':'replies'} hidden by active filters
+                  </p>
+                `}
               </div>
             </div>
           </div>
-          ${replies.length>0 && !collapsed && html`
+          ${sorted.length > 0 && !collapsed && html`
             <div class=${`mt-1 space-y-2 ${depth < MAX_INDENT ? 'ml-4 pl-3 border-l-2 border-gray-200' : 'ml-1 pl-1 border-l border-gray-100'}`}>
-              ${sorted.map(r=>html`<${PostCard} key=${r.post.uri} node=${r} isRoot=${false} depth=${depth+1} />`)}
+              ${sorted.map(r => html`<${PostCard}
+                key=${r.post.uri}
+                node=${r}
+                isRoot=${false}
+                depth=${depth+1}
+                rootAuthorDid=${rootAuthorDid}
+                filters=${filters}
+                collapseKey=${collapseKey}
+                expandKey=${expandKey}
+                longestBranchUri=${longestBranchUri}
+              />`)}
             </div>
           `}
         </div>
       `;
     }
 
-    // ── URL helpers ───────────────────────────────────────────────────────────
+    // ── URL param helpers ─────────────────────────────────────────────────────
 
     function getParam() { return new URLSearchParams(window.location.search).get('url')||''; }
     function setParam(val) {
@@ -317,12 +460,27 @@
       const [shareUrl, setShareUrl] = useState('');
       const [copied, setCopied] = useState(false);
 
+      // Filter state
+      const [hideStubs, setHideStubs] = useState(false);
+      const [collapseNonOP, setCollapseNonOP] = useState(false);
+      const [minLikes, setMinLikes] = useState('');
+      const [minReplies, setMinReplies] = useState('');
+      const [userSearch, setUserSearch] = useState('');
+
+      // Global expand/collapse signals (incrementing triggers PostCard effects)
+      const [collapseKey, setCollapseKey] = useState(0);
+      const [expandKey, setExpandKey] = useState(0);
+
       useEffect(()=>{ const v=getParam(); if(v) doLoad(v); },[]);
 
       async function doLoad(raw) {
         raw=(raw||input).trim();
         if(!raw) return;
         setLoading(true); setError(''); setThread(null); setShareUrl('');
+        // Reset all filters on new load
+        setHideStubs(false); setCollapseNonOP(false);
+        setMinLikes(''); setMinReplies(''); setUserSearch('');
+        setCollapseKey(0); setExpandKey(0);
         try {
           const atUri = await resolveToAtUri(raw);
           const result = await fetchThread(atUri);
@@ -341,7 +499,53 @@
         navigator.clipboard.writeText(shareUrl).then(()=>{ setCopied(true); setTimeout(()=>setCopied(false),2000); });
       }
 
+      function collapseAll() { setCollapseKey(k => k + 1); }
+      function expandAll() { setExpandKey(k => k + 1); }
+
+      function clearFilters() {
+        setHideStubs(false); setCollapseNonOP(false);
+        setMinLikes(''); setMinReplies(''); setUserSearch('');
+      }
+
+      function jumpToLongest() {
+        if (!longestBranch) return;
+        const rkey = longestBranch.node.post.uri.split('/').pop();
+        document.getElementById('post-'+rkey)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }
+
       const total = thread ? 1+countAll(thread) : 0;
+      const rootAuthorDid = thread?.post?.author?.did || '';
+      const longestBranch = useMemo(() => thread ? findLongestBranch(thread) : null, [thread]);
+      const topBranchCount = thread ? validReplies(thread).length : 0;
+
+      // Pre-compute subtree sets for O(n) filtering
+      const opSubtreeSet = useMemo(() => {
+        if (!thread || !collapseNonOP) return null;
+        const set = new Set();
+        computeOpSubtreeSet(thread, rootAuthorDid, set);
+        return set;
+      }, [thread, collapseNonOP, rootAuthorDid]);
+
+      const userSubtreeSet = useMemo(() => {
+        const q = userSearch.trim();
+        if (!thread || !q) return null;
+        const set = new Set();
+        computeUserSubtreeSet(thread, q, set);
+        return set;
+      }, [thread, userSearch]);
+
+      const filters = useMemo(() => ({
+        hideStubs,
+        collapseNonOP,
+        minLikes: parseInt(minLikes) || 0,
+        minReplies: parseInt(minReplies) || 0,
+        userSearch: userSearch.trim(),
+        opSubtreeSet,
+        userSubtreeSet,
+      }), [hideStubs, collapseNonOP, minLikes, minReplies, userSearch, opSubtreeSet, userSubtreeSet]);
+
+      const anyFilterActive = hideStubs || collapseNonOP ||
+        (parseInt(minLikes) > 0) || (parseInt(minReplies) > 0) || userSearch.trim();
 
       return html`
         <div class="max-w-2xl mx-auto px-4 py-8">
@@ -373,8 +577,83 @@
             </div>
           `}
           ${thread && html`
-            <div class="text-xs text-gray-400 mb-3">${total} post${total!==1?'s':''} in thread</div>
-            <${PostCard} node=${thread} isRoot=${true} depth=${0} />
+            <!-- Stats + controls row -->
+            <div class="mb-3 flex flex-wrap items-center gap-2 text-xs">
+              <span class="text-gray-400">
+                ${total} post${total!==1?'s':''} in thread
+                ${topBranchCount > 0 ? ` · ${topBranchCount} top-level branch${topBranchCount!==1?'es':''}` : ''}
+              </span>
+              <div class="flex gap-1.5 ml-auto flex-wrap">
+                <button onClick=${expandAll}
+                  class="px-2.5 py-1 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600 font-medium transition-colors">
+                  ▼ Expand All
+                </button>
+                <button onClick=${collapseAll}
+                  class="px-2.5 py-1 bg-white border border-gray-200 rounded-lg hover:bg-gray-50 text-gray-600 font-medium transition-colors">
+                  ▶ Collapse All
+                </button>
+                ${longestBranch && html`
+                  <button onClick=${jumpToLongest}
+                    class="px-2.5 py-1 bg-indigo-50 border border-indigo-200 rounded-lg hover:bg-indigo-100 text-indigo-700 font-medium transition-colors">
+                    📈 Longest (${longestBranch.postCount} post${longestBranch.postCount!==1?'s':''})
+                  </button>
+                `}
+              </div>
+            </div>
+
+            <!-- Filters row -->
+            <div class=${`mb-4 px-3 py-2.5 rounded-xl border flex flex-wrap items-center gap-x-4 gap-y-2 ${anyFilterActive ? 'bg-amber-50 border-amber-200' : 'bg-white border-gray-100'}`}>
+              <label class="flex items-center gap-1.5 cursor-pointer text-xs text-gray-700 select-none whitespace-nowrap"
+                title="Hide leaf posts that have no replies">
+                <input type="checkbox" checked=${hideStubs}
+                  onChange=${e=>setHideStubs(e.target.checked)} />
+                Hide stubs
+              </label>
+              <label class="flex items-center gap-1.5 cursor-pointer text-xs text-gray-700 select-none whitespace-nowrap"
+                title="Auto-collapse branches where the OP (thread author) never replied">
+                <input type="checkbox" checked=${collapseNonOP}
+                  onChange=${e=>setCollapseNonOP(e.target.checked)} />
+                Collapse non-OP
+              </label>
+              <div class="flex items-center gap-1 text-xs text-gray-500" title="Minimum like count">
+                <span>❤️≥</span>
+                <input type="number" min="0" value=${minLikes}
+                  onInput=${e=>setMinLikes(e.target.value)}
+                  class="w-14 px-1.5 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-sky-300 bg-white"
+                  placeholder="0" />
+              </div>
+              <div class="flex items-center gap-1 text-xs text-gray-500" title="Minimum reply count">
+                <span>💬≥</span>
+                <input type="number" min="0" value=${minReplies}
+                  onInput=${e=>setMinReplies(e.target.value)}
+                  class="w-14 px-1.5 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-sky-300 bg-white"
+                  placeholder="0" />
+              </div>
+              <div class="flex items-center gap-1 text-xs text-gray-500" title="Show only posts from this user (handle or display name)">
+                <span>👤</span>
+                <input type="text" value=${userSearch}
+                  onInput=${e=>setUserSearch(e.target.value)}
+                  class="w-28 px-1.5 py-0.5 border border-gray-200 rounded text-xs focus:outline-none focus:ring-1 focus:ring-sky-300 bg-white"
+                  placeholder="@username" />
+              </div>
+              ${anyFilterActive && html`
+                <button onClick=${clearFilters}
+                  class="ml-auto text-xs text-gray-400 hover:text-gray-600 flex-shrink-0 transition-colors">
+                  ✕ Clear
+                </button>
+              `}
+            </div>
+
+            <${PostCard}
+              node=${thread}
+              isRoot=${true}
+              depth=${0}
+              rootAuthorDid=${rootAuthorDid}
+              filters=${filters}
+              collapseKey=${collapseKey}
+              expandKey=${expandKey}
+              longestBranchUri=${longestBranch?.node?.post?.uri}
+            />
           `}
           ${!thread && !loading && !error && html`
             <div class="text-center py-20 text-gray-400">
