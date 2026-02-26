@@ -57,19 +57,37 @@ jobs:
               f.write(content)
           "
 
-      - name: Setup Node (cache npm for wrangler install)
-        uses: actions/setup-node@v4
+      - name: Cache wrangler
+        id: cache-wrangler
+        uses: actions/cache@v4
         with:
-          node-version: '20'
-          cache: 'npm'
+          path: node_modules
+          key: wrangler-3.90.0-${{ runner.os }}
+
+      - name: Install wrangler
+        if: steps.cache-wrangler.outputs.cache-hit != 'true'
+        run: npm install wrangler@3.90.0 --no-audit --no-fund
 
       - name: Deploy to Cloudflare Pages
         id: deploy
-        uses: cloudflare/wrangler-action@v3
-        with:
-          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          command: pages deploy /tmp/cloudflare-deploy --project-name austegard --branch preview --commit-dirty=true
+        run: |
+          set +e
+          OUTPUT=$(./node_modules/.bin/wrangler pages deploy /tmp/cloudflare-deploy \
+            --project-name austegard \
+            --branch preview \
+            --commit-dirty=true \
+            2>&1)
+          EXIT_CODE=$?
+          echo "$OUTPUT"
+          if [ $EXIT_CODE -ne 0 ]; then
+            echo "::error::Wrangler deploy failed (exit $EXIT_CODE)"
+            exit $EXIT_CODE
+          fi
+          URL=$(echo "$OUTPUT" | grep -oP 'https://[^\s]+\.pages\.dev' | tail -1)
+          echo "url=$URL" >> $GITHUB_OUTPUT
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Summary
         run: |
@@ -78,4 +96,4 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "**Source branch:** \`${BRANCH}\`" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Preview URL:** ${{ steps.deploy.outputs.deployment-url }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Preview URL:** ${{ steps.deploy.outputs.url }}" >> $GITHUB_STEP_SUMMARY
