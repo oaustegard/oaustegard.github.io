@@ -4,10 +4,10 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Bluesky Zeitgeist</title>
-  
+
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-  
+
   <script type="importmap">
     {
       "imports": {
@@ -20,29 +20,31 @@
       }
     }
   </script>
-  
+
   <style>
     @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap');
     body { font-family: 'JetBrains Mono', monospace; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     .animate-pulse-slow { animation: pulse 1.5s ease-in-out infinite; }
+    .drop-target { outline: 2px dashed #a78bfa; outline-offset: -2px; background: rgba(167,139,250,0.1) !important; }
+    .dragging { opacity: 0.5; }
   </style>
 </head>
 <body class="bg-gray-950 text-gray-200 min-h-screen">
   <div id="app"></div>
-  
+
   <script type="module">
     import { render } from 'preact';
-    import { useState, useEffect, useRef } from 'preact/hooks';
+    import { useState, useEffect, useRef, useCallback } from 'preact/hooks';
     import { signal, computed } from '@preact/signals';
     import { html } from 'htm/preact';
 
     // ========================================================================
     // CONSTANTS
     // ========================================================================
-    
+
     const JETSTREAM_URL = 'wss://jetstream1.us-east.bsky.network/subscribe?wantedCollections=app.bsky.feed.post';
-    
+
     // Stopwords - don't use these as standalone search terms
     const STOPWORDS = new Set([
       'a','able','about','above','across','after','again','against','all','almost',
@@ -66,22 +68,37 @@
       'well','went','were','what','when','where','whether','which','while','who',
       'whose','why','will','with','within','without','would','yet','you','your',
     ]);
-    
+
     // Generic words that appear in entities but aren't distinctive
     const GENERIC_ENTITY_WORDS = new Set([
       // Locations
       'beach','city','county','state','street','avenue','road','park','center','centre',
       'university','college','school','institute','hospital','airport','station','tower',
       'building','square','plaza','district','region','area','north','south','east','west',
+      'lake','river','mountain','valley','island','cape','fort','port','point','bay',
       // Titles/roles
       'president','senator','governor','mayor','director','chief','officer','minister',
       'secretary','general','captain','doctor','professor','judge','king','queen','prince',
+      'coach','manager','leader','speaker','chair','chairman','commander','admiral',
       // News/media
       'breaking','news','update','report','alert','live','watch','read','more','via',
+      'says','said','told','according','source','sources','official','officials',
       // Common first names (short)
       'rob','bob','jim','joe','tom','mike','john','james','david','mark','paul','steve',
       'bill','dan','don','ben','sam','tim','ed','al','lee','ray','jay','max','ian',
       'mary','ann','sue','amy','kim','lisa','jane','kate','sara','beth','jean','rose',
+      'chris','matt','nick','rick','will','jack','ryan','adam','eric','sean','gary',
+      'tony','andy','carl','alan','dale','dean','earl','gene','glen','greg','hans',
+      'ivan','leon','luke','marc','neil','omar','otto','owen','pete','phil','ralph',
+      'rex','ross','russ','seth','stan','wade','walt','ward',
+      // Common last names
+      'smith','jones','brown','davis','miller','wilson','moore','taylor','anderson',
+      'thomas','jackson','white','harris','martin','thompson','garcia','martinez',
+      'robinson','clark','rodriguez','lewis','lee','walker','hall','allen','young',
+      'king','wright','lopez','hill','scott','green','adams','baker','nelson','carter',
+      'mitchell','campbell','roberts','turner','parker','evans','edwards','collins',
+      'stewart','morris','murphy','cook','rogers','morgan','cooper','reed','ward',
+      'cox','howard','brooks','kelly','price','bennett','ross','gray','watson',
       // Time
       'day','week','month','year','today','yesterday','tomorrow','monday','tuesday',
       'wednesday','thursday','friday','saturday','sunday','january','february','march',
@@ -89,12 +106,17 @@
       // Other generic
       'new','old','big','great','good','best','first','last','top','high','low','late',
       'early','young','little','small','free','full','real','true','false','open',
+      'long','short','dark','light','super','ultra','mega','mini','major','minor',
+      // Common phrase starters/enders that get Title Cased
+      'just','like','only','even','still','also','very','much','many','some',
+      'than','then','them','they','what','when','where','which','while',
+      'right','left','back','front','side','next','other',
     ]);
 
     // ========================================================================
     // ENTITY EXTRACTION & EXPANSION
     // ========================================================================
-    
+
     function extractEntities(text) {
       // Match multi-word Title Case phrases
       const matches = text.match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)+)\b/g) || [];
@@ -105,56 +127,80 @@
                  'Just','But','And','For','New','See','Get','Let','One','Two'].includes(first);
       });
     }
-    
+
     function expandEntity(entity) {
-      // Generate search variants for an entity
+      // Generate search variants for an entity using word boundaries
       const variants = [entity.toLowerCase()];
-      
+
       const words = entity.split(' ');
+
+      // For 3+ word entities, add consecutive bigrams
+      if (words.length >= 3) {
+        for (let i = 0; i < words.length - 1; i++) {
+          const bigram = words[i].toLowerCase() + ' ' + words[i + 1].toLowerCase();
+          if (!variants.includes(bigram)) variants.push(bigram);
+        }
+      }
+
+      // Only add individual words that are sufficiently distinctive
+      // Require >4 chars (stricter), not a stopword, not generic
       for (const word of words) {
         const lower = word.toLowerCase();
-        // Add word if: >3 chars, not a stopword, not generic
-        if (lower.length > 3 && 
-            !STOPWORDS.has(lower) && 
+        if (lower.length > 4 &&
+            !STOPWORDS.has(lower) &&
             !GENERIC_ENTITY_WORDS.has(lower)) {
           if (!variants.includes(lower)) {
             variants.push(lower);
           }
         }
       }
-      
+
       return variants;
+    }
+
+    // Build pre-compiled regex patterns for variants (word-boundary matching)
+    function buildPatterns(variants) {
+      return variants.map(v => {
+        const escaped = v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp('\\b' + escaped + '\\b', 'i');
+      });
     }
 
     // ========================================================================
     // GLOBAL STATE
     // ========================================================================
-    
+
     const phase = signal('idle'); // idle | sampling | tracking
     const error = signal(null);
     const connectionStatus = signal('disconnected');
-    
+
     // Sampling state
     const postCount = signal(0);
     const postsPerSecond = signal(0);
     const entities = signal({}); // { name: count }
     const languages = signal({});
-    
-    // Tracking state  
-    const selectedTopics = signal([]); // [{ name, variants }]
+
+    // Tracking state
+    const selectedTopics = signal([]); // [{ name, variants, patterns, members? }]
     const topicFrequencies = signal({}); // { name: currentWindowCount }
     const frequencyHistory = signal([]); // [{ time, topic1: freq, topic2: freq, ... }]
+    const matchingPosts = signal([]); // [{ text, topics, time, did }]
+
+    // Drag state (for entity grouping)
+    const dragSource = signal(null); // entity name being dragged
 
     // ========================================================================
     // MAIN APP
     // ========================================================================
-    
+
     function App() {
       const wsRef = useRef(null);
       const chartRef = useRef(null);
       const chartInstance = useRef(null);
       const statsRef = useRef({ count: 0, windowStart: Date.now(), lastCounts: {} });
       const historyIntervalRef = useRef(null);
+      const postFlushRef = useRef(null);
+      const postsContainerRef = useRef(null);
 
       // Cleanup
       useEffect(() => {
@@ -162,19 +208,27 @@
           if (wsRef.current) wsRef.current.close();
           if (chartInstance.current) chartInstance.current.destroy();
           if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+          if (postFlushRef.current) clearInterval(postFlushRef.current);
         };
       }, []);
+
+      // Auto-scroll matching posts
+      useEffect(() => {
+        if (postsContainerRef.current) {
+          postsContainerRef.current.scrollTop = postsContainerRef.current.scrollHeight;
+        }
+      }, [matchingPosts.value]);
 
       // Update chart data in place
       useEffect(() => {
         if (phase.value !== 'tracking' || !chartRef.current) return;
-        
+
         const history = frequencyHistory.value;
         const topics = selectedTopics.value;
-        
+
         if (!chartInstance.current) {
           const colors = ['#22d3ee', '#f472b6', '#a78bfa', '#34d399', '#fbbf24', '#f87171'];
-          
+
           chartInstance.current = new Chart(chartRef.current, {
             type: 'line',
             data: {
@@ -194,17 +248,17 @@
               maintainAspectRatio: false,
               animation: { duration: 0 }, // Disable animations
               plugins: {
-                legend: { 
+                legend: {
                   position: 'bottom',
                   labels: { color: '#9ca3af', font: { family: 'JetBrains Mono', size: 11 } }
                 }
               },
               scales: {
-                x: { 
+                x: {
                   grid: { color: '#333' },
                   ticks: { color: '#6b7280', maxTicksLimit: 10 }
                 },
-                y: { 
+                y: {
                   grid: { color: '#333' },
                   ticks: { color: '#6b7280' },
                   beginAtZero: true,
@@ -214,7 +268,7 @@
             }
           });
         }
-        
+
         // Update data in place
         const chart = chartInstance.current;
         chart.data.labels = history.map(h => h.time + 's');
@@ -222,13 +276,13 @@
           chart.data.datasets[i].data = history.map(h => h[topic.name] || 0);
         });
         chart.update('none'); // Update without animation
-        
+
       }, [frequencyHistory.value]);
 
       // ====================================================================
       // SAMPLING PHASE - Discover entities
       // ====================================================================
-      
+
       const startSampling = () => {
         phase.value = 'sampling';
         error.value = null;
@@ -236,42 +290,42 @@
         postsPerSecond.value = 0;
         entities.value = {};
         languages.value = {};
-        
-        const state = { 
-          count: 0, 
-          entities: {}, 
+
+        const state = {
+          count: 0,
+          entities: {},
           langs: {},
           startTime: Date.now(),
           lastCount: 0,
         };
-        
+
         try {
           const ws = new WebSocket(JETSTREAM_URL);
           wsRef.current = ws;
-          
+
           ws.onopen = () => {
             connectionStatus.value = 'connected';
             console.log('Connected to Jetstream');
           };
-          
+
           ws.onmessage = (event) => {
             try {
               const data = JSON.parse(event.data);
               if (data.kind !== 'commit') return;
               if (data.commit?.collection !== 'app.bsky.feed.post') return;
               if (data.commit?.operation !== 'create') return;
-              
+
               const text = data.commit?.record?.text;
               if (!text) return;
-              
+
               state.count++;
-              
+
               // Extract entities
               const ents = extractEntities(text);
               for (const e of ents) {
                 state.entities[e] = (state.entities[e] || 0) + 1;
               }
-              
+
               // Track languages
               const langs = data.commit?.record?.langs || [];
               for (const lang of langs) {
@@ -279,16 +333,16 @@
               }
             } catch (e) {}
           };
-          
+
           ws.onerror = () => {
             error.value = 'WebSocket connection failed. This may not work in sandboxed environments.';
             connectionStatus.value = 'error';
           };
-          
+
           ws.onclose = () => {
             connectionStatus.value = 'disconnected';
           };
-          
+
           // Update UI every 500ms
           const updateInterval = setInterval(() => {
             const elapsed = (Date.now() - state.startTime) / 1000;
@@ -297,10 +351,10 @@
             entities.value = { ...state.entities };
             languages.value = { ...state.langs };
           }, 500);
-          
+
           // Store interval for cleanup
           statsRef.current.updateInterval = updateInterval;
-          
+
         } catch (e) {
           error.value = `Connection failed: ${e.message}`;
           phase.value = 'idle';
@@ -316,85 +370,106 @@
       // ====================================================================
       // TRACKING PHASE - Monitor selected topics
       // ====================================================================
-      
+
       const startTracking = () => {
         if (selectedTopics.value.length === 0) return;
-        
+
         phase.value = 'tracking';
         frequencyHistory.value = [];
-        
+        matchingPosts.value = [];
+
         // Reset chart
         if (chartInstance.current) {
           chartInstance.current.destroy();
           chartInstance.current = null;
         }
-        
+
         const state = {
           startTime: Date.now(),
           windowCounts: {},
           windowStart: Date.now(),
+          recentPosts: [],
         };
-        
+
         // Initialize counts
         selectedTopics.value.forEach(t => { state.windowCounts[t.name] = 0; });
         topicFrequencies.value = { ...state.windowCounts };
-        
+
         try {
           const ws = new WebSocket(JETSTREAM_URL);
           wsRef.current = ws;
-          
+
           ws.onopen = () => {
             connectionStatus.value = 'connected';
           };
-          
+
           ws.onmessage = (event) => {
             try {
               const data = JSON.parse(event.data);
               if (data.kind !== 'commit') return;
               if (data.commit?.collection !== 'app.bsky.feed.post') return;
               if (data.commit?.operation !== 'create') return;
-              
+
               const text = data.commit?.record?.text;
               if (!text) return;
-              
-              const textLower = text.toLowerCase();
-              
-              // Check each topic's variants
+
+              // Check each topic's patterns (word-boundary regex matching)
+              const matchedTopics = [];
               selectedTopics.value.forEach(topic => {
-                const matched = topic.variants.some(v => textLower.includes(v));
+                const matched = topic.patterns.some(p => p.test(text));
                 if (matched) {
                   state.windowCounts[topic.name]++;
+                  matchedTopics.push(topic.name);
                 }
               });
+
+              // Capture matching posts for live stream (#108)
+              if (matchedTopics.length > 0) {
+                state.recentPosts.push({
+                  text: text.slice(0, 300),
+                  topics: matchedTopics,
+                  time: new Date().toLocaleTimeString(),
+                  did: data.did,
+                });
+                // Keep buffer manageable
+                if (state.recentPosts.length > 200) {
+                  state.recentPosts = state.recentPosts.slice(-100);
+                }
+              }
             } catch (e) {}
           };
-          
+
           ws.onerror = () => {
             error.value = 'WebSocket connection failed';
             connectionStatus.value = 'error';
           };
-          
+
           ws.onclose = () => {
             connectionStatus.value = 'disconnected';
           };
-          
+
+          // Flush matching posts to signal every 500ms
+          postFlushRef.current = setInterval(() => {
+            matchingPosts.value = state.recentPosts.slice(-50);
+          }, 500);
+
           // Record history every 5 seconds (frequency per window)
           historyIntervalRef.current = setInterval(() => {
             const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
-            
+
             // Create history point with current window counts
             const point = { time: elapsed };
             selectedTopics.value.forEach(topic => {
               point[topic.name] = state.windowCounts[topic.name];
             });
-            
+
             frequencyHistory.value = [...frequencyHistory.value, point].slice(-30);
             topicFrequencies.value = { ...state.windowCounts };
-            
+
             // Reset window counts for next period
             selectedTopics.value.forEach(t => { state.windowCounts[t.name] = 0; });
           }, 5000);
-          
+
         } catch (e) {
           error.value = `Connection failed: ${e.message}`;
           phase.value = 'sampling';
@@ -404,6 +479,7 @@
       const stopTracking = () => {
         if (wsRef.current) wsRef.current.close();
         if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+        if (postFlushRef.current) clearInterval(postFlushRef.current);
         phase.value = 'sampling';
       };
 
@@ -411,6 +487,7 @@
         if (wsRef.current) wsRef.current.close();
         if (statsRef.current.updateInterval) clearInterval(statsRef.current.updateInterval);
         if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+        if (postFlushRef.current) clearInterval(postFlushRef.current);
         if (chartInstance.current) {
           chartInstance.current.destroy();
           chartInstance.current = null;
@@ -420,36 +497,192 @@
         entities.value = {};
         selectedTopics.value = [];
         frequencyHistory.value = [];
+        matchingPosts.value = [];
       };
 
       // ====================================================================
-      // TOPIC SELECTION
+      // TOPIC SELECTION & GROUPING (#106)
       // ====================================================================
-      
+
       const toggleTopic = (name, count) => {
         const current = selectedTopics.value;
-        const exists = current.find(t => t.name === name);
-        
+        const exists = current.find(t => t.name === name || (t.members && t.members.includes(name)));
+
         if (exists) {
-          selectedTopics.value = current.filter(t => t.name !== name);
+          selectedTopics.value = current.filter(t => t !== exists);
         } else if (current.length < 6) {
           const variants = expandEntity(name);
-          selectedTopics.value = [...current, { name, count, variants }];
+          const patterns = buildPatterns(variants);
+          selectedTopics.value = [...current, { name, count, variants, patterns }];
         }
+      };
+
+      // Group two entities together (drag-and-drop)
+      const groupEntities = (targetName, sourceName) => {
+        if (targetName === sourceName) return;
+
+        const current = selectedTopics.value;
+        const targetTopic = current.find(t => t.name === targetName || (t.members && t.members.includes(targetName)));
+        const sourceTopic = current.find(t => t.name === sourceName || (t.members && t.members.includes(sourceName)));
+
+        // If both already exist as selected topics, merge them
+        if (targetTopic && sourceTopic && targetTopic !== sourceTopic) {
+          const merged = mergeTopics(targetTopic, sourceTopic);
+          selectedTopics.value = current.filter(t => t !== targetTopic && t !== sourceTopic).concat(merged);
+          return;
+        }
+
+        // If target is already selected, add source to it
+        if (targetTopic) {
+          const sourceVariants = expandEntity(sourceName);
+          const members = [...(targetTopic.members || [targetTopic.name]), sourceName];
+          const allVariants = [...new Set([...targetTopic.variants, ...sourceVariants])];
+          const patterns = buildPatterns(allVariants);
+          const groupName = members.join(' + ');
+          const updated = {
+            name: groupName,
+            members,
+            count: (targetTopic.count || 0) + (entities.value[sourceName] || 0),
+            variants: allVariants,
+            patterns
+          };
+          selectedTopics.value = current.map(t => t === targetTopic ? updated : t);
+          return;
+        }
+
+        // Neither selected yet — create a new group
+        if (current.length < 6) {
+          const targetVariants = expandEntity(targetName);
+          const sourceVariants = expandEntity(sourceName);
+          const members = [targetName, sourceName];
+          const allVariants = [...new Set([...targetVariants, ...sourceVariants])];
+          const patterns = buildPatterns(allVariants);
+          const groupName = members.join(' + ');
+          selectedTopics.value = [...current, {
+            name: groupName,
+            members,
+            count: (entities.value[targetName] || 0) + (entities.value[sourceName] || 0),
+            variants: allVariants,
+            patterns,
+          }];
+        }
+      };
+
+      const mergeTopics = (a, b) => {
+        const members = [...(a.members || [a.name]), ...(b.members || [b.name])];
+        const allVariants = [...new Set([...a.variants, ...b.variants])];
+        const patterns = buildPatterns(allVariants);
+        return {
+          name: members.join(' + '),
+          members,
+          count: (a.count || 0) + (b.count || 0),
+          variants: allVariants,
+          patterns,
+        };
+      };
+
+      // Remove a single member from a group
+      const removeMemberFromGroup = (topicName, memberName) => {
+        const current = selectedTopics.value;
+        const topic = current.find(t => t.name === topicName);
+        if (!topic || !topic.members) return;
+
+        const remaining = topic.members.filter(m => m !== memberName);
+        if (remaining.length <= 1) {
+          // Dissolve group back to single entity
+          if (remaining.length === 1) {
+            const name = remaining[0];
+            const variants = expandEntity(name);
+            const patterns = buildPatterns(variants);
+            selectedTopics.value = current.map(t => t === topic
+              ? { name, count: entities.value[name] || 0, variants, patterns }
+              : t
+            );
+          } else {
+            selectedTopics.value = current.filter(t => t !== topic);
+          }
+        } else {
+          const allVariants = [...new Set(remaining.flatMap(m => expandEntity(m)))];
+          const patterns = buildPatterns(allVariants);
+          selectedTopics.value = current.map(t => t === topic
+            ? { name: remaining.join(' + '), members: remaining, count: topic.count, variants: allVariants, patterns }
+            : t
+          );
+        }
+      };
+
+      // Drag-and-drop handlers
+      const onDragStart = (e, entityName) => {
+        dragSource.value = entityName;
+        e.target.classList.add('dragging');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', entityName);
+      };
+
+      const onDragEnd = (e) => {
+        dragSource.value = null;
+        e.target.classList.remove('dragging');
+      };
+
+      const onDragOver = (e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = 'move';
+        e.currentTarget.classList.add('drop-target');
+      };
+
+      const onDragLeave = (e) => {
+        e.currentTarget.classList.remove('drop-target');
+      };
+
+      const onDropEntity = (e, targetName) => {
+        e.preventDefault();
+        e.currentTarget.classList.remove('drop-target');
+        const sourceName = e.dataTransfer.getData('text/plain');
+        if (sourceName && sourceName !== targetName) {
+          groupEntities(targetName, sourceName);
+        }
+      };
+
+      const onDropOnTopic = (e, topicIndex) => {
+        e.preventDefault();
+        e.currentTarget.classList.remove('drop-target');
+        const sourceName = e.dataTransfer.getData('text/plain');
+        if (!sourceName) return;
+
+        const topic = selectedTopics.value[topicIndex];
+        if (!topic) return;
+
+        // Don't add if entity is already a member
+        if (topic.members && topic.members.includes(sourceName)) return;
+        if (topic.name === sourceName) return;
+
+        groupEntities(topic.name, sourceName);
+      };
+
+      // ====================================================================
+      // SEARCH (#109)
+      // ====================================================================
+
+      const searchBsky = (query) => {
+        window.open(`https://bsky.app/search?q=${encodeURIComponent(query)}`, '_blank');
+      };
+
+      const searchGoogleNews = (query) => {
+        window.open(`https://news.google.com/search?q=${encodeURIComponent(query)}`, '_blank');
       };
 
       // ====================================================================
       // DERIVED DATA
       // ====================================================================
-      
-      const topEntities = computed(() => 
+
+      const topEntities = computed(() =>
         Object.entries(entities.value)
           .filter(([_, n]) => n >= 2)
           .sort((a, b) => b[1] - a[1])
           .slice(0, 20)
       );
 
-      const langData = computed(() => 
+      const langData = computed(() =>
         Object.entries(languages.value)
           .sort((a, b) => b[1] - a[1])
           .slice(0, 6)
@@ -458,6 +691,8 @@
       // ====================================================================
       // RENDER
       // ====================================================================
+
+      const TOPIC_COLORS = ['cyan', 'pink', 'purple', 'green', 'yellow', 'red'];
 
       return html`
         <div class="max-w-6xl mx-auto p-4">
@@ -471,7 +706,7 @@
                 FIREHOSE • ENTITY DETECTION • TOPIC TRACKING
               </p>
             </div>
-            
+
             <div class="flex items-center gap-3">
               <!-- Connection status -->
               <div class="flex items-center gap-2 text-xs">
@@ -481,40 +716,40 @@
                 }"></span>
                 <span class="text-gray-500">${connectionStatus.value}</span>
               </div>
-              
+
               ${phase.value === 'idle' && html`
-                <button 
+                <button
                   onClick=${startSampling}
                   class="bg-gradient-to-r from-cyan-500 to-blue-500 text-black font-semibold px-5 py-2 rounded-lg text-sm hover:opacity-90"
                 >
                   ▶ CONNECT TO FIREHOSE
                 </button>
               `}
-              
+
               ${phase.value === 'sampling' && html`
-                <button 
+                <button
                   onClick=${stopSampling}
                   class="bg-gray-700 text-gray-200 font-semibold px-4 py-2 rounded-lg text-sm"
                 >
                   ■ PAUSE
                 </button>
-                <button 
+                <button
                   onClick=${startTracking}
                   disabled=${selectedTopics.value.length === 0}
                   class="bg-gradient-to-r from-purple-500 to-pink-500 text-white font-semibold px-4 py-2 rounded-lg text-sm disabled:opacity-40"
                 >
                   ▶ TRACK (${selectedTopics.value.length})
                 </button>
-                <button 
+                <button
                   onClick=${reset}
                   class="bg-gray-800 text-gray-400 px-3 py-2 rounded-lg text-sm border border-gray-700"
                 >
                   ↺
                 </button>
               `}
-              
+
               ${phase.value === 'tracking' && html`
-                <button 
+                <button
                   onClick=${stopTracking}
                   class="bg-gradient-to-r from-yellow-500 to-orange-500 text-black font-semibold px-5 py-2 rounded-lg text-sm"
                 >
@@ -540,6 +775,9 @@
               <p class="text-gray-500 text-sm mt-2 text-center max-w-md">
                 Connects to Bluesky's Jetstream firehose (~50 posts/sec), detects trending entities via Title Case extraction, then tracks selected topics in real-time.
               </p>
+              <p class="text-gray-600 text-xs mt-4 text-center max-w-md">
+                Tip: Drag and drop entities onto each other to group them before tracking.
+              </p>
             </div>
           `}
 
@@ -557,7 +795,7 @@
                       LIVE
                     </span>
                   </div>
-                  
+
                   <div class="grid grid-cols-3 gap-4">
                     <div>
                       <div class="text-2xl font-bold text-white">${postCount.value.toLocaleString()}</div>
@@ -572,7 +810,7 @@
                       <div class="text-[10px] text-gray-500">ENTITIES</div>
                     </div>
                   </div>
-                  
+
                   ${langData.value.length > 0 && html`
                     <div class="mt-4">
                       <div class="text-[10px] text-gray-500 mb-2">LANGUAGES</div>
@@ -589,20 +827,31 @@
 
                 <!-- Detected Entities -->
                 <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
-                  <h3 class="text-xs font-semibold text-pink-400 tracking-wider mb-3">DETECTED ENTITIES</h3>
+                  <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xs font-semibold text-pink-400 tracking-wider">DETECTED ENTITIES</h3>
+                    <span class="text-[10px] text-gray-600">drag to group</span>
+                  </div>
                   <div class="space-y-1 max-h-80 overflow-y-auto">
-                    ${topEntities.value.length === 0 
+                    ${topEntities.value.length === 0
                       ? html`<span class="text-gray-500 text-sm">Detecting Title Case phrases...</span>`
                       : topEntities.value.map(([entity, count], i) => {
-                        const isSelected = selectedTopics.value.some(t => t.name === entity);
+                        const isSelected = selectedTopics.value.some(t =>
+                          t.name === entity || (t.members && t.members.includes(entity))
+                        );
                         return html`
                           <button
                             key=${entity}
                             onClick=${() => toggleTopic(entity, count)}
-                            class="w-full flex justify-between items-center px-2 py-1.5 rounded text-left transition-colors ${
-                              isSelected 
-                                ? 'bg-purple-500/20 border border-purple-500/50' 
-                                : i === 0 
+                            draggable="true"
+                            onDragStart=${(e) => onDragStart(e, entity)}
+                            onDragEnd=${onDragEnd}
+                            onDragOver=${onDragOver}
+                            onDragLeave=${onDragLeave}
+                            onDrop=${(e) => onDropEntity(e, entity)}
+                            class="w-full flex justify-between items-center px-2 py-1.5 rounded text-left transition-colors cursor-grab active:cursor-grabbing ${
+                              isSelected
+                                ? 'bg-purple-500/20 border border-purple-500/50'
+                                : i === 0
                                   ? 'bg-pink-500/10 border-l-2 border-pink-500 hover:bg-pink-500/20'
                                   : 'hover:bg-gray-800 border-l-2 border-transparent'
                             }"
@@ -626,23 +875,63 @@
                   <h3 class="text-xs font-semibold text-purple-400 tracking-wider mb-3">
                     SELECTED TOPICS (${selectedTopics.value.length}/6)
                   </h3>
-                  
-                  ${selectedTopics.value.length === 0 
-                    ? html`<p class="text-gray-500 text-sm">Click entities on the left to select topics for tracking.</p>`
+
+                  ${selectedTopics.value.length === 0
+                    ? html`
+                      <p class="text-gray-500 text-sm">Click entities on the left to select topics for tracking.</p>
+                      <p class="text-gray-600 text-xs mt-2">Drag entities onto each other to create groups with combined search terms.</p>
+                    `
                     : html`
                       <div class="space-y-3">
                         ${selectedTopics.value.map((topic, i) => {
-                          const colors = ['border-cyan-500', 'border-pink-500', 'border-purple-500', 'border-green-500', 'border-yellow-500', 'border-red-500'];
+                          const borderColor = 'border-' + TOPIC_COLORS[i % TOPIC_COLORS.length] + '-500';
                           return html`
-                            <div key=${topic.name} class="bg-gray-900/60 rounded-lg p-3 border-l-2 ${colors[i % colors.length]}">
-                              <div class="flex justify-between items-center mb-2">
-                                <span class="font-medium text-white text-sm">${topic.name}</span>
-                                <button 
-                                  onClick=${() => toggleTopic(topic.name)}
-                                  class="text-gray-500 hover:text-red-400 text-xs"
-                                >
-                                  ✕
-                                </button>
+                            <div
+                              key=${topic.name}
+                              class="bg-gray-900/60 rounded-lg p-3 border-l-2 ${borderColor}"
+                              onDragOver=${onDragOver}
+                              onDragLeave=${onDragLeave}
+                              onDrop=${(e) => onDropOnTopic(e, i)}
+                            >
+                              <div class="flex justify-between items-start mb-2">
+                                <div class="flex-1 min-w-0">
+                                  ${topic.members
+                                    ? html`
+                                      <div class="text-[10px] text-purple-400 mb-1 tracking-wider">GROUP</div>
+                                      <div class="flex flex-wrap gap-1">
+                                        ${topic.members.map(member => html`
+                                          <span key=${member} class="inline-flex items-center gap-1 px-1.5 py-0.5 bg-gray-800 rounded text-xs text-gray-300">
+                                            ${member}
+                                            <button
+                                              onClick=${(e) => { e.stopPropagation(); removeMemberFromGroup(topic.name, member); }}
+                                              class="text-gray-500 hover:text-red-400 text-[10px] ml-0.5"
+                                            >×</button>
+                                          </span>
+                                        `)}
+                                      </div>
+                                    `
+                                    : html`<span class="font-medium text-white text-sm">${topic.name}</span>`
+                                  }
+                                </div>
+                                <div class="flex items-center gap-1 ml-2 flex-shrink-0">
+                                  <!-- Search buttons (#109) -->
+                                  <button
+                                    onClick=${() => searchBsky(topic.members ? topic.members[0] : topic.name)}
+                                    class="text-gray-500 hover:text-cyan-400 text-[10px] px-1 py-0.5 rounded hover:bg-gray-800"
+                                    title="Search on Bluesky"
+                                  >bsky</button>
+                                  <button
+                                    onClick=${() => searchGoogleNews(topic.members ? topic.members[0] : topic.name)}
+                                    class="text-gray-500 hover:text-yellow-400 text-[10px] px-1 py-0.5 rounded hover:bg-gray-800"
+                                    title="Search on Google News"
+                                  >news</button>
+                                  <button
+                                    onClick=${() => toggleTopic(topic.members ? topic.members[0] : topic.name)}
+                                    class="text-gray-500 hover:text-red-400 text-xs ml-1"
+                                  >
+                                    ✕
+                                  </button>
+                                </div>
                               </div>
                               <div class="text-[11px] text-gray-500">
                                 <span class="text-gray-400">Search variants:</span> ${topic.variants.join(', ')}
@@ -653,10 +942,10 @@
                       </div>
                     `
                   }
-                  
+
                   ${selectedTopics.value.length > 0 && html`
                     <p class="text-[11px] text-gray-500 mt-4">
-                      Posts matching any variant will be counted. Frequency = matches per 5-second window.
+                      Posts matching any variant (word-boundary) will be counted. Drag more entities onto topics to expand groups.
                     </p>
                   `}
                 </div>
@@ -682,32 +971,77 @@
                 </div>
               </div>
 
-              <!-- Topic Cards -->
+              <!-- Topic Cards with search buttons -->
               <div class="grid grid-cols-2 md:grid-cols-3 gap-3">
                 ${selectedTopics.value.map((topic, i) => {
                   const freq = topicFrequencies.value[topic.name] || 0;
-                  const colors = ['border-cyan-500 text-cyan-400', 'border-pink-500 text-pink-400', 'border-purple-500 text-purple-400', 'border-green-500 text-green-400', 'border-yellow-500 text-yellow-400', 'border-red-500 text-red-400'];
-                  const colorClass = colors[i % colors.length];
-                  
+                  const color = TOPIC_COLORS[i % TOPIC_COLORS.length];
+                  const borderClass = 'border-' + color + '-500';
+                  const textClass = 'text-' + color + '-400';
+
                   return html`
-                    <div key=${topic.name} class="bg-gray-900/60 rounded-lg p-3 border border-gray-800 border-t-2 ${colorClass.split(' ')[0]}">
+                    <div key=${topic.name} class="bg-gray-900/60 rounded-lg p-3 border border-gray-800 border-t-2 ${borderClass}">
                       <div class="flex justify-between items-center mb-2">
-                        <span class="font-medium text-white text-sm truncate">${topic.name}</span>
-                        <span class="text-xl font-bold ${colorClass.split(' ')[1]}">${freq}</span>
+                        <span class="font-medium text-white text-sm truncate">${topic.members ? topic.members.join(' + ') : topic.name}</span>
+                        <span class="text-xl font-bold ${textClass}">${freq}</span>
                       </div>
-                      <div class="text-[10px] text-gray-500">
+                      <div class="text-[10px] text-gray-500 mb-2">
                         ${topic.variants.slice(0, 3).join(', ')}${topic.variants.length > 3 ? '...' : ''}
+                      </div>
+                      <!-- Search buttons (#109) -->
+                      <div class="flex gap-2 pt-1 border-t border-gray-800">
+                        <button
+                          onClick=${() => searchBsky(topic.members ? topic.members[0] : topic.name)}
+                          class="text-[10px] text-gray-500 hover:text-cyan-400 hover:bg-gray-800 px-1.5 py-0.5 rounded"
+                        >🔍 bsky</button>
+                        <button
+                          onClick=${() => searchGoogleNews(topic.members ? topic.members[0] : topic.name)}
+                          class="text-[10px] text-gray-500 hover:text-yellow-400 hover:bg-gray-800 px-1.5 py-0.5 rounded"
+                        >📰 news</button>
                       </div>
                     </div>
                   `;
                 })}
+              </div>
+
+              <!-- Live Matching Posts Stream (#108) -->
+              <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
+                <div class="flex justify-between items-center mb-3">
+                  <h3 class="text-xs font-semibold text-green-400 tracking-wider">MATCHING POSTS</h3>
+                  <span class="flex items-center gap-1.5 px-2 py-0.5 bg-green-500/10 rounded-full text-[10px] text-green-400">
+                    <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-slow"></span>
+                    ${matchingPosts.value.length} posts
+                  </span>
+                </div>
+                <div ref=${postsContainerRef} class="space-y-2 max-h-80 overflow-y-auto">
+                  ${matchingPosts.value.length === 0
+                    ? html`<span class="text-gray-500 text-sm">Waiting for matching posts...</span>`
+                    : matchingPosts.value.slice(-30).map((post, i) => {
+                      const topicColors = post.topics.map(t => {
+                        const idx = selectedTopics.value.findIndex(st => st.name === t);
+                        return TOPIC_COLORS[idx >= 0 ? idx % TOPIC_COLORS.length : 0];
+                      });
+                      return html`
+                        <div key=${i} class="bg-gray-800/50 rounded px-3 py-2 border-l-2 border-${topicColors[0]}-500/60">
+                          <div class="flex items-center gap-2 mb-1">
+                            <span class="text-[10px] text-gray-500">${post.time}</span>
+                            ${post.topics.map((t, ti) => html`
+                              <span key=${t} class="text-[10px] px-1.5 py-0.5 rounded bg-${topicColors[ti]}-500/20 text-${topicColors[ti]}-400">${t.length > 20 ? t.slice(0, 20) + '...' : t}</span>
+                            `)}
+                          </div>
+                          <p class="text-xs text-gray-300 leading-relaxed break-words">${post.text}</p>
+                        </div>
+                      `;
+                    })
+                  }
+                </div>
               </div>
             </div>
           `}
 
           <!-- Footer -->
           <div class="mt-8 pt-4 border-t border-gray-800 text-center text-[11px] text-gray-600">
-            Bluesky Zeitgeist • Jetstream Firehose • Title Case Entity Detection • No external APIs
+            Bluesky Zeitgeist • Jetstream Firehose • Entity Detection • Word-Boundary Matching • Entity Grouping
           </div>
         </div>
       `;
