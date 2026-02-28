@@ -26,6 +26,8 @@
     body { font-family: 'JetBrains Mono', monospace; }
     @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
     .animate-pulse-slow { animation: pulse 1.5s ease-in-out infinite; }
+    .drag-over { outline: 2px dashed #a78bfa; outline-offset: -2px; background: rgba(167, 139, 250, 0.1) !important; }
+    .dragging { opacity: 0.5; }
   </style>
 </head>
 <body class="bg-gray-950 text-gray-200 min-h-screen">
@@ -109,21 +111,59 @@
     function expandEntity(entity) {
       // Generate search variants for an entity
       const variants = [entity.toLowerCase()];
-      
+
       const words = entity.split(' ');
+
+      // Only add individual words if they're distinctive enough
+      // Require >4 chars (stricter), not stopword, not generic, and not too common
+      const distinctiveWords = [];
       for (const word of words) {
         const lower = word.toLowerCase();
-        // Add word if: >3 chars, not a stopword, not generic
-        if (lower.length > 3 && 
-            !STOPWORDS.has(lower) && 
+        if (lower.length > 4 &&
+            !STOPWORDS.has(lower) &&
             !GENERIC_ENTITY_WORDS.has(lower)) {
-          if (!variants.includes(lower)) {
-            variants.push(lower);
+          distinctiveWords.push(lower);
+        }
+      }
+
+      // Only add individual words if the entity has 2+ words and the word is distinctive
+      // This prevents "musk" matching "musky", "elon" matching "elongated" etc.
+      // For 2-word entities, only add words with 5+ chars to be safer
+      const minWordLen = words.length <= 2 ? 5 : 4;
+      for (const w of distinctiveWords) {
+        if (w.length >= minWordLen && !variants.includes(w)) {
+          variants.push(w);
+        }
+      }
+
+      // Add bigrams for entities with 3+ words (e.g., "United States Congress" -> "united states", "states congress")
+      if (words.length >= 3) {
+        for (let i = 0; i < words.length - 1; i++) {
+          const bigram = words[i].toLowerCase() + ' ' + words[i + 1].toLowerCase();
+          if (!variants.includes(bigram)) {
+            variants.push(bigram);
           }
         }
       }
-      
+
       return variants;
+    }
+
+    // Check if text matches a variant using word-boundary-aware matching
+    function matchesVariant(textLower, variant) {
+      const idx = textLower.indexOf(variant);
+      if (idx === -1) return false;
+
+      // For multi-word variants, substring match is fine (already specific)
+      if (variant.includes(' ')) return true;
+
+      // For single words, check word boundaries to reduce false positives
+      // e.g., prevent "trump" matching "trumpet" or "biden" matching "abiden"
+      const before = idx > 0 ? textLower[idx - 1] : ' ';
+      const after = idx + variant.length < textLower.length ? textLower[idx + variant.length] : ' ';
+      const boundaryChars = /[\s.,;:!?'"()\-\[\]{}\/\\@#$%^&*+=<>~`|—–\n\r\t]/;
+      return (idx === 0 || boundaryChars.test(before)) &&
+             (idx + variant.length === textLower.length || boundaryChars.test(after));
     }
 
     // ========================================================================
@@ -140,10 +180,16 @@
     const entities = signal({}); // { name: count }
     const languages = signal({});
     
-    // Tracking state  
-    const selectedTopics = signal([]); // [{ name, variants }]
+    // Tracking state
+    const selectedTopics = signal([]); // [{ name, variants, group? }]
     const topicFrequencies = signal({}); // { name: currentWindowCount }
     const frequencyHistory = signal([]); // [{ time, topic1: freq, topic2: freq, ... }]
+    const matchingPosts = signal([]); // [{ text, topic, time, did }] - live feed (#108)
+    const showLiveFeed = signal(false); // Toggle live post feed visibility
+
+    // Drag-and-drop state (#106)
+    const dragSource = signal(null); // entity name being dragged
+    const dragOverTarget = signal(null); // topic name being dragged over
 
     // ========================================================================
     // MAIN APP
@@ -333,6 +379,7 @@
           startTime: Date.now(),
           windowCounts: {},
           windowStart: Date.now(),
+          recentPosts: [],
         };
         
         // Initialize counts
@@ -353,17 +400,29 @@
               if (data.kind !== 'commit') return;
               if (data.commit?.collection !== 'app.bsky.feed.post') return;
               if (data.commit?.operation !== 'create') return;
-              
+
               const text = data.commit?.record?.text;
               if (!text) return;
-              
+
               const textLower = text.toLowerCase();
-              
-              // Check each topic's variants
+              const did = data.did || '';
+
+              // Check each topic's variants using word-boundary-aware matching (#107)
               selectedTopics.value.forEach(topic => {
-                const matched = topic.variants.some(v => textLower.includes(v));
+                const matched = topic.variants.some(v => matchesVariant(textLower, v));
                 if (matched) {
                   state.windowCounts[topic.name]++;
+                  // Capture matching posts for live feed (#108)
+                  state.recentPosts.push({
+                    text: text.slice(0, 300),
+                    topic: topic.name,
+                    time: new Date().toLocaleTimeString(),
+                    did,
+                  });
+                  // Keep buffer bounded
+                  if (state.recentPosts.length > 100) {
+                    state.recentPosts = state.recentPosts.slice(-50);
+                  }
                 }
               });
             } catch (e) {}
@@ -381,16 +440,21 @@
           // Record history every 5 seconds (frequency per window)
           historyIntervalRef.current = setInterval(() => {
             const elapsed = Math.floor((Date.now() - state.startTime) / 1000);
-            
+
             // Create history point with current window counts
             const point = { time: elapsed };
             selectedTopics.value.forEach(topic => {
               point[topic.name] = state.windowCounts[topic.name];
             });
-            
+
             frequencyHistory.value = [...frequencyHistory.value, point].slice(-30);
             topicFrequencies.value = { ...state.windowCounts };
-            
+
+            // Flush matching posts to signal (#108)
+            if (state.recentPosts.length > 0) {
+              matchingPosts.value = [...state.recentPosts].slice(-50);
+            }
+
             // Reset window counts for next period
             selectedTopics.value.forEach(t => { state.windowCounts[t.name] = 0; });
           }, 5000);
@@ -404,6 +468,8 @@
       const stopTracking = () => {
         if (wsRef.current) wsRef.current.close();
         if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+        matchingPosts.value = [];
+        showLiveFeed.value = false;
         phase.value = 'sampling';
       };
 
@@ -420,6 +486,10 @@
         entities.value = {};
         selectedTopics.value = [];
         frequencyHistory.value = [];
+        matchingPosts.value = [];
+        showLiveFeed.value = false;
+        dragSource.value = null;
+        dragOverTarget.value = null;
       };
 
       // ====================================================================
@@ -428,14 +498,113 @@
       
       const toggleTopic = (name, count) => {
         const current = selectedTopics.value;
-        const exists = current.find(t => t.name === name);
-        
+        const exists = current.find(t => t.name === name || (t.members && t.members.includes(name)));
+
         if (exists) {
-          selectedTopics.value = current.filter(t => t.name !== name);
+          selectedTopics.value = current.filter(t => t.name !== exists.name);
         } else if (current.length < 6) {
           const variants = expandEntity(name);
-          selectedTopics.value = [...current, { name, count, variants }];
+          selectedTopics.value = [...current, { name, count, variants, members: [name] }];
         }
+      };
+
+      // Drag-and-drop handlers for entity grouping (#106)
+      const handleEntityDragStart = (entityName) => {
+        dragSource.value = entityName;
+      };
+
+      const handleEntityDragEnd = () => {
+        dragSource.value = null;
+        dragOverTarget.value = null;
+      };
+
+      const handleTopicDragOver = (e, topicName) => {
+        e.preventDefault();
+        dragOverTarget.value = topicName;
+      };
+
+      const handleTopicDragLeave = () => {
+        dragOverTarget.value = null;
+      };
+
+      const handleTopicDrop = (e, targetTopicName) => {
+        e.preventDefault();
+        const sourceName = dragSource.value;
+        dragSource.value = null;
+        dragOverTarget.value = null;
+
+        if (!sourceName || sourceName === targetTopicName) return;
+
+        const current = selectedTopics.value;
+
+        // Check if source is already in a selected topic
+        const sourceTopicIdx = current.findIndex(t => t.name === sourceName || (t.members && t.members.includes(sourceName)));
+        const targetTopicIdx = current.findIndex(t => t.name === targetTopicName);
+        if (targetTopicIdx === -1) return;
+
+        // If source is already a selected topic, merge the two groups
+        if (sourceTopicIdx !== -1 && sourceTopicIdx !== targetTopicIdx) {
+          const source = current[sourceTopicIdx];
+          const target = current[targetTopicIdx];
+          const mergedMembers = [...(target.members || [target.name]), ...(source.members || [source.name])];
+          const mergedVariants = [...new Set([...target.variants, ...source.variants])];
+          const merged = {
+            name: target.name,
+            count: (target.count || 0) + (source.count || 0),
+            variants: mergedVariants,
+            members: mergedMembers,
+          };
+          selectedTopics.value = current.filter((_, i) => i !== sourceTopicIdx).map(t =>
+            t.name === targetTopicName ? merged : t
+          );
+          return;
+        }
+
+        // Source is an unselected entity — add it to the target group
+        const newVariants = expandEntity(sourceName);
+        const target = current[targetTopicIdx];
+        const merged = {
+          ...target,
+          members: [...(target.members || [target.name]), sourceName],
+          variants: [...new Set([...target.variants, ...newVariants])],
+          count: (target.count || 0) + (entities.value[sourceName] || 0),
+        };
+        selectedTopics.value = current.map(t => t.name === targetTopicName ? merged : t);
+      };
+
+      // Remove a single member from a group (#106)
+      const removeMember = (topicName, memberName) => {
+        const current = selectedTopics.value;
+        const topic = current.find(t => t.name === topicName);
+        if (!topic || !topic.members || topic.members.length <= 1) {
+          // Only one member — just remove the whole topic
+          selectedTopics.value = current.filter(t => t.name !== topicName);
+          return;
+        }
+        const newMembers = topic.members.filter(m => m !== memberName);
+        if (newMembers.length === 0) {
+          selectedTopics.value = current.filter(t => t.name !== topicName);
+          return;
+        }
+        // Recalculate variants from remaining members
+        const newVariants = [...new Set(newMembers.flatMap(m => expandEntity(m)))];
+        const newName = memberName === topicName ? newMembers[0] : topicName;
+        selectedTopics.value = current.map(t => t.name === topicName ? {
+          ...t, name: newName, members: newMembers, variants: newVariants,
+        } : t);
+      };
+
+      // Edit variants manually (#107)
+      const editVariants = (topicName) => {
+        const topic = selectedTopics.value.find(t => t.name === topicName);
+        if (!topic) return;
+        const input = prompt('Edit search variants (comma-separated):', topic.variants.join(', '));
+        if (input === null) return;
+        const newVariants = input.split(',').map(v => v.trim().toLowerCase()).filter(v => v.length > 0);
+        if (newVariants.length === 0) return;
+        selectedTopics.value = selectedTopics.value.map(t =>
+          t.name === topicName ? { ...t, variants: newVariants } : t
+        );
       };
 
       // ====================================================================
@@ -591,18 +760,23 @@
                 <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
                   <h3 class="text-xs font-semibold text-pink-400 tracking-wider mb-3">DETECTED ENTITIES</h3>
                   <div class="space-y-1 max-h-80 overflow-y-auto">
-                    ${topEntities.value.length === 0 
+                    ${topEntities.value.length === 0
                       ? html`<span class="text-gray-500 text-sm">Detecting Title Case phrases...</span>`
                       : topEntities.value.map(([entity, count], i) => {
-                        const isSelected = selectedTopics.value.some(t => t.name === entity);
+                        const isSelected = selectedTopics.value.some(t => t.name === entity || (t.members && t.members.includes(entity)));
                         return html`
                           <button
                             key=${entity}
+                            draggable="true"
+                            onDragStart=${() => handleEntityDragStart(entity)}
+                            onDragEnd=${handleEntityDragEnd}
                             onClick=${() => toggleTopic(entity, count)}
                             class="w-full flex justify-between items-center px-2 py-1.5 rounded text-left transition-colors ${
-                              isSelected 
-                                ? 'bg-purple-500/20 border border-purple-500/50' 
-                                : i === 0 
+                              dragSource.value === entity ? 'dragging' : ''
+                            } ${
+                              isSelected
+                                ? 'bg-purple-500/20 border border-purple-500/50'
+                                : i === 0
                                   ? 'bg-pink-500/10 border-l-2 border-pink-500 hover:bg-pink-500/20'
                                   : 'hover:bg-gray-800 border-l-2 border-transparent'
                             }"
@@ -611,7 +785,10 @@
                               ${i === 0 && !isSelected ? '🔥 ' : ''}${entity}
                               ${isSelected ? ' ✓' : ''}
                             </span>
-                            <span class="text-xs text-gray-500">${count}</span>
+                            <span class="flex items-center gap-1">
+                              <span class="text-xs text-gray-500">${count}</span>
+                              <span class="text-[10px] text-gray-600 cursor-grab" title="Drag to group with a selected topic">⠿</span>
+                            </span>
                           </button>
                         `;
                       })
@@ -627,25 +804,60 @@
                     SELECTED TOPICS (${selectedTopics.value.length}/6)
                   </h3>
                   
-                  ${selectedTopics.value.length === 0 
-                    ? html`<p class="text-gray-500 text-sm">Click entities on the left to select topics for tracking.</p>`
+                  ${selectedTopics.value.length === 0
+                    ? html`<p class="text-gray-500 text-sm">Click entities on the left to select topics for tracking. Drag entities onto a selected topic to group them.</p>`
                     : html`
                       <div class="space-y-3">
                         ${selectedTopics.value.map((topic, i) => {
                           const colors = ['border-cyan-500', 'border-pink-500', 'border-purple-500', 'border-green-500', 'border-yellow-500', 'border-red-500'];
+                          const isDropTarget = dragOverTarget.value === topic.name;
                           return html`
-                            <div key=${topic.name} class="bg-gray-900/60 rounded-lg p-3 border-l-2 ${colors[i % colors.length]}">
+                            <div key=${topic.name}
+                              onDragOver=${(e) => handleTopicDragOver(e, topic.name)}
+                              onDragLeave=${handleTopicDragLeave}
+                              onDrop=${(e) => handleTopicDrop(e, topic.name)}
+                              class="bg-gray-900/60 rounded-lg p-3 border-l-2 ${colors[i % colors.length]} ${isDropTarget ? 'drag-over' : ''} transition-all"
+                            >
                               <div class="flex justify-between items-center mb-2">
                                 <span class="font-medium text-white text-sm">${topic.name}</span>
-                                <button 
-                                  onClick=${() => toggleTopic(topic.name)}
-                                  class="text-gray-500 hover:text-red-400 text-xs"
-                                >
-                                  ✕
-                                </button>
+                                <div class="flex items-center gap-1">
+                                  <!-- Search links (#109) -->
+                                  <a href="https://bsky.app/search?q=${encodeURIComponent(topic.name)}"
+                                    target="_blank" rel="noopener"
+                                    class="text-cyan-500 hover:text-cyan-300 text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20"
+                                    title="Search on Bluesky"
+                                    onClick=${(e) => e.stopPropagation()}
+                                  >bsky</a>
+                                  <a href="https://news.google.com/search?q=${encodeURIComponent(topic.name)}"
+                                    target="_blank" rel="noopener"
+                                    class="text-yellow-500 hover:text-yellow-300 text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 hover:bg-yellow-500/20"
+                                    title="Search on Google News"
+                                    onClick=${(e) => e.stopPropagation()}
+                                  >news</a>
+                                  <!-- Edit variants (#107) -->
+                                  <button
+                                    onClick=${() => editVariants(topic.name)}
+                                    class="text-gray-500 hover:text-blue-400 text-[10px] px-1"
+                                    title="Edit search variants"
+                                  >✎</button>
+                                  <button
+                                    onClick=${() => toggleTopic(topic.name)}
+                                    class="text-gray-500 hover:text-red-400 text-xs"
+                                  >✕</button>
+                                </div>
                               </div>
+                              ${topic.members && topic.members.length > 1 ? html`
+                                <div class="flex flex-wrap gap-1 mb-2">
+                                  ${topic.members.map(m => html`
+                                    <span key=${m} class="inline-flex items-center gap-0.5 px-1.5 py-0.5 bg-purple-500/15 rounded text-[10px] text-purple-300 border border-purple-500/20">
+                                      ${m}
+                                      <button onClick=${() => removeMember(topic.name, m)} class="text-gray-500 hover:text-red-400 ml-0.5">×</button>
+                                    </span>
+                                  `)}
+                                </div>
+                              ` : ''}
                               <div class="text-[11px] text-gray-500">
-                                <span class="text-gray-400">Search variants:</span> ${topic.variants.join(', ')}
+                                <span class="text-gray-400">Variants:</span> ${topic.variants.join(', ')}
                               </div>
                             </div>
                           `;
@@ -653,10 +865,10 @@
                       </div>
                     `
                   }
-                  
+
                   ${selectedTopics.value.length > 0 && html`
                     <p class="text-[11px] text-gray-500 mt-4">
-                      Posts matching any variant will be counted. Frequency = matches per 5-second window.
+                      Drag entities onto topics to group them. Click ✎ to edit variants. Posts matching any variant will be counted per 5-second window.
                     </p>
                   `}
                 </div>
@@ -668,10 +880,18 @@
           ${phase.value === 'tracking' && html`
             <div class="space-y-4">
               <!-- Status -->
-              <div class="bg-cyan-500/10 rounded-lg px-4 py-3 border border-cyan-500/30 flex items-center gap-3">
-                <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse-slow"></span>
-                <span class="text-cyan-400 font-medium text-sm">TRACKING ${selectedTopics.value.length} TOPICS</span>
-                <span class="text-gray-500 text-sm">• Showing matches per 5-second window</span>
+              <div class="bg-cyan-500/10 rounded-lg px-4 py-3 border border-cyan-500/30 flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                  <span class="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-pulse-slow"></span>
+                  <span class="text-cyan-400 font-medium text-sm">TRACKING ${selectedTopics.value.length} TOPICS</span>
+                  <span class="text-gray-500 text-sm">• Matches per 5-second window</span>
+                </div>
+                <button
+                  onClick=${() => { showLiveFeed.value = !showLiveFeed.value; }}
+                  class="text-xs px-3 py-1.5 rounded-lg border ${showLiveFeed.value ? 'bg-green-500/20 border-green-500/50 text-green-400' : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'}"
+                >
+                  ${showLiveFeed.value ? '● LIVE FEED ON' : '○ LIVE FEED'}
+                </button>
               </div>
 
               <!-- Chart -->
@@ -688,20 +908,60 @@
                   const freq = topicFrequencies.value[topic.name] || 0;
                   const colors = ['border-cyan-500 text-cyan-400', 'border-pink-500 text-pink-400', 'border-purple-500 text-purple-400', 'border-green-500 text-green-400', 'border-yellow-500 text-yellow-400', 'border-red-500 text-red-400'];
                   const colorClass = colors[i % colors.length];
-                  
+
                   return html`
                     <div key=${topic.name} class="bg-gray-900/60 rounded-lg p-3 border border-gray-800 border-t-2 ${colorClass.split(' ')[0]}">
                       <div class="flex justify-between items-center mb-2">
                         <span class="font-medium text-white text-sm truncate">${topic.name}</span>
                         <span class="text-xl font-bold ${colorClass.split(' ')[1]}">${freq}</span>
                       </div>
-                      <div class="text-[10px] text-gray-500">
+                      <div class="text-[10px] text-gray-500 mb-1.5">
                         ${topic.variants.slice(0, 3).join(', ')}${topic.variants.length > 3 ? '...' : ''}
+                      </div>
+                      <!-- Search links (#109) -->
+                      <div class="flex gap-1">
+                        <a href="https://bsky.app/search?q=${encodeURIComponent(topic.name)}"
+                          target="_blank" rel="noopener"
+                          class="text-cyan-500 hover:text-cyan-300 text-[10px] px-1.5 py-0.5 rounded bg-cyan-500/10 hover:bg-cyan-500/20"
+                        >search bsky</a>
+                        <a href="https://news.google.com/search?q=${encodeURIComponent(topic.name)}"
+                          target="_blank" rel="noopener"
+                          class="text-yellow-500 hover:text-yellow-300 text-[10px] px-1.5 py-0.5 rounded bg-yellow-500/10 hover:bg-yellow-500/20"
+                        >google news</a>
                       </div>
                     </div>
                   `;
                 })}
               </div>
+
+              <!-- Live Post Feed (#108) -->
+              ${showLiveFeed.value && html`
+                <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
+                  <div class="flex justify-between items-center mb-3">
+                    <h3 class="text-xs font-semibold text-green-400 tracking-wider">MATCHING POSTS</h3>
+                    <span class="text-[10px] text-gray-500">${matchingPosts.value.length} posts captured</span>
+                  </div>
+                  <div class="space-y-2 max-h-80 overflow-y-auto">
+                    ${matchingPosts.value.length === 0
+                      ? html`<p class="text-gray-500 text-sm">Waiting for matching posts...</p>`
+                      : [...matchingPosts.value].reverse().slice(0, 30).map((post, i) => {
+                        const topicIdx = selectedTopics.value.findIndex(t => t.name === post.topic);
+                        const topicColors = ['text-cyan-400', 'text-pink-400', 'text-purple-400', 'text-green-400', 'text-yellow-400', 'text-red-400'];
+                        const tColor = topicColors[topicIdx % topicColors.length] || 'text-gray-400';
+                        return html`
+                          <div key=${i} class="bg-gray-800/50 rounded px-3 py-2 border-l-2 border-gray-700">
+                            <div class="flex justify-between items-start mb-1">
+                              <span class="text-[10px] font-medium ${tColor}">${post.topic}</span>
+                              <span class="text-[10px] text-gray-600">${post.time}</span>
+                            </div>
+                            <p class="text-xs text-gray-300 leading-relaxed break-words">${post.text}</p>
+                          </div>
+                        `;
+                      })
+                    }
+                  </div>
+                </div>
+              `}
             </div>
           `}
 
