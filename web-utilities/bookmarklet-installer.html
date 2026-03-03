@@ -125,9 +125,9 @@
     }
 
     textarea {
-      min-height: 200px;
+      min-height: 400px;
       font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
-      font-size: 0.75rem;
+      font-size: 0.85rem;
       resize: vertical;
     }
 
@@ -320,36 +320,6 @@
       color: var(--text-primary);
     }
 
-    .metadata-editor {
-      background: var(--bg-secondary);
-      padding: 1.5rem;
-      border-radius: 8px;
-      margin: 1rem 0;
-      border: 1px solid var(--border-color);
-    }
-
-    .metadata-editor h3 {
-      margin-top: 0;
-      color: var(--text-primary);
-    }
-
-    .checkbox-group {
-      margin: 1rem 0;
-    }
-
-    .checkbox-group label {
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-      cursor: pointer;
-      font-weight: normal;
-    }
-
-    .checkbox-group input[type="checkbox"] {
-      width: auto;
-      cursor: pointer;
-    }
-
     .export-buttons {
       display: flex;
       gap: 0.5rem;
@@ -449,31 +419,9 @@
         <textarea id="codeTextarea" placeholder="Enter your JavaScript code"></textarea>
       </div>
 
-      <button id="beautifyButton">Format Code</button>
-
-      <!-- Metadata Editor for Custom Code -->
-      <div id="metadataEditor" class="metadata-editor hidden">
-        <h3>✨ Add Metadata (Optional)</h3>
-        <div class="checkbox-group">
-          <label>
-            <input type="checkbox" id="addMetadataCheckbox">
-            Include metadata in my bookmarklet
-          </label>
-        </div>
-        <div id="metadataFields" class="hidden">
-          <div class="input-group">
-            <label for="metaTitleInput">Title</label>
-            <input type="text" id="metaTitleInput" placeholder="My Awesome Bookmarklet">
-          </div>
-          <div class="input-group">
-            <label for="metaDescInput">Description</label>
-            <input type="text" id="metaDescInput" placeholder="What does this bookmarklet do?">
-          </div>
-          <div class="input-group">
-            <label for="metaDomainsInput">Domains (comma-separated)</label>
-            <input type="text" id="metaDomainsInput" placeholder="example.com, sub.example.org">
-          </div>
-        </div>
+      <div style="display: flex; gap: 0.5rem; margin-top: 0.5rem;">
+        <button id="beautifyButton">Format Code</button>
+        <button id="addMetadataBtn" class="secondary">Add Metadata Template</button>
       </div>
 
       <div class="input-group">
@@ -547,13 +495,8 @@
         sourceLinks: document.getElementById('sourceLinks'),
         metadataInfo: document.getElementById('metadataInfo'),
 
-        // Metadata editor
-        metadataEditor: document.getElementById('metadataEditor'),
-        addMetadataCheckbox: document.getElementById('addMetadataCheckbox'),
-        metadataFields: document.getElementById('metadataFields'),
-        metaTitleInput: document.getElementById('metaTitleInput'),
-        metaDescInput: document.getElementById('metaDescInput'),
-        metaDomainsInput: document.getElementById('metaDomainsInput'),
+        // Metadata template
+        addMetadataBtn: document.getElementById('addMetadataBtn'),
 
         // Export
         exportButtons: document.getElementById('exportButtons'),
@@ -609,27 +552,23 @@
       /* ============================================
          METADATA INJECTION
          ============================================ */
-      function injectMetadata(code, metadata) {
-        // Remove existing metadata
-        code = code.replace(/\/\*\s*@\w+:[^*]+\*\/\s*/g, '');
-
-        // Build metadata comments
-        let metadataComments = '';
-        if (metadata.title) {
-          metadataComments += `/* @title: ${metadata.title} */\n`;
-        }
-        if (metadata.description) {
-          metadataComments += `/* @description: ${metadata.description} */\n`;
-        }
-        if (metadata.domains) {
-          metadataComments += `/* @domains: ${metadata.domains} */\n`;
+      function insertMetadataTemplate(code) {
+        // Don't insert if metadata already exists
+        const existing = extractMetadata(code);
+        if (hasMetadata(existing)) {
+          return null;
         }
 
-        // Inject after javascript: prefix if present
-        if (code.trim().startsWith('javascript:')) {
-          return code.replace(/^javascript:\s*/, `javascript:\n${metadataComments}`);
+        const template = `/* @title: Bookmarklet Title */\n/* @description: What does this bookmarklet do? */\n/* @domains: example.com */\n`;
+
+        // Insert after javascript: prefix if present
+        const trimmed = code.trimStart();
+        if (trimmed.startsWith('javascript:')) {
+          const prefixEnd = code.indexOf('javascript:') + 'javascript:'.length;
+          const rest = code.slice(prefixEnd).replace(/^\s*\n?/, '\n');
+          return code.slice(0, prefixEnd) + '\n' + template + rest.trimStart();
         } else {
-          return `javascript:\n${metadataComments}${code}`;
+          return template + code;
         }
       }
 
@@ -906,19 +845,6 @@
 
       async function createBookmarkletUrl(code) {
         try {
-          // Apply metadata if checkbox is checked
-          if (elements.addMetadataCheckbox.checked) {
-            const metadata = {
-              title: elements.metaTitleInput.value.trim(),
-              description: elements.metaDescInput.value.trim(),
-              domains: elements.metaDomainsInput.value.trim()
-            };
-
-            if (metadata.title || metadata.description || metadata.domains) {
-              code = injectMetadata(code, metadata);
-            }
-          }
-
           const minifyResult = await Terser.minify(code);
           if (minifyResult.error) {
             throw minifyResult.error;
@@ -1093,14 +1019,7 @@
 
       // Code editing
       elements.title.addEventListener('input', updateBookmarklet);
-      elements.code.addEventListener('input', () => {
-        // Show metadata editor when user enters custom code
-        if (elements.code.value.trim() && !state.selectedBookmarklet) {
-          elements.metadataEditor.classList.remove('hidden');
-        }
-
-        updateBookmarklet();
-      });
+      elements.code.addEventListener('input', updateBookmarklet);
 
       elements.beautify.addEventListener('click', () => {
         const code = elements.code.value.trim();
@@ -1110,23 +1029,22 @@
         }
       });
 
-      // Metadata editor
-      elements.addMetadataCheckbox.addEventListener('change', () => {
-        if (elements.addMetadataCheckbox.checked) {
-          elements.metadataFields.classList.remove('hidden');
-          // Pre-fill title if available
-          if (!elements.metaTitleInput.value && elements.title.value) {
-            elements.metaTitleInput.value = elements.title.value;
-          }
-        } else {
-          elements.metadataFields.classList.add('hidden');
+      // Add metadata template button
+      elements.addMetadataBtn.addEventListener('click', () => {
+        const code = elements.code.value;
+        const result = insertMetadataTemplate(code);
+        if (result === null) {
+          showWarning('Metadata already exists in the code. Edit the /* @key: value */ comments directly.');
+          return;
         }
+        // Pre-fill @title with the bookmarklet name field if available
+        const titleValue = elements.title.value.trim();
+        elements.code.value = titleValue
+          ? result.replace('/* @title: Bookmarklet Title */', `/* @title: ${titleValue} */`)
+          : result;
+        elements.code.focus();
         updateBookmarklet();
       });
-
-      elements.metaTitleInput.addEventListener('input', updateBookmarklet);
-      elements.metaDescInput.addEventListener('input', updateBookmarklet);
-      elements.metaDomainsInput.addEventListener('input', updateBookmarklet);
 
       // Export buttons
       elements.downloadBtn.addEventListener('click', downloadBookmarklet);
