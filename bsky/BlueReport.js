@@ -131,7 +131,6 @@ class BlueReportStore {
                 console.log('No new events to process');
                 return;
             }
-            console.log(`Processed into ${events.length} events`);
 
             await this.storeEvents(events);
             await this.aggregateData();
