@@ -79,18 +79,15 @@ class BlueReportStore {
     }
 
     async init() {
-        console.log('Initializing BlueReportStore...');
         this.db = await new Promise((resolve, reject) => {
             const request = indexedDB.open('BlueReport', 1);
 
             request.onerror = () => reject(request.error);
             request.onsuccess = () => {
-                console.log('IndexedDB opened successfully');
                 resolve(request.result);
             };
 
             request.onupgradeneeded = (event) => {
-                console.log('Creating/upgrading IndexedDB stores...');
                 const db = event.target.result;
 
                 if (!db.objectStoreNames.contains('events')) {
@@ -112,26 +109,21 @@ class BlueReportStore {
 
     async ingestData() {
         if (this.processingLock) {
-            console.log('Ingestion already in progress, skipping...');
             return;
         }
 
         try {
             this.processingLock = true;
-            console.log('Starting data ingestion...');
             const posts = await this.fetchPosts();
             if (!Array.isArray(posts)) {
                 console.error('Failed to fetch posts or invalid response format');
                 return;
             }
-            console.log(`Fetched ${posts.length} posts`);
 
             const events = await this.processEvents(posts);
             if (!Array.isArray(events) || events.length === 0) {
-                console.log('No new events to process');
                 return;
             }
-            console.log(`Processed into ${events.length} events`);
 
             await this.storeEvents(events);
             await this.aggregateData();
@@ -153,7 +145,6 @@ class BlueReportStore {
             sort = 'latest';
             since = this.lastFetchTimes[this.language];
         }
-        console.log(`Fetching posts for language: ${this.language} with sort: ${sort} and since: ${since}`);
         const params = new URLSearchParams({
             q: 'https*',
             limit: '100',
@@ -170,7 +161,6 @@ class BlueReportStore {
             const data = await response.json();
             const posts = data.posts || [];
             
-            console.log(`Fetched ${posts.length} posts from ${uri}`);
             // Update the last fetch time for the current language
             this.lastFetchTimes[this.language] = now.toISOString();
             return posts;
@@ -181,7 +171,6 @@ class BlueReportStore {
     }
 
     async refreshLanguage() {
-        console.log(`Refreshing data for language: ${this.language}`);
         // Purge events for the current language
         await new Promise((resolve, reject) => {
             const tx = this.db.transaction('events', 'readwrite');
@@ -225,7 +214,6 @@ class BlueReportStore {
         this.seenPosts = new Set();
         this.seenPostTimes = new Map();
 
-        console.log(`Data for language ${this.language} has been refreshed.`);
         // Trigger an immediate ingest to re-seed with top stories.
         await this.ingestData();
     }
@@ -241,7 +229,6 @@ class BlueReportStore {
           return;
         }
       
-        console.log('Fetching previews for top links...');
         const links = await this.getTopLinks();
         const tx = this.db.transaction('links', 'readwrite');
         const store = tx.objectStore('links');
@@ -318,7 +305,6 @@ class BlueReportStore {
                     thumb: post.embed.external.thumb,
                     uri: url
                 };
-                console.log('Found URL and preview in embed:', url, preview);
                 return { url, preview };
             }
         }
@@ -330,7 +316,6 @@ class BlueReportStore {
                     if (feature.$type === 'app.bsky.richtext.facet#link') {
                         url = this.normalizeUrl(feature.uri);
                         if (url) {
-                            console.log('Found URL in facet:', url);
                             return { url, preview: null };
                         }
                     }
@@ -417,7 +402,6 @@ class BlueReportStore {
                 if (!post) continue;
                 // For language "no", filter out posts with too many non-alpha characters.
                 if (this.language === 'no' && !this.isValidLanguagePost(post)) {
-                    console.log(`Post ${post.cid} filtered out due to non-alpha content`);
                     continue;
                 }
                 const urlData = this.extractUrl(post);
@@ -484,7 +468,6 @@ class BlueReportStore {
     async storeEvents(events) {
         if (!Array.isArray(events) || events.length === 0) return;
         
-        console.log(`Storing ${events.length} events...`);
         const tx = this.db.transaction('events', 'readwrite');
         const store = tx.objectStore('events');
 
@@ -502,7 +485,6 @@ class BlueReportStore {
 
         return new Promise((resolve, reject) => {
             tx.oncomplete = () => {
-                console.log('Events stored successfully');
                 resolve();
             };
             tx.onerror = () => reject(tx.error);
@@ -551,7 +533,6 @@ class BlueReportStore {
     }
 
     async aggregateData() {
-        console.log('Aggregating data...');
         // Purge any events/links older than 24 hrs.
         await this.purgeOldData();
 
@@ -566,7 +547,6 @@ class BlueReportStore {
                 request.onerror = () => reject(request.error);
             });
 
-            console.log(`Aggregating ${events.length} events...`);
 
             // Aggregate events by URL and language, while tracking the most recent event timestamp.
             const aggregated = {};
@@ -613,7 +593,6 @@ class BlueReportStore {
             });
 
             this.lastUpdate = now;
-            console.log('Data aggregation complete');
         } catch (error) {
             console.error('Error during aggregation:', error);
             tx.abort();
@@ -649,7 +628,6 @@ class BlueReportStore {
     
 
     async getTopLinks(n = 20) {
-        console.log(`Getting top links for language: ${this.language}`);
         return new Promise((resolve, reject) => {
             const tx = this.db.transaction('links', 'readonly');
             const store = tx.objectStore('links');
@@ -669,11 +647,9 @@ class BlueReportStore {
                     if (links.length < n) {
                         cursor.continue();
                     } else {
-                        console.log(`Retrieved ${links.length} top links`);
                         resolve(links);
                     }
                 } else {
-                    console.log(`Retrieved ${links.length} top links`);
                     resolve(links);
                 }
             };
@@ -773,7 +749,6 @@ class BlueReport {
           intervalSelect.value = this.store.updateInterval.toString();
           intervalSelect.addEventListener('change', (e) => {
             const newInterval = parseInt(e.target.value);
-            console.log(`Changing update interval to ${newInterval}ms`);
             this.store.updateInterval = newInterval;
             this.store.saveSettings();
             this.store.updateURL();
@@ -788,7 +763,6 @@ class BlueReport {
         const refreshBtn = document.getElementById('refresh-language');
         if (refreshBtn) {
           refreshBtn.addEventListener('click', async () => {
-            console.log('Refresh button clicked');
             await this.store.refreshLanguage();
             await this.updateUI();
           });
@@ -847,7 +821,6 @@ class BlueReport {
     }
 
     restartTimer() {
-        console.log('Restarting timer...');
         if (this.updateTimer) {
             clearTimeout(this.updateTimer);
             this.updateTimer = null;
@@ -860,14 +833,12 @@ class BlueReport {
     
     async start() {
         if (this.running) return;
-        console.log('Starting BlueReport...');
         this.running = true;
         await this.store.init();
         this.scheduleUpdate();
     }
 
     pause() {
-        console.log('Pausing BlueReport...');
         this.running = false;
         if (this.updateTimer) {
             clearTimeout(this.updateTimer);
@@ -882,7 +853,6 @@ class BlueReport {
     async updateUI() {
         if (!this.running) return;
         
-        console.log('Updating UI...');
         const links = await this.store.getTopLinks();
         const container = document.querySelector('.link-group');
         if (!container) {
