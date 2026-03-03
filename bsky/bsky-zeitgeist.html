@@ -75,15 +75,30 @@
       'beach','city','county','state','street','avenue','road','park','center','centre',
       'university','college','school','institute','hospital','airport','station','tower',
       'building','square','plaza','district','region','area','north','south','east','west',
+      'lake','river','mountain','valley','island','cape','fort','port','point','bay',
       // Titles/roles
       'president','senator','governor','mayor','director','chief','officer','minister',
       'secretary','general','captain','doctor','professor','judge','king','queen','prince',
-      // News/media
+      'coach','manager','leader','speaker','chair','chairman','commander','admiral',
+      // News/media verbs (often capitalized in headlines)
       'breaking','news','update','report','alert','live','watch','read','more','via',
+      'says','said','told','according','source','sources','official','officials',
       // Common first names (short)
       'rob','bob','jim','joe','tom','mike','john','james','david','mark','paul','steve',
       'bill','dan','don','ben','sam','tim','ed','al','lee','ray','jay','max','ian',
       'mary','ann','sue','amy','kim','lisa','jane','kate','sara','beth','jean','rose',
+      'chris','matt','nick','rick','will','jack','ryan','adam','eric','sean','gary',
+      'tony','andy','carl','alan','dale','dean','earl','gene','glen','greg','hans',
+      'ivan','leon','luke','marc','neil','omar','otto','owen','pete','phil','ralph',
+      'rex','ross','russ','seth','stan','wade','walt','ward',
+      // Common last names
+      'smith','jones','brown','davis','miller','wilson','moore','taylor','anderson',
+      'thomas','jackson','white','harris','martin','thompson','garcia','martinez',
+      'robinson','clark','rodriguez','lewis','lee','walker','hall','allen','young',
+      'king','wright','lopez','hill','scott','green','adams','baker','nelson','carter',
+      'mitchell','campbell','roberts','turner','parker','evans','edwards','collins',
+      'stewart','morris','murphy','cook','rogers','morgan','cooper','reed','ward',
+      'cox','howard','brooks','kelly','price','bennett','ross','gray','watson',
       // Time
       'day','week','month','year','today','yesterday','tomorrow','monday','tuesday',
       'wednesday','thursday','friday','saturday','sunday','january','february','march',
@@ -91,6 +106,11 @@
       // Other generic
       'new','old','big','great','good','best','first','last','top','high','low','late',
       'early','young','little','small','free','full','real','true','false','open',
+      'long','short','dark','light','super','ultra','mega','mini','major','minor',
+      // Common phrase words that get Title Cased
+      'just','like','only','even','still','also','very','much','many','some',
+      'than','then','them','they','what','when','where','which','while',
+      'right','left','back','front','side','next','other',
     ]);
 
     // ========================================================================
@@ -201,6 +221,8 @@
       const chartInstance = useRef(null);
       const statsRef = useRef({ count: 0, windowStart: Date.now(), lastCounts: {} });
       const historyIntervalRef = useRef(null);
+      const postFlushRef = useRef(null);
+      const postsContainerRef = useRef(null);
 
       // Cleanup
       useEffect(() => {
@@ -208,8 +230,16 @@
           if (wsRef.current) wsRef.current.close();
           if (chartInstance.current) chartInstance.current.destroy();
           if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+          if (postFlushRef.current) clearInterval(postFlushRef.current);
         };
       }, []);
+
+      // Auto-scroll matching posts to bottom as new ones arrive
+      useEffect(() => {
+        if (postsContainerRef.current) {
+          postsContainerRef.current.scrollTop = postsContainerRef.current.scrollHeight;
+        }
+      }, [matchingPosts.value]);
 
       // Update chart data in place
       useEffect(() => {
@@ -408,23 +438,28 @@
               const did = data.did || '';
 
               // Check each topic's variants using word-boundary-aware matching (#107)
+              const matchedTopics = [];
               selectedTopics.value.forEach(topic => {
                 const matched = topic.variants.some(v => matchesVariant(textLower, v));
                 if (matched) {
                   state.windowCounts[topic.name]++;
-                  // Capture matching posts for live feed (#108)
-                  state.recentPosts.push({
-                    text: text.slice(0, 300),
-                    topic: topic.name,
-                    time: new Date().toLocaleTimeString(),
-                    did,
-                  });
-                  // Keep buffer bounded
-                  if (state.recentPosts.length > 100) {
-                    state.recentPosts = state.recentPosts.slice(-50);
-                  }
+                  matchedTopics.push(topic.name);
                 }
               });
+
+              // Capture post once with all matched topics (#108)
+              if (matchedTopics.length > 0) {
+                state.recentPosts.push({
+                  text: text.slice(0, 300),
+                  topics: matchedTopics,
+                  time: new Date().toLocaleTimeString(),
+                  did,
+                });
+                // Keep buffer bounded
+                if (state.recentPosts.length > 200) {
+                  state.recentPosts = state.recentPosts.slice(-100);
+                }
+              }
             } catch (e) {}
           };
           
@@ -450,14 +485,14 @@
             frequencyHistory.value = [...frequencyHistory.value, point].slice(-30);
             topicFrequencies.value = { ...state.windowCounts };
 
-            // Flush matching posts to signal (#108)
-            if (state.recentPosts.length > 0) {
-              matchingPosts.value = [...state.recentPosts].slice(-50);
-            }
-
             // Reset window counts for next period
             selectedTopics.value.forEach(t => { state.windowCounts[t.name] = 0; });
           }, 5000);
+
+          // Flush matching posts to signal every 500ms for responsive live feed (#108)
+          postFlushRef.current = setInterval(() => {
+            matchingPosts.value = state.recentPosts.slice(-50);
+          }, 500);
           
         } catch (e) {
           error.value = `Connection failed: ${e.message}`;
@@ -468,6 +503,7 @@
       const stopTracking = () => {
         if (wsRef.current) wsRef.current.close();
         if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+        if (postFlushRef.current) clearInterval(postFlushRef.current);
         matchingPosts.value = [];
         showLiveFeed.value = false;
         phase.value = 'sampling';
@@ -477,6 +513,7 @@
         if (wsRef.current) wsRef.current.close();
         if (statsRef.current.updateInterval) clearInterval(statsRef.current.updateInterval);
         if (historyIntervalRef.current) clearInterval(historyIntervalRef.current);
+        if (postFlushRef.current) clearInterval(postFlushRef.current);
         if (chartInstance.current) {
           chartInstance.current.destroy();
           chartInstance.current = null;
@@ -939,20 +976,27 @@
                 <div class="bg-gray-900/60 rounded-lg p-4 border border-gray-800">
                   <div class="flex justify-between items-center mb-3">
                     <h3 class="text-xs font-semibold text-green-400 tracking-wider">MATCHING POSTS</h3>
-                    <span class="text-[10px] text-gray-500">${matchingPosts.value.length} posts captured</span>
+                    <span class="flex items-center gap-1.5 px-2 py-0.5 bg-green-500/10 rounded-full text-[10px] text-green-400">
+                      <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse-slow"></span>
+                      ${matchingPosts.value.length} posts
+                    </span>
                   </div>
-                  <div class="space-y-2 max-h-80 overflow-y-auto">
+                  <div ref=${postsContainerRef} class="space-y-2 max-h-80 overflow-y-auto">
                     ${matchingPosts.value.length === 0
                       ? html`<p class="text-gray-500 text-sm">Waiting for matching posts...</p>`
-                      : [...matchingPosts.value].reverse().slice(0, 30).map((post, i) => {
-                        const topicIdx = selectedTopics.value.findIndex(t => t.name === post.topic);
-                        const topicColors = ['text-cyan-400', 'text-pink-400', 'text-purple-400', 'text-green-400', 'text-yellow-400', 'text-red-400'];
-                        const tColor = topicColors[topicIdx % topicColors.length] || 'text-gray-400';
+                      : matchingPosts.value.slice(-30).map((post, i) => {
+                        const TOPIC_COLORS = ['cyan', 'pink', 'purple', 'green', 'yellow', 'red'];
+                        const topicColors = (post.topics || [post.topic]).map(t => {
+                          const idx = selectedTopics.value.findIndex(st => st.name === t);
+                          return TOPIC_COLORS[idx >= 0 ? idx % TOPIC_COLORS.length : 0];
+                        });
                         return html`
-                          <div key=${i} class="bg-gray-800/50 rounded px-3 py-2 border-l-2 border-gray-700">
-                            <div class="flex justify-between items-start mb-1">
-                              <span class="text-[10px] font-medium ${tColor}">${post.topic}</span>
-                              <span class="text-[10px] text-gray-600">${post.time}</span>
+                          <div key=${i} class="bg-gray-800/50 rounded px-3 py-2 border-l-2 border-${topicColors[0]}-500/60">
+                            <div class="flex items-center gap-2 mb-1">
+                              <span class="text-[10px] text-gray-500">${post.time}</span>
+                              ${(post.topics || [post.topic]).map((t, ti) => html`
+                                <span key=${t} class="text-[10px] px-1.5 py-0.5 rounded bg-${topicColors[ti]}-500/20 text-${topicColors[ti]}-400">${t.length > 20 ? t.slice(0, 20) + '...' : t}</span>
+                              `)}
                             </div>
                             <p class="text-xs text-gray-300 leading-relaxed break-words">${post.text}</p>
                           </div>
