@@ -37,7 +37,6 @@ async function processSearch(query, limit, sort) {
         
         /* Log the cursor if available */
         if (searchData.data.cursor) {
-            console.log('Search cursor:', searchData.data.cursor);
             debugLog.add('search_cursor', searchData.data.cursor);
         }
         
