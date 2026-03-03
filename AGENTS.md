@@ -68,6 +68,10 @@ You can run the **Update Code Maps** workflow from GitHub Actions. It lives in `
 
 **Best practice**: Regenerate maps just before committing code changes that affect module interfaces. You can also use the Update Code Maps workflow after changes that alter imports/exports, in addition to the local `codemap.py` command.
 
+## Environment Constraints
+
+- **`gh` CLI is not available.** Do not attempt to use `gh` for creating PRs, viewing issues, or any other GitHub API operations. Use the UI's "Create PR" button instead.
+
 ## Dev Environment Tips
 
 This is a Jekyll-based static site published to GitHub Pages.

@@ -316,6 +316,16 @@
       color: #1f2937;
     }
 
+    kbd {
+      background: #f3f4f6;
+      border: 1px solid #d1d5db;
+      border-radius: 3px;
+      padding: 0.1rem 0.35rem;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 0.85em;
+      box-shadow: 0 1px 0 #d1d5db;
+    }
+
     /* Mobile Styles */
     @media (max-width: 768px) {
       body {
@@ -471,9 +481,12 @@
   <div id="input-section">
     <div id="drop">
       <div class="icon">📄</div>
-      <div><strong>Drop PDF or URL here</strong> or click to browse</div>
+      <div><strong>Drop, paste, or click to browse</strong></div>
       <div style="font-size: 0.85rem; color: #6b7280; margin-top: 0.5rem;">
-        Text extraction happens in your browser - no data leaves your device
+        PDF files and URLs supported &mdash; paste with Ctrl+V / ⌘V
+      </div>
+      <div style="font-size: 0.8rem; color: #9ca3af; margin-top: 0.25rem;">
+        All processing happens in your browser &mdash; no data leaves your device
       </div>
     </div>
     <input type="file" id="fileIn" accept="application/pdf" style="display:none">
@@ -533,10 +546,10 @@
       <h3>💡 URL API</h3>
       <p style="margin: 0.5rem 0;">You can also fetch PDFs from URLs:</p>
       <ul style="margin: 0.5rem 0 0 1.5rem;">
-        <li>Add <code>?url=https://arxiv.org/pdf/2406.11706</code> to this page's URL</li>
-        <li>Short form: <code>?https://arxiv.org/pdf/2406.11706</code></li>
-        <li>With page range: <code>?url=...&amp;pages=1-3,5</code></li>
-        <li>Or drag and drop a PDF URL into the box above</li>
+        <li><strong>Paste:</strong> Copy a PDF URL, then press <kbd>Ctrl+V</kbd> / <kbd>⌘V</kbd> on this page</li>
+        <li><strong>Drag &amp; drop:</strong> Drag a PDF file or URL into the box above</li>
+        <li><strong>URL param:</strong> <code>?url=https://arxiv.org/pdf/2406.11706</code></li>
+        <li><strong>Short form:</strong> <code>?https://arxiv.org/pdf/2406.11706</code></li>
       </ul>
     </div>
   </div>
@@ -722,6 +735,54 @@
       }
     };
     fileInput.onchange = () => handleFile(fileInput.files[0]);
+
+    // Clipboard paste handling
+    document.addEventListener('paste', async (e) => {
+      // Ignore paste if output is showing (user might be selecting text)
+      if (outputContainer.style.display === 'block') return;
+
+      const clipboardData = e.clipboardData;
+      if (!clipboardData) return;
+
+      // Check for pasted PDF files
+      const files = clipboardData.files;
+      if (files.length > 0) {
+        for (const file of files) {
+          if (file.type === 'application/pdf') {
+            e.preventDefault();
+            handleFile(file);
+            return;
+          }
+        }
+      }
+
+      // Check for pasted text that looks like a URL
+      const text = clipboardData.getData('text/plain')?.trim();
+      if (text && (text.startsWith('http://') || text.startsWith('https://'))) {
+        e.preventDefault();
+        try {
+          const file = await fetchPdfFromUrl(text);
+          handleFile(file);
+
+          // Auto-trigger extraction
+          setTimeout(() => {
+            if (extractBtn && !extractBtn.disabled) {
+              extractBtn.click();
+            }
+          }, 500);
+        } catch (error) {
+          progress.innerHTML = `<span class="warning">⚠ Error loading PDF from URL: ${error.message}</span>`;
+          fileInfo.innerHTML = `<span class="warning">Failed to load: ${text}</span>`;
+          console.error('Paste URL error:', error);
+        }
+        return;
+      }
+    });
+
+    // Visual feedback for paste on drop zone
+    drop.addEventListener('focus', () => drop.classList.add('hover'));
+    drop.addEventListener('blur', () => drop.classList.remove('hover'));
+    drop.setAttribute('tabindex', '0');
 
     // Format selection (for input section)
     document.querySelectorAll('input[name="format"]').forEach(radio => {
