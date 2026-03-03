@@ -142,8 +142,11 @@ export function reconstructTextWithFacets(text, facets) {
     function byteToCharOffset(str, byteOffset) {
         let currentByte = 0;
         for (let i = 0; i < str.length; i++) {
-            const char = str[i];
-            const charBytes = new TextEncoder().encode(char).length;
+            const code = str.charCodeAt(i);
+            // UTF-8 byte widths via code-point arithmetic — no allocations needed.
+            // Lone surrogates (0xD800–0xDFFF) count as 3 bytes, matching TextEncoder's
+            // U+FFFD replacement behaviour for unpaired surrogates.
+            const charBytes = code < 0x80 ? 1 : code < 0x800 ? 2 : 3;
             if (currentByte + charBytes > byteOffset) {
                 return i;
             }
