@@ -124,7 +124,6 @@ class BlueReportStore {
                 console.error('Failed to fetch posts or invalid response format');
                 return;
             }
-            console.log(`Fetched ${posts.length} posts`);
 
             const events = await this.processEvents(posts);
             if (!Array.isArray(events) || events.length === 0) {
