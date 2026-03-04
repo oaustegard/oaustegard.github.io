@@ -191,10 +191,9 @@
     const LAYOUT_PAD = 100;
     const VIRT_BUFFER = 300; // px margin around viewport for virtualization
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
-    const GRID_THRESHOLD = 8; // children above this count get grid layout
-    const GRID_COLS = 8; // max columns in grid layout
     const CLUSTER_ZOOM = 0.35; // below this zoom, render dots instead of full cards
     const QUOTE_BATCH = 25; // initial quote posts to show
+    const AUTO_COLLAPSE_CHILDREN = 20; // auto-collapse nodes with more direct children than this
     const API = 'https://public.api.bsky.app/xrpc/';
 
     // ── URL / API helpers ───────────────────────────────────────────────────────
@@ -435,41 +434,30 @@
       }
 
       // Subtree widths (bottom-up), respecting collapsed branches
-      // When a node has many children (>GRID_THRESHOLD), use grid layout:
-      //   children arranged in rows of GRID_COLS, which dramatically reduces canvas width
+      // Uses adaptive gap: when a node has many children, the gap between
+      // siblings shrinks so the tree stays compact while retaining its shape.
       const stw = new Map();
-      const gridInfo = new Map(); // uri -> { cols, rows } for grid-layout nodes
+      function siblingGap(count) {
+        // Smooth reduction: full gap for ≤4, down to 4px for very wide nodes
+        if (count <= 4) return H_GAP;
+        return Math.max(4, Math.round(H_GAP * 4 / count));
+      }
       function computeWidths(uri) {
         const node = nodes.get(uri);
         const ch = collapsedBranches.has(uri)
           ? []
           : (node?.children || []).filter(c => nodes.has(c));
         if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
-
-        // For many children, use grid layout
-        if (ch.length > GRID_THRESHOLD) {
-          // In grid mode, each child gets a single-column slot (no subtree expansion)
-          const cols = Math.min(ch.length, GRID_COLS);
-          const rows = Math.ceil(ch.length / cols);
-          gridInfo.set(uri, { cols, rows });
-          // Still compute child widths (for their own subtrees if expanded later)
-          for (const c of ch) computeWidths(c);
-          const w = cols * CARD_W + (cols - 1) * H_GAP;
-          stw.set(uri, Math.max(CARD_W, w));
-          return stw.get(uri);
-        }
-
-        // Normal tree layout for reasonable child counts
         let total = 0;
         for (const c of ch) total += computeWidths(c);
-        total += (ch.length - 1) * H_GAP;
+        total += (ch.length - 1) * siblingGap(ch.length);
         const w = Math.max(CARD_W, total);
         stw.set(uri, w);
         return w;
       }
       computeWidths(seedUri);
 
-      // Assign reply positions (top-down), respecting collapsed branches and grid layout
+      // Assign reply positions (top-down), respecting collapsed branches
       function assignPos(uri, x, y) {
         pos.set(uri, { x, y });
         const node = nodes.get(uri);
@@ -477,35 +465,14 @@
           ? []
           : (node?.children || []).filter(c => nodes.has(c));
         if (ch.length === 0) return;
-
-        // Grid layout: arrange children in rows×cols grid
-        // Grid children's subtrees are suppressed — user can expand them individually
-        const gi = gridInfo.get(uri);
-        if (gi) {
-          const gridW = gi.cols * CARD_W + (gi.cols - 1) * H_GAP;
-          // Center the grid under the parent CARD, not the subtree
-          const startX = x + CARD_W / 2 - gridW / 2;
-          const startY = y + CARD_H + V_GAP;
-          for (let i = 0; i < ch.length; i++) {
-            const col = i % gi.cols;
-            const row = Math.floor(i / gi.cols);
-            pos.set(ch[i], {
-              x: startX + col * (CARD_W + H_GAP),
-              y: startY + row * (CARD_H + V_GAP),
-            });
-            // Don't recurse — grid children's subtrees stay collapsed in grid mode
-          }
-          return;
-        }
-
-        // Normal tree layout
-        const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * H_GAP;
+        const gap = siblingGap(ch.length);
+        const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * gap;
         let sx = x + CARD_W / 2 - totalW / 2;
         const cy = y + CARD_H + V_GAP;
         for (const c of ch) {
           const cw = stw.get(c);
           assignPos(c, sx + (cw - CARD_W) / 2, cy);
-          sx += cw + H_GAP;
+          sx += cw + gap;
         }
       }
       assignPos(seedUri, 0, 0);
@@ -541,21 +508,8 @@
         const tB = new Date(nodes.get(b)?.post?.record?.createdAt || 0);
         return tA - tB;
       });
-      if (qpList.length > GRID_THRESHOLD) {
-        // Grid layout for quote posts
-        const qCols = Math.min(qpList.length, 4);
-        for (let i = 0; i < qpList.length; i++) {
-          const col = i % qCols;
-          const row = Math.floor(i / qCols);
-          pos.set(qpList[i], {
-            x: qpStartX + col * (CARD_W + H_GAP),
-            y: (row + 1) * (CARD_H + V_GAP),
-          });
-        }
-      } else {
-        for (let i = 0; i < qpList.length; i++) {
-          pos.set(qpList[i], { x: qpStartX, y: (i + 1) * (CARD_H + V_GAP) });
-        }
+      for (let i = 0; i < qpList.length; i++) {
+        pos.set(qpList[i], { x: qpStartX, y: (i + 1) * (CARD_H + V_GAP) });
       }
 
       // Normalize positions
@@ -1003,11 +957,15 @@
           const g = buildGraph(atUri, down, up, qpResult.posts);
           setGraph(g);
 
-          // Auto-collapse seed's children if extremely wide (>40 direct replies)
-          const seedNode = g.nodes.get(atUri);
-          if (seedNode && seedNode.children.length > 40) {
-            setCollapsedBranches(new Set([atUri]));
+          // Auto-collapse any node with many direct children to keep initial view navigable.
+          // The user can expand them individually via the ▶ toggle.
+          const autoCollapsed = new Set();
+          for (const [uri, node] of g.nodes) {
+            if (node.children.length > AUTO_COLLAPSE_CHILDREN) {
+              autoCollapsed.add(uri);
+            }
           }
+          if (autoCollapsed.size > 0) setCollapsedBranches(autoCollapsed);
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       }
