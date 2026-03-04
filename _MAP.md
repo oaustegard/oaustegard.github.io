@@ -1,5 +1,5 @@
 # oaustegard.github.io/
-*Subdirectories: 10*
+*Files: 6 | Subdirectories: 10*
 
 ## Subdirectories
 
@@ -14,3 +14,11 @@
 - [tests/](./tests/_MAP.md)
 - [web-utilities/](./web-utilities/_MAP.md)
 
+## Files
+
+- **404.html** — exports: `showNotFoundMessage`
+- **index.html**
+- **no_ssl.html** — exports: `getQueryParam`
+- **playwright.config.js**
+- **pv.html** — imports: `htmlpreview.js`
+- **tools.html**
