@@ -17,7 +17,11 @@
   </script>
   <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
   <style>
+    html, body { overscroll-behavior: none; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; overflow: hidden; }
+    /* Prevent browser from hijacking touch gestures (scroll/zoom) on the canvas area */
+    .pz-viewport { touch-action: none; -webkit-user-select: none; user-select: none; }
+    .pz-canvas { touch-action: none; }
     .post-text { overflow-wrap: anywhere; word-break: break-word; }
 
     /* Avatar */
@@ -743,7 +747,7 @@
       // Compute layout
       const layout = useMemo(() => graph ? computeLayout(graph) : null, [graph]);
 
-      // Panzoom init
+      // Panzoom init — re-run when layout changes (canvas div only exists when graph is loaded)
       useEffect(() => {
         if (!canvasElRef.current || !window.panzoom) return;
         const pz = window.panzoom(canvasElRef.current, {
@@ -755,8 +759,8 @@
         pzRef.current = pz;
         // Trigger minimap redraws on pan/zoom
         pz.on('transform', () => { setMinimapKey(k => k + 1); });
-        return () => pz.dispose();
-      }, []);
+        return () => { pz.dispose(); pzRef.current = null; };
+      }, [layout]);
 
       // Track minimap refresh
       const [minimapKey, setMinimapKey] = useState(0);
@@ -884,10 +888,10 @@
           ${error && html`<div class="px-4 py-2.5 bg-red-50 border-b border-red-200 text-red-700 text-sm">${error}</div>`}
 
           <!-- Viewport -->
-          <div ref=${viewportRef} class="flex-1 overflow-hidden relative bg-gray-100" style="cursor:grab">
+          <div ref=${viewportRef} class="flex-1 overflow-hidden relative bg-gray-100 pz-viewport" style="cursor:grab">
             ${graph && layout && html`
-              <div ref=${canvasElRef}
-                   style="position:absolute;width:${layout.canvasWidth}px;height:${layout.canvasHeight}px;will-change:transform;">
+              <div ref=${canvasElRef} class="pz-canvas"
+                   style="position:absolute;min-width:200%;min-height:200%;width:${layout.canvasWidth}px;height:${layout.canvasHeight}px;will-change:transform;">
                 <${ConnectionLayer}
                   edges=${graph.edges}
                   positions=${layout.positions}
