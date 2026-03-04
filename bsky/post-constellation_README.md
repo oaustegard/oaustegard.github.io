@@ -20,8 +20,9 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 3. **Zoom**: Use the +/− buttons, scroll wheel, or pinch gesture on touch devices
 4. **Tap a card**: Expand it to see full text, embeds, and action buttons
 5. **Re-seed**: On an expanded card, click "Re-seed ⟳" to make that post the new center
-6. **Center**: Click ⊙ to re-center on the seed post
-7. **Fit**: Click "Fit" to zoom out and see the entire graph
+6. **Collapse/Expand**: Click the ▼/▶ toggle on reply cards to collapse or expand their subtrees
+7. **Center**: Click ⊙ to re-center on the seed post
+8. **Fit**: Click "Fit" to zoom out and see the entire graph
 
 ## Features
 
@@ -29,10 +30,13 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 - **Deterministic tree layout**: Same graph always looks the same
 - **Compact cards** with 2-line text preview; expand on click for full content and embeds
 - **SVG connection lines**: Solid blue for thread relationships, dashed orange with arrows for quotes
-- **Minimap**: Small overview in the bottom-right corner showing all nodes and the current viewport
+- **Viewport virtualization**: Only cards and edges visible on screen (plus a 300px buffer) are rendered to the DOM, enabling smooth performance on large graphs
+- **Branch collapse/expand**: Click the toggle on any reply node to collapse its subtree; shows descendant count so you know what's hidden
+- **Minimap**: Small overview in the bottom-right corner showing all nodes and the current viewport, drawn via requestAnimationFrame for smooth updates during pan/zoom
 - **Legend**: Color-coded line styles explained in the bottom-left corner
 - **Thread indicators**: Posts that are part of their own threads show a 🧵 indicator
 - **URL parameters**: Shareable links via `?url=` query parameter
+- **Stats display**: Shows visible/total post count in the toolbar
 
 ## Technology
 
@@ -64,8 +68,7 @@ All positions are normalized so the minimum coordinate is padded from the canvas
 ## Future Enhancements
 
 - Proportional time mode (vertical position maps to real time)
-- Branch collapse/expand toggles
 - Expand sub-graphs for quote posts (load their own threads)
 - Load-more for truncated thread branches
-- Viewport-based card virtualization for large threads
 - Keyboard navigation
+- Smooth animation on layout changes

@@ -136,6 +136,23 @@
       vertical-align: middle;
       margin-right: 4px;
     }
+
+    /* Collapse toggle */
+    .collapse-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 2px;
+      padding: 1px 5px;
+      border-radius: 6px;
+      font-size: 9px;
+      font-weight: 600;
+      color: #6b7280;
+      background: #f3f4f6;
+      border: none;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    .collapse-btn:hover { background: #e5e7eb; }
   </style>
 </head>
 <body class="bg-gray-100">
@@ -172,6 +189,8 @@
     const QUOTE_X_OFF = CARD_W + 56;
     const QUOTE_Y_STEP = 48;
     const LAYOUT_PAD = 100;
+    const VIRT_BUFFER = 300; // px margin around viewport for virtualization
+    const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
     const API = 'https://public.api.bsky.app/xrpc/';
 
     // ── URL / API helpers ───────────────────────────────────────────────────────
@@ -299,7 +318,7 @@
     // ── Graph building ──────────────────────────────────────────────────────────
 
     function makeNode(uri, post, type) {
-      return { id: uri, post, type, parentId: null, children: [], subtreeWidth: CARD_W };
+      return { id: uri, post, type, parentId: null, children: [], subtreeWidth: CARD_W, descendantCount: 0 };
     }
 
     function buildGraph(seedUri, threadDown, threadUp, quotePostsData) {
@@ -328,7 +347,6 @@
       function walkReplies(threadNode) {
         const replies = validReplies(threadNode);
         const parentUri = threadNode.post.uri;
-        // Sort by likes descending
         replies.sort((a, b) => (b.post.likeCount || 0) - (a.post.likeCount || 0));
         for (const reply of replies) {
           const rUri = reply.post.uri;
@@ -342,6 +360,16 @@
         }
       }
       walkReplies(threadDown);
+
+      // Compute descendant counts for collapse UI
+      function countDesc(uri) {
+        const n = nodes.get(uri);
+        let c = 0;
+        for (const ch of n.children) c += 1 + countDesc(ch);
+        n.descendantCount = c;
+        return c;
+      }
+      countDesc(seedUri);
 
       // 4. Quote chain (what seed quotes)
       const stack = extractQuoteStack(threadDown.post);
@@ -366,14 +394,13 @@
 
     // ── Layout algorithm ────────────────────────────────────────────────────────
 
-    function computeLayout(graph) {
+    function computeLayout(graph, collapsedBranches) {
       const { nodes, edges, seedUri } = graph;
-      const pos = new Map(); // uri -> { x, y }
+      const pos = new Map();
 
-      // 1. Seed at origin
       pos.set(seedUri, { x: 0, y: 0 });
 
-      // 2. Ancestors above seed
+      // Ancestors above seed
       const ancestors = [];
       let cur = seedUri;
       while (nodes.get(cur)?.parentId) {
@@ -388,11 +415,13 @@
         pos.set(ancestors[i], { x: 0, y: -(ancestors.length - i) * (CARD_H + V_GAP) });
       }
 
-      // 3. Subtree widths (bottom-up)
+      // Subtree widths (bottom-up), respecting collapsed branches
       const stw = new Map();
       function computeWidths(uri) {
         const node = nodes.get(uri);
-        const ch = (node?.children || []).filter(c => nodes.has(c));
+        const ch = collapsedBranches.has(uri)
+          ? []
+          : (node?.children || []).filter(c => nodes.has(c));
         if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
         let total = 0;
         for (const c of ch) total += computeWidths(c);
@@ -403,11 +432,13 @@
       }
       computeWidths(seedUri);
 
-      // 4. Assign reply positions (top-down)
+      // Assign reply positions (top-down), respecting collapsed branches
       function assignPos(uri, x, y) {
         pos.set(uri, { x, y });
         const node = nodes.get(uri);
-        const ch = (node?.children || []).filter(c => nodes.has(c));
+        const ch = collapsedBranches.has(uri)
+          ? []
+          : (node?.children || []).filter(c => nodes.has(c));
         if (ch.length === 0) return;
         const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * H_GAP;
         let sx = x + CARD_W / 2 - totalW / 2;
@@ -420,7 +451,7 @@
       }
       assignPos(seedUri, 0, 0);
 
-      // 5. Quoted posts (upper-left diagonal)
+      // Quoted posts (upper-left diagonal)
       const quotedChain = [];
       let qCur = seedUri;
       while (true) {
@@ -433,7 +464,7 @@
         pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
       }
 
-      // 6. Quote posts (lower-right, sorted chronologically)
+      // Quote posts (lower-right, sorted chronologically)
       const qpList = [];
       for (const edge of edges) {
         if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
@@ -448,7 +479,7 @@
         pos.set(qpList[i], { x: QUOTE_X_OFF, y: (i + 1) * (CARD_H + V_GAP) });
       }
 
-      // 7. Normalize: shift all positions so min x/y = LAYOUT_PAD
+      // Normalize positions
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const p of pos.values()) {
         if (p.x < minX) minX = p.x;
@@ -479,7 +510,6 @@
         const my = (y1 + y2) / 2;
         return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
       }
-      // Quote: connect nearest horizontal edges
       const fromCx = fromPos.x + CARD_W / 2, toCx = toPos.x + CARD_W / 2;
       const fromCy = fromPos.y + CARD_H / 2, toCy = toPos.y + CARD_H / 2;
       let x1, y1, x2, y2;
@@ -593,9 +623,10 @@
       return html`<span class="type-badge ${type}">${label}</span>`;
     }
 
-    function ConstellationCard({ node, pos, expanded, onToggle, onReseed }) {
+    function ConstellationCard({ node, pos, expanded, collapsed, onToggle, onReseed, onToggleCollapse }) {
       const p = node.post;
       const hasThread = p.record?.reply || (p.replyCount && p.replyCount > 0);
+      const hasChildren = node.children.length > 0;
       return html`
         <div class="constellation-card type-${node.type} ${expanded ? 'is-expanded' : ''}"
              style="left: ${pos.x}px; top: ${pos.y}px;"
@@ -617,7 +648,16 @@
             ${(node.type === 'quoted' || node.type === 'quote-post') && hasThread && html`
               <span class="text-amber-500" title="Part of a thread">🧵</span>
             `}
-            <span class="ml-auto text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
+            ${hasChildren && html`
+              <button class="collapse-btn ml-auto"
+                      onClick=${e => { e.stopPropagation(); onToggleCollapse(node.id); }}
+                      title=${collapsed ? 'Expand branch' : 'Collapse branch'}>
+                ${collapsed ? '▶' : '▼'} ${node.descendantCount}
+              </button>
+            `}
+            ${!hasChildren && html`
+              <span class="ml-auto text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
+            `}
           </div>
           ${expanded && html`
             <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100" style="font-size:11px">
@@ -626,6 +666,7 @@
                 onClick=${e => e.stopPropagation()}>
                 Open ↗
               </a>
+              <span class="text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
               ${node.type !== 'seed' && html`
                 <button class="text-sky-500 hover:text-sky-700 font-medium ml-auto"
                         onClick=${e => { e.stopPropagation(); onReseed(node.id); }}>
@@ -639,7 +680,7 @@
 
     // ── Connection layer ────────────────────────────────────────────────────────
 
-    function ConnectionLayer({ edges, positions, nodes, canvasWidth, canvasHeight }) {
+    function ConnectionLayer({ edges, positions, canvasWidth, canvasHeight }) {
       return html`
         <svg width=${canvasWidth} height=${canvasHeight}
              style="position:absolute;top:0;left:0;pointer-events:none;overflow:visible;">
@@ -660,20 +701,19 @@
         </svg>`;
     }
 
-    // ── Minimap ─────────────────────────────────────────────────────────────────
+    // ── Minimap (self-updating via rAF, no Preact re-renders) ───────────────────
 
-    function Minimap({ nodes, positions, layout, pzRef, viewportRef }) {
+    function Minimap({ nodes, positions, layout, pzRef, viewportRef, drawRef }) {
       const canvasRef = useRef(null);
       const MINI_W = 140, MINI_H = 90;
 
-      useEffect(() => {
+      const draw = useCallback(() => {
         const ctx = canvasRef.current?.getContext('2d');
         if (!ctx || !layout) return;
         const { canvasWidth: cw, canvasHeight: ch } = layout;
         const scale = Math.min(MINI_W / cw, MINI_H / ch);
         ctx.clearRect(0, 0, MINI_W, MINI_H);
 
-        // Draw nodes as dots
         const typeColors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#6b7280', quoted: '#f97316', 'quote-post': '#fb923c' };
         for (const [uri, node] of nodes) {
           const p = positions.get(uri);
@@ -685,30 +725,35 @@
           ctx.fill();
         }
 
-        // Draw viewport rectangle
         if (pzRef.current && viewportRef.current) {
           const t = pzRef.current.getTransform();
           const vw = viewportRef.current.clientWidth;
           const vh = viewportRef.current.clientHeight;
-          const rx = -t.x / t.scale * scale + 2;
-          const ry = -t.y / t.scale * scale + 2;
-          const rw = vw / t.scale * scale;
-          const rh = vh / t.scale * scale;
           ctx.strokeStyle = '#3b82f6';
           ctx.lineWidth = 1;
-          ctx.strokeRect(rx, ry, rw, rh);
+          ctx.strokeRect(
+            -t.x / t.scale * scale + 2,
+            -t.y / t.scale * scale + 2,
+            vw / t.scale * scale,
+            vh / t.scale * scale
+          );
         }
-      });
+      }, [nodes, positions, layout]);
+
+      // Register draw function for external callers (panzoom transform callback)
+      useEffect(() => {
+        drawRef.current = draw;
+        draw();
+        return () => { drawRef.current = null; };
+      }, [draw, drawRef]);
 
       function handleClick(e) {
         if (!pzRef.current || !viewportRef.current || !layout) return;
         const rect = canvasRef.current.getBoundingClientRect();
-        const mx = e.clientX - rect.left;
-        const my = e.clientY - rect.top;
         const { canvasWidth: cw, canvasHeight: ch } = layout;
         const scale = Math.min(MINI_W / cw, MINI_H / ch);
-        const targetX = (mx - 2) / scale;
-        const targetY = (my - 2) / scale;
+        const targetX = (e.clientX - rect.left - 2) / scale;
+        const targetY = (e.clientY - rect.top - 2) / scale;
         const t = pzRef.current.getTransform();
         const vw = viewportRef.current.clientWidth;
         const vh = viewportRef.current.clientHeight;
@@ -739,15 +784,63 @@
       const [error, setError] = useState('');
       const [graph, setGraph] = useState(null);
       const [expandedCards, setExpandedCards] = useState(new Set());
+      const [collapsedBranches, setCollapsedBranches] = useState(new Set());
+      const [viewRect, setViewRect] = useState(null);
 
       const viewportRef = useRef(null);
       const canvasElRef = useRef(null);
       const pzRef = useRef(null);
+      const minimapDrawRef = useRef(null);
+      const vrTimerRef = useRef(null);
 
-      // Compute layout
-      const layout = useMemo(() => graph ? computeLayout(graph) : null, [graph]);
+      // Layout depends on graph + collapsed branches
+      const layout = useMemo(() => {
+        return graph ? computeLayout(graph, collapsedBranches) : null;
+      }, [graph, collapsedBranches]);
 
-      // Panzoom init — re-run when layout changes (canvas div only exists when graph is loaded)
+      // ── Viewport virtualization ───────────────────────────────────────────
+      function updateViewRect() {
+        if (!pzRef.current || !viewportRef.current) return;
+        const t = pzRef.current.getTransform();
+        const vw = viewportRef.current.clientWidth;
+        const vh = viewportRef.current.clientHeight;
+        setViewRect({
+          left: -t.x / t.scale - VIRT_BUFFER,
+          top: -t.y / t.scale - VIRT_BUFFER,
+          right: (-t.x + vw) / t.scale + VIRT_BUFFER,
+          bottom: (-t.y + vh) / t.scale + VIRT_BUFFER,
+        });
+      }
+
+      // Visible nodes: only those within the viewport rect
+      const visibleUris = useMemo(() => {
+        if (!layout || !viewRect) return null; // null = show all
+        const s = new Set();
+        for (const [uri, pos] of layout.positions) {
+          if (pos.x + CARD_W >= viewRect.left && pos.x <= viewRect.right &&
+              pos.y + CARD_H >= viewRect.top && pos.y <= viewRect.bottom) {
+            s.add(uri);
+          }
+        }
+        // Always include expanded cards and seed
+        for (const uri of expandedCards) {
+          if (layout.positions.has(uri)) s.add(uri);
+        }
+        if (graph) s.add(graph.seedUri);
+        return s;
+      }, [layout, viewRect, expandedCards, graph]);
+
+      // Visible edges: at least one endpoint visible
+      const visibleEdges = useMemo(() => {
+        if (!graph) return [];
+        if (!visibleUris) return graph.edges;
+        return graph.edges.filter(e =>
+          (visibleUris.has(e.from) || visibleUris.has(e.to)) &&
+          layout?.positions.has(e.from) && layout?.positions.has(e.to)
+        );
+      }, [graph, visibleUris, layout]);
+
+      // ── Panzoom init ──────────────────────────────────────────────────────
       useEffect(() => {
         if (!canvasElRef.current || !window.panzoom) return;
         const pz = window.panzoom(canvasElRef.current, {
@@ -757,13 +850,32 @@
           onTouch: (e) => { if (e.target.closest('.constellation-card')) return false; },
         });
         pzRef.current = pz;
-        // Trigger minimap redraws on pan/zoom
-        pz.on('transform', () => { setMinimapKey(k => k + 1); });
-        return () => { pz.dispose(); pzRef.current = null; };
-      }, [layout]);
 
-      // Track minimap refresh
-      const [minimapKey, setMinimapKey] = useState(0);
+        // On transform: redraw minimap (rAF) + throttled viewRect update
+        let lastVR = 0;
+        pz.on('transform', () => {
+          // Minimap: direct rAF draw, no state updates
+          if (minimapDrawRef.current) requestAnimationFrame(minimapDrawRef.current);
+          // ViewRect: throttled state update
+          const now = Date.now();
+          if (now - lastVR > VIRT_THROTTLE) {
+            lastVR = now;
+            updateViewRect();
+          } else if (!vrTimerRef.current) {
+            vrTimerRef.current = setTimeout(() => {
+              vrTimerRef.current = null;
+              lastVR = Date.now();
+              updateViewRect();
+            }, VIRT_THROTTLE);
+          }
+        });
+
+        return () => {
+          pz.dispose();
+          pzRef.current = null;
+          if (vrTimerRef.current) { clearTimeout(vrTimerRef.current); vrTimerRef.current = null; }
+        };
+      }, [layout]);
 
       // Center on seed when layout changes
       useEffect(() => {
@@ -775,12 +887,15 @@
           vw / 2 - layout.seedX - CARD_W / 2,
           vh * 0.38 - layout.seedY - CARD_H / 2
         );
+        // Set initial viewRect
+        requestAnimationFrame(updateViewRect);
       }, [layout]);
 
       async function doLoad(url) {
         url = (url || input).trim();
         if (!url) return;
-        setLoading(true); setError(''); setGraph(null); setExpandedCards(new Set());
+        setLoading(true); setError(''); setGraph(null);
+        setExpandedCards(new Set()); setCollapsedBranches(new Set()); setViewRect(null);
         setUrlParam('url', url);
         try {
           const atUri = await resolveToAtUri(url);
@@ -801,6 +916,14 @@
 
       function toggleCard(uri) {
         setExpandedCards(prev => {
+          const next = new Set(prev);
+          next.has(uri) ? next.delete(uri) : next.add(uri);
+          return next;
+        });
+      }
+
+      function toggleCollapse(uri) {
+        setCollapsedBranches(prev => {
           const next = new Set(prev);
           next.has(uri) ? next.delete(uri) : next.add(uri);
           return next;
@@ -840,6 +963,7 @@
 
       // Stats
       const nodeCount = graph ? graph.nodes.size : 0;
+      const visibleCount = visibleUris ? visibleUris.size : nodeCount;
       const stats = useMemo(() => {
         if (!graph) return {};
         let ancestors = 0, replies = 0, quoted = 0, qp = 0;
@@ -870,7 +994,7 @@
             </div>
             ${graph && html`
               <div class="flex items-center gap-1.5 text-xs text-gray-400 flex-shrink-0">
-                <span>${nodeCount} posts</span>
+                <span title="Visible / total">${visibleCount}/${nodeCount} posts</span>
                 ${stats.ancestors > 0 && html`<span class="text-gray-300">·</span><span>${stats.ancestors} ancestor${stats.ancestors !== 1 ? 's' : ''}</span>`}
                 ${stats.replies > 0 && html`<span class="text-gray-300">·</span><span>${stats.replies} repl${stats.replies !== 1 ? 'ies' : 'y'}</span>`}
                 ${stats.quoted > 0 && html`<span class="text-gray-300">·</span><span>${stats.quoted} quoted</span>`}
@@ -893,28 +1017,31 @@
               <div ref=${canvasElRef} class="pz-canvas"
                    style="position:absolute;min-width:200%;min-height:200%;width:${layout.canvasWidth}px;height:${layout.canvasHeight}px;will-change:transform;">
                 <${ConnectionLayer}
-                  edges=${graph.edges}
+                  edges=${visibleEdges}
                   positions=${layout.positions}
-                  nodes=${graph.nodes}
                   canvasWidth=${layout.canvasWidth}
                   canvasHeight=${layout.canvasHeight} />
-                ${Array.from(graph.nodes.entries()).map(([uri, node]) => {
-                  const p = layout.positions.get(uri);
-                  if (!p) return null;
-                  return html`<${ConstellationCard}
-                    key=${uri} node=${node} pos=${p}
-                    expanded=${expandedCards.has(uri)}
-                    onToggle=${() => toggleCard(uri)}
-                    onReseed=${reseed} />`;
-                })}
+                ${Array.from(graph.nodes.entries())
+                  .filter(([uri]) => !visibleUris || visibleUris.has(uri))
+                  .filter(([uri]) => layout.positions.has(uri))
+                  .map(([uri, node]) => {
+                    const p = layout.positions.get(uri);
+                    return html`<${ConstellationCard}
+                      key=${uri} node=${node} pos=${p}
+                      expanded=${expandedCards.has(uri)}
+                      collapsed=${collapsedBranches.has(uri)}
+                      onToggle=${() => toggleCard(uri)}
+                      onReseed=${reseed}
+                      onToggleCollapse=${toggleCollapse} />`;
+                  })}
               </div>
               <${Minimap}
-                key=${minimapKey}
                 nodes=${graph.nodes}
                 positions=${layout.positions}
                 layout=${layout}
                 pzRef=${pzRef}
-                viewportRef=${viewportRef} />
+                viewportRef=${viewportRef}
+                drawRef=${minimapDrawRef} />
             `}
 
             ${!graph && !loading && !error && html`
