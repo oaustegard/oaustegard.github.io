@@ -31,7 +31,10 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 - **Compact cards** with 2-line text preview; expand on click for full content and embeds
 - **SVG connection lines**: Solid blue for thread relationships, dashed orange with arrows for quotes
 - **Viewport virtualization**: Only cards and edges visible on screen (plus a 300px buffer) are rendered to the DOM, enabling smooth performance on large graphs
+- **Grid layout for wide nodes**: When a post has more than 8 direct replies, children are arranged in a compact grid (8 columns) instead of a single horizontal row, dramatically reducing canvas width (e.g., 94 replies: 2,400px vs 36,800px)
+- **Zoom-aware rendering**: At low zoom levels (<0.35), cards are replaced with lightweight colored rectangles for fast rendering; zoom in to see full card content
 - **Branch collapse/expand**: Click the toggle on any reply node to collapse its subtree; shows descendant count so you know what's hidden
+- **Quote pagination**: Initial load fetches 25 quote posts; click "more quotes" in the toolbar to load additional batches
 - **Minimap**: Small overview in the bottom-right corner showing all nodes and the current viewport, drawn via requestAnimationFrame for smooth updates during pan/zoom
 - **Legend**: Color-coded line styles explained in the bottom-left corner
 - **Thread indicators**: Posts that are part of their own threads show a 🧵 indicator
@@ -52,7 +55,9 @@ The layout uses a two-pass tree algorithm:
 1. **Bottom-up**: Compute subtree widths for each node in the reply tree
 2. **Top-down**: Assign x/y positions, centering children under their parent
 
-Ancestors are placed in a single column above the seed. Quoted posts step diagonally to the upper-left. Quote posts are arranged vertically to the lower-right.
+When a node has more than 8 children, the layout switches to **grid mode**: children are arranged in rows of up to 8 columns. Grid children's subtrees are suppressed in the grid view — use Re-seed to explore deeper threads.
+
+Ancestors are placed in a single column above the seed. Quoted posts step diagonally to the upper-left. Quote posts are arranged in a grid (up to 4 columns) to the lower-right.
 
 All positions are normalized so the minimum coordinate is padded from the canvas origin, ensuring no clipping.
 
@@ -62,7 +67,7 @@ All positions are normalized so the minimum coordinate is padded from the canvas
 |---|---|
 | `app.bsky.feed.getPostThread` (depth=1000, parentHeight=0) | Fetch full reply tree below the seed |
 | `app.bsky.feed.getPostThread` (depth=0, parentHeight=1000) | Fetch ancestor chain above the seed |
-| `app.bsky.feed.getQuotes` (limit=100) | Fetch posts that quote the seed |
+| `app.bsky.feed.getQuotes` (limit=25, paginated) | Fetch posts that quote the seed |
 | `com.atproto.identity.resolveHandle` | Resolve handle to DID (if needed) |
 
 ## Future Enhancements
