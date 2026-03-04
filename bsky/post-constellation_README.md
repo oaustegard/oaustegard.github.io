@@ -31,7 +31,8 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 - **Compact cards** with 2-line text preview; expand on click for full content and embeds
 - **SVG connection lines**: Solid blue for thread relationships, dashed orange with arrows for quotes
 - **Viewport virtualization**: Only cards and edges visible on screen (plus a 300px buffer) are rendered to the DOM, enabling smooth performance on large graphs
-- **Grid layout for wide nodes**: When a post has more than 8 direct replies, children are arranged in a compact grid (8 columns) instead of a single horizontal row, dramatically reducing canvas width (e.g., 94 replies: 2,400px vs 36,800px)
+- **Adaptive compaction**: When a node has many siblings, horizontal gaps shrink proportionally, keeping the tree shape while limiting spread
+- **Auto-collapse**: Nodes with more than 20 direct children start collapsed; click ▶ to expand and explore
 - **Zoom-aware rendering**: At low zoom levels (<0.35), cards are replaced with lightweight colored rectangles for fast rendering; zoom in to see full card content
 - **Branch collapse/expand**: Click the toggle on any reply node to collapse its subtree; shows descendant count so you know what's hidden
 - **Quote pagination**: Initial load fetches 25 quote posts; click "more quotes" in the toolbar to load additional batches
@@ -55,9 +56,9 @@ The layout uses a two-pass tree algorithm:
 1. **Bottom-up**: Compute subtree widths for each node in the reply tree
 2. **Top-down**: Assign x/y positions, centering children under their parent
 
-When a node has more than 8 children, the layout switches to **grid mode**: children are arranged in rows of up to 8 columns. Grid children's subtrees are suppressed in the grid view — use Re-seed to explore deeper threads.
+When a node has many siblings, horizontal gaps between them shrink adaptively (full 28px gap for ≤4 siblings, down to 4px for very wide groups), keeping the tree shape visible while limiting horizontal spread. Nodes with more than 20 direct children start collapsed to keep the initial view navigable.
 
-Ancestors are placed in a single column above the seed. Quoted posts step diagonally to the upper-left. Quote posts are arranged in a grid (up to 4 columns) to the lower-right.
+Ancestors are placed in a single column above the seed. Quoted posts step diagonally to the upper-left. Quote posts are arranged vertically to the lower-right, positioned past the rightmost edge of the reply tree.
 
 All positions are normalized so the minimum coordinate is padded from the canvas origin, ensuring no clipping.
 
