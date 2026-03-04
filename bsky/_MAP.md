@@ -14,7 +14,7 @@
 - **github-search.html** — exports: `sanitizeHTML, get3DaysAgoISO, extractLinksFromFacets, displayPost`
 - **index.html**
 - **list-to-list.html** — exports: `showStatus, showSection, updateProgress, toggleDropdown, parseListUrl, resolveHandle` — imports: `bsky-lib.js`
-- **post-constellation.html** — exports (47): `avatarHue, parseBskyUrl, resolveToAtUri, fetchThreadDown, fetchThreadUp, fetchQuotePosts, fetchSinglePost, timeAgo`... — imports: `preact, hooks, preact`
+- **post-constellation.html** — exports (48): `avatarHue, parseBskyUrl, resolveToAtUri, fetchThreadDown, fetchThreadUp, fetchQuotePosts, fetchSinglePost, timeAgo`... — imports: `preact, hooks, preact`
 - **processor.html** — imports (7): `bsky-core.js, bsky-thread.js, bsky-quote.js, bsky-search.js, bsky-core.js`...
 - **report.html** — imports: `BlueReport.js`
 - **starterpack-to-list.html** — exports: `followRedirectUrl, findStarterPackFromUrl, showStatus, showSection, updateProgress, toggleDropdown` — imports: `bsky-lib.js`
