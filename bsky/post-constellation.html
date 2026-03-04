@@ -1,0 +1,955 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bluesky Post Constellation</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/*preact@10.23.1",
+        "preact/": "https://esm.sh/*preact@10.23.1/",
+        "htm": "https://esm.sh/*htm@3.1.1",
+        "htm/preact": "https://esm.sh/*htm@3.1.1/preact"
+      }
+    }
+  </script>
+  <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; margin: 0; overflow: hidden; }
+    .post-text { overflow-wrap: anywhere; word-break: break-word; }
+
+    /* Avatar */
+    .avatar-wrap {
+      position: relative;
+      width: 24px; height: 24px;
+      border-radius: 50%;
+      overflow: hidden;
+      flex-shrink: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 600; font-size: 0.6rem; color: white;
+    }
+    .avatar-wrap img {
+      position: absolute; inset: 0;
+      width: 100%; height: 100%; object-fit: cover;
+      opacity: 0;
+      transition: opacity 0.15s;
+    }
+    .avatar-wrap img.loaded { opacity: 1; }
+
+    /* Constellation cards */
+    .constellation-card {
+      position: absolute;
+      width: 280px;
+      background: white;
+      border: 1px solid #e5e7eb;
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+      transition: box-shadow 0.15s, border-color 0.15s;
+      user-select: none;
+      font-size: 12px;
+    }
+    .constellation-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+
+    .constellation-card.type-seed {
+      border-color: #3b82f6;
+      box-shadow: 0 0 0 2px rgba(59,130,246,0.18);
+      z-index: 5;
+    }
+    .constellation-card.type-ancestor { border-color: #d1d5db; opacity: 0.88; }
+    .constellation-card.type-quoted { border-left: 3px solid #f97316; }
+    .constellation-card.type-quote-post { border-right: 3px solid #f97316; }
+    .constellation-card.is-expanded {
+      z-index: 20;
+      box-shadow: 0 4px 16px rgba(0,0,0,0.13);
+      cursor: default;
+    }
+
+    /* Type badges */
+    .type-badge {
+      display: inline-block;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 1px 5px;
+      border-radius: 9px;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .type-badge.seed { background: #dbeafe; color: #2563eb; }
+    .type-badge.ancestor { background: #f3f4f6; color: #6b7280; }
+    .type-badge.quoted { background: #ffedd5; color: #c2410c; }
+    .type-badge.quote-post { background: #ffedd5; color: #c2410c; }
+
+    /* SVG connections */
+    .conn-thread { stroke: #3b82f6; stroke-width: 2; fill: none; }
+    .conn-quote { stroke: #f97316; stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
+
+    /* Line clamp for compact text */
+    .line-clamp-2 {
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    /* Toolbar */
+    .toolbar { background: white; border-bottom: 1px solid #e5e7eb; }
+
+    /* Minimap */
+    .minimap {
+      position: absolute;
+      bottom: 12px;
+      right: 12px;
+      background: rgba(255,255,255,0.92);
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 6px;
+      z-index: 30;
+      pointer-events: auto;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+
+    /* Legend */
+    .legend {
+      position: absolute;
+      bottom: 12px;
+      left: 12px;
+      background: rgba(255,255,255,0.92);
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 8px 10px;
+      z-index: 30;
+      font-size: 10px;
+      color: #6b7280;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    }
+    .legend-line {
+      display: inline-block;
+      width: 20px;
+      height: 2px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+  <div id="app"><div style="padding:2rem;color:#888">Loading…</div></div>
+  <div id="err" style="display:none;padding:1rem;background:#fee;color:#900;font-family:monospace;white-space:pre-wrap;position:fixed;bottom:0;left:0;right:0;max-height:40vh;overflow:auto;z-index:9999"></div>
+  <script>
+    window.onerror = (msg,s,l,c,e) => {
+      document.getElementById('err').style.display='block';
+      document.getElementById('err').textContent='Error: '+msg+'\n'+(e&&e.stack||'');
+    };
+    window.addEventListener('unhandledrejection',e=>{
+      document.getElementById('err').style.display='block';
+      document.getElementById('err').textContent+='Rejection: '+(e.reason&&e.reason.stack||e.reason)+'\n';
+    });
+    function avatarHue(str) {
+      let hash = 0;
+      for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
+      return Math.abs(hash) % 360;
+    }
+    window.avatarHue = avatarHue;
+  </script>
+
+  <script type="module">
+    import { render } from 'preact';
+    import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    // ── Constants ───────────────────────────────────────────────────────────────
+
+    const CARD_W = 280;
+    const CARD_H = 108;
+    const V_GAP = 48;
+    const H_GAP = 28;
+    const QUOTE_X_OFF = CARD_W + 56;
+    const QUOTE_Y_STEP = 48;
+    const LAYOUT_PAD = 100;
+    const API = 'https://public.api.bsky.app/xrpc/';
+
+    // ── URL / API helpers ───────────────────────────────────────────────────────
+
+    function parseBskyUrl(url) {
+      const m = url.match(/bsky\.app\/profile\/([^/?# \t]+)\/post\/([^/?# \t]+)/);
+      return m ? { actor: m[1], rkey: m[2] } : null;
+    }
+
+    async function resolveToAtUri(input) {
+      input = input.trim();
+      if (input.startsWith('at://')) return input;
+      const parsed = parseBskyUrl(input);
+      if (!parsed) throw new Error('Paste a bsky.app post URL or an at:// URI');
+      let did = parsed.actor;
+      if (!did.startsWith('did:')) {
+        const r = await fetch(API + 'com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(did));
+        if (!r.ok) throw new Error('Could not resolve handle: ' + did);
+        did = (await r.json()).did;
+      }
+      return 'at://' + did + '/app.bsky.feed.post/' + parsed.rkey;
+    }
+
+    async function fetchThreadDown(atUri) {
+      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=1000&parentHeight=0');
+      if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.message || 'API error ' + r.status); }
+      return (await r.json()).thread;
+    }
+
+    async function fetchThreadUp(atUri) {
+      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=0&parentHeight=1000');
+      if (!r.ok) return null;
+      return (await r.json()).thread;
+    }
+
+    async function fetchQuotePosts(atUri) {
+      const r = await fetch(API + 'app.bsky.feed.getQuotes?uri=' + encodeURIComponent(atUri) + '&limit=100');
+      if (!r.ok) return [];
+      const data = await r.json();
+      return data.posts || [];
+    }
+
+    async function fetchSinglePost(uri) {
+      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(uri) + '&depth=0&parentHeight=0');
+      if (!r.ok) return null;
+      const data = await r.json();
+      if (data.thread?.$type !== 'app.bsky.feed.defs#threadViewPost') return null;
+      return data.thread.post;
+    }
+
+    // ── Display helpers ─────────────────────────────────────────────────────────
+
+    function timeAgo(iso) {
+      if (!iso) return '';
+      const diff = Date.now() - new Date(iso).getTime();
+      const m = Math.floor(diff / 60000), h = Math.floor(diff / 3600000), d = Math.floor(diff / 86400000);
+      if (m < 1) return 'now';
+      if (h < 1) return m + 'm';
+      if (d < 1) return h + 'h';
+      if (d < 30) return d + 'd';
+      return new Date(iso).toLocaleDateString();
+    }
+
+    function postUrl(p) {
+      return 'https://bsky.app/profile/' + p.author.did + '/post/' + p.uri.split('/').pop();
+    }
+
+    // ── Tree / quote helpers ────────────────────────────────────────────────────
+
+    function validReplies(node) {
+      return (node.replies || []).filter(r => r.$type === 'app.bsky.feed.defs#threadViewPost');
+    }
+
+    function viewRecordToPost(vr) {
+      let embed = null;
+      if (vr.embeds?.length) {
+        if (vr.embeds.length === 1) {
+          embed = vr.embeds[0];
+        } else {
+          const recEmbed = vr.embeds.find(e =>
+            e.$type === 'app.bsky.embed.record#view' || e.$type === 'app.bsky.embed.recordWithMedia#view');
+          const mediaEmbed = vr.embeds.find(e =>
+            e.$type === 'app.bsky.embed.images#view' || e.$type === 'app.bsky.embed.video#view' || e.$type === 'app.bsky.embed.external#view');
+          if (recEmbed && mediaEmbed) {
+            embed = { $type: 'app.bsky.embed.recordWithMedia#view', media: mediaEmbed, record: recEmbed };
+          } else { embed = recEmbed || mediaEmbed; }
+        }
+      }
+      return {
+        uri: vr.uri, cid: vr.cid, author: vr.author,
+        record: vr.value || {}, embed,
+        likeCount: vr.likeCount, repostCount: vr.repostCount, replyCount: vr.replyCount, indexedAt: vr.indexedAt
+      };
+    }
+
+    function extractQuoteStack(post) {
+      const stack = [post];
+      let embed = post.embed;
+      const seen = new Set([post.uri]);
+      while (embed) {
+        let vr = null;
+        if (embed.$type === 'app.bsky.embed.record#view' && embed.record?.$type === 'app.bsky.embed.record#viewRecord')
+          vr = embed.record;
+        else if (embed.$type === 'app.bsky.embed.recordWithMedia#view' && embed.record?.record?.$type === 'app.bsky.embed.record#viewRecord')
+          vr = embed.record.record;
+        if (!vr || seen.has(vr.uri)) break;
+        seen.add(vr.uri);
+        const fp = viewRecordToPost(vr);
+        stack.push(fp);
+        embed = fp.embed;
+      }
+      return stack;
+    }
+
+    function getQuotedUri(post) {
+      const rec = post.record || post;
+      const emb = rec.embed;
+      if (!emb) return null;
+      const t = emb.$type;
+      if (t === 'app.bsky.embed.record' && emb.record?.uri) return emb.record.uri;
+      if (t === 'app.bsky.embed.recordWithMedia' && emb.record?.record?.uri) return emb.record.record.uri;
+      return null;
+    }
+
+    // ── Graph building ──────────────────────────────────────────────────────────
+
+    function makeNode(uri, post, type) {
+      return { id: uri, post, type, parentId: null, children: [], subtreeWidth: CARD_W };
+    }
+
+    function buildGraph(seedUri, threadDown, threadUp, quotePostsData) {
+      const nodes = new Map();
+      const edges = [];
+
+      // 1. Seed
+      nodes.set(seedUri, makeNode(seedUri, threadDown.post, 'seed'));
+
+      // 2. Ancestors from threadUp
+      if (threadUp && threadUp.parent) {
+        let child = threadUp;
+        let parentThread = threadUp.parent;
+        while (parentThread && parentThread.$type === 'app.bsky.feed.defs#threadViewPost') {
+          const pUri = parentThread.post.uri;
+          if (!nodes.has(pUri)) nodes.set(pUri, makeNode(pUri, parentThread.post, 'ancestor'));
+          const childUri = child.post.uri;
+          if (nodes.has(childUri)) nodes.get(childUri).parentId = pUri;
+          edges.push({ from: pUri, to: childUri, type: 'thread' });
+          child = parentThread;
+          parentThread = parentThread.parent;
+        }
+      }
+
+      // 3. Reply tree
+      function walkReplies(threadNode) {
+        const replies = validReplies(threadNode);
+        const parentUri = threadNode.post.uri;
+        // Sort by likes descending
+        replies.sort((a, b) => (b.post.likeCount || 0) - (a.post.likeCount || 0));
+        for (const reply of replies) {
+          const rUri = reply.post.uri;
+          if (!nodes.has(rUri)) {
+            nodes.set(rUri, makeNode(rUri, reply.post, 'reply'));
+            nodes.get(rUri).parentId = parentUri;
+            nodes.get(parentUri).children.push(rUri);
+            edges.push({ from: parentUri, to: rUri, type: 'thread' });
+            walkReplies(reply);
+          }
+        }
+      }
+      walkReplies(threadDown);
+
+      // 4. Quote chain (what seed quotes)
+      const stack = extractQuoteStack(threadDown.post);
+      for (let i = 1; i < stack.length; i++) {
+        const quoted = stack[i];
+        if (!nodes.has(quoted.uri)) nodes.set(quoted.uri, makeNode(quoted.uri, quoted, 'quoted'));
+        edges.push({ from: stack[i - 1].uri, to: quoted.uri, type: 'quote' });
+      }
+
+      // 5. Quote posts (who quoted the seed)
+      if (quotePostsData?.length) {
+        for (const qp of quotePostsData) {
+          if (!nodes.has(qp.uri) && qp.uri !== seedUri) {
+            nodes.set(qp.uri, makeNode(qp.uri, qp, 'quote-post'));
+            edges.push({ from: qp.uri, to: seedUri, type: 'quote' });
+          }
+        }
+      }
+
+      return { nodes, edges, seedUri };
+    }
+
+    // ── Layout algorithm ────────────────────────────────────────────────────────
+
+    function computeLayout(graph) {
+      const { nodes, edges, seedUri } = graph;
+      const pos = new Map(); // uri -> { x, y }
+
+      // 1. Seed at origin
+      pos.set(seedUri, { x: 0, y: 0 });
+
+      // 2. Ancestors above seed
+      const ancestors = [];
+      let cur = seedUri;
+      while (nodes.get(cur)?.parentId) {
+        const pid = nodes.get(cur).parentId;
+        if (nodes.has(pid) && nodes.get(pid).type === 'ancestor') {
+          ancestors.push(pid);
+          cur = pid;
+        } else break;
+      }
+      ancestors.reverse();
+      for (let i = 0; i < ancestors.length; i++) {
+        pos.set(ancestors[i], { x: 0, y: -(ancestors.length - i) * (CARD_H + V_GAP) });
+      }
+
+      // 3. Subtree widths (bottom-up)
+      const stw = new Map();
+      function computeWidths(uri) {
+        const node = nodes.get(uri);
+        const ch = (node?.children || []).filter(c => nodes.has(c));
+        if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
+        let total = 0;
+        for (const c of ch) total += computeWidths(c);
+        total += (ch.length - 1) * H_GAP;
+        const w = Math.max(CARD_W, total);
+        stw.set(uri, w);
+        return w;
+      }
+      computeWidths(seedUri);
+
+      // 4. Assign reply positions (top-down)
+      function assignPos(uri, x, y) {
+        pos.set(uri, { x, y });
+        const node = nodes.get(uri);
+        const ch = (node?.children || []).filter(c => nodes.has(c));
+        if (ch.length === 0) return;
+        const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * H_GAP;
+        let sx = x + CARD_W / 2 - totalW / 2;
+        const cy = y + CARD_H + V_GAP;
+        for (const c of ch) {
+          const cw = stw.get(c);
+          assignPos(c, sx + (cw - CARD_W) / 2, cy);
+          sx += cw + H_GAP;
+        }
+      }
+      assignPos(seedUri, 0, 0);
+
+      // 5. Quoted posts (upper-left diagonal)
+      const quotedChain = [];
+      let qCur = seedUri;
+      while (true) {
+        const edge = edges.find(e => e.type === 'quote' && e.from === qCur && nodes.get(e.to)?.type === 'quoted');
+        if (!edge) break;
+        quotedChain.push(edge.to);
+        qCur = edge.to;
+      }
+      for (let i = 0; i < quotedChain.length; i++) {
+        pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
+      }
+
+      // 6. Quote posts (lower-right, sorted chronologically)
+      const qpList = [];
+      for (const edge of edges) {
+        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
+          qpList.push(edge.from);
+      }
+      qpList.sort((a, b) => {
+        const tA = new Date(nodes.get(a)?.post?.record?.createdAt || 0);
+        const tB = new Date(nodes.get(b)?.post?.record?.createdAt || 0);
+        return tA - tB;
+      });
+      for (let i = 0; i < qpList.length; i++) {
+        pos.set(qpList[i], { x: QUOTE_X_OFF, y: (i + 1) * (CARD_H + V_GAP) });
+      }
+
+      // 7. Normalize: shift all positions so min x/y = LAYOUT_PAD
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of pos.values()) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x + CARD_W > maxX) maxX = p.x + CARD_W;
+        if (p.y + CARD_H > maxY) maxY = p.y + CARD_H;
+      }
+      const seedBefore = pos.get(seedUri);
+      const result = {
+        positions: new Map(),
+        canvasWidth: maxX - minX + LAYOUT_PAD * 2,
+        canvasHeight: maxY - minY + LAYOUT_PAD * 2,
+        seedX: seedBefore.x - minX + LAYOUT_PAD,
+        seedY: seedBefore.y - minY + LAYOUT_PAD,
+      };
+      for (const [uri, p] of pos) {
+        result.positions.set(uri, { x: p.x - minX + LAYOUT_PAD, y: p.y - minY + LAYOUT_PAD });
+      }
+      return result;
+    }
+
+    // ── Connection geometry ─────────────────────────────────────────────────────
+
+    function connectionPath(fromPos, toPos, type) {
+      if (type === 'thread') {
+        const x1 = fromPos.x + CARD_W / 2, y1 = fromPos.y + CARD_H;
+        const x2 = toPos.x + CARD_W / 2, y2 = toPos.y;
+        const my = (y1 + y2) / 2;
+        return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
+      }
+      // Quote: connect nearest horizontal edges
+      const fromCx = fromPos.x + CARD_W / 2, toCx = toPos.x + CARD_W / 2;
+      const fromCy = fromPos.y + CARD_H / 2, toCy = toPos.y + CARD_H / 2;
+      let x1, y1, x2, y2;
+      if (fromCx > toCx) {
+        x1 = fromPos.x; y1 = fromCy; x2 = toPos.x + CARD_W; y2 = toCy;
+      } else {
+        x1 = fromPos.x + CARD_W; y1 = fromCy; x2 = toPos.x; y2 = toCy;
+      }
+      const mx = (x1 + x2) / 2;
+      return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
+    }
+
+    // ── UI components ───────────────────────────────────────────────────────────
+
+    function DynImg({ url, alt, styleObj, cls }) {
+      const ref = useRef(null);
+      useEffect(() => { if (ref.current && url) ref.current.setAttribute('src', url); }, [url]);
+      return html`<img ref=${ref} alt=${alt || ''} class=${cls || ''}
+        style=${styleObj || {}} onError=${e => e.target.style.display = 'none'} />`;
+    }
+
+    function Avatar({ author }) {
+      const hue = window.avatarHue(author.did || author.handle || '');
+      const bg = `hsl(${hue},60%,45%)`;
+      const letter = (author.displayName || author.handle || '?')[0].toUpperCase();
+      const cs = { position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover' };
+      return html`
+        <div class="avatar-wrap" style=${'background:' + bg}>
+          <span>${letter}</span>
+          ${author.avatar && html`<${DynImg} url=${author.avatar} cls="loaded" styleObj=${cs} />`}
+        </div>`;
+    }
+
+    // ── Embed components (for expanded cards) ───────────────────────────────────
+
+    function ImageGrid({ images }) {
+      if (!images?.length) return null;
+      return html`
+        <div class=${`mt-1.5 grid gap-1 rounded-lg overflow-hidden ${images.length > 1 ? 'grid-cols-2' : ''}`}>
+          ${images.map((img, i) => {
+            const ar = img.aspectRatio ? img.aspectRatio.width + '/' + img.aspectRatio.height : '16/9';
+            return html`<a key=${i} href="${img.fullsize}" target="_blank" rel="noopener" class="block">
+              <${DynImg} url=${img.thumb} alt=${img.alt || ''} cls="w-full object-cover max-h-36"
+                styleObj=${{ aspectRatio: ar, objectFit: 'cover', width: '100%' }} />
+            </a>`;
+          })}
+        </div>`;
+    }
+
+    function VideoThumb({ embed }) {
+      return html`
+        <div class="mt-1.5 relative rounded-lg overflow-hidden bg-black" style="aspect-ratio: ${embed.aspectRatio ? embed.aspectRatio.width + '/' + embed.aspectRatio.height : '16/9'}; max-height: 200px">
+          <${DynImg} url=${embed.thumbnail} alt="Video" cls="w-full h-full" styleObj=${{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.8 }} />
+          <div class="absolute inset-0 flex items-center justify-center">
+            <div class="bg-black bg-opacity-60 rounded-full w-10 h-10 flex items-center justify-center">
+              <span style="font-size:1.2rem">▶</span>
+            </div>
+          </div>
+        </div>`;
+    }
+
+    function ExternalCard({ external }) {
+      return html`
+        <a href="${external.uri}" target="_blank" rel="noopener"
+          class="block mt-1.5 rounded-lg border border-gray-200 bg-gray-50 hover:bg-gray-100 transition-colors overflow-hidden no-underline"
+          onClick=${e => e.stopPropagation()}>
+          ${external.thumb && html`<${DynImg} url=${external.thumb} cls="w-full object-cover max-h-24"
+            styleObj=${{ width: '100%', objectFit: 'cover', maxHeight: '6rem' }} />`}
+          <div class="p-2">
+            <div class="text-xs font-semibold text-gray-800 post-text truncate">${external.title}</div>
+            <div class="text-xs text-gray-400 mt-0.5 truncate">${external.uri}</div>
+          </div>
+        </a>`;
+    }
+
+    function EmbedQuotedPost({ record }) {
+      if (!record || record.$type !== 'app.bsky.embed.record#viewRecord') return null;
+      const qUrl = 'https://bsky.app/profile/' + record.author.did + '/post/' + record.uri.split('/').pop();
+      return html`
+        <div class="mt-1.5 rounded-lg border border-gray-200 bg-gray-50 p-2">
+          <a href="${qUrl}" target="_blank" rel="noopener" class="block no-underline hover:opacity-80"
+            onClick=${e => e.stopPropagation()}>
+            <div class="flex items-center gap-1.5 mb-0.5">
+              <${Avatar} author=${record.author} />
+              <span class="text-xs font-semibold text-gray-700 truncate">${record.author.displayName || record.author.handle}</span>
+            </div>
+            <p class="text-xs text-gray-600 post-text line-clamp-2">${record.value?.text || ''}</p>
+          </a>
+        </div>`;
+    }
+
+    function PostEmbed({ embed }) {
+      if (!embed) return null;
+      const t = embed.$type;
+      if (t === 'app.bsky.embed.images#view') return html`<${ImageGrid} images=${embed.images} />`;
+      if (t === 'app.bsky.embed.video#view') return html`<${VideoThumb} embed=${embed} />`;
+      if (t === 'app.bsky.embed.external#view') return html`<${ExternalCard} external=${embed.external} />`;
+      if (t === 'app.bsky.embed.record#view') return html`<${EmbedQuotedPost} record=${embed.record} />`;
+      if (t === 'app.bsky.embed.recordWithMedia#view') {
+        return html`<div><${PostEmbed} embed=${embed.media} /><${EmbedQuotedPost} record=${embed.record?.record} /></div>`;
+      }
+      return null;
+    }
+
+    // ── Constellation card ──────────────────────────────────────────────────────
+
+    function typeBadge(type) {
+      const labels = { seed: 'seed', ancestor: 'ancestor', quoted: 'quoted', 'quote-post': 'quotes' };
+      const label = labels[type];
+      if (!label) return null;
+      return html`<span class="type-badge ${type}">${label}</span>`;
+    }
+
+    function ConstellationCard({ node, pos, expanded, onToggle, onReseed }) {
+      const p = node.post;
+      const hasThread = p.record?.reply || (p.replyCount && p.replyCount > 0);
+      return html`
+        <div class="constellation-card type-${node.type} ${expanded ? 'is-expanded' : ''}"
+             style="left: ${pos.x}px; top: ${pos.y}px;"
+             onClick=${onToggle}>
+          <div class="flex items-center gap-1.5 mb-1 min-w-0">
+            <${Avatar} author=${p.author} />
+            <span class="font-semibold text-gray-800 truncate" style="max-width:100px">${p.author.displayName || p.author.handle}</span>
+            <span class="text-gray-400 truncate">@${p.author.handle}</span>
+            ${typeBadge(node.type)}
+          </div>
+          <p class="text-gray-700 post-text leading-relaxed ${expanded ? '' : 'line-clamp-2'}" style="font-size:11px">
+            ${p.record?.text || ''}
+          </p>
+          ${expanded && p.embed && html`<${PostEmbed} embed=${p.embed} />`}
+          <div class="flex items-center gap-2 mt-1.5 text-gray-400" style="font-size:10px">
+            <span>💬${p.replyCount || 0}</span>
+            <span>🔁${p.repostCount || 0}</span>
+            <span>❤️${p.likeCount || 0}</span>
+            ${(node.type === 'quoted' || node.type === 'quote-post') && hasThread && html`
+              <span class="text-amber-500" title="Part of a thread">🧵</span>
+            `}
+            <span class="ml-auto text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
+          </div>
+          ${expanded && html`
+            <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100" style="font-size:11px">
+              <a href="${postUrl(p)}" target="_blank" rel="noopener"
+                class="text-sky-500 hover:text-sky-700 font-medium"
+                onClick=${e => e.stopPropagation()}>
+                Open ↗
+              </a>
+              ${node.type !== 'seed' && html`
+                <button class="text-sky-500 hover:text-sky-700 font-medium ml-auto"
+                        onClick=${e => { e.stopPropagation(); onReseed(node.id); }}>
+                  Re-seed ⟳
+                </button>
+              `}
+            </div>
+          `}
+        </div>`;
+    }
+
+    // ── Connection layer ────────────────────────────────────────────────────────
+
+    function ConnectionLayer({ edges, positions, nodes, canvasWidth, canvasHeight }) {
+      return html`
+        <svg width=${canvasWidth} height=${canvasHeight}
+             style="position:absolute;top:0;left:0;pointer-events:none;overflow:visible;">
+          <defs>
+            <marker id="qa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
+              <path d="M 0 0 L 8 3 L 0 6 Z" fill="#f97316" />
+            </marker>
+          </defs>
+          ${edges.map((edge, i) => {
+            const fp = positions.get(edge.from);
+            const tp = positions.get(edge.to);
+            if (!fp || !tp) return null;
+            const d = connectionPath(fp, tp, edge.type);
+            return html`<path key=${i} d=${d}
+              class=${edge.type === 'thread' ? 'conn-thread' : 'conn-quote'}
+              marker-end=${edge.type === 'quote' ? 'url(#qa)' : ''} />`;
+          })}
+        </svg>`;
+    }
+
+    // ── Minimap ─────────────────────────────────────────────────────────────────
+
+    function Minimap({ nodes, positions, layout, pzRef, viewportRef }) {
+      const canvasRef = useRef(null);
+      const MINI_W = 140, MINI_H = 90;
+
+      useEffect(() => {
+        const ctx = canvasRef.current?.getContext('2d');
+        if (!ctx || !layout) return;
+        const { canvasWidth: cw, canvasHeight: ch } = layout;
+        const scale = Math.min(MINI_W / cw, MINI_H / ch);
+        ctx.clearRect(0, 0, MINI_W, MINI_H);
+
+        // Draw nodes as dots
+        const typeColors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#6b7280', quoted: '#f97316', 'quote-post': '#fb923c' };
+        for (const [uri, node] of nodes) {
+          const p = positions.get(uri);
+          if (!p) continue;
+          ctx.fillStyle = typeColors[node.type] || '#9ca3af';
+          const r = node.type === 'seed' ? 3 : 2;
+          ctx.beginPath();
+          ctx.arc(p.x * scale + 2, p.y * scale + 2, r, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        // Draw viewport rectangle
+        if (pzRef.current && viewportRef.current) {
+          const t = pzRef.current.getTransform();
+          const vw = viewportRef.current.clientWidth;
+          const vh = viewportRef.current.clientHeight;
+          const rx = -t.x / t.scale * scale + 2;
+          const ry = -t.y / t.scale * scale + 2;
+          const rw = vw / t.scale * scale;
+          const rh = vh / t.scale * scale;
+          ctx.strokeStyle = '#3b82f6';
+          ctx.lineWidth = 1;
+          ctx.strokeRect(rx, ry, rw, rh);
+        }
+      });
+
+      function handleClick(e) {
+        if (!pzRef.current || !viewportRef.current || !layout) return;
+        const rect = canvasRef.current.getBoundingClientRect();
+        const mx = e.clientX - rect.left;
+        const my = e.clientY - rect.top;
+        const { canvasWidth: cw, canvasHeight: ch } = layout;
+        const scale = Math.min(MINI_W / cw, MINI_H / ch);
+        const targetX = (mx - 2) / scale;
+        const targetY = (my - 2) / scale;
+        const t = pzRef.current.getTransform();
+        const vw = viewportRef.current.clientWidth;
+        const vh = viewportRef.current.clientHeight;
+        pzRef.current.moveTo(-targetX * t.scale + vw / 2, -targetY * t.scale + vh / 2);
+      }
+
+      return html`
+        <div class="minimap">
+          <canvas ref=${canvasRef} width=${MINI_W} height=${MINI_H}
+            style="cursor:crosshair;display:block" onClick=${handleClick} />
+        </div>`;
+    }
+
+    // ── URL param helpers ───────────────────────────────────────────────────────
+
+    function getUrlParam(key) { return new URLSearchParams(window.location.search).get(key) || ''; }
+    function setUrlParam(key, val) {
+      const u = new URL(window.location);
+      if (val) u.searchParams.set(key, val); else u.searchParams.delete(key);
+      window.history.replaceState({}, '', u);
+    }
+
+    // ── App ─────────────────────────────────────────────────────────────────────
+
+    function App() {
+      const [input, setInput] = useState(() => getUrlParam('url'));
+      const [loading, setLoading] = useState(false);
+      const [error, setError] = useState('');
+      const [graph, setGraph] = useState(null);
+      const [expandedCards, setExpandedCards] = useState(new Set());
+
+      const viewportRef = useRef(null);
+      const canvasElRef = useRef(null);
+      const pzRef = useRef(null);
+
+      // Compute layout
+      const layout = useMemo(() => graph ? computeLayout(graph) : null, [graph]);
+
+      // Panzoom init
+      useEffect(() => {
+        if (!canvasElRef.current || !window.panzoom) return;
+        const pz = window.panzoom(canvasElRef.current, {
+          maxZoom: 4, minZoom: 0.08, smoothScroll: false,
+          zoomDoubleClickSpeed: 1,
+          beforeMouseDown: (e) => !!e.target.closest('.constellation-card'),
+          onTouch: (e) => { if (e.target.closest('.constellation-card')) return false; },
+        });
+        pzRef.current = pz;
+        // Trigger minimap redraws on pan/zoom
+        pz.on('transform', () => { setMinimapKey(k => k + 1); });
+        return () => pz.dispose();
+      }, []);
+
+      // Track minimap refresh
+      const [minimapKey, setMinimapKey] = useState(0);
+
+      // Center on seed when layout changes
+      useEffect(() => {
+        if (!layout || !pzRef.current || !viewportRef.current) return;
+        const vw = viewportRef.current.clientWidth;
+        const vh = viewportRef.current.clientHeight;
+        pzRef.current.zoomAbs(0, 0, 1);
+        pzRef.current.moveTo(
+          vw / 2 - layout.seedX - CARD_W / 2,
+          vh * 0.38 - layout.seedY - CARD_H / 2
+        );
+      }, [layout]);
+
+      async function doLoad(url) {
+        url = (url || input).trim();
+        if (!url) return;
+        setLoading(true); setError(''); setGraph(null); setExpandedCards(new Set());
+        setUrlParam('url', url);
+        try {
+          const atUri = await resolveToAtUri(url);
+          const [downR, upR, quotesR] = await Promise.allSettled([
+            fetchThreadDown(atUri), fetchThreadUp(atUri), fetchQuotePosts(atUri),
+          ]);
+          const down = downR.status === 'fulfilled' ? downR.value : null;
+          if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
+            throw new Error('Thread not found or post is private');
+          const up = upR.status === 'fulfilled' ? upR.value : null;
+          const qps = quotesR.status === 'fulfilled' ? quotesR.value : [];
+          setGraph(buildGraph(atUri, down, up, qps));
+        } catch (e) { setError(e.message); }
+        finally { setLoading(false); }
+      }
+
+      useEffect(() => { const u = getUrlParam('url'); if (u) doLoad(u); }, []);
+
+      function toggleCard(uri) {
+        setExpandedCards(prev => {
+          const next = new Set(prev);
+          next.has(uri) ? next.delete(uri) : next.add(uri);
+          return next;
+        });
+      }
+
+      function reseed(uri) {
+        const node = graph?.nodes.get(uri);
+        if (!node) return;
+        const url = postUrl(node.post);
+        setInput(url);
+        doLoad(url);
+      }
+
+      function centerOnSeed() {
+        if (!layout || !pzRef.current || !viewportRef.current) return;
+        const vw = viewportRef.current.clientWidth;
+        const vh = viewportRef.current.clientHeight;
+        pzRef.current.zoomAbs(0, 0, 1);
+        pzRef.current.moveTo(vw / 2 - layout.seedX - CARD_W / 2, vh * 0.38 - layout.seedY - CARD_H / 2);
+      }
+
+      function zoomToFit() {
+        if (!layout || !pzRef.current || !viewportRef.current) return;
+        const vw = viewportRef.current.clientWidth;
+        const vh = viewportRef.current.clientHeight;
+        const s = Math.min(vw / layout.canvasWidth, vh / layout.canvasHeight, 1) * 0.88;
+        pzRef.current.zoomAbs(0, 0, s);
+        pzRef.current.moveTo(
+          (vw - layout.canvasWidth * s) / 2,
+          (vh - layout.canvasHeight * s) / 2
+        );
+      }
+
+      function zoomIn() { if (pzRef.current && viewportRef.current) { const vw = viewportRef.current.clientWidth; const vh = viewportRef.current.clientHeight; pzRef.current.smoothZoom(vw / 2, vh / 2, 1.4); } }
+      function zoomOut() { if (pzRef.current && viewportRef.current) { const vw = viewportRef.current.clientWidth; const vh = viewportRef.current.clientHeight; pzRef.current.smoothZoom(vw / 2, vh / 2, 0.7); } }
+
+      // Stats
+      const nodeCount = graph ? graph.nodes.size : 0;
+      const stats = useMemo(() => {
+        if (!graph) return {};
+        let ancestors = 0, replies = 0, quoted = 0, qp = 0;
+        for (const n of graph.nodes.values()) {
+          if (n.type === 'ancestor') ancestors++;
+          else if (n.type === 'reply') replies++;
+          else if (n.type === 'quoted') quoted++;
+          else if (n.type === 'quote-post') qp++;
+        }
+        return { ancestors, replies, quoted, qp };
+      }, [graph]);
+
+      return html`
+        <div class="flex flex-col h-screen">
+          <!-- Toolbar -->
+          <div class="toolbar px-3 py-2 flex items-center gap-2 flex-wrap">
+            <span class="text-base font-bold text-gray-800 whitespace-nowrap">🌌 Post Constellation</span>
+            <div class="flex-1 flex items-center gap-2 min-w-0">
+              <input type="text" value=${input}
+                onInput=${e => setInput(e.target.value)}
+                onKeyDown=${e => e.key === 'Enter' && doLoad()}
+                placeholder="https://bsky.app/profile/…/post/…"
+                class="flex-1 min-w-0 px-3 py-1.5 rounded-lg border border-gray-300 text-sm focus:outline-none focus:ring-2 focus:ring-sky-400 bg-white" />
+              <button onClick=${() => doLoad()} disabled=${loading}
+                class="px-4 py-1.5 bg-sky-600 text-white rounded-lg text-sm font-medium hover:bg-sky-700 disabled:opacity-50 transition-colors flex-shrink-0">
+                ${loading ? '…' : 'Load'}
+              </button>
+            </div>
+            ${graph && html`
+              <div class="flex items-center gap-1.5 text-xs text-gray-400 flex-shrink-0">
+                <span>${nodeCount} posts</span>
+                ${stats.ancestors > 0 && html`<span class="text-gray-300">·</span><span>${stats.ancestors} ancestor${stats.ancestors !== 1 ? 's' : ''}</span>`}
+                ${stats.replies > 0 && html`<span class="text-gray-300">·</span><span>${stats.replies} repl${stats.replies !== 1 ? 'ies' : 'y'}</span>`}
+                ${stats.quoted > 0 && html`<span class="text-gray-300">·</span><span>${stats.quoted} quoted</span>`}
+                ${stats.qp > 0 && html`<span class="text-gray-300">·</span><span>${stats.qp} quote${stats.qp !== 1 ? 's' : ''}</span>`}
+              </div>
+              <div class="flex items-center gap-1 flex-shrink-0">
+                <button onClick=${zoomOut} class="px-1.5 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 font-mono" title="Zoom out">−</button>
+                <button onClick=${zoomIn} class="px-1.5 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 font-mono" title="Zoom in">+</button>
+                <button onClick=${centerOnSeed} class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">⊙</button>
+                <button onClick=${zoomToFit} class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Zoom to fit">Fit</button>
+              </div>
+            `}
+          </div>
+
+          ${error && html`<div class="px-4 py-2.5 bg-red-50 border-b border-red-200 text-red-700 text-sm">${error}</div>`}
+
+          <!-- Viewport -->
+          <div ref=${viewportRef} class="flex-1 overflow-hidden relative bg-gray-100" style="cursor:grab">
+            ${graph && layout && html`
+              <div ref=${canvasElRef}
+                   style="position:absolute;width:${layout.canvasWidth}px;height:${layout.canvasHeight}px;will-change:transform;">
+                <${ConnectionLayer}
+                  edges=${graph.edges}
+                  positions=${layout.positions}
+                  nodes=${graph.nodes}
+                  canvasWidth=${layout.canvasWidth}
+                  canvasHeight=${layout.canvasHeight} />
+                ${Array.from(graph.nodes.entries()).map(([uri, node]) => {
+                  const p = layout.positions.get(uri);
+                  if (!p) return null;
+                  return html`<${ConstellationCard}
+                    key=${uri} node=${node} pos=${p}
+                    expanded=${expandedCards.has(uri)}
+                    onToggle=${() => toggleCard(uri)}
+                    onReseed=${reseed} />`;
+                })}
+              </div>
+              <${Minimap}
+                key=${minimapKey}
+                nodes=${graph.nodes}
+                positions=${layout.positions}
+                layout=${layout}
+                pzRef=${pzRef}
+                viewportRef=${viewportRef} />
+            `}
+
+            ${!graph && !loading && !error && html`
+              <div class="flex items-center justify-center h-full text-gray-400">
+                <div class="text-center px-6">
+                  <div class="text-5xl mb-3">🌌</div>
+                  <p class="text-sm mb-1">Paste a Bluesky post URL to visualize its constellation</p>
+                  <p class="text-xs text-gray-300">See thread replies, ancestors, quoted posts, and who quoted it — all on one canvas</p>
+                </div>
+              </div>
+            `}
+            ${loading && html`
+              <div class="flex items-center justify-center h-full text-gray-400">
+                <div class="text-center">
+                  <div class="text-xl animate-pulse mb-2">Loading…</div>
+                  <p class="text-xs">Fetching thread, ancestors, and quotes</p>
+                </div>
+              </div>
+            `}
+
+            ${graph && layout && html`
+              <div class="legend">
+                <div class="flex items-center gap-3">
+                  <span><span class="legend-line" style="background:#3b82f6"></span>reply</span>
+                  <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
+                </div>
+              </div>
+            `}
+          </div>
+        </div>
+      `;
+    }
+
+    try {
+      render(html`<${App} />`, document.getElementById('app'));
+    } catch (e) {
+      document.getElementById('err').style.display = 'block';
+      document.getElementById('err').textContent = 'Render failed: ' + e.message + '\n' + e.stack;
+    }
+  </script>
+</body>
+</html>
