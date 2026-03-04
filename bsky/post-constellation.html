@@ -191,6 +191,10 @@
     const LAYOUT_PAD = 100;
     const VIRT_BUFFER = 300; // px margin around viewport for virtualization
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
+    const GRID_THRESHOLD = 8; // children above this count get grid layout
+    const GRID_COLS = 8; // max columns in grid layout
+    const CLUSTER_ZOOM = 0.35; // below this zoom, render dots instead of full cards
+    const QUOTE_BATCH = 25; // initial quote posts to show
     const API = 'https://public.api.bsky.app/xrpc/';
 
     // ── URL / API helpers ───────────────────────────────────────────────────────
@@ -226,11 +230,13 @@
       return (await r.json()).thread;
     }
 
-    async function fetchQuotePosts(atUri) {
-      const r = await fetch(API + 'app.bsky.feed.getQuotes?uri=' + encodeURIComponent(atUri) + '&limit=100');
-      if (!r.ok) return [];
+    async function fetchQuotePosts(atUri, limit = QUOTE_BATCH, cursor = null) {
+      let url = API + 'app.bsky.feed.getQuotes?uri=' + encodeURIComponent(atUri) + '&limit=' + limit;
+      if (cursor) url += '&cursor=' + encodeURIComponent(cursor);
+      const r = await fetch(url);
+      if (!r.ok) return { posts: [], cursor: null };
       const data = await r.json();
-      return data.posts || [];
+      return { posts: data.posts || [], cursor: data.cursor || null };
     }
 
     async function fetchSinglePost(uri) {
@@ -392,6 +398,19 @@
       return { nodes, edges, seedUri };
     }
 
+    // Add more quote posts to an existing graph (returns new graph object)
+    function addQuotePosts(graph, quotePosts) {
+      const nodes = new Map(graph.nodes);
+      const edges = [...graph.edges];
+      for (const qp of quotePosts) {
+        if (!nodes.has(qp.uri) && qp.uri !== graph.seedUri) {
+          nodes.set(qp.uri, makeNode(qp.uri, qp, 'quote-post'));
+          edges.push({ from: qp.uri, to: graph.seedUri, type: 'quote' });
+        }
+      }
+      return { nodes, edges, seedUri: graph.seedUri };
+    }
+
     // ── Layout algorithm ────────────────────────────────────────────────────────
 
     function computeLayout(graph, collapsedBranches) {
@@ -416,13 +435,31 @@
       }
 
       // Subtree widths (bottom-up), respecting collapsed branches
+      // When a node has many children (>GRID_THRESHOLD), use grid layout:
+      //   children arranged in rows of GRID_COLS, which dramatically reduces canvas width
       const stw = new Map();
+      const gridInfo = new Map(); // uri -> { cols, rows } for grid-layout nodes
       function computeWidths(uri) {
         const node = nodes.get(uri);
         const ch = collapsedBranches.has(uri)
           ? []
           : (node?.children || []).filter(c => nodes.has(c));
         if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
+
+        // For many children, use grid layout
+        if (ch.length > GRID_THRESHOLD) {
+          // In grid mode, each child gets a single-column slot (no subtree expansion)
+          const cols = Math.min(ch.length, GRID_COLS);
+          const rows = Math.ceil(ch.length / cols);
+          gridInfo.set(uri, { cols, rows });
+          // Still compute child widths (for their own subtrees if expanded later)
+          for (const c of ch) computeWidths(c);
+          const w = cols * CARD_W + (cols - 1) * H_GAP;
+          stw.set(uri, Math.max(CARD_W, w));
+          return stw.get(uri);
+        }
+
+        // Normal tree layout for reasonable child counts
         let total = 0;
         for (const c of ch) total += computeWidths(c);
         total += (ch.length - 1) * H_GAP;
@@ -432,7 +469,7 @@
       }
       computeWidths(seedUri);
 
-      // Assign reply positions (top-down), respecting collapsed branches
+      // Assign reply positions (top-down), respecting collapsed branches and grid layout
       function assignPos(uri, x, y) {
         pos.set(uri, { x, y });
         const node = nodes.get(uri);
@@ -440,6 +477,28 @@
           ? []
           : (node?.children || []).filter(c => nodes.has(c));
         if (ch.length === 0) return;
+
+        // Grid layout: arrange children in rows×cols grid
+        // Grid children's subtrees are suppressed — user can expand them individually
+        const gi = gridInfo.get(uri);
+        if (gi) {
+          const parentW = stw.get(uri);
+          const gridW = gi.cols * CARD_W + (gi.cols - 1) * H_GAP;
+          const startX = x + parentW / 2 - gridW / 2;
+          const startY = y + CARD_H + V_GAP;
+          for (let i = 0; i < ch.length; i++) {
+            const col = i % gi.cols;
+            const row = Math.floor(i / gi.cols);
+            pos.set(ch[i], {
+              x: startX + col * (CARD_W + H_GAP),
+              y: startY + row * (CARD_H + V_GAP),
+            });
+            // Don't recurse — grid children's subtrees stay collapsed in grid mode
+          }
+          return;
+        }
+
+        // Normal tree layout
         const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * H_GAP;
         let sx = x + CARD_W / 2 - totalW / 2;
         const cy = y + CARD_H + V_GAP;
@@ -464,7 +523,7 @@
         pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
       }
 
-      // Quote posts (lower-right, sorted chronologically)
+      // Quote posts (lower-right, sorted chronologically, grid if many)
       const qpList = [];
       for (const edge of edges) {
         if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
@@ -475,8 +534,21 @@
         const tB = new Date(nodes.get(b)?.post?.record?.createdAt || 0);
         return tA - tB;
       });
-      for (let i = 0; i < qpList.length; i++) {
-        pos.set(qpList[i], { x: QUOTE_X_OFF, y: (i + 1) * (CARD_H + V_GAP) });
+      if (qpList.length > GRID_THRESHOLD) {
+        // Grid layout for quote posts
+        const qCols = Math.min(qpList.length, 4);
+        for (let i = 0; i < qpList.length; i++) {
+          const col = i % qCols;
+          const row = Math.floor(i / qCols);
+          pos.set(qpList[i], {
+            x: QUOTE_X_OFF + col * (CARD_W + H_GAP),
+            y: (row + 1) * (CARD_H + V_GAP),
+          });
+        }
+      } else {
+        for (let i = 0; i < qpList.length; i++) {
+          pos.set(qpList[i], { x: QUOTE_X_OFF, y: (i + 1) * (CARD_H + V_GAP) });
+        }
       }
 
       // Normalize positions
@@ -786,6 +858,10 @@
       const [expandedCards, setExpandedCards] = useState(new Set());
       const [collapsedBranches, setCollapsedBranches] = useState(new Set());
       const [viewRect, setViewRect] = useState(null);
+      const [zoomScale, setZoomScale] = useState(1);
+      const [quoteCursor, setQuoteCursor] = useState(null);
+      const [loadingMore, setLoadingMore] = useState(false);
+      const seedAtUri = useRef(null);
 
       const viewportRef = useRef(null);
       const canvasElRef = useRef(null);
@@ -851,11 +927,18 @@
         });
         pzRef.current = pz;
 
-        // On transform: redraw minimap (rAF) + throttled viewRect update
+        // On transform: redraw minimap (rAF) + throttled viewRect update + zoom tracking
         let lastVR = 0;
+        let lastZoom = 1;
         pz.on('transform', () => {
           // Minimap: direct rAF draw, no state updates
           if (minimapDrawRef.current) requestAnimationFrame(minimapDrawRef.current);
+          // Track zoom scale for cluster rendering (only update on meaningful change)
+          const t = pz.getTransform();
+          if (Math.abs(t.scale - lastZoom) > 0.02) {
+            lastZoom = t.scale;
+            setZoomScale(t.scale);
+          }
           // ViewRect: throttled state update
           const now = Date.now();
           if (now - lastVR > VIRT_THROTTLE) {
@@ -895,21 +978,44 @@
         url = (url || input).trim();
         if (!url) return;
         setLoading(true); setError(''); setGraph(null);
-        setExpandedCards(new Set()); setCollapsedBranches(new Set()); setViewRect(null);
+        setExpandedCards(new Set()); setCollapsedBranches(new Set());
+        setViewRect(null); setQuoteCursor(null); setZoomScale(1);
         setUrlParam('url', url);
         try {
           const atUri = await resolveToAtUri(url);
+          seedAtUri.current = atUri;
           const [downR, upR, quotesR] = await Promise.allSettled([
-            fetchThreadDown(atUri), fetchThreadUp(atUri), fetchQuotePosts(atUri),
+            fetchThreadDown(atUri), fetchThreadUp(atUri), fetchQuotePosts(atUri, QUOTE_BATCH),
           ]);
           const down = downR.status === 'fulfilled' ? downR.value : null;
           if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
             throw new Error('Thread not found or post is private');
           const up = upR.status === 'fulfilled' ? upR.value : null;
-          const qps = quotesR.status === 'fulfilled' ? quotesR.value : [];
-          setGraph(buildGraph(atUri, down, up, qps));
+          const qpResult = quotesR.status === 'fulfilled' ? quotesR.value : { posts: [], cursor: null };
+          setQuoteCursor(qpResult.cursor);
+          const g = buildGraph(atUri, down, up, qpResult.posts);
+          setGraph(g);
+
+          // Auto-collapse seed's children if extremely wide (>40 direct replies)
+          const seedNode = g.nodes.get(atUri);
+          if (seedNode && seedNode.children.length > 40) {
+            setCollapsedBranches(new Set([atUri]));
+          }
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
+      }
+
+      async function loadMoreQuotes() {
+        if (!quoteCursor || loadingMore || !seedAtUri.current) return;
+        setLoadingMore(true);
+        try {
+          const result = await fetchQuotePosts(seedAtUri.current, QUOTE_BATCH, quoteCursor);
+          setQuoteCursor(result.cursor);
+          if (result.posts.length > 0) {
+            setGraph(prev => prev ? addQuotePosts(prev, result.posts) : prev);
+          }
+        } catch (e) { /* silently fail, user can retry */ }
+        finally { setLoadingMore(false); }
       }
 
       useEffect(() => { const u = getUrlParam('url'); if (u) doLoad(u); }, []);
@@ -999,6 +1105,9 @@
                 ${stats.replies > 0 && html`<span class="text-gray-300">·</span><span>${stats.replies} repl${stats.replies !== 1 ? 'ies' : 'y'}</span>`}
                 ${stats.quoted > 0 && html`<span class="text-gray-300">·</span><span>${stats.quoted} quoted</span>`}
                 ${stats.qp > 0 && html`<span class="text-gray-300">·</span><span>${stats.qp} quote${stats.qp !== 1 ? 's' : ''}</span>`}
+                ${quoteCursor && html`<span class="text-gray-300">·</span><button
+                  onClick=${loadMoreQuotes} disabled=${loadingMore}
+                  class="text-sky-500 hover:text-sky-700 font-medium disabled:opacity-50">${loadingMore ? '…' : 'more quotes'}</button>`}
               </div>
               <div class="flex items-center gap-1 flex-shrink-0">
                 <button onClick=${zoomOut} class="px-1.5 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 font-mono" title="Zoom out">−</button>
@@ -1021,19 +1130,45 @@
                   positions=${layout.positions}
                   canvasWidth=${layout.canvasWidth}
                   canvasHeight=${layout.canvasHeight} />
-                ${Array.from(graph.nodes.entries())
-                  .filter(([uri]) => !visibleUris || visibleUris.has(uri))
-                  .filter(([uri]) => layout.positions.has(uri))
-                  .map(([uri, node]) => {
-                    const p = layout.positions.get(uri);
-                    return html`<${ConstellationCard}
-                      key=${uri} node=${node} pos=${p}
-                      expanded=${expandedCards.has(uri)}
-                      collapsed=${collapsedBranches.has(uri)}
-                      onToggle=${() => toggleCard(uri)}
-                      onReseed=${reseed}
-                      onToggleCollapse=${toggleCollapse} />`;
-                  })}
+                ${zoomScale < CLUSTER_ZOOM
+                  ? html`
+                    <!-- Cluster dots mode: render lightweight colored rectangles at low zoom -->
+                    ${Array.from(graph.nodes.entries())
+                      .filter(([uri]) => !visibleUris || visibleUris.has(uri))
+                      .filter(([uri]) => layout.positions.has(uri))
+                      .map(([uri, node]) => {
+                        const p = layout.positions.get(uri);
+                        const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
+                        return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:6px;border:1px solid #d1d5db;opacity:0.85;pointer-events:none;" />`;
+                      })}
+                    <!-- Seed card always rendered fully -->
+                    ${(() => {
+                      const seedNode = graph.nodes.get(graph.seedUri);
+                      const seedPos = layout.positions.get(graph.seedUri);
+                      if (!seedNode || !seedPos) return null;
+                      return html`<${ConstellationCard}
+                        key=${graph.seedUri} node=${seedNode} pos=${seedPos}
+                        expanded=${expandedCards.has(graph.seedUri)}
+                        collapsed=${collapsedBranches.has(graph.seedUri)}
+                        onToggle=${() => toggleCard(graph.seedUri)}
+                        onReseed=${reseed}
+                        onToggleCollapse=${toggleCollapse} />`;
+                    })()}`
+                  : html`
+                    ${Array.from(graph.nodes.entries())
+                      .filter(([uri]) => !visibleUris || visibleUris.has(uri))
+                      .filter(([uri]) => layout.positions.has(uri))
+                      .map(([uri, node]) => {
+                        const p = layout.positions.get(uri);
+                        return html`<${ConstellationCard}
+                          key=${uri} node=${node} pos=${p}
+                          expanded=${expandedCards.has(uri)}
+                          collapsed=${collapsedBranches.has(uri)}
+                          onToggle=${() => toggleCard(uri)}
+                          onReseed=${reseed}
+                          onToggleCollapse=${toggleCollapse} />`;
+                      })}`
+                }
               </div>
               <${Minimap}
                 nodes=${graph.nodes}
