@@ -245,29 +245,30 @@
       return stack;
     }
 
-    // Check if the last post in the stack might have a deeper chain we haven't fetched
-    function stackMayHaveMore(stack) {
-      if (stack.length < 2) return false;
-      const last = stack[stack.length - 1];
-      if (!last.embed) return false;
-      const t = last.embed.$type;
-      // If the last post has a record embed but we couldn't resolve the viewRecord,
-      // it means the chain was truncated
-      if (t === 'app.bsky.embed.record#view' && last.embed.record?.$type !== 'app.bsky.embed.record#viewRecord')
-        return true;
-      if (t === 'app.bsky.embed.recordWithMedia#view' && last.embed.record?.record?.$type !== 'app.bsky.embed.record#viewRecord')
-        return true;
-      return false;
+    // Detect the AT URI of the post quoted by a given post, using the
+    // record-level embed (always present, unlike view-level which truncates).
+    function getQuotedUri(post) {
+      const rec = post.record || post;
+      const emb = rec.embed;
+      if (!emb) return null;
+      const t = emb.$type;
+      if (t === 'app.bsky.embed.record' && emb.record?.uri)
+        return emb.record.uri;
+      if (t === 'app.bsky.embed.recordWithMedia' && emb.record?.record?.uri)
+        return emb.record.record.uri;
+      return null;
     }
 
-    // Fetch a single post and extract more of the quote chain
-    async function fetchDeeperStack(lastPostUri) {
-      const r = await fetch('https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri='+encodeURIComponent(lastPostUri)+'&depth=0&parentHeight=0');
-      if (!r.ok) throw new Error('Failed to fetch deeper post');
+    // Fetch a single post by URI, returning a full post object or null.
+    async function fetchPost(uri) {
+      const r = await fetch(
+        'https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri='
+        + encodeURIComponent(uri) + '&depth=0&parentHeight=0'
+      );
+      if (!r.ok) return null;
       const data = await r.json();
-      if (data.thread?.$type !== 'app.bsky.feed.defs#threadViewPost') return [];
-      const moreStack = extractQuoteStack(data.thread.post);
-      return moreStack.slice(1); // skip the first (it's the same as lastPost)
+      if (data.thread?.$type !== 'app.bsky.feed.defs#threadViewPost') return null;
+      return data.thread.post;
     }
 
     // ── Search matching (author handle/name and post text) ────────────────────
@@ -479,19 +480,41 @@
       `;
     }
 
-    function StackView({ stack, canLoadMore, onLoadMore, loadingMore }) {
+    function StackView({ stack, hasMore, onLoadMore, loadingMore }) {
+      // Sentinel ref for IntersectionObserver-based infinite scroll
+      const sentinelRef = useRef(null);
+      useEffect(() => {
+        if (!hasMore || loadingMore) return;
+        const el = sentinelRef.current;
+        if (!el) return;
+        const observer = new IntersectionObserver(entries => {
+          if (entries[0].isIntersecting) onLoadMore();
+        }, { rootMargin: '400px' });
+        observer.observe(el);
+        return () => observer.disconnect();
+      }, [hasMore, loadingMore, stack.length]);
+
       return html`
         <div class="space-y-0">
           ${stack.map((post, i) => html`
             <${StackCard} key=${post.uri} post=${post} index=${i} total=${stack.length} />
           `)}
-          ${canLoadMore && html`
-            <div class="flex items-center gap-2 py-1.5 pl-4">
-              <div class="w-0.5 h-3 bg-gray-300"></div>
-              <button onClick=${onLoadMore} disabled=${loadingMore}
-                class="text-xs text-sky-500 hover:text-sky-700 font-medium disabled:opacity-50">
-                ${loadingMore ? 'Loading…' : 'Load deeper quotes…'}
-              </button>
+          ${(hasMore || loadingMore) && html`
+            <div ref=${sentinelRef} class="flex items-center gap-2 py-2 pl-4">
+              <div class="w-0.5 h-3 bg-gray-300 ${loadingMore ? 'animate-pulse' : ''}"></div>
+              ${loadingMore
+                ? html`<span class="text-xs text-sky-500 animate-pulse">Loading…</span>`
+                : html`<button onClick=${onLoadMore}
+                    class="text-xs text-sky-500 hover:text-sky-700 font-medium">
+                    Load more…
+                  </button>`
+              }
+            </div>
+          `}
+          ${!hasMore && !loadingMore && stack.length > 1 && html`
+            <div class="flex items-center gap-2 py-2 pl-4">
+              <div class="w-0.5 h-3 bg-gray-200"></div>
+              <span class="text-xs text-gray-400 italic">End of quote chain (${stack.length} posts)</span>
             </div>
           `}
         </div>
@@ -671,8 +694,6 @@
 
       // View mode: 'thread' (default reply tree) or 'stack' (quote chain)
       const [mode, setMode] = useState(() => getParams().mode || 'thread');
-      // Extra stack entries loaded via "load deeper"
-      const [extraStack, setExtraStack] = useState([]);
       const [loadingMore, setLoadingMore] = useState(false);
 
       // Filter state — initialised from QSPs
@@ -699,7 +720,7 @@
         raw = (raw || input).trim();
         if (!raw) return;
         setLoading(true); setError(''); setThread(null); setShareUrl('');
-        setExtraStack([]);
+        setQuoteStack([]); setStackDone(false);
         if (resetFilters) {
           // Reset all filters when the user loads a brand-new thread
           setHideStubs(false); setCollapseNonOP(false);
@@ -747,37 +768,46 @@
         document.getElementById('post-'+rkey)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
 
-      // Quote stack: extracted from the post's embed chain
-      const baseStack = useMemo(() => thread ? extractQuoteStack(thread.post) : [], [thread]);
-      const quoteStack = useMemo(() => [...baseStack, ...extraStack], [baseStack, extraStack]);
+      // Quote stack: lazy-loaded chain of quote posts
+      const [quoteStack, setQuoteStack] = useState([]);
+      const [stackDone, setStackDone] = useState(false);
       const hasStack = quoteStack.length >= 2;
-      const canLoadMore = useMemo(() => {
-        if (quoteStack.length < 2) return false;
-        const last = quoteStack[quoteStack.length - 1];
-        if (!last.embed) return false;
-        const t = last.embed.$type;
-        // If the last post has a record embed whose inner record is present but
-        // NOT a fully-resolved viewRecord, the API truncated the chain
-        if (t === 'app.bsky.embed.record#view') {
-          const rec = last.embed.record;
-          return rec != null && rec.$type !== 'app.bsky.embed.record#viewRecord';
-        }
-        if (t === 'app.bsky.embed.recordWithMedia#view') {
-          const rec = last.embed.record?.record;
-          return rec != null && rec.$type !== 'app.bsky.embed.record#viewRecord';
-        }
-        return false;
-      }, [quoteStack]);
+      const hasMore = quoteStack.length >= 2 && !stackDone;
 
-      async function loadDeeperStack() {
-        if (loadingMore || !quoteStack.length) return;
+      // Initialise the stack from the already-embedded data when thread loads
+      useEffect(() => {
+        if (!thread) return;
+        const initial = extractQuoteStack(thread.post);
+        setQuoteStack(initial);
+        // If the initial extraction only found 1 post, mark done
+        if (initial.length < 2) { setStackDone(true); return; }
+        // Check whether the last post quotes something (to know if we can load more)
+        const lastQuotedUri = getQuotedUri(initial[initial.length - 1]);
+        setStackDone(!lastQuotedUri);
+      }, [thread]);
+
+      // Load the next post in the quote chain (called by scroll / click)
+      async function loadMoreStack() {
+        if (loadingMore || stackDone || !quoteStack.length) return;
         setLoadingMore(true);
         try {
-          const lastUri = quoteStack[quoteStack.length - 1].uri;
-          const more = await fetchDeeperStack(lastUri);
-          if (more.length > 0) setExtraStack(prev => [...prev, ...more]);
+          const last = quoteStack[quoteStack.length - 1];
+          const quotedUri = getQuotedUri(last);
+          if (!quotedUri) { setStackDone(true); return; }
+
+          const post = await fetchPost(quotedUri);
+          if (!post) { setStackDone(true); return; }
+
+          // Avoid duplicates
+          if (quoteStack.some(p => p.uri === post.uri)) { setStackDone(true); return; }
+
+          setQuoteStack(prev => [...prev, post]);
+
+          // Check if this new post also quotes something
+          const nextUri = getQuotedUri(post);
+          if (!nextUri) setStackDone(true);
         } catch(e) {
-          setError('Failed to load deeper quotes: ' + e.message);
+          setStackDone(true);
         } finally {
           setLoadingMore(false);
         }
@@ -865,11 +895,12 @@
               <!-- Stack view -->
               <div class="mb-3 text-xs text-gray-400">
                 ${quoteStack.length} post${quoteStack.length!==1?'s':''} in quote chain
+                ${loadingMore ? html` · <span class="text-sky-500">loading…</span>` : ''}
               </div>
               <${StackView}
                 stack=${quoteStack}
-                canLoadMore=${canLoadMore}
-                onLoadMore=${loadDeeperStack}
+                hasMore=${hasMore}
+                onLoadMore=${loadMoreStack}
                 loadingMore=${loadingMore}
               />
             ` : html`
