@@ -326,7 +326,9 @@
       const fullStack = [...stack, ...deeperPosts];
       for (let i = 1; i < fullStack.length; i++) {
         addNode(fullStack[i].uri, fullStack[i], 'quoted');
-        links.push({ source: fullStack[i - 1].uri, target: fullStack[i].uri, type: 'quote' });
+        // Use seedUri for the first link source to match the seed node's key
+        const sourceUri = i === 1 ? seedUri : fullStack[i - 1].uri;
+        links.push({ source: sourceUri, target: fullStack[i].uri, type: 'quote' });
       }
 
       return {
@@ -626,7 +628,7 @@
         }
       }
 
-      if (newNodes.length === 0) return;
+      if (newNodes.length === 0 && newLinks.length === 0) return;
 
       // Update D3 simulation
       currentSim.nodes(graphData.nodes);
@@ -808,6 +810,7 @@
         if (link.type !== 'thread') continue;
         const sx = link.source.x, sy = link.source.y;
         const tx = link.target.x, ty = link.target.y;
+        if (sx == null || sy == null || tx == null || ty == null) continue;
         const my = (sy + ty) / 2;
         edgeCtx.moveTo(sx, sy);
         edgeCtx.bezierCurveTo(sx, my, tx, my, tx, ty);
@@ -823,6 +826,7 @@
         if (link.type === 'thread') continue;
         const sx = link.source.x, sy = link.source.y;
         const tx = link.target.x, ty = link.target.y;
+        if (sx == null || sy == null || tx == null || ty == null) continue;
         const mx = (sx + tx) / 2;
         edgeCtx.moveTo(sx, sy);
         edgeCtx.bezierCurveTo(mx, sy, mx, ty, tx, ty);
@@ -1222,17 +1226,25 @@
         // Build initial graph — thread only, no quote web crawl
         const rawData = await buildGraphData(atUri, down, up);
 
-        // Auto-explore seed's quotes immediately (fast, single request)
-        const seedNode = rawData.nodes.find(n => n.id === atUri);
-        if ((seedNode?.post.quoteCount || 0) > 0) {
-          const seedQuotes = await fetchAllQuotePosts(atUri);
-          for (const qp of seedQuotes) {
-            if (!rawData.nodes.some(n => n.id === qp.uri)) {
-              rawData.nodes.push({ id: qp.uri, post: qp, type: 'quote-post' });
-              rawData.links.push({ source: qp.uri, target: atUri, type: 'quote' });
+        // Auto-explore quotes for seed and all quoted nodes (what the seed quotes)
+        const urisToExplore = [atUri];
+        for (const n of rawData.nodes) {
+          if (n.type === 'quoted') urisToExplore.push(n.id);
+        }
+        for (const uri of urisToExplore) {
+          const node = rawData.nodes.find(n => n.id === uri);
+          if ((node?.post.quoteCount || 0) > 0) {
+            const quotes = await fetchAllQuotePosts(uri);
+            for (const qp of quotes) {
+              if (!rawData.nodes.some(n => n.id === qp.uri)) {
+                rawData.nodes.push({ id: qp.uri, post: qp, type: 'quote-post' });
+              }
+              if (!rawData.links.some(l => l.source === qp.uri && l.target === uri)) {
+                rawData.links.push({ source: qp.uri, target: uri, type: 'quote' });
+              }
             }
+            exploredSet.add(uri);
           }
-          exploredSet.add(atUri);
         }
 
         renderApp({ loading: false, error: '', hasGraph: true });
