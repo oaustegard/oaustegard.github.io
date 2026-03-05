@@ -497,16 +497,16 @@
       // Sort chronologically
       threadNodes.sort((a, b) => a.t - b.t);
 
-      // Assign Y: tight initial spacing (compaction pass below resolves overlaps)
-      const BASE_Y = 12;
+      // Assign Y: full card-height spacing (compaction pass below pulls nodes up)
+      const BASE_Y = CARD_H + V_GAP;
       const timeToY = new Map();
       let yPos = 0;
       for (let i = 0; i < threadNodes.length; i++) {
         if (i > 0) {
           const gap = threadNodes[i].t - threadNodes[i - 1].t;
           let bonus = 0;
-          if (gap > 86400000) bonus = 6;       // > 1 day
-          else if (gap > 3600000) bonus = 3;    // > 1 hour
+          if (gap > 86400000) bonus = 8;       // > 1 day
+          else if (gap > 3600000) bonus = 4;    // > 1 hour
           yPos += BASE_Y + bonus;
         }
         timeToY.set(threadNodes[i].uri, yPos);
@@ -574,16 +574,22 @@
         });
       }
 
-      // ── Y compaction: allow vertical overlap when X ranges don't overlap ──
+      // ── Y compaction: pull nodes up when they have X clearance ──
+      // Process in time order. Each node tries to move as high as possible
+      // while staying (a) at or below its parent and (b) not overlapping
+      // any already-placed node that shares its X range.
       const allPositioned = [...pos.entries()].map(([uri, p]) => ({
         uri, x: p.x, y: p.y, time: getTime(uri)
       })).sort((a, b) => a.time - b.time);
       const placed = [];
       const OVERLAP_GAP = 2;
       for (const item of allPositioned) {
-        let minY = item.y;
+        const node = nodes.get(item.uri);
+        // Parent constraint: must be below parent
+        const parentPos = node?.parentId ? pos.get(node.parentId) : null;
+        let minY = parentPos ? parentPos.y + CARD_H + OVERLAP_GAP : 0;
+        // Collision constraint: check all placed nodes with overlapping X
         for (const p of placed) {
-          // Only enforce vertical separation if X ranges overlap
           if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
             minY = Math.max(minY, p.y + CARD_H + OVERLAP_GAP);
           }
@@ -1172,8 +1178,8 @@
                     const p = layout.positions.get(uri);
                     // At very low zoom, render lightweight dots instead of full cards
                     if (zoomScale < CLUSTER_ZOOM && uri !== graph.seedUri) {
-                      const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
-                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:6px;border:1px solid #d1d5db;opacity:0.85;" />`;
+                      const colors = { seed: '#2563eb', ancestor: '#6b7280', reply: '#93c5fd', quoted: '#fb923c', 'quote-post': '#fbbf24' };
+                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#93c5fd'};border-radius:6px;border:1px solid #9ca3af;opacity:0.9;" />`;
                     }
                     return html`<${ConstellationCard}
                       key=${uri} node=${node} pos=${p}
