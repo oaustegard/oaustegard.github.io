@@ -70,59 +70,71 @@ export async function fetchAllQuotePosts(atUri) {
 }
 
 /**
- * Recursively explore the "quote web" — BFS outward from one or more
- * seed URIs, fetching who quoted each post.  Returns a Map<uri, post[]>
- * where each key is a quoted URI and the value is the array of posts
- * that quote it.
+ * Recursively explore the "quote web" — priority-driven BFS outward from
+ * one or more seed URIs, fetching who quoted each post.
+ *
+ * Uses a priority queue ordered by quoteCount (descending) so the most
+ * active branches are explored first.  This naturally follows the "spine"
+ * of a viral quote chain deeply while also filling in side branches.
  *
  * @param {string|string[]} seedUris   - Starting AT URI(s)
  * @param {Object} [opts]
- * @param {number} [opts.maxDepth=3]    - How many hops from the seeds to explore
- * @param {number} [opts.maxTotal=500]  - Stop after collecting this many quote-posts total
- * @param {Function} [opts.onProgress]  - Called with { depth, queued, fetched } on each level
+ * @param {number} [opts.maxTotal=2000]     - Stop after collecting this many posts
+ * @param {number} [opts.maxAPICalls=200]   - Stop after this many getQuotes calls
+ * @param {Function} [opts.onProgress]      - Called with { fetched, apiCalls }
  * @returns {Promise<{ quoteMap: Map, allQuotePosts: Object[] }>}
  */
 export async function fetchQuoteWeb(seedUris, opts = {}) {
-  const { maxDepth = 3, maxTotal = 500, onProgress } = opts;
+  const { maxTotal = 2000, maxAPICalls = 200, onProgress } = opts;
   const quoteMap = new Map();   // parentUri -> [quotePosts]
   const allPosts = [];          // flat array of all discovered quote posts
   const seen = new Set();       // URIs already queued/fetched
+  let apiCalls = 0;
 
   // Accept single URI or array
   const seeds = Array.isArray(seedUris) ? seedUris : [seedUris];
   for (const s of seeds) seen.add(s);
 
-  let frontier = [...seeds];
+  // Priority queue: explore highest-quoteCount posts first.
+  // Each entry: { uri, quoteCount }
+  // Simple sorted insert — fine for the expected sizes.
+  const queue = seeds.map(s => ({ uri: s, quoteCount: Infinity }));
 
-  for (let depth = 0; depth < maxDepth && frontier.length > 0 && allPosts.length < maxTotal; depth++) {
-    if (onProgress) onProgress({ depth, queued: frontier.length, fetched: allPosts.length });
+  const CONCURRENCY = 5;
 
-    // Fetch quotes for all posts in the current frontier (with concurrency limit)
-    const CONCURRENCY = 5;
-    const nextFrontier = [];
-    for (let i = 0; i < frontier.length && allPosts.length < maxTotal; i += CONCURRENCY) {
-      const batch = frontier.slice(i, i + CONCURRENCY);
-      const results = await Promise.allSettled(batch.map(uri => fetchAllQuotePosts(uri)));
-      for (let j = 0; j < batch.length; j++) {
-        const parentUri = batch[j];
-        const posts = results[j].status === 'fulfilled' ? results[j].value : [];
-        if (posts.length) {
-          quoteMap.set(parentUri, posts);
-          for (const qp of posts) {
-            if (!seen.has(qp.uri)) {
-              seen.add(qp.uri);
-              allPosts.push({ ...qp, _quotedUri: parentUri });
-              // If this post was also quoted, add to next frontier
-              if ((qp.quoteCount || 0) > 0) {
-                nextFrontier.push(qp.uri);
-              }
+  while (queue.length > 0 && allPosts.length < maxTotal && apiCalls < maxAPICalls) {
+    // Take up to CONCURRENCY items from the front of the queue (highest priority)
+    const batch = queue.splice(0, CONCURRENCY);
+    apiCalls += batch.length;
+
+    if (onProgress) onProgress({ fetched: allPosts.length, apiCalls });
+
+    const results = await Promise.allSettled(
+      batch.map(item => fetchAllQuotePosts(item.uri))
+    );
+
+    for (let j = 0; j < batch.length; j++) {
+      const parentUri = batch[j].uri;
+      const posts = results[j].status === 'fulfilled' ? results[j].value : [];
+      if (posts.length) {
+        quoteMap.set(parentUri, posts);
+        for (const qp of posts) {
+          if (!seen.has(qp.uri)) {
+            seen.add(qp.uri);
+            allPosts.push({ ...qp, _quotedUri: parentUri });
+            // Enqueue if this post was also quoted
+            if ((qp.quoteCount || 0) > 0) {
+              // Insert in sorted order (descending by quoteCount)
+              const entry = { uri: qp.uri, quoteCount: qp.quoteCount };
+              let idx = queue.findIndex(q => q.quoteCount < entry.quoteCount);
+              if (idx === -1) idx = queue.length;
+              queue.splice(idx, 0, entry);
             }
-            if (allPosts.length >= maxTotal) break;
           }
+          if (allPosts.length >= maxTotal) break;
         }
       }
     }
-    frontier = nextFrontier;
   }
 
   return { quoteMap, allQuotePosts: allPosts };

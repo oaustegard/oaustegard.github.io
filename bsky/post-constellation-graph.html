@@ -252,9 +252,11 @@
         }
       }
 
-      // Fetch the full quote web (quotes of quotes, up to 3 hops deep)
+      // Fetch the full quote web: priority BFS from all posts with quoteCount > 0
+      let fetchedQuoteMap = new Map();
       if (quoteWebSeeds.length) {
-        const quoteWebResult = await fetchQuoteWeb(quoteWebSeeds, { maxDepth: 3, maxTotal: 500 });
+        const quoteWebResult = await fetchQuoteWeb(quoteWebSeeds);
+        fetchedQuoteMap = quoteWebResult.quoteMap;
         if (quoteWebResult?.allQuotePosts?.length) {
           for (const qp of quoteWebResult.allQuotePosts) {
             const quotedUri = qp._quotedUri;
@@ -268,10 +270,20 @@
         }
       }
 
+      // Count unexplored quotes (posts with quoteCount > 0 that we didn't fetch)
+      let unexploredQuotes = 0;
+      for (const node of nodesMap.values()) {
+        const qc = node.post.quoteCount || 0;
+        if (qc > 0 && !fetchedQuoteMap.has(node.id)) {
+          unexploredQuotes += qc;
+        }
+      }
+
       return {
         nodes: Array.from(nodesMap.values()),
         links,
-        seedUri
+        seedUri,
+        unexploredQuotes
       };
     }
 
@@ -305,7 +317,7 @@
         return kept.has(sId) && kept.has(tId);
       });
 
-      return { data: { nodes, links, seedUri: data.seedUri }, pruned: true, totalCount };
+      return { data: { nodes, links, seedUri: data.seedUri, unexploredQuotes: data.unexploredQuotes }, pruned: true, totalCount };
     }
 
     // ── Render embed HTML ────────────────────────────────────────────────────────
@@ -389,6 +401,7 @@
         if (counts.reply) parts.push(`${counts.reply} in thread`);
         if (counts.quoted) parts.push(`${counts.quoted} quoted`);
         if (counts['quote-post']) parts.push(`${counts['quote-post']} quote post${counts['quote-post'] > 1 ? 's' : ''}`);
+        if (graphData.unexploredQuotes) parts.push(`~${graphData.unexploredQuotes} more unexplored`);
         statsHtml = `<span class="text-xs text-gray-400">${parts.join(' &middot; ')}</span>`;
       }
 
