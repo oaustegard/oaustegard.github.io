@@ -19,7 +19,6 @@
   <style>
     html, body { overscroll-behavior: none; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; overflow: hidden; }
-    /* Prevent browser from hijacking touch gestures (scroll/zoom) on the canvas area */
     .pz-viewport { touch-action: none; -webkit-user-select: none; user-select: none; }
     .pz-canvas { touch-action: none; }
     .post-text { overflow-wrap: anywhere; word-break: break-word; }
@@ -51,7 +50,7 @@
       border-radius: 7px;
       padding: 5px 6px;
       cursor: pointer;
-      transition: box-shadow 0.15s, border-color 0.15s;
+      transition: box-shadow 0.15s, border-color 0.15s, opacity 0.3s;
       user-select: none;
       font-size: 11px;
       line-height: 1.3;
@@ -73,6 +72,40 @@
       cursor: default;
       font-size: 12px;
       padding: 10px 12px;
+    }
+
+    /* Explorable glow — nodes with undiscovered connections */
+    .constellation-card.explorable {
+      animation: explorable-pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes explorable-pulse {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(251,191,36,0); }
+      50% { box-shadow: 0 0 12px 4px rgba(251,191,36,0.35); }
+    }
+    .constellation-card.type-seed.explorable {
+      animation: seed-explorable-pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes seed-explorable-pulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.18); }
+      50% { box-shadow: 0 0 0 2px rgba(59,130,246,0.18), 0 0 12px 4px rgba(251,191,36,0.35); }
+    }
+
+    /* Exploring indicator */
+    .constellation-card.exploring {
+      animation: exploring-spin 1s linear infinite;
+    }
+    @keyframes exploring-spin {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.3); }
+      50% { box-shadow: 0 0 0 2px rgba(59,130,246,0.6), 0 0 8px 2px rgba(59,130,246,0.2); }
+    }
+
+    /* Fade-in for newly discovered nodes */
+    .constellation-card.just-discovered {
+      animation: node-fade-in 0.5s ease-out;
+    }
+    @keyframes node-fade-in {
+      from { opacity: 0; transform: scale(0.85); }
+      to { opacity: 1; transform: scale(1); }
     }
 
     /* Type badges */
@@ -104,6 +137,24 @@
 
     /* Toolbar */
     .toolbar { background: white; border-bottom: 1px solid #e5e7eb; }
+
+    /* Torch vignette — fog of war overlay */
+    .torch-vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 25;
+      background: radial-gradient(
+        ellipse 55% 55% at 50% 50%,
+        transparent 0%,
+        transparent 40%,
+        rgba(17, 24, 39, 0.06) 60%,
+        rgba(17, 24, 39, 0.15) 75%,
+        rgba(17, 24, 39, 0.30) 90%,
+        rgba(17, 24, 39, 0.45) 100%
+      );
+      transition: opacity 0.3s;
+    }
 
     /* Minimap */
     .minimap {
@@ -140,6 +191,14 @@
       vertical-align: middle;
       margin-right: 4px;
     }
+    .legend-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
 
     /* Collapse toggle */
     .collapse-btn {
@@ -157,6 +216,22 @@
       white-space: nowrap;
     }
     .collapse-btn:hover { background: #e5e7eb; }
+
+    /* Quote count badge on explorable nodes */
+    .quote-count-badge {
+      position: absolute;
+      top: -6px;
+      right: -6px;
+      background: #fbbf24;
+      color: #78350f;
+      font-size: 8px;
+      font-weight: 700;
+      padding: 1px 4px;
+      border-radius: 8px;
+      line-height: 1.2;
+      z-index: 2;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+    }
   </style>
 </head>
 <body class="bg-gray-100">
@@ -183,7 +258,6 @@
     import { render } from 'preact';
     import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
     import { html } from 'htm/preact';
-    import { fetchQuoteWeb } from './bsky-graph.js';
 
     // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -194,12 +268,17 @@
     const QUOTE_X_OFF = CARD_W + 14;
     const QUOTE_Y_STEP = 18;
     const LAYOUT_PAD = 20;
-    const QP_COLS = 3;           // quote posts arranged in N columns
+    const QP_COLS = 3;
     const VIRT_BUFFER = 300;
     const VIRT_THROTTLE = 80;
     const CLUSTER_ZOOM = 0.30;
-    const QUOTE_BATCH = 25;
     const API = 'https://public.api.bsky.app/xrpc/';
+
+    // Fog-of-war constants
+    const EXPLORE_RADIUS = 250;     // px from viewport center to trigger exploration
+    const EXPLORE_DWELL = 600;      // ms a node must be near center before exploring
+    const EXPLORE_COOLDOWN = 300;   // ms between exploration checks
+    const DISCOVER_FADE_MS = 1500;  // how long "just-discovered" animation class stays
 
     // ── URL / API helpers ───────────────────────────────────────────────────────
 
@@ -234,32 +313,19 @@
       return (await r.json()).thread;
     }
 
-    async function fetchQuotePosts(atUri, limit = QUOTE_BATCH, cursor = null) {
-      let url = API + 'app.bsky.feed.getQuotes?uri=' + encodeURIComponent(atUri) + '&limit=' + limit;
-      if (cursor) url += '&cursor=' + encodeURIComponent(cursor);
-      const r = await fetch(url);
-      if (!r.ok) return { posts: [], cursor: null };
-      const data = await r.json();
-      return { posts: data.posts || [], cursor: data.cursor || null };
-    }
-
     async function fetchAllQuotePosts(atUri) {
       const allPosts = [];
       let cursor = null;
       do {
-        const result = await fetchQuotePosts(atUri, 100, cursor);
-        allPosts.push(...result.posts);
-        cursor = result.cursor;
+        let url = API + 'app.bsky.feed.getQuotes?uri=' + encodeURIComponent(atUri) + '&limit=100';
+        if (cursor) url += '&cursor=' + encodeURIComponent(cursor);
+        const r = await fetch(url);
+        if (!r.ok) break;
+        const data = await r.json();
+        allPosts.push(...(data.posts || []));
+        cursor = data.cursor || null;
       } while (cursor);
       return allPosts;
-    }
-
-    async function fetchSinglePost(uri) {
-      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(uri) + '&depth=0&parentHeight=0');
-      if (!r.ok) return null;
-      const data = await r.json();
-      if (data.thread?.$type !== 'app.bsky.feed.defs#threadViewPost') return null;
-      return data.thread.post;
     }
 
     // ── Display helpers ─────────────────────────────────────────────────────────
@@ -303,7 +369,8 @@
       return {
         uri: vr.uri, cid: vr.cid, author: vr.author,
         record: vr.value || {}, embed,
-        likeCount: vr.likeCount, repostCount: vr.repostCount, replyCount: vr.replyCount, indexedAt: vr.indexedAt
+        likeCount: vr.likeCount, repostCount: vr.repostCount, replyCount: vr.replyCount,
+        quoteCount: vr.quoteCount, indexedAt: vr.indexedAt
       };
     }
 
@@ -416,35 +483,32 @@
       return { nodes, edges, seedUri };
     }
 
-    function addQuotePosts(graph, quotePosts) {
+    /** Add quote posts incrementally to an existing graph. Returns a new graph object. */
+    function addQuotePostsToGraph(graph, quotePosts, quotedUri) {
       const nodes = new Map(graph.nodes);
       const edges = [...graph.edges];
+      const added = [];
       for (const qp of quotePosts) {
-        if (!nodes.has(qp.uri) && qp.uri !== graph.seedUri) {
+        if (!nodes.has(qp.uri)) {
           nodes.set(qp.uri, makeNode(qp.uri, qp, 'quote-post'));
-          edges.push({ from: qp.uri, to: graph.seedUri, type: 'quote' });
+          edges.push({ from: qp.uri, to: quotedUri, type: 'quote' });
+          added.push(qp.uri);
         }
       }
-      return { nodes, edges, seedUri: graph.seedUri };
+      return { nodes, edges, seedUri: graph.seedUri, _newUris: added };
     }
 
     // ── Layout algorithm ────────────────────────────────────────────────────────
-    //
-    // Y-axis = chronological order (scroll down = later posts, like Bluesky timeline)
-    // X-axis = tree branching (children spread horizontally under parent)
-    // Compact sequential spacing with small bonus gaps for large time jumps.
 
     function computeLayout(graph, collapsedBranches) {
       const { nodes, edges, seedUri } = graph;
       const pos = new Map();
 
-      // Helper: get post timestamp as epoch ms
       function getTime(uri) {
         const node = nodes.get(uri);
         return new Date(node?.post?.record?.createdAt || node?.post?.indexedAt || 0).getTime();
       }
 
-      // Ancestors above seed
       const ancestors = [];
       let cur = seedUri;
       while (nodes.get(cur)?.parentId) {
@@ -454,15 +518,13 @@
           cur = pid;
         } else break;
       }
-      ancestors.reverse(); // oldest first
+      ancestors.reverse();
 
-      // Adaptive horizontal gap: shrinks when a node has many children
       function hGap(count) {
         if (count <= 6) return H_GAP;
         return Math.max(4, Math.round(H_GAP * 6 / count));
       }
 
-      // Subtree widths (bottom-up) for X-axis branching
       const stw = new Map();
       function computeWidths(uri) {
         const node = nodes.get(uri);
@@ -479,10 +541,6 @@
       }
       computeWidths(seedUri);
 
-      // ── Time-ordered Y positions ───────────────────────────────────────────
-      // Collect all thread nodes (ancestors + seed + visible replies),
-      // sort chronologically, assign Y with full card-height spacing.
-
       const threadNodes = [];
       for (const a of ancestors) {
         if (nodes.has(a)) threadNodes.push({ uri: a, t: getTime(a) });
@@ -497,10 +555,8 @@
       }
       collectReplies(seedUri);
 
-      // Sort chronologically
       threadNodes.sort((a, b) => a.t - b.t);
 
-      // Assign Y: compact sequential with small bonus gaps for time jumps
       const BASE_Y = CARD_H + 4;
       const timeToY = new Map();
       let yPos = 0;
@@ -508,23 +564,17 @@
         if (i > 0) {
           const gap = threadNodes[i].t - threadNodes[i - 1].t;
           let bonus = 0;
-          if (gap > 86400000) bonus = 8;       // > 1 day
-          else if (gap > 3600000) bonus = 4;    // > 1 hour
+          if (gap > 86400000) bonus = 8;
+          else if (gap > 3600000) bonus = 4;
           yPos += BASE_Y + bonus;
         }
         timeToY.set(threadNodes[i].uri, yPos);
       }
 
-      // ── X positions: tree branching ────────────────────────────────────────
-      // Children spread horizontally under parent, centered on parent.
-      // Y comes from timeToY (chronological order).
-
-      // Position ancestors centered above seed (all at x=0)
       for (const a of ancestors) {
         pos.set(a, { x: 0, y: timeToY.get(a) || 0 });
       }
 
-      // Position seed + reply tree
       function assignX(uri, x) {
         pos.set(uri, { x, y: timeToY.get(uri) || 0 });
         const node = nodes.get(uri);
@@ -543,7 +593,7 @@
       }
       assignX(seedUri, 0);
 
-      // ── Quoted posts (upper-left diagonal) ─────────────────────────────────
+      // Quoted posts (upper-left diagonal)
       const quotedChain = [];
       let qCur = seedUri;
       while (true) {
@@ -556,28 +606,39 @@
         pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
       }
 
-      // ── Quote posts (multi-column grid to the right, sorted chronologically)
+      // Quote posts: group by which node they quote, place in columns beside that node
+      const quotesByTarget = new Map();
+      for (const edge of edges) {
+        if (edge.type === 'quote' && nodes.get(edge.from)?.type === 'quote-post') {
+          if (!quotesByTarget.has(edge.to)) quotesByTarget.set(edge.to, []);
+          quotesByTarget.get(edge.to).push(edge.from);
+        }
+      }
+
       let replyMaxX = 0;
       for (const p of pos.values()) {
         if (p.x + CARD_W > replyMaxX) replyMaxX = p.x + CARD_W;
       }
+
       const qpStartX = replyMaxX + 24;
-      const qpList = [];
-      for (const edge of edges) {
-        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
-          qpList.push(edge.from);
-      }
-      qpList.sort((a, b) => getTime(a) - getTime(b));
-      for (let i = 0; i < qpList.length; i++) {
-        const col = i % QP_COLS;
-        const row = Math.floor(i / QP_COLS);
-        pos.set(qpList[i], {
-          x: qpStartX + col * (CARD_W + H_GAP),
-          y: (row + 1) * (CARD_H + V_GAP)
-        });
+      // Layout each group of quote posts
+      let globalQpRow = 0;
+      for (const [targetUri, qpUris] of quotesByTarget) {
+        qpUris.sort((a, b) => getTime(a) - getTime(b));
+        const targetPos = pos.get(targetUri);
+        const baseY = targetPos ? targetPos.y : globalQpRow * (CARD_H + V_GAP);
+        for (let i = 0; i < qpUris.length; i++) {
+          const col = i % QP_COLS;
+          const row = Math.floor(i / QP_COLS);
+          pos.set(qpUris[i], {
+            x: qpStartX + col * (CARD_W + H_GAP),
+            y: baseY + row * (CARD_H + V_GAP)
+          });
+        }
+        globalQpRow += Math.ceil(qpUris.length / QP_COLS);
       }
 
-      // ── Normalize positions ────────────────────────────────────────────────
+      // Normalize positions
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const p of pos.values()) {
         if (p.x < minX) minX = p.x;
@@ -641,7 +702,7 @@
         </div>`;
     }
 
-    // ── Embed components (for expanded cards) ───────────────────────────────────
+    // ── Embed components ────────────────────────────────────────────────────────
 
     function ImageGrid({ images }) {
       if (!images?.length) return null;
@@ -721,16 +782,25 @@
       return html`<span class="type-badge ${type}">${label}</span>`;
     }
 
-    function ConstellationCard({ node, pos, expanded, collapsed, onToggle, onReseed, onToggleCollapse }) {
+    function ConstellationCard({ node, pos, expanded, collapsed, onToggle, onReseed, onToggleCollapse, isExplorable, isExploring, isNew }) {
       const p = node.post;
       const hasChildren = node.children.length > 0;
+      const quoteCount = p.quoteCount || 0;
+
+      const extraClasses = [
+        `type-${node.type}`,
+        expanded && 'is-expanded',
+        isExplorable && 'explorable',
+        isExploring && 'exploring',
+        isNew && 'just-discovered',
+      ].filter(Boolean).join(' ');
 
       if (!expanded) {
-        // ── Compact card ──
         return html`
-          <div class="constellation-card type-${node.type}"
+          <div class="constellation-card ${extraClasses}"
                style="left: ${pos.x}px; top: ${pos.y}px;"
                onClick=${onToggle}>
+            ${isExplorable && quoteCount > 0 && html`<div class="quote-count-badge">${quoteCount}q</div>`}
             <div class="flex items-center gap-1 mb-0.5 min-w-0">
               <${Avatar} author=${p.author} />
               <span class="font-semibold text-gray-800 truncate" style="max-width:80px;font-size:10px">${p.author.displayName || p.author.handle}</span>
@@ -751,11 +821,11 @@
           </div>`;
       }
 
-      // ── Expanded card (wider overlay) ──
       return html`
-        <div class="constellation-card type-${node.type} is-expanded"
+        <div class="constellation-card ${extraClasses}"
              style="left: ${pos.x}px; top: ${pos.y}px;"
              onClick=${onToggle}>
+          ${isExplorable && quoteCount > 0 && html`<div class="quote-count-badge">${quoteCount}q</div>`}
           <div class="flex items-center gap-1.5 mb-1 min-w-0">
             <${Avatar} author=${p.author} />
             <span class="font-semibold text-gray-800 truncate" style="max-width:120px">${p.author.displayName || p.author.handle}</span>
@@ -818,9 +888,9 @@
         </svg>`;
     }
 
-    // ── Minimap (self-updating via rAF, no Preact re-renders) ───────────────────
+    // ── Minimap ─────────────────────────────────────────────────────────────────
 
-    function Minimap({ nodes, positions, layout, pzRef, viewportRef, drawRef }) {
+    function Minimap({ nodes, positions, layout, pzRef, viewportRef, drawRef, exploredSet }) {
       const canvasRef = useRef(null);
       const MINI_W = 140, MINI_H = 90;
 
@@ -835,8 +905,10 @@
         for (const [uri, node] of nodes) {
           const p = positions.get(uri);
           if (!p) continue;
-          ctx.fillStyle = typeColors[node.type] || '#9ca3af';
-          const r = node.type === 'seed' ? 3 : 2;
+          // Unexplored nodes with quotes are gold
+          const isExplorable = (node.post.quoteCount || 0) > 0 && !exploredSet.has(uri);
+          ctx.fillStyle = isExplorable ? '#fbbf24' : (typeColors[node.type] || '#9ca3af');
+          const r = node.type === 'seed' ? 3 : isExplorable ? 2.5 : 2;
           ctx.beginPath();
           ctx.arc(p.x * scale + 2, p.y * scale + 2, r, 0, Math.PI * 2);
           ctx.fill();
@@ -855,9 +927,8 @@
             vh / t.scale * scale
           );
         }
-      }, [nodes, positions, layout]);
+      }, [nodes, positions, layout, exploredSet]);
 
-      // Register draw function for external callers (panzoom transform callback)
       useEffect(() => {
         drawRef.current = draw;
         draw();
@@ -904,9 +975,15 @@
       const [collapsedBranches, setCollapsedBranches] = useState(new Set());
       const [viewRect, setViewRect] = useState(null);
       const [zoomScale, setZoomScale] = useState(1);
-      const [quoteCursor, setQuoteCursor] = useState(null);
-      const [loadingMore, setLoadingMore] = useState(false);
       const seedAtUri = useRef(null);
+
+      // Fog-of-war state
+      const [exploredSet, setExploredSet] = useState(new Set());   // URIs whose quotes we've fetched
+      const [exploringSet, setExploringSet] = useState(new Set());  // URIs currently being fetched
+      const [newNodes, setNewNodes] = useState(new Set());          // recently discovered URIs (for fade-in)
+      const [torchEnabled, setTorchEnabled] = useState(true);
+      const dwellTimers = useRef(new Map());  // uri -> { timer, startTime }
+      const exploreQueueRef = useRef(new Set());  // prevent duplicate concurrent fetches
 
       const viewportRef = useRef(null);
       const canvasElRef = useRef(null);
@@ -918,6 +995,118 @@
       const layout = useMemo(() => {
         return graph ? computeLayout(graph, collapsedBranches) : null;
       }, [graph, collapsedBranches]);
+
+      // ── Fog-of-war: find explorable nodes ──────────────────────────────────
+      const explorableUris = useMemo(() => {
+        if (!graph) return new Set();
+        const s = new Set();
+        for (const [uri, node] of graph.nodes) {
+          if ((node.post.quoteCount || 0) > 0 && !exploredSet.has(uri) && !exploringSet.has(uri)) {
+            s.add(uri);
+          }
+        }
+        return s;
+      }, [graph, exploredSet, exploringSet]);
+
+      // ── Explore a single node's quotes ─────────────────────────────────────
+      const exploreNode = useCallback(async (uri) => {
+        if (exploreQueueRef.current.has(uri)) return;
+        exploreQueueRef.current.add(uri);
+        setExploringSet(prev => { const s = new Set(prev); s.add(uri); return s; });
+
+        try {
+          const posts = await fetchAllQuotePosts(uri);
+          if (posts.length > 0) {
+            setGraph(prevGraph => {
+              if (!prevGraph) return prevGraph;
+              const tagged = posts.map(p => ({ ...p, _quotedUri: uri }));
+              const updated = addQuotePostsToGraph(prevGraph, tagged, uri);
+              // Track new nodes for fade-in animation
+              if (updated._newUris?.length) {
+                setNewNodes(prev => {
+                  const s = new Set(prev);
+                  for (const u of updated._newUris) s.add(u);
+                  return s;
+                });
+                // Clear fade-in after animation completes
+                setTimeout(() => {
+                  setNewNodes(prev => {
+                    const s = new Set(prev);
+                    for (const u of updated._newUris) s.delete(u);
+                    return s;
+                  });
+                }, DISCOVER_FADE_MS);
+              }
+              return updated;
+            });
+          }
+        } catch (e) {
+          console.warn('Explore failed for', uri, e);
+        } finally {
+          exploreQueueRef.current.delete(uri);
+          setExploringSet(prev => { const s = new Set(prev); s.delete(uri); return s; });
+          setExploredSet(prev => { const s = new Set(prev); s.add(uri); return s; });
+        }
+      }, []);
+
+      // ── Viewport center detection for fog-of-war ───────────────────────────
+      const checkExploration = useCallback(() => {
+        if (!pzRef.current || !viewportRef.current || !layout || !graph) return;
+
+        const t = pzRef.current.getTransform();
+        const vw = viewportRef.current.clientWidth;
+        const vh = viewportRef.current.clientHeight;
+
+        // Viewport center in canvas coordinates
+        const cx = (-t.x + vw / 2) / t.scale;
+        const cy = (-t.y + vh / 2) / t.scale;
+
+        // Find explorable nodes within radius of viewport center
+        const radius = EXPLORE_RADIUS / t.scale; // scale radius with zoom
+        const nearCenter = [];
+
+        for (const uri of explorableUris) {
+          const pos = layout.positions.get(uri);
+          if (!pos) continue;
+          const dx = pos.x + CARD_W / 2 - cx;
+          const dy = pos.y + CARD_H / 2 - cy;
+          const dist = Math.sqrt(dx * dx + dy * dy);
+          if (dist < radius) {
+            nearCenter.push({ uri, dist });
+          }
+        }
+
+        if (nearCenter.length === 0) {
+          // Clear all dwell timers for nodes no longer near center
+          for (const [uri, entry] of dwellTimers.current) {
+            clearTimeout(entry.timer);
+          }
+          dwellTimers.current.clear();
+          return;
+        }
+
+        // Sort by distance, explore closest first
+        nearCenter.sort((a, b) => a.dist - b.dist);
+
+        // Clear timers for nodes no longer near center
+        for (const [uri, entry] of dwellTimers.current) {
+          if (!nearCenter.some(n => n.uri === uri)) {
+            clearTimeout(entry.timer);
+            dwellTimers.current.delete(uri);
+          }
+        }
+
+        // Start dwell timers for newly near nodes
+        for (const { uri } of nearCenter) {
+          if (!dwellTimers.current.has(uri)) {
+            const timer = setTimeout(() => {
+              dwellTimers.current.delete(uri);
+              exploreNode(uri);
+            }, EXPLORE_DWELL);
+            dwellTimers.current.set(uri, { timer, startTime: Date.now() });
+          }
+        }
+      }, [layout, graph, explorableUris, exploreNode]);
 
       // ── Viewport virtualization ───────────────────────────────────────────
       function updateViewRect() {
@@ -933,9 +1122,8 @@
         });
       }
 
-      // Visible nodes: only those within the viewport rect
       const visibleUris = useMemo(() => {
-        if (!layout || !viewRect) return null; // null = show all
+        if (!layout || !viewRect) return null;
         const s = new Set();
         for (const [uri, pos] of layout.positions) {
           if (pos.x + CARD_W >= viewRect.left && pos.x <= viewRect.right &&
@@ -943,7 +1131,6 @@
             s.add(uri);
           }
         }
-        // Always include expanded cards and seed
         for (const uri of expandedCards) {
           if (layout.positions.has(uri)) s.add(uri);
         }
@@ -951,7 +1138,6 @@
         return s;
       }, [layout, viewRect, expandedCards, graph]);
 
-      // Visible edges: at least one endpoint visible
       const visibleEdges = useMemo(() => {
         if (!graph) return [];
         if (!visibleUris) return graph.edges;
@@ -972,9 +1158,9 @@
         });
         pzRef.current = pz;
 
-        // On transform: redraw minimap (rAF) + throttled viewRect update
         let lastVR = 0;
         let lastZoom = 1;
+        let lastExploreCheck = 0;
         pz.on('transform', () => {
           if (minimapDrawRef.current) requestAnimationFrame(minimapDrawRef.current);
           const t = pz.getTransform();
@@ -990,6 +1176,11 @@
               updateViewRect();
             }, VIRT_THROTTLE);
           }
+          // Check exploration on pan/zoom (throttled)
+          if (now - lastExploreCheck > EXPLORE_COOLDOWN) {
+            lastExploreCheck = now;
+            checkExploration();
+          }
         });
 
         return () => {
@@ -997,7 +1188,14 @@
           pzRef.current = null;
           if (vrTimerRef.current) { clearTimeout(vrTimerRef.current); vrTimerRef.current = null; }
         };
-      }, [layout]);
+      }, [layout, checkExploration]);
+
+      // Also check exploration when layout changes (initial load) or after settling
+      useEffect(() => {
+        if (!layout) return;
+        const timer = setTimeout(checkExploration, 800);
+        return () => clearTimeout(timer);
+      }, [layout, checkExploration]);
 
       // Center on seed when layout changes
       useEffect(() => {
@@ -1009,7 +1207,6 @@
           vw / 2 - layout.seedX - CARD_W / 2,
           vh * 0.38 - layout.seedY - CARD_H / 2
         );
-        // Set initial viewRect
         requestAnimationFrame(updateViewRect);
       }, [layout]);
 
@@ -1018,7 +1215,14 @@
         if (!url) return;
         setLoading(true); setError(''); setGraph(null);
         setExpandedCards(new Set()); setCollapsedBranches(new Set());
-        setViewRect(null); setQuoteCursor(null); setZoomScale(1);
+        setViewRect(null); setZoomScale(1);
+        setExploredSet(new Set()); setExploringSet(new Set());
+        setNewNodes(new Set());
+        // Clear dwell timers
+        for (const [, entry] of dwellTimers.current) clearTimeout(entry.timer);
+        dwellTimers.current.clear();
+        exploreQueueRef.current.clear();
+
         setUrlParam('url', url);
         try {
           const atUri = await resolveToAtUri(url);
@@ -1031,27 +1235,25 @@
             throw new Error('Thread not found or post is private');
           const up = upR.status === 'fulfilled' ? upR.value : null;
 
-          // Build initial graph to discover all posts with quoteCount > 0
+          // Build initial graph with just the thread — no quote web crawl
           const initialGraph = buildGraph(atUri, down, up, []);
 
-          // Collect all URIs with quoteCount > 0 for quote web exploration
-          const quoteWebSeeds = [];
-          for (const node of initialGraph.nodes.values()) {
-            if ((node.post.quoteCount || 0) > 0) quoteWebSeeds.push(node.id);
-          }
+          // Auto-explore the seed's quotes immediately
+          const seedNode = initialGraph.nodes.get(atUri);
+          const seedQuoteCount = seedNode?.post?.quoteCount || 0;
 
-          let quoteWebPosts = [];
-          if (quoteWebSeeds.length) {
-            const result = await fetchQuoteWeb(quoteWebSeeds);
-            quoteWebPosts = result.allQuotePosts;
+          if (seedQuoteCount > 0) {
+            const seedQuotes = await fetchAllQuotePosts(atUri);
+            const tagged = seedQuotes.map(p => ({ ...p, _quotedUri: atUri }));
+            const withQuotes = addQuotePostsToGraph(initialGraph, tagged, atUri);
+            setExploredSet(new Set([atUri]));
+            setGraph(withQuotes);
+          } else {
+            setGraph(initialGraph);
           }
-
-          setQuoteCursor(null);
-          setGraph(buildGraph(atUri, down, up, quoteWebPosts));
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       }
-
 
       useEffect(() => { const u = getUrlParam('url'); if (u) doLoad(u); }, []);
 
@@ -1143,8 +1345,15 @@
                 ${stats.replies > 0 && html`<span class="text-gray-300">·</span><span title=${stats.expectedReplies ? `Seed post reports ${stats.expectedReplies} direct replies; loaded ${stats.replies} total thread descendants` : ''}>${stats.replies} in thread</span>`}
                 ${stats.quoted > 0 && html`<span class="text-gray-300">·</span><span>${stats.quoted} quoted</span>`}
                 ${stats.qp > 0 && html`<span class="text-gray-300">·</span><span title=${stats.expectedQuotes ? `Seed post reports ${stats.expectedQuotes} quotes` : ''}>${stats.qp} quote post${stats.qp !== 1 ? 's' : ''}</span>`}
+                ${explorableUris.size > 0 && html`<span class="text-gray-300">·</span><span style="color:#d97706" title="Navigate toward glowing nodes to discover more">${explorableUris.size} unexplored</span>`}
+                ${exploringSet.size > 0 && html`<span class="text-gray-300">·</span><span style="color:#3b82f6" class="animate-pulse">exploring…</span>`}
               </div>
               <div class="flex items-center gap-1 flex-shrink-0">
+                <button onClick=${() => setTorchEnabled(t => !t)}
+                  class="px-2 py-0.5 text-xs rounded hover:bg-gray-200 ${torchEnabled ? 'bg-amber-100' : 'bg-gray-100'}"
+                  title=${torchEnabled ? 'Torch mode on — click to disable' : 'Torch mode off — click to enable'}>
+                  🔦
+                </button>
                 <button onClick=${zoomOut} class="px-1.5 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 font-mono" title="Zoom out">−</button>
                 <button onClick=${zoomIn} class="px-1.5 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 font-mono" title="Zoom in">+</button>
                 <button onClick=${centerOnSeed} class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">⊙</button>
@@ -1170,10 +1379,10 @@
                   .filter(([uri]) => layout.positions.has(uri))
                   .map(([uri, node]) => {
                     const p = layout.positions.get(uri);
-                    // At very low zoom, render lightweight dots instead of full cards
                     if (zoomScale < CLUSTER_ZOOM && uri !== graph.seedUri) {
+                      const isExp = explorableUris.has(uri);
                       const colors = { seed: '#2563eb', ancestor: '#6b7280', reply: '#93c5fd', quoted: '#fb923c', 'quote-post': '#fbbf24' };
-                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#93c5fd'};border-radius:6px;border:1px solid #9ca3af;opacity:0.9;" />`;
+                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${isExp ? '#fbbf24' : (colors[node.type] || '#93c5fd')};border-radius:6px;border:1px solid #9ca3af;opacity:0.9;" />`;
                     }
                     return html`<${ConstellationCard}
                       key=${uri} node=${node} pos=${p}
@@ -1181,16 +1390,21 @@
                       collapsed=${collapsedBranches.has(uri)}
                       onToggle=${() => toggleCard(uri)}
                       onReseed=${reseed}
-                      onToggleCollapse=${toggleCollapse} />`;
+                      onToggleCollapse=${toggleCollapse}
+                      isExplorable=${explorableUris.has(uri)}
+                      isExploring=${exploringSet.has(uri)}
+                      isNew=${newNodes.has(uri)} />`;
                   })}
               </div>
+              ${torchEnabled && html`<div class="torch-vignette" />`}
               <${Minimap}
                 nodes=${graph.nodes}
                 positions=${layout.positions}
                 layout=${layout}
                 pzRef=${pzRef}
                 viewportRef=${viewportRef}
-                drawRef=${minimapDrawRef} />
+                drawRef=${minimapDrawRef}
+                exploredSet=${exploredSet} />
             `}
 
             ${!graph && !loading && !error && html`
@@ -1198,7 +1412,7 @@
                 <div class="text-center px-6">
                   <div class="text-5xl mb-3">🌌</div>
                   <p class="text-sm mb-1">Paste a Bluesky post URL to visualize its constellation</p>
-                  <p class="text-xs text-gray-300">See thread replies, ancestors, quoted posts, and who quoted it — all on one canvas</p>
+                  <p class="text-xs text-gray-300">Navigate toward glowing nodes to discover more — like a torch in a cave</p>
                 </div>
               </div>
             `}
@@ -1206,16 +1420,17 @@
               <div class="flex items-center justify-center h-full text-gray-400">
                 <div class="text-center">
                   <div class="text-xl animate-pulse mb-2">Loading…</div>
-                  <p class="text-xs">Fetching thread, ancestors, and quotes</p>
+                  <p class="text-xs">Fetching thread and ancestors</p>
                 </div>
               </div>
             `}
 
             ${graph && layout && html`
               <div class="legend">
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3 flex-wrap">
                   <span><span class="legend-line" style="background:#3b82f6"></span>reply</span>
                   <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
+                  <span><span class="legend-dot" style="background:#fbbf24;box-shadow:0 0 6px 2px rgba(251,191,36,0.4)"></span>explorable</span>
                 </div>
               </div>
             `}
