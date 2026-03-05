@@ -502,6 +502,7 @@
     let currentSim = null;
     let graphData = null;
     let expandedCards = new Set();
+    let allExpanded = getUrlParam('ea') === '1';
     let seedUri = null;
     let prunedInfo = null; // { pruned, totalCount }
     let lastRawData = null; // cached for re-pruning without refetch
@@ -541,6 +542,7 @@
               <div class="flex items-center gap-1 flex-shrink-0">
                 <button id="btn-center" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">&#x2299;</button>
                 <button id="btn-fit" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Zoom to fit">Fit</button>
+                <button id="btn-expand-all" class="px-2 py-0.5 text-xs ${allExpanded ? 'bg-sky-100 text-sky-700' : 'bg-gray-100'} rounded hover:bg-gray-200" title="Expand/collapse all cards">${allExpanded ? 'Collapse all' : 'Expand all'}</button>
                 <a href="thread-reader?url=${encodeURIComponent(getUrlParam('url'))}"
                   class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 text-gray-700 no-underline" title="View as thread">&#x1f9f5; Thread</a>
               </div>
@@ -576,6 +578,46 @@
       if (loadBtn) loadBtn.addEventListener('click', () => doLoad());
       if (document.getElementById('btn-center')) document.getElementById('btn-center').addEventListener('click', centerOnSeed);
       if (document.getElementById('btn-fit')) document.getElementById('btn-fit').addEventListener('click', zoomToFit);
+      if (document.getElementById('btn-expand-all')) document.getElementById('btn-expand-all').addEventListener('click', toggleExpandAll);
+    }
+
+    // ── Expand helpers ──────────────────────────────────────────────────────────
+
+    function isExpanded(id) {
+      return allExpanded || expandedCards.has(id);
+    }
+
+    function collideRadius(d) {
+      if (isExpanded(d.id)) return d.type === 'seed' ? 200 : 180;
+      return d.type === 'seed' ? 140 : 110;
+    }
+
+    function refreshCards() {
+      if (!cardEls) return;
+      cardEls.each(function(d) {
+        const exp = isExpanded(d.id);
+        d3.select(this).classed('expanded', exp).html(renderCard(d, exp));
+      });
+    }
+
+    function reheatCollisions() {
+      if (!currentSim) return;
+      currentSim.force('collide').radius(collideRadius);
+      currentSim.alpha(0.5).restart();
+    }
+
+    function toggleExpandAll() {
+      allExpanded = !allExpanded;
+      setUrlParam('ea', allExpanded ? '1' : '');
+      expandedCards.clear();
+      refreshCards();
+      reheatCollisions();
+      // Re-render toolbar to update button label
+      const btn = document.getElementById('btn-expand-all');
+      if (btn) {
+        btn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
+        btn.className = `px-2 py-0.5 text-xs ${allExpanded ? 'bg-sky-100 text-sky-700' : 'bg-gray-100'} rounded hover:bg-gray-200`;
+      }
     }
 
     // ── D3 Force Graph ───────────────────────────────────────────────────────────
@@ -689,7 +731,7 @@
           .theta(isVeryLarge ? 1.2 : 0.9)
         )
         .force('collide', d3.forceCollide()
-          .radius(d => d.type === 'seed' ? 140 : 110)
+          .radius(collideRadius)
           .strength(0.8)
           .iterations(isLarge ? 1 : 2)
         )
@@ -720,17 +762,19 @@
       cardEls = cardTransform.selectAll('.graph-card')
         .data(data.nodes, d => d.id)
         .join('div')
-        .attr('class', d => `graph-card type-${d.type}`)
-        .html(d => renderCard(d, false))
+        .attr('class', d => `graph-card type-${d.type}${isExpanded(d.id) ? ' expanded' : ''}`)
+        .html(d => renderCard(d, isExpanded(d.id)))
         .on('click', function(event, d) {
           event.stopPropagation();
-          if (expandedCards.has(d.id)) {
+          const wasExpanded = isExpanded(d.id);
+          if (wasExpanded) {
             expandedCards.delete(d.id);
-            d3.select(this).classed('expanded', false).html(renderCard(d, false));
           } else {
             expandedCards.add(d.id);
-            d3.select(this).classed('expanded', true).html(renderCard(d, true));
           }
+          const nowExpanded = isExpanded(d.id);
+          d3.select(this).classed('expanded', nowExpanded).html(renderCard(d, nowExpanded));
+          reheatCollisions();
         })
         .call(d3.drag()
           .on('start', (event, d) => {
@@ -782,7 +826,7 @@
           <span><span class="legend-line" style="background:#93c5fd"></span>reply</span>
           <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
         </div>
-        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom</div>
+        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Reheat after expand to settle</div>
       `;
       viewport.appendChild(legendDiv);
 
