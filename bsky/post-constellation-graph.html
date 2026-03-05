@@ -39,7 +39,7 @@
       font-size: 11px;
       line-height: 1.35;
       box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-      transition: box-shadow 0.15s, border-color 0.15s;
+      transition: box-shadow 0.15s, border-color 0.15s, opacity 0.4s;
       transform: translate(-50%, -50%);
       pointer-events: auto;
     }
@@ -59,12 +59,61 @@
 
     .graph-card.expanded {
       width: 300px;
-      max-height: 400px;
-      overflow-y: auto;
       z-index: 50;
       box-shadow: 0 4px 20px rgba(0,0,0,0.14);
       font-size: 12px;
       padding: 12px 14px;
+    }
+
+    /* Explorable glow — pulsing gold for nodes with undiscovered quotes */
+    .graph-card.explorable {
+      animation: explorable-pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes explorable-pulse {
+      0%, 100% { box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+      50% { box-shadow: 0 0 14px 5px rgba(251,191,36,0.4), 0 1px 3px rgba(0,0,0,0.06); }
+    }
+    .graph-card.type-seed.explorable {
+      animation: seed-explorable-pulse 2.5s ease-in-out infinite;
+    }
+    @keyframes seed-explorable-pulse {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.20), 0 2px 8px rgba(0,0,0,0.06); }
+      50% { box-shadow: 0 0 0 2px rgba(59,130,246,0.20), 0 0 14px 5px rgba(251,191,36,0.4); }
+    }
+
+    /* Exploring spinner */
+    .graph-card.exploring {
+      animation: exploring-glow 1s ease-in-out infinite;
+    }
+    @keyframes exploring-glow {
+      0%, 100% { box-shadow: 0 0 0 2px rgba(59,130,246,0.3); }
+      50% { box-shadow: 0 0 0 2px rgba(59,130,246,0.6), 0 0 10px 3px rgba(59,130,246,0.2); }
+    }
+
+    /* Fade-in for newly discovered nodes */
+    .graph-card.just-discovered {
+      animation: card-appear 0.6s ease-out;
+    }
+    @keyframes card-appear {
+      from { opacity: 0; transform: translate(-50%, -50%) scale(0.7); }
+      to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+    }
+
+    /* Quote count badge */
+    .quote-count-badge {
+      position: absolute;
+      top: -7px;
+      right: -7px;
+      background: #fbbf24;
+      color: #78350f;
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 8px;
+      line-height: 1.3;
+      z-index: 2;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.15);
+      pointer-events: none;
     }
 
     /* Type badges */
@@ -84,9 +133,9 @@
     .type-badge.quote-post { background: #ffedd5; color: #c2410c; }
 
     /* Line clamp */
-    .line-clamp-4 {
+    .line-clamp-6 {
       display: -webkit-box;
-      -webkit-line-clamp: 4;
+      -webkit-line-clamp: 6;
       -webkit-box-orient: vertical;
       overflow: hidden;
     }
@@ -97,6 +146,24 @@
 
     /* Toolbar */
     .toolbar { background: white; border-bottom: 1px solid #e5e7eb; z-index: 200; position: relative; }
+
+    /* Torch vignette */
+    .torch-vignette {
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      z-index: 25;
+      background: radial-gradient(
+        ellipse 55% 55% at 50% 50%,
+        transparent 0%,
+        transparent 40%,
+        rgba(17, 24, 39, 0.06) 60%,
+        rgba(17, 24, 39, 0.15) 75%,
+        rgba(17, 24, 39, 0.30) 90%,
+        rgba(17, 24, 39, 0.45) 100%
+      );
+      transition: opacity 0.3s;
+    }
 
     /* Legend */
     .legend {
@@ -116,6 +183,14 @@
       display: inline-block;
       width: 20px;
       height: 2px;
+      vertical-align: middle;
+      margin-right: 4px;
+    }
+    .legend-dot {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
       vertical-align: middle;
       margin-right: 4px;
     }
@@ -180,7 +255,7 @@
     import {
       resolveToAtUri,
       fetchThreadDown, fetchThreadUp,
-      fetchQuoteWeb,
+      fetchAllQuotePosts,
       extractQuoteStack, getQuotedUri, deepenQuoteChain,
       validReplies, postUrl, timeAgo, avatarHue
     } from './bsky-graph.js';
@@ -188,10 +263,21 @@
     // ── Constants ─────────────────────────────────────────────────────────────────
     const CARD_W = 200;
     const CARD_H_EST = 80;
-    const DEFAULT_MAX_NODES = 150;
-    let maxNodes = DEFAULT_MAX_NODES;
 
-    // ── Build graph data for D3 ──────────────────────────────────────────────────
+    // Fog-of-war constants
+    const EXPLORE_RADIUS = 350;     // px from viewport center (in screen coords)
+    const EXPLORE_DWELL = 600;      // ms before auto-exploring a nearby node
+    const EXPLORE_CHECK_MS = 400;   // ms between exploration checks
+    const DISCOVER_FADE_MS = 1200;  // how long "just-discovered" class stays
+
+    // ── Fog-of-war state ──────────────────────────────────────────────────────────
+    const exploredSet = new Set();    // URIs whose quotes we've fetched
+    const exploringSet = new Set();   // URIs currently being fetched
+    const newNodeSet = new Set();     // recently discovered (for fade-in)
+    const dwellTimers = new Map();    // uri -> setTimeout id
+    let torchEnabled = true;
+
+    // ── Build initial graph data (thread only, no quote web) ──────────────────────
 
     async function buildGraphData(seedUri, threadDown, threadUp) {
       const nodesMap = new Map();
@@ -244,80 +330,11 @@
         links.push({ source: fullStack[i - 1].uri, target: fullStack[i].uri, type: 'quote' });
       }
 
-      // Collect all URIs with quoteCount > 0 to seed the quote web
-      const quoteWebSeeds = [];
-      for (const node of nodesMap.values()) {
-        if ((node.post.quoteCount || 0) > 0) {
-          quoteWebSeeds.push(node.id);
-        }
-      }
-
-      // Fetch the full quote web: priority BFS from all posts with quoteCount > 0
-      let fetchedQuoteMap = new Map();
-      if (quoteWebSeeds.length) {
-        const quoteWebResult = await fetchQuoteWeb(quoteWebSeeds);
-        fetchedQuoteMap = quoteWebResult.quoteMap;
-        if (quoteWebResult?.allQuotePosts?.length) {
-          for (const qp of quoteWebResult.allQuotePosts) {
-            const quotedUri = qp._quotedUri;
-            if (!nodesMap.has(qp.uri)) {
-              addNode(qp.uri, qp, 'quote-post');
-            }
-            if (quotedUri && !links.some(l => l.source === qp.uri && l.target === quotedUri)) {
-              links.push({ source: qp.uri, target: quotedUri, type: 'quote' });
-            }
-          }
-        }
-      }
-
-      // Count unexplored quotes (posts with quoteCount > 0 that we didn't fetch)
-      let unexploredQuotes = 0;
-      for (const node of nodesMap.values()) {
-        const qc = node.post.quoteCount || 0;
-        if (qc > 0 && !fetchedQuoteMap.has(node.id)) {
-          unexploredQuotes += qc;
-        }
-      }
-
       return {
         nodes: Array.from(nodesMap.values()),
         links,
         seedUri,
-        unexploredQuotes
       };
-    }
-
-    // ── Prune graph to node limit ──────────────────────────────────────────────
-
-    function pruneGraph(data, limit) {
-      if (data.nodes.length <= limit) return { data, pruned: false, totalCount: data.nodes.length };
-      const totalCount = data.nodes.length;
-
-      // Priority: seed=0, ancestor=1, quoted=2, reply=3, quote-post=4
-      const typePriority = { seed: 0, ancestor: 1, quoted: 2, reply: 3, 'quote-post': 4 };
-
-      // Score nodes: lower is higher priority
-      const scored = data.nodes.map(n => ({
-        node: n,
-        priority: typePriority[n.type] ?? 5,
-        likes: n.post?.likeCount || 0
-      }));
-
-      // Sort: priority first, then likes descending within same priority
-      scored.sort((a, b) => {
-        if (a.priority !== b.priority) return a.priority - b.priority;
-        return b.likes - a.likes;
-      });
-
-      const kept = new Set(scored.slice(0, limit).map(s => s.node.id));
-      const nodes = data.nodes.filter(n => kept.has(n.id));
-      const links = data.links.filter(l => {
-        const sId = typeof l.source === 'object' ? l.source.id : l.source;
-        const tId = typeof l.target === 'object' ? l.target.id : l.target;
-        return kept.has(sId) && kept.has(tId);
-      });
-
-      return { data: { nodes, links, seedUri: data.seedUri, unexploredQuotes: data.unexploredQuotes }, pruned: true, totalCount };
     }
 
     // ── Render embed HTML ────────────────────────────────────────────────────────
@@ -384,24 +401,31 @@
     let expandedCards = new Set();
     let allExpanded = getUrlParam('ea') === '1';
     let seedUri = null;
-    let prunedInfo = null; // { pruned, totalCount }
-    let lastRawData = null; // cached for re-pruning without refetch
+
+    function countExplorableNodes() {
+      if (!graphData) return 0;
+      let c = 0;
+      for (const n of graphData.nodes) {
+        if ((n.post.quoteCount || 0) > 0 && !exploredSet.has(n.id) && !exploringSet.has(n.id)) c++;
+      }
+      return c;
+    }
 
     function renderApp(state) {
       const { loading, error, hasGraph } = state;
 
-      // Build stats
       let statsHtml = '';
       if (graphData) {
         const counts = { ancestor: 0, reply: 0, quoted: 0, 'quote-post': 0 };
         for (const n of graphData.nodes) counts[n.type] = (counts[n.type] || 0) + 1;
         const parts = [`${graphData.nodes.length} nodes`];
-        if (prunedInfo?.pruned) parts[0] += ` of ${prunedInfo.totalCount}`;
         if (counts.ancestor) parts.push(`${counts.ancestor} ancestor${counts.ancestor > 1 ? 's' : ''}`);
         if (counts.reply) parts.push(`${counts.reply} in thread`);
         if (counts.quoted) parts.push(`${counts.quoted} quoted`);
         if (counts['quote-post']) parts.push(`${counts['quote-post']} quote post${counts['quote-post'] > 1 ? 's' : ''}`);
-        if (graphData.unexploredQuotes) parts.push(`~${graphData.unexploredQuotes} more unexplored`);
+        const explorable = countExplorableNodes();
+        if (explorable > 0) parts.push(`<span style="color:#d97706">${explorable} unexplored</span>`);
+        if (exploringSet.size > 0) parts.push(`<span style="color:#3b82f6" class="animate-pulse">exploring...</span>`);
         statsHtml = `<span class="text-xs text-gray-400">${parts.join(' &middot; ')}</span>`;
       }
 
@@ -421,6 +445,7 @@
             ${statsHtml}
             ${hasGraph ? `
               <div class="flex items-center gap-1 flex-shrink-0">
+                <button id="btn-torch" class="px-2 py-0.5 text-xs ${torchEnabled ? 'bg-amber-100' : 'bg-gray-100'} rounded hover:bg-gray-200" title="Toggle torch/fog-of-war">&#x1f526;</button>
                 <button id="btn-center" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">&#x2299;</button>
                 <button id="btn-fit" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Zoom to fit">Fit</button>
                 <button id="btn-expand-all" class="px-2 py-0.5 text-xs ${allExpanded ? 'bg-sky-100 text-sky-700' : 'bg-gray-100'} rounded hover:bg-gray-200" title="Expand/collapse all cards">${allExpanded ? 'Collapse all' : 'Expand all'}</button>
@@ -435,8 +460,8 @@
               <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af">
                 <div style="text-align:center;padding:1.5rem">
                   <div style="font-size:3rem;margin-bottom:0.75rem">&#x1f30c;</div>
-                  <p style="font-size:0.875rem;margin-bottom:0.25rem">Paste a Bluesky post URL to visualize its constellation as a force-directed graph</p>
-                  <p style="font-size:0.75rem;color:#d1d5db">Thread replies, ancestors, quoted posts, and quote posts -- all connected</p>
+                  <p style="font-size:0.875rem;margin-bottom:0.25rem">Paste a Bluesky post URL to visualize its constellation</p>
+                  <p style="font-size:0.75rem;color:#d1d5db">Navigate toward glowing nodes to discover more &mdash; like a torch in a cave</p>
                 </div>
               </div>
             ` : ''}
@@ -444,7 +469,7 @@
               <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af">
                 <div style="text-align:center">
                   <div style="font-size:1.25rem" class="animate-pulse">Loading...</div>
-                  <p style="font-size:0.75rem;margin-top:0.5rem">Fetching thread, ancestors, and quotes</p>
+                  <p style="font-size:0.75rem;margin-top:0.5rem">Fetching thread and ancestors</p>
                 </div>
               </div>
             ` : ''}
@@ -460,6 +485,15 @@
       if (document.getElementById('btn-center')) document.getElementById('btn-center').addEventListener('click', centerOnSeed);
       if (document.getElementById('btn-fit')) document.getElementById('btn-fit').addEventListener('click', zoomToFit);
       if (document.getElementById('btn-expand-all')) document.getElementById('btn-expand-all').addEventListener('click', toggleExpandAll);
+      if (document.getElementById('btn-torch')) document.getElementById('btn-torch').addEventListener('click', toggleTorch);
+    }
+
+    function toggleTorch() {
+      torchEnabled = !torchEnabled;
+      const el = document.querySelector('.torch-vignette');
+      if (el) el.style.opacity = torchEnabled ? '1' : '0';
+      const btn = document.getElementById('btn-torch');
+      if (btn) btn.className = `px-2 py-0.5 text-xs ${torchEnabled ? 'bg-amber-100' : 'bg-gray-100'} rounded hover:bg-gray-200`;
     }
 
     // ── Expand helpers ──────────────────────────────────────────────────────────
@@ -469,7 +503,7 @@
     }
 
     function collideRadius(d) {
-      if (isExpanded(d.id)) return d.type === 'seed' ? 200 : 180;
+      if (isExpanded(d.id)) return d.type === 'seed' ? 220 : 200;
       return d.type === 'seed' ? 140 : 110;
     }
 
@@ -477,7 +511,10 @@
       if (!cardEls) return;
       cardEls.each(function(d) {
         const exp = isExpanded(d.id);
-        d3.select(this).classed('expanded', exp).html(renderCard(d, exp));
+        d3.select(this)
+          .classed('expanded', exp)
+          .html(renderCard(d, exp));
+        updateCardExplorableState(d3.select(this), d);
       });
     }
 
@@ -493,7 +530,6 @@
       expandedCards.clear();
       refreshCards();
       reheatCollisions();
-      // Re-render toolbar to update button label
       const btn = document.getElementById('btn-expand-all');
       if (btn) {
         btn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
@@ -501,9 +537,261 @@
       }
     }
 
+    // ── Update explorable state on card elements ────────────────────────────────
+
+    function updateCardExplorableState(sel, d) {
+      const qc = d.post.quoteCount || 0;
+      const isExplorable = qc > 0 && !exploredSet.has(d.id) && !exploringSet.has(d.id);
+      const isExploring = exploringSet.has(d.id);
+      const isNew = newNodeSet.has(d.id);
+      sel
+        .classed('explorable', isExplorable)
+        .classed('exploring', isExploring)
+        .classed('just-discovered', isNew);
+
+      // Add/remove badge
+      let badge = sel.select('.quote-count-badge');
+      if (isExplorable && qc > 0) {
+        if (badge.empty()) {
+          sel.append('div').attr('class', 'quote-count-badge').text(qc + 'q');
+        }
+      } else {
+        if (!badge.empty()) badge.remove();
+      }
+    }
+
+    function updateAllExplorableStates() {
+      if (!cardEls) return;
+      cardEls.each(function(d) {
+        updateCardExplorableState(d3.select(this), d);
+      });
+    }
+
+    // ── Fog-of-war: explore a node's quotes ─────────────────────────────────────
+
+    async function exploreNode(uri) {
+      if (exploredSet.has(uri) || exploringSet.has(uri)) return;
+      exploringSet.add(uri);
+      updateAllExplorableStates();
+      updateStats();
+
+      try {
+        const posts = await fetchAllQuotePosts(uri);
+        if (posts.length > 0 && graphData) {
+          addDiscoveredPosts(posts, uri);
+        }
+      } catch (e) {
+        console.warn('Explore failed for', uri, e);
+      } finally {
+        exploringSet.delete(uri);
+        exploredSet.add(uri);
+        updateAllExplorableStates();
+        updateStats();
+      }
+    }
+
+    // ── Add discovered posts to the live D3 graph ───────────────────────────────
+
+    function addDiscoveredPosts(posts, quotedUri) {
+      if (!graphData || !currentSim) return;
+
+      const newNodes = [];
+      const newLinks = [];
+
+      // Find the position of the node that was quoted, to place new nodes nearby
+      const targetNode = graphData.nodes.find(n => n.id === quotedUri);
+      const baseX = targetNode ? targetNode.x : 0;
+      const baseY = targetNode ? targetNode.y : 0;
+
+      for (const qp of posts) {
+        if (!graphData.nodes.some(n => n.id === qp.uri)) {
+          const node = {
+            id: qp.uri, post: qp, type: 'quote-post',
+            x: baseX + (Math.random() - 0.5) * 200,
+            y: baseY + (Math.random() - 0.5) * 200,
+          };
+          graphData.nodes.push(node);
+          newNodes.push(node);
+          newNodeSet.add(qp.uri);
+        }
+        const linkExists = graphData.links.some(l => {
+          const sId = typeof l.source === 'object' ? l.source.id : l.source;
+          const tId = typeof l.target === 'object' ? l.target.id : l.target;
+          return sId === qp.uri && tId === quotedUri;
+        });
+        if (!linkExists) {
+          const link = { source: qp.uri, target: quotedUri, type: 'quote' };
+          graphData.links.push(link);
+          newLinks.push(link);
+        }
+      }
+
+      if (newNodes.length === 0) return;
+
+      // Update D3 simulation
+      currentSim.nodes(graphData.nodes);
+      currentSim.force('link').links(graphData.links);
+
+      // Re-bindSVG edges
+      const linkSel = gLinks.selectAll('path')
+        .data(graphData.links)
+        .join('path')
+        .attr('class', d => d.type === 'thread' ? 'edge-thread' : 'edge-quote')
+        .attr('marker-end', d => d.type === 'quote' ? 'url(#arrow-quote)' : '');
+
+      // Re-bind card elements
+      cardEls = cardTransformEl.selectAll('.graph-card')
+        .data(graphData.nodes, d => d.id)
+        .join(
+          enter => enter.append('div')
+            .attr('class', d => `graph-card type-${d.type}${isExpanded(d.id) ? ' expanded' : ''} just-discovered`)
+            .html(d => renderCard(d, isExpanded(d.id)))
+            .on('click', cardClickHandler)
+            .call(cardDragBehavior),
+          update => update,
+          exit => exit.remove()
+        );
+
+      // Update tick handler reference
+      currentSim.on('tick', makeTickHandler(linkSel));
+
+      // Update explorable states
+      updateAllExplorableStates();
+
+      // Reheat simulation gently to integrate new nodes
+      currentSim.alpha(0.4).restart();
+
+      // Clear fade-in class after animation
+      setTimeout(() => {
+        for (const n of newNodes) newNodeSet.delete(n.id);
+        updateAllExplorableStates();
+      }, DISCOVER_FADE_MS);
+    }
+
+    // ── Fog-of-war: viewport center check ───────────────────────────────────────
+
+    let exploreCheckTimer = null;
+
+    function checkExploration() {
+      if (!graphData || !svg || !zoom) return;
+
+      const viewport = document.getElementById('viewport');
+      if (!viewport) return;
+      const vw = viewport.clientWidth;
+      const vh = viewport.clientHeight;
+
+      // Get current zoom transform
+      const transform = d3.zoomTransform(svg.node());
+
+      // Viewport center in graph coordinates
+      const cx = (vw / 2 - transform.x) / transform.k;
+      const cy = (vh / 2 - transform.y) / transform.k;
+
+      // Radius in graph coords
+      const radius = EXPLORE_RADIUS / transform.k;
+
+      const nearCenter = [];
+      for (const n of graphData.nodes) {
+        const qc = n.post.quoteCount || 0;
+        if (qc <= 0 || exploredSet.has(n.id) || exploringSet.has(n.id)) continue;
+        const dx = n.x - cx;
+        const dy = n.y - cy;
+        const dist = Math.sqrt(dx * dx + dy * dy);
+        if (dist < radius) {
+          nearCenter.push({ node: n, dist });
+        }
+      }
+
+      // Clear timers for nodes no longer near center
+      for (const [uri, timer] of dwellTimers) {
+        if (!nearCenter.some(nc => nc.node.id === uri)) {
+          clearTimeout(timer);
+          dwellTimers.delete(uri);
+        }
+      }
+
+      if (nearCenter.length === 0) return;
+
+      // Sort by distance, explore closest first
+      nearCenter.sort((a, b) => a.dist - b.dist);
+
+      for (const { node } of nearCenter) {
+        if (!dwellTimers.has(node.id)) {
+          const timer = setTimeout(() => {
+            dwellTimers.delete(node.id);
+            exploreNode(node.id);
+          }, EXPLORE_DWELL);
+          dwellTimers.set(node.id, timer);
+        }
+      }
+    }
+
+    function startExplorationChecks() {
+      if (exploreCheckTimer) clearInterval(exploreCheckTimer);
+      exploreCheckTimer = setInterval(checkExploration, EXPLORE_CHECK_MS);
+    }
+
+    function stopExplorationChecks() {
+      if (exploreCheckTimer) { clearInterval(exploreCheckTimer); exploreCheckTimer = null; }
+      for (const [, timer] of dwellTimers) clearTimeout(timer);
+      dwellTimers.clear();
+    }
+
+    // ── Update stats in toolbar without full re-render ──────────────────────────
+
+    function updateStats() {
+      const statsEl = app.querySelector('.text-xs.text-gray-400');
+      if (!statsEl || !graphData) return;
+      const counts = { ancestor: 0, reply: 0, quoted: 0, 'quote-post': 0 };
+      for (const n of graphData.nodes) counts[n.type] = (counts[n.type] || 0) + 1;
+      const parts = [`${graphData.nodes.length} nodes`];
+      if (counts.ancestor) parts.push(`${counts.ancestor} ancestor${counts.ancestor > 1 ? 's' : ''}`);
+      if (counts.reply) parts.push(`${counts.reply} in thread`);
+      if (counts.quoted) parts.push(`${counts.quoted} quoted`);
+      if (counts['quote-post']) parts.push(`${counts['quote-post']} quote post${counts['quote-post'] > 1 ? 's' : ''}`);
+      const explorable = countExplorableNodes();
+      if (explorable > 0) parts.push(`<span style="color:#d97706">${explorable} unexplored</span>`);
+      if (exploringSet.size > 0) parts.push(`<span style="color:#3b82f6" class="animate-pulse">exploring...</span>`);
+      statsEl.innerHTML = parts.join(' &middot; ');
+    }
+
     // ── D3 Force Graph ───────────────────────────────────────────────────────────
 
-    let svg, gLinks, gCards, zoom, cardEls;
+    let svg, gLinks, gCards, zoom, cardEls, cardTransformEl;
+
+    // Shared click handler and drag behavior for cards
+    function cardClickHandler(event, d) {
+      event.stopPropagation();
+      const wasExpanded = isExpanded(d.id);
+      if (wasExpanded) {
+        expandedCards.delete(d.id);
+      } else {
+        expandedCards.add(d.id);
+      }
+      const nowExpanded = isExpanded(d.id);
+      d3.select(this).classed('expanded', nowExpanded).html(renderCard(d, nowExpanded));
+      updateCardExplorableState(d3.select(this), d);
+      reheatCollisions();
+    }
+
+    let cardDragBehavior;
+
+    function makeTickHandler(linkSel) {
+      return () => {
+        linkSel.attr('d', d => {
+          const sx = d.source.x, sy = d.source.y;
+          const tx = d.target.x, ty = d.target.y;
+          const mx = (sx + tx) / 2, my = (sy + ty) / 2;
+          if (d.type === 'thread') {
+            return `M ${sx} ${sy} C ${sx} ${my}, ${tx} ${my}, ${tx} ${ty}`;
+          }
+          return `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ty}, ${tx} ${ty}`;
+        });
+
+        cardEls.style('left', d => d.x + 'px')
+               .style('top', d => d.y + 'px');
+      };
+    }
 
     function initGraph(data) {
       graphData = data;
@@ -537,7 +825,7 @@
         .style('pointer-events', 'none')
         .style('overflow', 'visible');
 
-      const cardTransform = cardContainer.append('div')
+      cardTransformEl = cardContainer.append('div')
         .attr('class', 'card-transform')
         .style('position', 'absolute')
         .style('top', 0)
@@ -546,28 +834,29 @@
         .style('height', 0)
         .style('overflow', 'visible');
 
+      // Torch vignette overlay
+      const torchDiv = document.createElement('div');
+      torchDiv.className = 'torch-vignette';
+      torchDiv.style.opacity = torchEnabled ? '1' : '0';
+      viewport.appendChild(torchDiv);
+
       // Zoom behavior
       zoom = d3.zoom()
         .scaleExtent([0.05, 4])
         .on('zoom', (event) => {
           const t = event.transform;
           gMain.attr('transform', t);
-          cardTransform
+          cardTransformEl
             .style('transform', `translate(${t.x}px, ${t.y}px) scale(${t.k})`)
             .style('transform-origin', '0 0');
         });
 
       svg.call(zoom);
-      // Also let the card container receive wheel/pinch events and forward them
-      d3.select(viewport).on('wheel', (event) => {
-        // The SVG zoom already handles this via the svg element
-      });
 
-      // Initial positions: cluster by type
+      // Initial positions
       const seedNode = data.nodes.find(n => n.id === data.seedUri);
       if (seedNode) { seedNode.fx = 0; seedNode.fy = 0; }
 
-      // Give initial position hints based on type
       for (const node of data.nodes) {
         if (node.type === 'ancestor') {
           node.x = (Math.random() - 0.5) * 100;
@@ -586,7 +875,6 @@
         }
       }
 
-      // D3 force simulation — tune for graph size
       const nodeCount = data.nodes.length;
       const isLarge = nodeCount > 80;
       const isVeryLarge = nodeCount > 200;
@@ -622,6 +910,22 @@
 
       currentSim = sim;
 
+      // Drag behavior (shared for initial and dynamically added cards)
+      cardDragBehavior = d3.drag()
+        .on('start', (event, d) => {
+          if (!event.active) sim.alphaTarget(0.1).restart();
+          d.fx = d.x; d.fy = d.y;
+          d3.select(event.sourceEvent.target.closest('.graph-card')).classed('dragging', true);
+        })
+        .on('drag', (event, d) => {
+          d.fx = event.x; d.fy = event.y;
+        })
+        .on('end', (event, d) => {
+          if (!event.active) sim.alphaTarget(0);
+          if (d.type !== 'seed') { d.fx = null; d.fy = null; }
+          d3.select(event.sourceEvent.target.closest('.graph-card')).classed('dragging', false);
+        });
+
       // Draw edges
       const linkSel = gLinks.selectAll('path')
         .data(data.links)
@@ -640,43 +944,20 @@
         .append('path').attr('d', 'M 0 0 L 8 3 L 0 6 Z').attr('fill', '#fdba74');
 
       // Card elements
-      cardEls = cardTransform.selectAll('.graph-card')
+      cardEls = cardTransformEl.selectAll('.graph-card')
         .data(data.nodes, d => d.id)
         .join('div')
         .attr('class', d => `graph-card type-${d.type}${isExpanded(d.id) ? ' expanded' : ''}`)
         .html(d => renderCard(d, isExpanded(d.id)))
-        .on('click', function(event, d) {
-          event.stopPropagation();
-          const wasExpanded = isExpanded(d.id);
-          if (wasExpanded) {
-            expandedCards.delete(d.id);
-          } else {
-            expandedCards.add(d.id);
-          }
-          const nowExpanded = isExpanded(d.id);
-          d3.select(this).classed('expanded', nowExpanded).html(renderCard(d, nowExpanded));
-          reheatCollisions();
-        })
-        .call(d3.drag()
-          .on('start', (event, d) => {
-            if (!event.active) sim.alphaTarget(0.1).restart();
-            d.fx = d.x; d.fy = d.y;
-            d3.select(event.sourceEvent.target.closest('.graph-card')).classed('dragging', true);
-          })
-          .on('drag', (event, d) => {
-            d.fx = event.x; d.fy = event.y;
-          })
-          .on('end', (event, d) => {
-            if (!event.active) sim.alphaTarget(0);
-            // Keep seed pinned, release others
-            if (d.type !== 'seed') { d.fx = null; d.fy = null; }
-            d3.select(event.sourceEvent.target.closest('.graph-card')).classed('dragging', false);
-          })
-        );
+        .on('click', cardClickHandler)
+        .call(cardDragBehavior);
 
-      // Throttle DOM updates for large graphs — simulation runs fast but DOM updates are expensive
+      // Set explorable state
+      updateAllExplorableStates();
+
+      // Tick handler
       let lastTickTime = 0;
-      const tickInterval = isVeryLarge ? 50 : (isLarge ? 30 : 0); // ms between DOM updates
+      const tickInterval = isVeryLarge ? 50 : (isLarge ? 30 : 0);
 
       sim.on('tick', () => {
         if (tickInterval) {
@@ -703,11 +984,12 @@
       const legendDiv = document.createElement('div');
       legendDiv.className = 'legend';
       legendDiv.innerHTML = `
-        <div style="display:flex;align-items:center;gap:12px">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <span><span class="legend-line" style="background:#93c5fd"></span>reply</span>
           <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
+          <span><span class="legend-dot" style="background:#fbbf24;box-shadow:0 0 6px 2px rgba(251,191,36,0.4)"></span>explorable</span>
         </div>
-        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Reheat after expand to settle</div>
+        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Pan toward glowing nodes to discover</div>
       `;
       viewport.appendChild(legendDiv);
 
@@ -721,14 +1003,6 @@
           <button id="sim-stop" class="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200">Stop</button>
           <button id="sim-release" class="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Release all pinned nodes">Unpin all</button>
         </div>
-        ${prunedInfo?.pruned ? `
-          <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
-            <label style="font-size:10px;color:#6b7280;white-space:nowrap">Max nodes:</label>
-            <input id="node-limit" type="range" min="20" max="${Math.min(prunedInfo.totalCount, 500)}" value="${maxNodes}" style="flex:1;height:14px">
-            <span id="node-limit-val" style="font-size:10px;color:#6b7280;min-width:24px">${maxNodes}</span>
-          </div>
-          <div style="font-size:9px;color:#9ca3af">Showing ${data.nodes.length} of ${prunedInfo.totalCount} &middot; adjust and reload</div>
-        ` : ''}
       `;
       viewport.appendChild(controlsDiv);
 
@@ -743,17 +1017,6 @@
         sim.alpha(0.5).restart();
       });
 
-      const nodeLimitInput = document.getElementById('node-limit');
-      if (nodeLimitInput) {
-        nodeLimitInput.addEventListener('input', (e) => {
-          document.getElementById('node-limit-val').textContent = e.target.value;
-        });
-        nodeLimitInput.addEventListener('change', (e) => {
-          maxNodes = parseInt(e.target.value, 10);
-          doLoad(null, true); // re-prune without refetch
-        });
-      }
-
       // Center view
       setTimeout(() => {
         svg.transition().duration(500).call(
@@ -761,6 +1024,9 @@
           d3.zoomIdentity.translate(width / 2, height / 2).scale(0.7)
         );
       }, 100);
+
+      // Start fog-of-war exploration checks
+      startExplorationChecks();
     }
 
     function renderCard(d, expanded) {
@@ -789,7 +1055,7 @@
             ${badge}
             <span style="margin-left:auto;font-size:9px;color:#9ca3af;flex-shrink:0">${time}</span>
           </div>
-          <p class="line-clamp-4 post-text" style="color:#4b5563;font-size:10px;margin:0">${escHtml(text)}</p>
+          <p class="line-clamp-6 post-text" style="color:#4b5563;font-size:10px;margin:0">${escHtml(text)}</p>
           <div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:9px;color:#9ca3af">
             <span>&#10084;&#65039;${p.likeCount || 0}</span>
             <span>&#128172;${p.replyCount || 0}</span>
@@ -879,22 +1145,20 @@
 
     // ── Load ─────────────────────────────────────────────────────────────────────
 
-    async function doLoad(url, reprune) {
+    async function doLoad(url) {
       url = url || document.getElementById('url-input')?.value || '';
       url = url.trim();
       if (!url) return;
 
+      // Clean up previous state
       if (currentSim) { currentSim.stop(); currentSim = null; }
+      stopExplorationChecks();
       graphData = null;
-
-      // If just changing node limit, re-prune cached data instead of refetching
-      if (reprune && lastRawData) {
-        const result = pruneGraph(lastRawData, maxNodes);
-        prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };
-        renderApp({ loading: false, error: '', hasGraph: true });
-        initGraph(result.data);
-        return;
-      }
+      exploredSet.clear();
+      exploringSet.clear();
+      newNodeSet.clear();
+      for (const [, timer] of dwellTimers) clearTimeout(timer);
+      dwellTimers.clear();
 
       renderApp({ loading: true, error: '', hasGraph: false });
       setUrlParam('url', url);
@@ -908,13 +1172,25 @@
         if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
+
+        // Build initial graph — thread only, no quote web crawl
         const rawData = await buildGraphData(atUri, down, up);
-        lastRawData = rawData;
-        const result = pruneGraph(rawData, maxNodes);
-        prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };
+
+        // Auto-explore seed's quotes immediately (fast, single request)
+        const seedNode = rawData.nodes.find(n => n.id === atUri);
+        if ((seedNode?.post.quoteCount || 0) > 0) {
+          const seedQuotes = await fetchAllQuotePosts(atUri);
+          for (const qp of seedQuotes) {
+            if (!rawData.nodes.some(n => n.id === qp.uri)) {
+              rawData.nodes.push({ id: qp.uri, post: qp, type: 'quote-post' });
+              rawData.links.push({ source: qp.uri, target: atUri, type: 'quote' });
+            }
+          }
+          exploredSet.add(atUri);
+        }
 
         renderApp({ loading: false, error: '', hasGraph: true });
-        initGraph(result.data);
+        initGraph(rawData);
       } catch (e) {
         renderApp({ loading: false, error: e.message, hasGraph: false });
       }
