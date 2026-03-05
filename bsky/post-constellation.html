@@ -19,6 +19,7 @@
   <style>
     html, body { overscroll-behavior: none; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; overflow: hidden; }
+    /* Prevent browser from hijacking touch gestures (scroll/zoom) on the canvas area */
     .pz-viewport { touch-action: none; -webkit-user-select: none; user-select: none; }
     .pz-canvas { touch-action: none; }
     .post-text { overflow-wrap: anywhere; word-break: break-word; }
@@ -41,18 +42,18 @@
     }
     .avatar-wrap img.loaded { opacity: 1; }
 
-    /* Constellation cards — compact DAG nodes */
+    /* Constellation cards */
     .constellation-card {
       position: absolute;
-      width: 150px;
+      width: 180px;
       background: white;
       border: 1px solid #e5e7eb;
       border-radius: 8px;
-      padding: 5px 7px;
+      padding: 6px 8px;
       cursor: pointer;
       transition: box-shadow 0.15s, border-color 0.15s;
       user-select: none;
-      font-size: 10px;
+      font-size: 11px;
       line-height: 1.3;
     }
     .constellation-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
@@ -66,7 +67,7 @@
     .constellation-card.type-quoted { border-left: 3px solid #f97316; }
     .constellation-card.type-quote-post { border-right: 3px solid #f97316; }
     .constellation-card.is-expanded {
-      width: 300px !important;
+      width: 280px !important;
       z-index: 20;
       box-shadow: 0 4px 16px rgba(0,0,0,0.13);
       cursor: default;
@@ -93,13 +94,7 @@
     .conn-thread { stroke: #93c5fd; stroke-width: 1.5; fill: none; }
     .conn-quote { stroke: #fdba74; stroke-width: 1.5; stroke-dasharray: 5 3; fill: none; }
 
-    /* Line clamp */
-    .line-clamp-1 {
-      display: -webkit-box;
-      -webkit-line-clamp: 1;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
+    /* Line clamp for compact text */
     .line-clamp-2 {
       display: -webkit-box;
       -webkit-line-clamp: 2;
@@ -191,16 +186,17 @@
 
     // ── Constants ───────────────────────────────────────────────────────────────
 
-    const CARD_W = 150;
-    const CARD_H = 64;
-    const CELL_W = CARD_W + 14;  // horizontal pitch
-    const CELL_H = CARD_H + 12;  // vertical pitch
-    const LAYOUT_PAD = 40;
-    const EXPANDED_W = 300;
-    const QUOTE_ZONE_GAP = 2;    // column gap between thread and quote zones
+    const CARD_W = 180;
+    const CARD_H = 72;
+    const V_GAP = 12;
+    const H_GAP = 10;
+    const QUOTE_X_OFF = CARD_W + 20;
+    const QUOTE_Y_STEP = 24;
+    const LAYOUT_PAD = 30;
+    const QP_COLS = 3;           // quote posts arranged in N columns
     const VIRT_BUFFER = 300;
     const VIRT_THROTTLE = 80;
-    const CLUSTER_ZOOM = 0.25;
+    const CLUSTER_ZOOM = 0.30;
     const QUOTE_BATCH = 25;
     const API = 'https://public.api.bsky.app/xrpc/';
 
@@ -359,8 +355,8 @@
       // 3. Reply tree
       function walkReplies(threadNode) {
         const replies = validReplies(threadNode);
-        replies.sort((a, b) => (b.post.likeCount || 0) - (a.post.likeCount || 0));
         const parentUri = threadNode.post.uri;
+        replies.sort((a, b) => (b.post.likeCount || 0) - (a.post.likeCount || 0));
         for (const reply of replies) {
           const rUri = reply.post.uri;
           if (!nodes.has(rUri)) {
@@ -374,7 +370,7 @@
       }
       walkReplies(threadDown);
 
-      // Compute descendant counts
+      // Compute descendant counts for collapse UI
       function countDesc(uri) {
         const n = nodes.get(uri);
         let c = 0;
@@ -417,204 +413,194 @@
       return { nodes, edges, seedUri: graph.seedUri };
     }
 
-    // ── Layout: DAG packer (time on Y, greedy X packing, type zones) ──────────
+    // ── Layout algorithm ────────────────────────────────────────────────────────
+    //
+    // Y-axis = chronological order (scroll down = later posts, like Bluesky timeline)
+    // X-axis = tree branching (children spread horizontally under parent)
+    // Compact sequential spacing with small bonus gaps for large time jumps.
 
     function computeLayout(graph, collapsedBranches) {
       const { nodes, edges, seedUri } = graph;
+      const pos = new Map();
 
-      // 1. Collect visible nodes
-      const visible = new Set();
-      function collectTree(uri) {
-        if (!nodes.has(uri)) return;
-        visible.add(uri);
-        if (!collapsedBranches.has(uri)) {
-          for (const ch of nodes.get(uri).children) collectTree(ch);
-        }
+      // Helper: get post timestamp as epoch ms
+      function getTime(uri) {
+        const node = nodes.get(uri);
+        return new Date(node?.post?.record?.createdAt || node?.post?.indexedAt || 0).getTime();
       }
-      collectTree(seedUri);
 
-      // Ancestors
+      // Ancestors above seed
       const ancestors = [];
       let cur = seedUri;
       while (nodes.get(cur)?.parentId) {
         const pid = nodes.get(cur).parentId;
         if (nodes.has(pid) && nodes.get(pid).type === 'ancestor') {
-          visible.add(pid);
-          ancestors.unshift(pid);
+          ancestors.push(pid);
           cur = pid;
         } else break;
       }
+      ancestors.reverse(); // oldest first
 
-      // Quoted chain
-      const quotedUris = [];
+      // Adaptive horizontal gap: shrinks when a node has many children
+      function hGap(count) {
+        if (count <= 6) return H_GAP;
+        return Math.max(4, Math.round(H_GAP * 6 / count));
+      }
+
+      // Subtree widths (bottom-up) for X-axis branching
+      const stw = new Map();
+      function computeWidths(uri) {
+        const node = nodes.get(uri);
+        const ch = collapsedBranches.has(uri)
+          ? []
+          : (node?.children || []).filter(c => nodes.has(c));
+        if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
+        let total = 0;
+        for (const c of ch) total += computeWidths(c);
+        total += (ch.length - 1) * hGap(ch.length);
+        const w = Math.max(CARD_W, total);
+        stw.set(uri, w);
+        return w;
+      }
+      computeWidths(seedUri);
+
+      // ── Time-ordered Y positions ───────────────────────────────────────────
+      // Collect all thread nodes (ancestors + seed + visible replies),
+      // sort chronologically, assign compact sequential Y with small bonus
+      // spacing for significant time gaps (>1h → +20px, >1d → +40px).
+
+      const threadNodes = [];
+      for (const a of ancestors) {
+        if (nodes.has(a)) threadNodes.push({ uri: a, t: getTime(a) });
+      }
+      function collectReplies(uri) {
+        const node = nodes.get(uri);
+        if (!node) return;
+        threadNodes.push({ uri, t: getTime(uri) });
+        if (!collapsedBranches.has(uri)) {
+          for (const ch of (node.children || []).filter(c => nodes.has(c))) collectReplies(ch);
+        }
+      }
+      collectReplies(seedUri);
+
+      // Sort chronologically
+      threadNodes.sort((a, b) => a.t - b.t);
+
+      // Assign Y: compact sequential with small bonus gaps for time jumps
+      const BASE_Y = CARD_H + 8;
+      const timeToY = new Map();
+      let yPos = 0;
+      for (let i = 0; i < threadNodes.length; i++) {
+        if (i > 0) {
+          const gap = threadNodes[i].t - threadNodes[i - 1].t;
+          let bonus = 0;
+          if (gap > 86400000) bonus = 16;      // > 1 day
+          else if (gap > 3600000) bonus = 8;    // > 1 hour
+          yPos += BASE_Y + bonus;
+        }
+        timeToY.set(threadNodes[i].uri, yPos);
+      }
+
+      // ── X positions: tree branching ────────────────────────────────────────
+      // Children spread horizontally under parent, centered on parent.
+      // Y comes from timeToY (chronological order).
+
+      // Position ancestors centered above seed (all at x=0)
+      for (const a of ancestors) {
+        pos.set(a, { x: 0, y: timeToY.get(a) || 0 });
+      }
+
+      // Position seed + reply tree
+      function assignX(uri, x) {
+        pos.set(uri, { x, y: timeToY.get(uri) || 0 });
+        const node = nodes.get(uri);
+        const ch = collapsedBranches.has(uri)
+          ? []
+          : (node?.children || []).filter(c => nodes.has(c));
+        if (ch.length === 0) return;
+        const gap = hGap(ch.length);
+        const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * gap;
+        let sx = x + CARD_W / 2 - totalW / 2;
+        for (const c of ch) {
+          const cw = stw.get(c);
+          assignX(c, sx + (cw - CARD_W) / 2);
+          sx += cw + gap;
+        }
+      }
+      assignX(seedUri, 0);
+
+      // ── Quoted posts (upper-left diagonal) ─────────────────────────────────
+      const quotedChain = [];
       let qCur = seedUri;
       while (true) {
         const edge = edges.find(e => e.type === 'quote' && e.from === qCur && nodes.get(e.to)?.type === 'quoted');
         if (!edge) break;
-        quotedUris.push(edge.to);
-        visible.add(edge.to);
+        quotedChain.push(edge.to);
         qCur = edge.to;
       }
+      for (let i = 0; i < quotedChain.length; i++) {
+        pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
+      }
 
-      // Quote posts
-      const quotePostUris = [];
+      // ── Quote posts (multi-column grid to the right, sorted chronologically)
+      let replyMaxX = 0;
+      for (const p of pos.values()) {
+        if (p.x + CARD_W > replyMaxX) replyMaxX = p.x + CARD_W;
+      }
+      const qpStartX = replyMaxX + 24;
+      const qpList = [];
       for (const edge of edges) {
-        if (edge.type === 'quote' && nodes.has(edge.from) && nodes.get(edge.from).type === 'quote-post') {
-          visible.add(edge.from);
-          quotePostUris.push(edge.from);
-        }
+        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
+          qpList.push(edge.from);
       }
-      quotePostUris.sort((a, b) => {
-        const ta = new Date(nodes.get(a).post.record?.createdAt || nodes.get(a).post.indexedAt || 0).getTime();
-        const tb = new Date(nodes.get(b).post.record?.createdAt || nodes.get(b).post.indexedAt || 0).getTime();
-        return ta - tb;
-      });
-
-      // Thread replies sorted by timestamp
-      const threadReplies = [...visible]
-        .filter(uri => nodes.get(uri).type === 'reply')
-        .map(uri => ({
-          uri,
-          time: new Date(nodes.get(uri).post.record?.createdAt || nodes.get(uri).post.indexedAt || 0).getTime()
-        }))
-        .sort((a, b) => a.time - b.time);
-
-      // 2. Grid placement
-      const gridPos = new Map();
-      const occupied = new Set();
-
-      function isOcc(col, row) { return occupied.has(`${col},${row}`); }
-      function place(uri, col, row) {
-        gridPos.set(uri, { col, row });
-        occupied.add(`${col},${row}`);
-      }
-
-      // ─── Pass 1: Quoted chain (upper-left staircase) ──────
-      // Oldest (deepest in chain) at top-left, each step closer to seed
-      for (let i = 0; i < quotedUris.length; i++) {
-        const col = -(quotedUris.length - i) - QUOTE_ZONE_GAP;
-        place(quotedUris[i], col, i);
-      }
-
-      // ─── Pass 2: Ancestors (above seed, column 0) ──────
-      const ancestorStartRow = quotedUris.length;
-      for (let i = 0; i < ancestors.length; i++) {
-        place(ancestors[i], 0, ancestorStartRow + i);
-      }
-
-      // ─── Pass 3: Seed ──────
-      const seedRow = ancestorStartRow + ancestors.length;
-      place(seedUri, 0, seedRow);
-
-      // ─── Pass 4: Reply tree (time-ordered, greedy X near parent) ──────
-      for (const { uri } of threadReplies) {
-        const node = nodes.get(uri);
-        // Must be below parent
-        let minRow = seedRow + 1;
-        if (node.parentId && gridPos.has(node.parentId)) {
-          minRow = gridPos.get(node.parentId).row + 1;
-        }
-
-        const preferredCol = (node.parentId && gridPos.has(node.parentId))
-          ? gridPos.get(node.parentId).col
-          : 0;
-
-        let placed = false;
-        for (let row = minRow; row < minRow + 200 && !placed; row++) {
-          // Try preferred col first
-          if (!isOcc(preferredCol, row)) {
-            place(uri, preferredCol, row);
-            placed = true;
-            break;
-          }
-          // Scan outward
-          for (let d = 1; d <= 40; d++) {
-            if (!isOcc(preferredCol + d, row)) {
-              place(uri, preferredCol + d, row);
-              placed = true;
-              break;
-            }
-            if (!isOcc(preferredCol - d, row)) {
-              place(uri, preferredCol - d, row);
-              placed = true;
-              break;
-            }
-          }
-        }
-        if (!placed) place(uri, preferredCol, minRow);
-      }
-
-      // Find thread zone extent
-      let maxThreadCol = 0;
-      for (const [uri, p] of gridPos) {
-        const n = nodes.get(uri);
-        if (n && (n.type === 'seed' || n.type === 'reply' || n.type === 'ancestor')) {
-          if (p.col > maxThreadCol) maxThreadCol = p.col;
-        }
-      }
-
-      // ─── Pass 5: Quote posts (right zone, packed) ──────
-      const qpStartCol = maxThreadCol + QUOTE_ZONE_GAP + 1;
-      for (const uri of quotePostUris) {
-        const minRow = seedRow + 1;
-        let placed = false;
-        for (let row = minRow; row < minRow + 200 && !placed; row++) {
-          for (let col = qpStartCol; col < qpStartCol + 20; col++) {
-            if (!isOcc(col, row)) {
-              place(uri, col, row);
-              placed = true;
-              break;
-            }
-          }
-        }
-        if (!placed) place(uri, qpStartCol, minRow);
-      }
-
-      // 3. Convert grid → pixel positions
-      let minCol = Infinity, maxCol = -Infinity, maxRow = 0;
-      for (const p of gridPos.values()) {
-        if (p.col < minCol) minCol = p.col;
-        if (p.col > maxCol) maxCol = p.col;
-        if (p.row > maxRow) maxRow = p.row;
-      }
-
-      const positions = new Map();
-      for (const [uri, p] of gridPos) {
-        positions.set(uri, {
-          x: (p.col - minCol) * CELL_W + LAYOUT_PAD,
-          y: p.row * CELL_H + LAYOUT_PAD,
+      qpList.sort((a, b) => getTime(a) - getTime(b));
+      for (let i = 0; i < qpList.length; i++) {
+        const col = i % QP_COLS;
+        const row = Math.floor(i / QP_COLS);
+        pos.set(qpList[i], {
+          x: qpStartX + col * (CARD_W + H_GAP),
+          y: (row + 1) * (CARD_H + V_GAP)
         });
       }
 
-      const seedPos = positions.get(seedUri) || { x: LAYOUT_PAD, y: LAYOUT_PAD };
-      return {
-        positions,
-        canvasWidth: (maxCol - minCol + 1) * CELL_W + LAYOUT_PAD * 2,
-        canvasHeight: (maxRow + 1) * CELL_H + LAYOUT_PAD * 2,
-        seedX: seedPos.x,
-        seedY: seedPos.y,
+      // ── Normalize positions ────────────────────────────────────────────────
+      let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      for (const p of pos.values()) {
+        if (p.x < minX) minX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.x + CARD_W > maxX) maxX = p.x + CARD_W;
+        if (p.y + CARD_H > maxY) maxY = p.y + CARD_H;
+      }
+      const seedBefore = pos.get(seedUri);
+      const result = {
+        positions: new Map(),
+        canvasWidth: maxX - minX + LAYOUT_PAD * 2,
+        canvasHeight: maxY - minY + LAYOUT_PAD * 2,
+        seedX: seedBefore.x - minX + LAYOUT_PAD,
+        seedY: seedBefore.y - minY + LAYOUT_PAD,
       };
+      for (const [uri, p] of pos) {
+        result.positions.set(uri, { x: p.x - minX + LAYOUT_PAD, y: p.y - minY + LAYOUT_PAD });
+      }
+      return result;
     }
 
     // ── Connection geometry ─────────────────────────────────────────────────────
 
     function connectionPath(fromPos, toPos, type) {
-      const fw = CARD_W, fh = CARD_H;
       if (type === 'thread') {
-        // Vertical bezier: parent bottom → child top
-        const x1 = fromPos.x + fw / 2, y1 = fromPos.y + fh;
-        const x2 = toPos.x + fw / 2, y2 = toPos.y;
+        const x1 = fromPos.x + CARD_W / 2, y1 = fromPos.y + CARD_H;
+        const x2 = toPos.x + CARD_W / 2, y2 = toPos.y;
         const my = (y1 + y2) / 2;
         return `M ${x1} ${y1} C ${x1} ${my}, ${x2} ${my}, ${x2} ${y2}`;
       }
-      // Quote: horizontal bezier between card edges
-      const fromCx = fromPos.x + fw / 2, toCx = toPos.x + fw / 2;
-      const fromCy = fromPos.y + fh / 2, toCy = toPos.y + fh / 2;
+      const fromCx = fromPos.x + CARD_W / 2, toCx = toPos.x + CARD_W / 2;
+      const fromCy = fromPos.y + CARD_H / 2, toCy = toPos.y + CARD_H / 2;
       let x1, y1, x2, y2;
       if (fromCx > toCx) {
-        x1 = fromPos.x; y1 = fromCy; x2 = toPos.x + fw; y2 = toCy;
+        x1 = fromPos.x; y1 = fromCy; x2 = toPos.x + CARD_W; y2 = toCy;
       } else {
-        x1 = fromPos.x + fw; y1 = fromCy; x2 = toPos.x; y2 = toCy;
+        x1 = fromPos.x + CARD_W; y1 = fromCy; x2 = toPos.x; y2 = toCy;
       }
       const mx = (x1 + x2) / 2;
       return `M ${x1} ${y1} C ${mx} ${y1}, ${mx} ${y2}, ${x2} ${y2}`;
@@ -726,14 +712,14 @@
       const hasChildren = node.children.length > 0;
 
       if (!expanded) {
-        // ── Compact card (150×64) ──
+        // ── Compact card ──
         return html`
           <div class="constellation-card type-${node.type}"
                style="left: ${pos.x}px; top: ${pos.y}px;"
                onClick=${onToggle}>
             <div class="flex items-center gap-1 mb-0.5 min-w-0">
               <${Avatar} author=${p.author} />
-              <span class="font-semibold text-gray-800 truncate" style="max-width:70px;font-size:10px">${p.author.displayName || p.author.handle}</span>
+              <span class="font-semibold text-gray-800 truncate" style="max-width:80px;font-size:10px">${p.author.displayName || p.author.handle}</span>
               ${typeBadge(node.type)}
               ${hasChildren && html`
                 <button class="collapse-btn ml-auto"
@@ -742,7 +728,7 @@
                 </button>
               `}
             </div>
-            <p class="text-gray-600 line-clamp-1 post-text" style="font-size:10px">${p.record?.text || ''}</p>
+            <p class="text-gray-600 line-clamp-2 post-text" style="font-size:10px">${p.record?.text || ''}</p>
             <div class="flex items-center gap-1.5 mt-0.5" style="font-size:9px;color:#9ca3af">
               <span>❤️${p.likeCount || 0}</span>
               <span>💬${p.replyCount || 0}</span>
@@ -751,7 +737,7 @@
           </div>`;
       }
 
-      // ── Expanded card (300px, full details) ──
+      // ── Expanded card (wider overlay) ──
       return html`
         <div class="constellation-card type-${node.type} is-expanded"
              style="left: ${pos.x}px; top: ${pos.y}px;"
@@ -818,7 +804,7 @@
         </svg>`;
     }
 
-    // ── Minimap ─────────────────────────────────────────────────────────────────
+    // ── Minimap (self-updating via rAF, no Preact re-renders) ───────────────────
 
     function Minimap({ nodes, positions, layout, pzRef, viewportRef, drawRef }) {
       const canvasRef = useRef(null);
@@ -857,6 +843,7 @@
         }
       }, [nodes, positions, layout]);
 
+      // Register draw function for external callers (panzoom transform callback)
       useEffect(() => {
         drawRef.current = draw;
         draw();
@@ -913,6 +900,7 @@
       const minimapDrawRef = useRef(null);
       const vrTimerRef = useRef(null);
 
+      // Layout depends on graph + collapsed branches
       const layout = useMemo(() => {
         return graph ? computeLayout(graph, collapsedBranches) : null;
       }, [graph, collapsedBranches]);
@@ -931,8 +919,9 @@
         });
       }
 
+      // Visible nodes: only those within the viewport rect
       const visibleUris = useMemo(() => {
-        if (!layout || !viewRect) return null;
+        if (!layout || !viewRect) return null; // null = show all
         const s = new Set();
         for (const [uri, pos] of layout.positions) {
           if (pos.x + CARD_W >= viewRect.left && pos.x <= viewRect.right &&
@@ -940,6 +929,7 @@
             s.add(uri);
           }
         }
+        // Always include expanded cards and seed
         for (const uri of expandedCards) {
           if (layout.positions.has(uri)) s.add(uri);
         }
@@ -947,6 +937,7 @@
         return s;
       }, [layout, viewRect, expandedCards, graph]);
 
+      // Visible edges: at least one endpoint visible
       const visibleEdges = useMemo(() => {
         if (!graph) return [];
         if (!visibleUris) return graph.edges;
@@ -967,15 +958,13 @@
         });
         pzRef.current = pz;
 
+        // On transform: redraw minimap (rAF) + throttled viewRect update
         let lastVR = 0;
         let lastZoom = 1;
         pz.on('transform', () => {
           if (minimapDrawRef.current) requestAnimationFrame(minimapDrawRef.current);
           const t = pz.getTransform();
-          if (Math.abs(t.scale - lastZoom) > 0.02) {
-            lastZoom = t.scale;
-            setZoomScale(t.scale);
-          }
+          if (Math.abs(t.scale - lastZoom) > 0.02) { lastZoom = t.scale; setZoomScale(t.scale); }
           const now = Date.now();
           if (now - lastVR > VIRT_THROTTLE) {
             lastVR = now;
@@ -1006,6 +995,7 @@
           vw / 2 - layout.seedX - CARD_W / 2,
           vh * 0.38 - layout.seedY - CARD_H / 2
         );
+        // Set initial viewRect
         requestAnimationFrame(updateViewRect);
       }, [layout]);
 
@@ -1028,8 +1018,7 @@
           const up = upR.status === 'fulfilled' ? upR.value : null;
           const qpResult = quotesR.status === 'fulfilled' ? quotesR.value : { posts: [], cursor: null };
           setQuoteCursor(qpResult.cursor);
-          const g = buildGraph(atUri, down, up, qpResult.posts);
-          setGraph(g);
+          setGraph(buildGraph(atUri, down, up, qpResult.posts));
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       }
@@ -1040,10 +1029,8 @@
         try {
           const result = await fetchQuotePosts(seedAtUri.current, QUOTE_BATCH, quoteCursor);
           setQuoteCursor(result.cursor);
-          if (result.posts.length > 0) {
-            setGraph(prev => prev ? addQuotePosts(prev, result.posts) : prev);
-          }
-        } catch (e) { /* silently fail, user can retry */ }
+          if (result.posts.length > 0) setGraph(prev => prev ? addQuotePosts(prev, result.posts) : prev);
+        } catch (e) { /* user can retry */ }
         finally { setLoadingMore(false); }
       }
 
@@ -1159,44 +1146,24 @@
                   positions=${layout.positions}
                   canvasWidth=${layout.canvasWidth}
                   canvasHeight=${layout.canvasHeight} />
-                ${zoomScale < CLUSTER_ZOOM
-                  ? html`
-                    <!-- Cluster dots at very low zoom -->
-                    ${Array.from(graph.nodes.entries())
-                      .filter(([uri]) => !visibleUris || visibleUris.has(uri))
-                      .filter(([uri]) => layout.positions.has(uri))
-                      .map(([uri, node]) => {
-                        const p = layout.positions.get(uri);
-                        const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
-                        return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:5px;border:1px solid #d1d5db;opacity:0.85;pointer-events:none;" />`;
-                      })}
-                    ${(() => {
-                      const seedNode = graph.nodes.get(graph.seedUri);
-                      const seedPos = layout.positions.get(graph.seedUri);
-                      if (!seedNode || !seedPos) return null;
-                      return html`<${ConstellationCard}
-                        key=${graph.seedUri} node=${seedNode} pos=${seedPos}
-                        expanded=${expandedCards.has(graph.seedUri)}
-                        collapsed=${collapsedBranches.has(graph.seedUri)}
-                        onToggle=${() => toggleCard(graph.seedUri)}
-                        onReseed=${reseed}
-                        onToggleCollapse=${toggleCollapse} />`;
-                    })()}`
-                  : html`
-                    ${Array.from(graph.nodes.entries())
-                      .filter(([uri]) => !visibleUris || visibleUris.has(uri))
-                      .filter(([uri]) => layout.positions.has(uri))
-                      .map(([uri, node]) => {
-                        const p = layout.positions.get(uri);
-                        return html`<${ConstellationCard}
-                          key=${uri} node=${node} pos=${p}
-                          expanded=${expandedCards.has(uri)}
-                          collapsed=${collapsedBranches.has(uri)}
-                          onToggle=${() => toggleCard(uri)}
-                          onReseed=${reseed}
-                          onToggleCollapse=${toggleCollapse} />`;
-                      })}`
-                }
+                ${Array.from(graph.nodes.entries())
+                  .filter(([uri]) => !visibleUris || visibleUris.has(uri))
+                  .filter(([uri]) => layout.positions.has(uri))
+                  .map(([uri, node]) => {
+                    const p = layout.positions.get(uri);
+                    // At very low zoom, render lightweight dots instead of full cards
+                    if (zoomScale < CLUSTER_ZOOM && uri !== graph.seedUri) {
+                      const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
+                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:6px;border:1px solid #d1d5db;opacity:0.85;" />`;
+                    }
+                    return html`<${ConstellationCard}
+                      key=${uri} node=${node} pos=${p}
+                      expanded=${expandedCards.has(uri)}
+                      collapsed=${collapsedBranches.has(uri)}
+                      onToggle=${() => toggleCard(uri)}
+                      onReseed=${reseed}
+                      onToggleCollapse=${toggleCollapse} />`;
+                  })}
               </div>
               <${Minimap}
                 nodes=${graph.nodes}
@@ -1228,8 +1195,8 @@
             ${graph && layout && html`
               <div class="legend">
                 <div class="flex items-center gap-3">
-                  <span><span class="legend-line" style="background:#93c5fd"></span>reply</span>
-                  <span><span class="legend-line" style="background:#fdba74;border-top:2px dashed #fdba74;height:0"></span>quote</span>
+                  <span><span class="legend-line" style="background:#3b82f6"></span>reply</span>
+                  <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
                 </div>
               </div>
             `}
