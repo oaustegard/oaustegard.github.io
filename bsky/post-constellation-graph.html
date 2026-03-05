@@ -59,6 +59,8 @@
 
     .graph-card.expanded {
       width: 300px;
+      max-height: 400px;
+      overflow-y: auto;
       z-index: 50;
       box-shadow: 0 4px 20px rgba(0,0,0,0.14);
       font-size: 12px;
@@ -82,12 +84,6 @@
     .type-badge.quote-post { background: #ffedd5; color: #c2410c; }
 
     /* Line clamp */
-    .line-clamp-2 {
-      display: -webkit-box;
-      -webkit-line-clamp: 2;
-      -webkit-box-orient: vertical;
-      overflow: hidden;
-    }
     .line-clamp-4 {
       display: -webkit-box;
       -webkit-line-clamp: 4;
@@ -183,6 +179,8 @@
     const API = 'https://public.api.bsky.app/xrpc/';
     const CARD_W = 200;
     const CARD_H_EST = 80;
+    const DEFAULT_MAX_NODES = 150;
+    let maxNodes = DEFAULT_MAX_NODES;
 
     // ── URL / API helpers (from post-constellation.html) ─────────────────────────
 
@@ -378,6 +376,39 @@
       };
     }
 
+    // ── Prune graph to node limit ──────────────────────────────────────────────
+
+    function pruneGraph(data, limit) {
+      if (data.nodes.length <= limit) return { data, pruned: false, totalCount: data.nodes.length };
+      const totalCount = data.nodes.length;
+
+      // Priority: seed=0, ancestor=1, quoted=2, reply=3, quote-post=4
+      const typePriority = { seed: 0, ancestor: 1, quoted: 2, reply: 3, 'quote-post': 4 };
+
+      // Score nodes: lower is higher priority
+      const scored = data.nodes.map(n => ({
+        node: n,
+        priority: typePriority[n.type] ?? 5,
+        likes: n.post?.likeCount || 0
+      }));
+
+      // Sort: priority first, then likes descending within same priority
+      scored.sort((a, b) => {
+        if (a.priority !== b.priority) return a.priority - b.priority;
+        return b.likes - a.likes;
+      });
+
+      const kept = new Set(scored.slice(0, limit).map(s => s.node.id));
+      const nodes = data.nodes.filter(n => kept.has(n.id));
+      const links = data.links.filter(l => {
+        const sId = typeof l.source === 'object' ? l.source.id : l.source;
+        const tId = typeof l.target === 'object' ? l.target.id : l.target;
+        return kept.has(sId) && kept.has(tId);
+      });
+
+      return { data: { nodes, links, seedUri: data.seedUri }, pruned: true, totalCount };
+    }
+
     // ── Render embed HTML ────────────────────────────────────────────────────────
 
     function renderEmbed(embed) {
@@ -441,6 +472,8 @@
     let graphData = null;
     let expandedCards = new Set();
     let seedUri = null;
+    let prunedInfo = null; // { pruned, totalCount }
+    let lastRawData = null; // cached for re-pruning without refetch
 
     function renderApp(state) {
       const { loading, error, hasGraph } = state;
@@ -451,6 +484,7 @@
         const counts = { ancestor: 0, reply: 0, quoted: 0, 'quote-post': 0 };
         for (const n of graphData.nodes) counts[n.type] = (counts[n.type] || 0) + 1;
         const parts = [`${graphData.nodes.length} nodes`];
+        if (prunedInfo?.pruned) parts[0] += ` of ${prunedInfo.totalCount}`;
         if (counts.ancestor) parts.push(`${counts.ancestor} ancestor${counts.ancestor > 1 ? 's' : ''}`);
         if (counts.reply) parts.push(`${counts.reply} in thread`);
         if (counts.quoted) parts.push(`${counts.quoted} quoted`);
@@ -596,13 +630,17 @@
         }
       }
 
-      // D3 force simulation
+      // D3 force simulation — tune for graph size
+      const nodeCount = data.nodes.length;
+      const isLarge = nodeCount > 80;
+      const isVeryLarge = nodeCount > 200;
+
       const sim = d3.forceSimulation(data.nodes)
         .force('link', d3.forceLink(data.links)
           .id(d => d.id)
           .distance(d => {
-            if (d.type === 'thread') return 120;
-            return 180;
+            if (d.type === 'thread') return isLarge ? 100 : 120;
+            return isLarge ? 140 : 180;
           })
           .strength(d => {
             if (d.type === 'thread') return 0.7;
@@ -611,18 +649,19 @@
         )
         .force('charge', d3.forceManyBody()
           .strength(d => {
-            if (d.type === 'seed') return -800;
-            return -300;
+            if (d.type === 'seed') return isLarge ? -500 : -800;
+            return isLarge ? -150 : -300;
           })
-          .distanceMax(800)
+          .distanceMax(isLarge ? 500 : 800)
+          .theta(isVeryLarge ? 1.2 : 0.9)
         )
         .force('collide', d3.forceCollide()
           .radius(d => d.type === 'seed' ? 140 : 110)
           .strength(0.8)
-          .iterations(2)
+          .iterations(isLarge ? 1 : 2)
         )
         .force('center', d3.forceCenter(0, 0).strength(0.03))
-        .alphaDecay(0.015)
+        .alphaDecay(isVeryLarge ? 0.03 : 0.015)
         .velocityDecay(0.35);
 
       currentSim = sim;
@@ -677,7 +716,17 @@
           })
         );
 
+      // Throttle DOM updates for large graphs — simulation runs fast but DOM updates are expensive
+      let lastTickTime = 0;
+      const tickInterval = isVeryLarge ? 50 : (isLarge ? 30 : 0); // ms between DOM updates
+
       sim.on('tick', () => {
+        if (tickInterval) {
+          const now = performance.now();
+          if (now - lastTickTime < tickInterval) return;
+          lastTickTime = now;
+        }
+
         linkSel.attr('d', d => {
           const sx = d.source.x, sy = d.source.y;
           const tx = d.target.x, ty = d.target.y;
@@ -714,6 +763,14 @@
           <button id="sim-stop" class="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200">Stop</button>
           <button id="sim-release" class="px-2 py-1 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Release all pinned nodes">Unpin all</button>
         </div>
+        ${prunedInfo?.pruned ? `
+          <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
+            <label style="font-size:10px;color:#6b7280;white-space:nowrap">Max nodes:</label>
+            <input id="node-limit" type="range" min="20" max="${Math.min(prunedInfo.totalCount, 500)}" value="${maxNodes}" style="flex:1;height:14px">
+            <span id="node-limit-val" style="font-size:10px;color:#6b7280;min-width:24px">${maxNodes}</span>
+          </div>
+          <div style="font-size:9px;color:#9ca3af">Showing ${data.nodes.length} of ${prunedInfo.totalCount} &middot; adjust and reload</div>
+        ` : ''}
       `;
       viewport.appendChild(controlsDiv);
 
@@ -727,6 +784,17 @@
         for (const n of data.nodes) { n.fx = null; n.fy = null; }
         sim.alpha(0.5).restart();
       });
+
+      const nodeLimitInput = document.getElementById('node-limit');
+      if (nodeLimitInput) {
+        nodeLimitInput.addEventListener('input', (e) => {
+          document.getElementById('node-limit-val').textContent = e.target.value;
+        });
+        nodeLimitInput.addEventListener('change', (e) => {
+          maxNodes = parseInt(e.target.value, 10);
+          doLoad(null, true); // re-prune without refetch
+        });
+      }
 
       // Center view
       setTimeout(() => {
@@ -763,7 +831,7 @@
             ${badge}
             <span style="margin-left:auto;font-size:9px;color:#9ca3af;flex-shrink:0">${time}</span>
           </div>
-          <p class="line-clamp-2 post-text" style="color:#4b5563;font-size:10px;margin:0">${escHtml(text)}</p>
+          <p class="line-clamp-4 post-text" style="color:#4b5563;font-size:10px;margin:0">${escHtml(text)}</p>
           <div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:9px;color:#9ca3af">
             <span>&#10084;&#65039;${p.likeCount || 0}</span>
             <span>&#128172;${p.replyCount || 0}</span>
@@ -787,7 +855,7 @@
           </div>
           ${badge}
         </div>
-        <p class="line-clamp-4 post-text" style="color:#374151;font-size:11px;margin:0;line-height:1.45">${escHtml(text)}</p>
+        <p class="post-text" style="color:#374151;font-size:11px;margin:0;line-height:1.45">${escHtml(text)}</p>
         ${embedHtml}
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:10px;color:#9ca3af">
           <span>&#128172;${p.replyCount || 0}</span>
@@ -853,13 +921,23 @@
 
     // ── Load ─────────────────────────────────────────────────────────────────────
 
-    async function doLoad(url) {
+    async function doLoad(url, reprune) {
       url = url || document.getElementById('url-input')?.value || '';
       url = url.trim();
       if (!url) return;
 
       if (currentSim) { currentSim.stop(); currentSim = null; }
       graphData = null;
+
+      // If just changing node limit, re-prune cached data instead of refetching
+      if (reprune && lastRawData) {
+        const result = pruneGraph(lastRawData, maxNodes);
+        prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };
+        renderApp({ loading: false, error: '', hasGraph: true });
+        initGraph(result.data);
+        return;
+      }
+
       renderApp({ loading: true, error: '', hasGraph: false });
       setUrlParam('url', url);
 
@@ -873,10 +951,13 @@
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
         const allQuotes = quotesR.status === 'fulfilled' ? quotesR.value : [];
-        const data = buildGraphData(atUri, down, up, allQuotes);
+        const rawData = buildGraphData(atUri, down, up, allQuotes);
+        lastRawData = rawData;
+        const result = pruneGraph(rawData, maxNodes);
+        prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };
 
         renderApp({ loading: false, error: '', hasGraph: true });
-        initGraph(data);
+        initGraph(result.data);
       } catch (e) {
         renderApp({ loading: false, error: e.message, hasGraph: false });
       }
