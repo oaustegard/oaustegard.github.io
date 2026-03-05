@@ -192,7 +192,6 @@
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
     const CLUSTER_ZOOM = 0.35; // below this zoom, render dots instead of full cards
     const QUOTE_BATCH = 25; // initial quote posts to show
-    const AUTO_COLLAPSE_CHILDREN = 20; // auto-collapse nodes with more direct children than this
     const API = 'https://public.api.bsky.app/xrpc/';
 
     // ── URL / API helpers ───────────────────────────────────────────────────────
@@ -482,15 +481,25 @@
         qCur = edge.to;
       }
 
-      // 4. Quote posts (who quoted the seed) — add to the graph too
+      // 4. Quote posts (who quoted the seed) — chain them sequentially
+      //    so dagre spreads them across multiple ranks instead of one row.
+      //    Sort by time, then seed → qp1, qp1 → qp2, qp2 → qp3, etc.
       const qpList = [];
       for (const edge of edges) {
         if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post') {
           qpList.push(edge.from);
-          addToDagre(edge.from);
-          // Edge FROM seed TO quote-post so dagre puts them below
-          g.setEdge(seedUri, edge.from);
         }
+      }
+      qpList.sort((a, b) => {
+        const tA = new Date(nodes.get(a)?.post?.record?.createdAt || 0);
+        const tB = new Date(nodes.get(b)?.post?.record?.createdAt || 0);
+        return tA - tB;
+      });
+      for (let i = 0; i < qpList.length; i++) {
+        addToDagre(qpList[i]);
+        // Chain: seed → qp1 → qp2 → qp3 → ...
+        const parent = i === 0 ? seedUri : qpList[i - 1];
+        g.setEdge(parent, qpList[i]);
       }
 
       // Run dagre layout on the unified graph
@@ -945,18 +954,7 @@
           const up = upR.status === 'fulfilled' ? upR.value : null;
           const qpResult = quotesR.status === 'fulfilled' ? quotesR.value : { posts: [], cursor: null };
           setQuoteCursor(qpResult.cursor);
-          const g = buildGraph(atUri, down, up, qpResult.posts);
-          setGraph(g);
-
-          // Auto-collapse any node with many direct children to keep initial view navigable.
-          // The user can expand them individually via the ▶ toggle.
-          const autoCollapsed = new Set();
-          for (const [uri, node] of g.nodes) {
-            if (node.children.length > AUTO_COLLAPSE_CHILDREN) {
-              autoCollapsed.add(uri);
-            }
-          }
-          if (autoCollapsed.size > 0) setCollapsedBranches(autoCollapsed);
+          setGraph(buildGraph(atUri, down, up, qpResult.posts));
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       }
