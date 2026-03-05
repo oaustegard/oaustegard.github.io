@@ -475,55 +475,22 @@
       }
       computeWidths(seedUri);
 
-      // ── Time-ordered Y positions ───────────────────────────────────────────
-      // Collect all thread nodes (ancestors + seed + visible replies),
-      // sort chronologically, assign compact sequential Y with small bonus
-      // spacing for significant time gaps (>1h → +20px, >1d → +40px).
-
-      const threadNodes = [];
-      for (const a of ancestors) {
-        if (nodes.has(a)) threadNodes.push({ uri: a, t: getTime(a) });
-      }
-      function collectReplies(uri) {
-        const node = nodes.get(uri);
-        if (!node) return;
-        threadNodes.push({ uri, t: getTime(uri) });
-        if (!collapsedBranches.has(uri)) {
-          for (const ch of (node.children || []).filter(c => nodes.has(c))) collectReplies(ch);
-        }
-      }
-      collectReplies(seedUri);
-
-      // Sort chronologically
-      threadNodes.sort((a, b) => a.t - b.t);
-
-      // Assign Y: full card-height spacing (compaction pass below pulls nodes up)
-      const BASE_Y = CARD_H + V_GAP;
-      const timeToY = new Map();
-      let yPos = 0;
-      for (let i = 0; i < threadNodes.length; i++) {
-        if (i > 0) {
-          const gap = threadNodes[i].t - threadNodes[i - 1].t;
-          let bonus = 0;
-          if (gap > 86400000) bonus = 8;       // > 1 day
-          else if (gap > 3600000) bonus = 4;    // > 1 hour
-          yPos += BASE_Y + bonus;
-        }
-        timeToY.set(threadNodes[i].uri, yPos);
-      }
-
-      // ── X positions: tree branching ────────────────────────────────────────
+      // ── X positions: tree branching, Y from tree depth ─────────────────────
       // Children spread horizontally under parent, centered on parent.
-      // Y comes from timeToY (chronological order).
+      // Y is determined by depth in the tree (each level = CARD_H + V_GAP).
+      const ROW_H = CARD_H + V_GAP;
 
-      // Position ancestors centered above seed (all at x=0)
-      for (const a of ancestors) {
-        pos.set(a, { x: 0, y: timeToY.get(a) || 0 });
+      // Position ancestors above seed
+      for (let i = 0; i < ancestors.length; i++) {
+        const a = ancestors[i];
+        if (nodes.has(a)) {
+          pos.set(a, { x: 0, y: -(ancestors.length - i) * ROW_H });
+        }
       }
 
-      // Position seed + reply tree
-      function assignX(uri, x) {
-        pos.set(uri, { x, y: timeToY.get(uri) || 0 });
+      // Position seed + reply tree using depth-based Y
+      function assignPos(uri, x, depth) {
+        pos.set(uri, { x, y: depth * ROW_H });
         const node = nodes.get(uri);
         const ch = collapsedBranches.has(uri)
           ? []
@@ -534,11 +501,11 @@
         let sx = x + CARD_W / 2 - totalW / 2;
         for (const c of ch) {
           const cw = stw.get(c);
-          assignX(c, sx + (cw - CARD_W) / 2);
+          assignPos(c, sx + (cw - CARD_W) / 2, depth + 1);
           sx += cw + gap;
         }
       }
-      assignX(seedUri, 0);
+      assignPos(seedUri, 0, 0);
 
       // ── Quoted posts (upper-left diagonal) ─────────────────────────────────
       const quotedChain = [];
@@ -574,29 +541,7 @@
         });
       }
 
-      // ── Y compaction: pull nodes up when they have X clearance ──
-      // Process in time order. Each node tries to move as high as possible
-      // while staying (a) at or below its parent and (b) not overlapping
-      // any already-placed node that shares its X range.
-      const allPositioned = [...pos.entries()].map(([uri, p]) => ({
-        uri, x: p.x, y: p.y, time: getTime(uri)
-      })).sort((a, b) => a.time - b.time);
-      const placed = [];
-      const OVERLAP_GAP = 2;
-      for (const item of allPositioned) {
-        const node = nodes.get(item.uri);
-        // Parent constraint: must be below parent
-        const parentPos = node?.parentId ? pos.get(node.parentId) : null;
-        let minY = parentPos ? parentPos.y + CARD_H + OVERLAP_GAP : 0;
-        // Collision constraint: check all placed nodes with overlapping X
-        for (const p of placed) {
-          if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
-            minY = Math.max(minY, p.y + CARD_H + OVERLAP_GAP);
-          }
-        }
-        pos.get(item.uri).y = minY;
-        placed.push({ x: item.x, y: minY });
-      }
+      // No Y compaction needed — depth-based Y naturally spaces the tree
 
       // ── Normalize positions ────────────────────────────────────────────────
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
