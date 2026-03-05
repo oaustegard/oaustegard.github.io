@@ -185,8 +185,8 @@
 
     const CARD_W = 280;
     const CARD_H = 108;
-    const V_GAP = 40;   // vertical gap between ranks (dagre ranksep)
-    const H_GAP = 16;   // horizontal gap between siblings (dagre nodesep)
+    const V_GAP = 24;   // vertical gap between ranks (dagre ranksep)
+    const H_GAP = 12;   // horizontal gap between siblings (dagre nodesep)
     const LAYOUT_PAD = 60;
     const VIRT_BUFFER = 300; // px margin around viewport for virtualization
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
@@ -496,56 +496,11 @@
       // Run dagre layout on the unified graph
       dagre.layout(g);
 
-      // Extract X from dagre (compact horizontal packing), but compute Y from
-      // post timestamps so the vertical axis encodes TIME. This gives both
-      // space-efficient width and a meaningful time dimension.
+      // Use dagre positions directly — it produces the most compact layout
       const pos = new Map();
-
-      // Gather all timestamps to build a time scale
-      const times = [];
-      for (const uri of g.nodes()) {
-        const node = nodes.get(uri);
-        if (node) {
-          const t = new Date(node.post?.record?.createdAt || node.post?.indexedAt || 0).getTime();
-          times.push({ uri, t });
-        }
-      }
-      times.sort((a, b) => a.t - b.t);
-
-      // Map time to Y: earliest post at y=0, each subsequent post gets
-      // proportional spacing with a minimum gap of CARD_H + V_GAP/2
-      const TIME_ROW = CARD_H + V_GAP;  // minimum spacing between time slots
-      const timeToY = new Map();
-      if (times.length > 0) {
-        const t0 = times[0].t;
-        const tMax = times[times.length - 1].t;
-        const span = tMax - t0 || 1;
-        // Target height: enough rows for all nodes, proportionally distributed
-        const targetH = times.length * TIME_ROW;
-        for (const { uri, t } of times) {
-          const fraction = (t - t0) / span;
-          // Use proportional time mapping, but ensure minimum spacing
-          timeToY.set(uri, fraction * targetH);
-        }
-        // Enforce minimum gap: walk sorted nodes and push down if too close
-        let lastY = -Infinity;
-        for (const { uri } of times) {
-          let y = timeToY.get(uri);
-          if (y < lastY + TIME_ROW) y = lastY + TIME_ROW;
-          timeToY.set(uri, y);
-          lastY = y;
-        }
-      }
-
-      // Combine: X from dagre, Y from time
       for (const uri of g.nodes()) {
         const n = g.node(uri);
-        if (n) {
-          pos.set(uri, {
-            x: n.x - CARD_W / 2,
-            y: timeToY.get(uri) || 0,
-          });
-        }
+        if (n) pos.set(uri, { x: n.x - CARD_W / 2, y: n.y - CARD_H / 2 });
       }
 
       // Normalize positions so everything starts at LAYOUT_PAD
