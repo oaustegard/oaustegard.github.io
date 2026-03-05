@@ -141,8 +141,7 @@
     }
 
     /* SVG edges */
-    .edge-thread { stroke: #93c5fd; stroke-width: 1.5; fill: none; }
-    .edge-quote { stroke: #fdba74; stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+    /* Edges rendered via canvas — see drawEdges() */
 
     /* Toolbar */
     .toolbar { background: white; border-bottom: 1px solid #e5e7eb; z-index: 200; position: relative; }
@@ -633,14 +632,7 @@
       currentSim.nodes(graphData.nodes);
       currentSim.force('link').links(graphData.links);
 
-      // Re-bindSVG edges
-      const linkSel = gLinks.selectAll('path')
-        .data(graphData.links)
-        .join('path')
-        .attr('class', d => d.type === 'thread' ? 'edge-thread' : 'edge-quote')
-        .attr('marker-end', d => d.type === 'quote' ? 'url(#arrow-quote)' : '');
-
-      // Re-bind card elements
+      // Re-bind card elements (edges are drawn by canvas drawEdges() from graphData.links)
       cardEls = cardTransformEl.selectAll('.graph-card')
         .data(graphData.nodes, d => d.id)
         .join(
@@ -652,9 +644,6 @@
           update => update,
           exit => exit.remove()
         );
-
-      // Update tick handler reference
-      currentSim.on('tick', makeTickHandler(linkSel));
 
       // Update explorable states
       updateAllExplorableStates();
@@ -758,7 +747,9 @@
 
     // ── D3 Force Graph ───────────────────────────────────────────────────────────
 
-    let svg, gLinks, gCards, zoom, cardEls, cardTransformEl;
+    let svg, zoom, cardEls, cardTransformEl;
+    let edgeCanvas, edgeCtx;   // Canvas for edge rendering (much faster than SVG)
+    let currentTransform = d3.zoomIdentity;
 
     // Shared click handler and drag behavior for cards
     function cardClickHandler(event, d) {
@@ -777,27 +768,76 @@
 
     let cardDragBehavior;
 
-    function makeTickHandler(linkSel) {
-      return () => {
-        linkSel.attr('d', d => {
-          const sx = d.source.x, sy = d.source.y;
-          const tx = d.target.x, ty = d.target.y;
-          const mx = (sx + tx) / 2, my = (sy + ty) / 2;
-          if (d.type === 'thread') {
-            return `M ${sx} ${sy} C ${sx} ${my}, ${tx} ${my}, ${tx} ${ty}`;
-          }
-          return `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ty}, ${tx} ${ty}`;
-        });
-
-        cardEls.style('left', d => d.x + 'px')
-               .style('top', d => d.y + 'px');
+    // Get viewport bounds in graph coordinates (for culling)
+    function getViewportBounds() {
+      const viewport = document.getElementById('viewport');
+      if (!viewport) return null;
+      const w = viewport.clientWidth, h = viewport.clientHeight;
+      const t = currentTransform;
+      const pad = 150; // px buffer in screen coords
+      return {
+        left: (-t.x - pad) / t.k,
+        top: (-t.y - pad) / t.k,
+        right: (-t.x + w + pad) / t.k,
+        bottom: (-t.y + h + pad) / t.k,
       };
+    }
+
+    function isInViewport(x, y, bounds) {
+      if (!bounds) return true;
+      return x >= bounds.left - CARD_W && x <= bounds.right + CARD_W &&
+             y >= bounds.top - CARD_H_EST && y <= bounds.bottom + CARD_H_EST;
+    }
+
+    // Draw all edges on canvas (called per tick)
+    function drawEdges() {
+      if (!edgeCanvas || !edgeCtx || !graphData) return;
+      const w = edgeCanvas.width, h = edgeCanvas.height;
+      const t = currentTransform;
+      edgeCtx.clearRect(0, 0, w, h);
+      edgeCtx.save();
+      edgeCtx.translate(t.x, t.y);
+      edgeCtx.scale(t.k, t.k);
+
+      // Draw thread edges (solid blue)
+      edgeCtx.strokeStyle = '#93c5fd';
+      edgeCtx.lineWidth = 1.5 / t.k; // keep visual width constant
+      edgeCtx.setLineDash([]);
+      edgeCtx.beginPath();
+      for (const link of graphData.links) {
+        if (link.type !== 'thread') continue;
+        const sx = link.source.x, sy = link.source.y;
+        const tx = link.target.x, ty = link.target.y;
+        const my = (sy + ty) / 2;
+        edgeCtx.moveTo(sx, sy);
+        edgeCtx.bezierCurveTo(sx, my, tx, my, tx, ty);
+      }
+      edgeCtx.stroke();
+
+      // Draw quote edges (dashed orange)
+      edgeCtx.strokeStyle = '#fdba74';
+      edgeCtx.lineWidth = 1.5 / t.k;
+      edgeCtx.setLineDash([6 / t.k, 4 / t.k]);
+      edgeCtx.beginPath();
+      for (const link of graphData.links) {
+        if (link.type === 'thread') continue;
+        const sx = link.source.x, sy = link.source.y;
+        const tx = link.target.x, ty = link.target.y;
+        const mx = (sx + tx) / 2;
+        edgeCtx.moveTo(sx, sy);
+        edgeCtx.bezierCurveTo(mx, sy, mx, ty, tx, ty);
+      }
+      edgeCtx.stroke();
+      edgeCtx.setLineDash([]);
+
+      edgeCtx.restore();
     }
 
     function initGraph(data) {
       graphData = data;
       seedUri = data.seedUri;
       expandedCards = new Set();
+      currentTransform = d3.zoomIdentity;
 
       const viewport = document.getElementById('viewport');
       viewport.innerHTML = '';
@@ -805,16 +845,24 @@
       const width = viewport.clientWidth;
       const height = viewport.clientHeight;
 
-      // Create SVG for edges
+      // Canvas for edges (much faster than SVG with many links)
+      edgeCanvas = document.createElement('canvas');
+      edgeCanvas.width = width * devicePixelRatio;
+      edgeCanvas.height = height * devicePixelRatio;
+      edgeCanvas.style.cssText = `position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;`;
+      edgeCtx = edgeCanvas.getContext('2d');
+      edgeCtx.scale(devicePixelRatio, devicePixelRatio);
+      viewport.appendChild(edgeCanvas);
+
+      // Invisible SVG just for zoom behavior (no rendering)
       svg = d3.select(viewport).append('svg')
         .attr('width', '100%')
         .attr('height', '100%')
         .style('position', 'absolute')
         .style('top', 0)
-        .style('left', 0);
-
-      const gMain = svg.append('g').attr('class', 'graph-main');
-      gLinks = gMain.append('g').attr('class', 'links');
+        .style('left', 0)
+        .style('pointer-events', 'all')
+        .style('background', 'transparent');
 
       // HTML overlay for cards
       const cardContainer = d3.select(viewport).append('div')
@@ -845,14 +893,26 @@
       zoom = d3.zoom()
         .scaleExtent([0.05, 4])
         .on('zoom', (event) => {
+          currentTransform = event.transform;
           const t = event.transform;
-          gMain.attr('transform', t);
           cardTransformEl
             .style('transform', `translate(${t.x}px, ${t.y}px) scale(${t.k})`)
             .style('transform-origin', '0 0');
+          // Redraw edges on canvas immediately on zoom/pan
+          drawEdges();
         });
 
       svg.call(zoom);
+
+      // Resize canvas on window resize
+      const resizeObserver = new ResizeObserver(() => {
+        if (!edgeCanvas) return;
+        edgeCanvas.width = viewport.clientWidth * devicePixelRatio;
+        edgeCanvas.height = viewport.clientHeight * devicePixelRatio;
+        edgeCtx.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
+        drawEdges();
+      });
+      resizeObserver.observe(viewport);
 
       // Initial positions
       const seedNode = data.nodes.find(n => n.id === data.seedUri);
@@ -906,8 +966,8 @@
           .iterations(isLarge ? 1 : 2)
         )
         .force('center', d3.forceCenter(0, 0).strength(0.03))
-        .alphaDecay(isVeryLarge ? 0.03 : 0.015)
-        .velocityDecay(0.35);
+        .alphaDecay(isVeryLarge ? 0.04 : 0.02)
+        .velocityDecay(0.4);
 
       currentSim = sim;
 
@@ -927,23 +987,6 @@
           d3.select(event.sourceEvent.target.closest('.graph-card')).classed('dragging', false);
         });
 
-      // Draw edges
-      const linkSel = gLinks.selectAll('path')
-        .data(data.links)
-        .join('path')
-        .attr('class', d => d.type === 'thread' ? 'edge-thread' : 'edge-quote')
-        .attr('marker-end', d => d.type === 'quote' ? 'url(#arrow-quote)' : '');
-
-      // Arrow markers
-      svg.select('defs').remove();
-      const defs = svg.append('defs');
-      defs.append('marker')
-        .attr('id', 'arrow-quote')
-        .attr('markerWidth', 8).attr('markerHeight', 6)
-        .attr('refX', 7).attr('refY', 3)
-        .attr('orient', 'auto')
-        .append('path').attr('d', 'M 0 0 L 8 3 L 0 6 Z').attr('fill', '#fdba74');
-
       // Card elements
       cardEls = cardTransformEl.selectAll('.graph-card')
         .data(data.nodes, d => d.id)
@@ -956,29 +999,31 @@
       // Set explorable state
       updateAllExplorableStates();
 
-      // Tick handler
+      // Tick handler with viewport culling + canvas edges
       let lastTickTime = 0;
-      const tickInterval = isVeryLarge ? 50 : (isLarge ? 30 : 0);
+      const tickInterval = isVeryLarge ? 60 : (isLarge ? 40 : 16);
 
       sim.on('tick', () => {
-        if (tickInterval) {
-          const now = performance.now();
-          if (now - lastTickTime < tickInterval) return;
-          lastTickTime = now;
-        }
+        const now = performance.now();
+        if (now - lastTickTime < tickInterval) return;
+        lastTickTime = now;
 
-        linkSel.attr('d', d => {
-          const sx = d.source.x, sy = d.source.y;
-          const tx = d.target.x, ty = d.target.y;
-          const mx = (sx + tx) / 2, my = (sy + ty) / 2;
-          if (d.type === 'thread') {
-            return `M ${sx} ${sy} C ${sx} ${my}, ${tx} ${my}, ${tx} ${ty}`;
+        // Draw edges on canvas (fast — single draw call)
+        drawEdges();
+
+        // Viewport culling: only update DOM for visible cards
+        const bounds = getViewportBounds();
+        cardEls.each(function(d) {
+          const visible = isInViewport(d.x, d.y, bounds);
+          const el = this;
+          if (visible) {
+            el.style.left = d.x + 'px';
+            el.style.top = d.y + 'px';
+            if (el.style.display === 'none') el.style.display = '';
+          } else {
+            if (el.style.display !== 'none') el.style.display = 'none';
           }
-          return `M ${sx} ${sy} C ${mx} ${sy}, ${mx} ${ty}, ${tx} ${ty}`;
         });
-
-        cardEls.style('left', d => d.x + 'px')
-               .style('top', d => d.y + 'px');
       });
 
       // Add legend
