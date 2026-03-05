@@ -140,6 +140,7 @@
 
     /* Embed styles */
     .embed-img { border-radius: 6px; max-height: 120px; width: 100%; object-fit: cover; margin-top: 6px; }
+    .graph-card.expanded .embed-img { max-height: 200px; }
     .embed-external {
       margin-top: 6px;
       border: 1px solid #e5e7eb;
@@ -148,6 +149,7 @@
       background: #f9fafb;
     }
     .embed-external img { width: 100%; max-height: 80px; object-fit: cover; }
+    .graph-card.expanded .embed-external img { max-height: 120px; }
     .embed-external .meta { padding: 4px 6px; }
     .embed-quote {
       margin-top: 6px;
@@ -213,6 +215,14 @@
       const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=0&parentHeight=1000');
       if (!r.ok) return null;
       return (await r.json()).thread;
+    }
+
+    async function fetchPost(uri) {
+      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(uri) + '&depth=0&parentHeight=0');
+      if (!r.ok) return null;
+      const data = await r.json();
+      if (data.thread?.$type !== 'app.bsky.feed.defs#threadViewPost') return null;
+      return data.thread.post;
     }
 
     async function fetchAllQuotePosts(atUri) {
@@ -310,7 +320,26 @@
 
     // ── Build graph data for D3 ──────────────────────────────────────────────────
 
-    function buildGraphData(seedUri, threadDown, threadUp, quotePosts) {
+    // Follow a quote chain deeper by fetching posts individually.
+    // Starts from the last post in the inline stack and keeps going.
+    async function deepenQuoteChain(stack) {
+      const seen = new Set(stack.map(p => p.uri));
+      let last = stack[stack.length - 1];
+      const extra = [];
+      // Safety limit to avoid infinite loops
+      for (let i = 0; i < 50; i++) {
+        const quotedUri = getQuotedUri(last);
+        if (!quotedUri || seen.has(quotedUri)) break;
+        const post = await fetchPost(quotedUri);
+        if (!post) break;
+        seen.add(post.uri);
+        extra.push(post);
+        last = post;
+      }
+      return extra;
+    }
+
+    async function buildGraphData(seedUri, threadDown, threadUp, quotePosts) {
       const nodesMap = new Map();
       const links = [];
 
@@ -352,11 +381,13 @@
       }
       walkReplies(threadDown);
 
-      // Quote chain (what seed quotes)
+      // Quote chain (what seed quotes) — inline from API, then fetch deeper
       const stack = extractQuoteStack(threadDown.post);
-      for (let i = 1; i < stack.length; i++) {
-        addNode(stack[i].uri, stack[i], 'quoted');
-        links.push({ source: stack[i - 1].uri, target: stack[i].uri, type: 'quote' });
+      const deeperPosts = await deepenQuoteChain(stack);
+      const fullStack = [...stack, ...deeperPosts];
+      for (let i = 1; i < fullStack.length; i++) {
+        addNode(fullStack[i].uri, fullStack[i], 'quoted');
+        links.push({ source: fullStack[i - 1].uri, target: fullStack[i].uri, type: 'quote' });
       }
 
       // Quote posts (who quoted the seed)
@@ -510,6 +541,8 @@
               <div class="flex items-center gap-1 flex-shrink-0">
                 <button id="btn-center" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">&#x2299;</button>
                 <button id="btn-fit" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Zoom to fit">Fit</button>
+                <a href="thread-reader?url=${encodeURIComponent(getUrlParam('url'))}"
+                  class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 text-gray-700 no-underline" title="View as thread">&#x1f9f5; Thread</a>
               </div>
             ` : ''}
           </div>
@@ -951,7 +984,7 @@
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
         const allQuotes = quotesR.status === 'fulfilled' ? quotesR.value : [];
-        const rawData = buildGraphData(atUri, down, up, allQuotes);
+        const rawData = await buildGraphData(atUri, down, up, allQuotes);
         lastRawData = rawData;
         const result = pruneGraph(rawData, maxNodes);
         prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };
