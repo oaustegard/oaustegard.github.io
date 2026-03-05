@@ -573,24 +573,23 @@
         });
       }
 
-      // ── Y compaction: pull nodes up, but keep minimum spacing ─────────────
-      // Nodes with overlapping X ranges need full card-height separation.
-      // Nodes in different X columns get reduced (but non-zero) spacing
-      // so the layout stays vertically distributed instead of collapsing flat.
+      // ── Y compaction: collapse free space, enforce parent-child ordering ──
+      // Nodes only need separation from nodes they actually overlap with in X.
+      // Vertical spread comes from the parent constraint: each node must sit
+      // below its parent, which naturally creates depth in the tree.
       const allPositioned = [...pos.entries()].map(([uri, p]) => ({
         uri, x: p.x, y: p.y, time: getTime(uri)
       })).sort((a, b) => a.time - b.time);
       const placed = [];
-      const MIN_Y_GAP = Math.round(CARD_H / 2);  // minimum gap even when X doesn't overlap
       for (const item of allPositioned) {
-        let minY = 0;
+        const node = nodes.get(item.uri);
+        // Must be below parent
+        const parentPos = node?.parentId ? pos.get(node.parentId) : null;
+        let minY = parentPos ? parentPos.y + CARD_H + V_GAP : 0;
+        // Must not overlap any placed node in the same X range
         for (const p of placed) {
           if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
-            // X ranges overlap: full card separation
             minY = Math.max(minY, p.y + CARD_H + V_GAP);
-          } else {
-            // No X overlap: small minimum gap to preserve vertical spread
-            minY = Math.max(minY, p.y + MIN_Y_GAP);
           }
         }
         pos.get(item.uri).y = minY;
