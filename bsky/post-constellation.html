@@ -27,12 +27,12 @@
     /* Avatar */
     .avatar-wrap {
       position: relative;
-      width: 24px; height: 24px;
+      width: 20px; height: 20px;
       border-radius: 50%;
       overflow: hidden;
       flex-shrink: 0;
       display: flex; align-items: center; justify-content: center;
-      font-weight: 600; font-size: 0.6rem; color: white;
+      font-weight: 600; font-size: 0.5rem; color: white;
     }
     .avatar-wrap img {
       position: absolute; inset: 0;
@@ -45,15 +45,16 @@
     /* Constellation cards */
     .constellation-card {
       position: absolute;
-      width: 280px;
+      width: 170px;
       background: white;
       border: 1px solid #e5e7eb;
-      border-radius: 10px;
-      padding: 10px 12px;
+      border-radius: 7px;
+      padding: 5px 6px;
       cursor: pointer;
       transition: box-shadow 0.15s, border-color 0.15s;
       user-select: none;
-      font-size: 12px;
+      font-size: 11px;
+      line-height: 1.3;
     }
     .constellation-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
 
@@ -66,18 +67,21 @@
     .constellation-card.type-quoted { border-left: 3px solid #f97316; }
     .constellation-card.type-quote-post { border-right: 3px solid #f97316; }
     .constellation-card.is-expanded {
+      width: 280px !important;
       z-index: 20;
       box-shadow: 0 4px 16px rgba(0,0,0,0.13);
       cursor: default;
+      font-size: 12px;
+      padding: 10px 12px;
     }
 
     /* Type badges */
     .type-badge {
       display: inline-block;
-      font-size: 9px;
+      font-size: 8px;
       font-weight: 600;
-      padding: 1px 5px;
-      border-radius: 9px;
+      padding: 0px 4px;
+      border-radius: 7px;
       white-space: nowrap;
       flex-shrink: 0;
     }
@@ -87,8 +91,8 @@
     .type-badge.quote-post { background: #ffedd5; color: #c2410c; }
 
     /* SVG connections */
-    .conn-thread { stroke: #3b82f6; stroke-width: 2; fill: none; }
-    .conn-quote { stroke: #f97316; stroke-width: 2; stroke-dasharray: 6 4; fill: none; }
+    .conn-thread { stroke: #93c5fd; stroke-width: 1.5; fill: none; }
+    .conn-quote { stroke: #fdba74; stroke-width: 1.5; stroke-dasharray: 5 3; fill: none; }
 
     /* Line clamp for compact text */
     .line-clamp-2 {
@@ -142,9 +146,9 @@
       display: inline-flex;
       align-items: center;
       gap: 2px;
-      padding: 1px 5px;
-      border-radius: 6px;
-      font-size: 9px;
+      padding: 0px 4px;
+      border-radius: 5px;
+      font-size: 8px;
       font-weight: 600;
       color: #6b7280;
       background: #f3f4f6;
@@ -182,17 +186,18 @@
 
     // ── Constants ───────────────────────────────────────────────────────────────
 
-    const CARD_W = 280;
-    const CARD_H = 108;
-    const V_GAP = 36;
-    const H_GAP = 20;
-    const QUOTE_X_OFF = CARD_W + 40;
-    const QUOTE_Y_STEP = 40;
-    const LAYOUT_PAD = 80;
-    const VIRT_BUFFER = 300; // px margin around viewport for virtualization
-    const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
-    const CLUSTER_ZOOM = 0.35; // below this zoom, render dots instead of full cards
-    const QUOTE_BATCH = 25; // initial quote posts to show
+    const CARD_W = 170;
+    const CARD_H = 62;
+    const V_GAP = 6;
+    const H_GAP = 6;
+    const QUOTE_X_OFF = CARD_W + 14;
+    const QUOTE_Y_STEP = 18;
+    const LAYOUT_PAD = 20;
+    const QP_COLS = 3;           // quote posts arranged in N columns
+    const VIRT_BUFFER = 300;
+    const VIRT_THROTTLE = 80;
+    const CLUSTER_ZOOM = 0.30;
+    const QUOTE_BATCH = 25;
     const API = 'https://public.api.bsky.app/xrpc/';
 
     // ── URL / API helpers ───────────────────────────────────────────────────────
@@ -481,16 +486,16 @@
       // Sort chronologically
       threadNodes.sort((a, b) => a.t - b.t);
 
-      // Assign Y: compact sequential with bonus gaps for time jumps
-      const BASE_Y = CARD_H + 12; // tight spacing
+      // Assign Y: tight initial spacing (compaction pass below resolves overlaps)
+      const BASE_Y = 12;
       const timeToY = new Map();
       let yPos = 0;
       for (let i = 0; i < threadNodes.length; i++) {
         if (i > 0) {
           const gap = threadNodes[i].t - threadNodes[i - 1].t;
           let bonus = 0;
-          if (gap > 86400000) bonus = 40;      // > 1 day
-          else if (gap > 3600000) bonus = 20;   // > 1 hour
+          if (gap > 86400000) bonus = 6;       // > 1 day
+          else if (gap > 3600000) bonus = 3;    // > 1 hour
           yPos += BASE_Y + bonus;
         }
         timeToY.set(threadNodes[i].uri, yPos);
@@ -537,12 +542,12 @@
         pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
       }
 
-      // ── Quote posts (right column, sorted chronologically) ─────────────────
+      // ── Quote posts (multi-column grid to the right, sorted chronologically)
       let replyMaxX = 0;
       for (const p of pos.values()) {
         if (p.x + CARD_W > replyMaxX) replyMaxX = p.x + CARD_W;
       }
-      const qpStartX = replyMaxX + 40;
+      const qpStartX = replyMaxX + 24;
       const qpList = [];
       for (const edge of edges) {
         if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
@@ -550,7 +555,30 @@
       }
       qpList.sort((a, b) => getTime(a) - getTime(b));
       for (let i = 0; i < qpList.length; i++) {
-        pos.set(qpList[i], { x: qpStartX, y: (i + 1) * (CARD_H + V_GAP) });
+        const col = i % QP_COLS;
+        const row = Math.floor(i / QP_COLS);
+        pos.set(qpList[i], {
+          x: qpStartX + col * (CARD_W + H_GAP),
+          y: (row + 1) * (CARD_H + V_GAP)
+        });
+      }
+
+      // ── Y compaction: allow vertical overlap when X ranges don't overlap ──
+      const allPositioned = [...pos.entries()].map(([uri, p]) => ({
+        uri, x: p.x, y: p.y, time: getTime(uri)
+      })).sort((a, b) => a.time - b.time);
+      const placed = [];
+      const OVERLAP_GAP = 2;
+      for (const item of allPositioned) {
+        let minY = item.y;
+        for (const p of placed) {
+          // Only enforce vertical separation if X ranges overlap
+          if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
+            minY = Math.max(minY, p.y + CARD_H + OVERLAP_GAP);
+          }
+        }
+        pos.get(item.uri).y = minY;
+        placed.push({ x: item.x, y: minY });
       }
 
       // ── Normalize positions ────────────────────────────────────────────────
@@ -699,29 +727,53 @@
 
     function ConstellationCard({ node, pos, expanded, collapsed, onToggle, onReseed, onToggleCollapse }) {
       const p = node.post;
-      const hasThread = p.record?.reply || (p.replyCount && p.replyCount > 0);
       const hasChildren = node.children.length > 0;
+
+      if (!expanded) {
+        // ── Compact card ──
+        return html`
+          <div class="constellation-card type-${node.type}"
+               style="left: ${pos.x}px; top: ${pos.y}px;"
+               onClick=${onToggle}>
+            <div class="flex items-center gap-1 mb-0.5 min-w-0">
+              <${Avatar} author=${p.author} />
+              <span class="font-semibold text-gray-800 truncate" style="max-width:80px;font-size:10px">${p.author.displayName || p.author.handle}</span>
+              ${typeBadge(node.type)}
+              ${hasChildren && html`
+                <button class="collapse-btn ml-auto"
+                        onClick=${e => { e.stopPropagation(); onToggleCollapse(node.id); }}>
+                  ${collapsed ? '▶' : '▼'} ${node.descendantCount}
+                </button>
+              `}
+            </div>
+            <p class="text-gray-600 line-clamp-2 post-text" style="font-size:10px">${p.record?.text || ''}</p>
+            <div class="flex items-center gap-1.5 mt-0.5" style="font-size:9px;color:#9ca3af">
+              <span>❤️${p.likeCount || 0}</span>
+              <span>💬${p.replyCount || 0}</span>
+              <span class="ml-auto">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
+            </div>
+          </div>`;
+      }
+
+      // ── Expanded card (wider overlay) ──
       return html`
-        <div class="constellation-card type-${node.type} ${expanded ? 'is-expanded' : ''}"
+        <div class="constellation-card type-${node.type} is-expanded"
              style="left: ${pos.x}px; top: ${pos.y}px;"
              onClick=${onToggle}>
           <div class="flex items-center gap-1.5 mb-1 min-w-0">
             <${Avatar} author=${p.author} />
-            <span class="font-semibold text-gray-800 truncate" style="max-width:100px">${p.author.displayName || p.author.handle}</span>
-            <span class="text-gray-400 truncate">@${p.author.handle}</span>
+            <span class="font-semibold text-gray-800 truncate" style="max-width:120px">${p.author.displayName || p.author.handle}</span>
+            <span class="text-gray-400 truncate text-xs">@${p.author.handle}</span>
             ${typeBadge(node.type)}
           </div>
-          <p class="text-gray-700 post-text leading-relaxed ${expanded ? '' : 'line-clamp-2'}" style="font-size:11px">
+          <p class="text-gray-700 post-text leading-relaxed" style="font-size:11px">
             ${p.record?.text || ''}
           </p>
-          ${expanded && p.embed && html`<${PostEmbed} embed=${p.embed} />`}
+          ${p.embed && html`<${PostEmbed} embed=${p.embed} />`}
           <div class="flex items-center gap-2 mt-1.5 text-gray-400" style="font-size:10px">
             <span>💬${p.replyCount || 0}</span>
             <span>🔁${p.repostCount || 0}</span>
             <span>❤️${p.likeCount || 0}</span>
-            ${(node.type === 'quoted' || node.type === 'quote-post') && hasThread && html`
-              <span class="text-amber-500" title="Part of a thread">🧵</span>
-            `}
             ${hasChildren && html`
               <button class="collapse-btn ml-auto"
                       onClick=${e => { e.stopPropagation(); onToggleCollapse(node.id); }}
@@ -729,26 +781,21 @@
                 ${collapsed ? '▶' : '▼'} ${node.descendantCount}
               </button>
             `}
-            ${!hasChildren && html`
-              <span class="ml-auto text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
+          </div>
+          <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100" style="font-size:11px">
+            <a href="${postUrl(p)}" target="_blank" rel="noopener"
+              class="text-sky-500 hover:text-sky-700 font-medium"
+              onClick=${e => e.stopPropagation()}>
+              Open ↗
+            </a>
+            <span class="text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
+            ${node.type !== 'seed' && html`
+              <button class="text-sky-500 hover:text-sky-700 font-medium ml-auto"
+                      onClick=${e => { e.stopPropagation(); onReseed(node.id); }}>
+                Re-seed ⟳
+              </button>
             `}
           </div>
-          ${expanded && html`
-            <div class="flex items-center gap-2 mt-2 pt-2 border-t border-gray-100" style="font-size:11px">
-              <a href="${postUrl(p)}" target="_blank" rel="noopener"
-                class="text-sky-500 hover:text-sky-700 font-medium"
-                onClick=${e => e.stopPropagation()}>
-                Open ↗
-              </a>
-              <span class="text-gray-300">${timeAgo(p.record?.createdAt || p.indexedAt || '')}</span>
-              ${node.type !== 'seed' && html`
-                <button class="text-sky-500 hover:text-sky-700 font-medium ml-auto"
-                        onClick=${e => { e.stopPropagation(); onReseed(node.id); }}>
-                  Re-seed ⟳
-                </button>
-              `}
-            </div>
-          `}
         </div>`;
     }
 
@@ -760,7 +807,7 @@
              style="position:absolute;top:0;left:0;pointer-events:none;overflow:visible;">
           <defs>
             <marker id="qa" markerWidth="8" markerHeight="6" refX="7" refY="3" orient="auto">
-              <path d="M 0 0 L 8 3 L 0 6 Z" fill="#f97316" />
+              <path d="M 0 0 L 8 3 L 0 6 Z" fill="#fdba74" />
             </marker>
           </defs>
           ${edges.map((edge, i) => {
