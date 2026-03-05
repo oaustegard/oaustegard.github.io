@@ -573,6 +573,30 @@
         });
       }
 
+      // ── Y compaction: pull nodes up, but keep minimum spacing ─────────────
+      // Nodes with overlapping X ranges need full card-height separation.
+      // Nodes in different X columns get reduced (but non-zero) spacing
+      // so the layout stays vertically distributed instead of collapsing flat.
+      const allPositioned = [...pos.entries()].map(([uri, p]) => ({
+        uri, x: p.x, y: p.y, time: getTime(uri)
+      })).sort((a, b) => a.time - b.time);
+      const placed = [];
+      const MIN_Y_GAP = 4;  // minimum gap even when X doesn't overlap
+      for (const item of allPositioned) {
+        let minY = 0;
+        for (const p of placed) {
+          if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
+            // X ranges overlap: full card separation
+            minY = Math.max(minY, p.y + CARD_H + V_GAP);
+          } else {
+            // No X overlap: small minimum gap to preserve vertical spread
+            minY = Math.max(minY, p.y + MIN_Y_GAP);
+          }
+        }
+        pos.get(item.uri).y = minY;
+        placed.push({ x: item.x, y: minY });
+      }
+
       // ── Normalize positions ────────────────────────────────────────────────
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const p of pos.values()) {
