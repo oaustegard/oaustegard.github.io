@@ -177,169 +177,23 @@
   </script>
 
   <script type="module">
+    import {
+      resolveToAtUri,
+      fetchThreadDown, fetchThreadUp,
+      fetchQuoteWeb,
+      extractQuoteStack, getQuotedUri, deepenQuoteChain,
+      validReplies, postUrl, timeAgo, avatarHue
+    } from './bsky-graph.js';
+
     // ── Constants ─────────────────────────────────────────────────────────────────
-    const API = 'https://public.api.bsky.app/xrpc/';
     const CARD_W = 200;
     const CARD_H_EST = 80;
     const DEFAULT_MAX_NODES = 150;
     let maxNodes = DEFAULT_MAX_NODES;
 
-    // ── URL / API helpers (from post-constellation.html) ─────────────────────────
-
-    function parseBskyUrl(url) {
-      const m = url.match(/bsky\.app\/profile\/([^/?# \t]+)\/post\/([^/?# \t]+)/);
-      return m ? { actor: m[1], rkey: m[2] } : null;
-    }
-
-    async function resolveToAtUri(input) {
-      input = input.trim();
-      if (input.startsWith('at://')) return input;
-      const parsed = parseBskyUrl(input);
-      if (!parsed) throw new Error('Paste a bsky.app post URL or an at:// URI');
-      let did = parsed.actor;
-      if (!did.startsWith('did:')) {
-        const r = await fetch(API + 'com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(did));
-        if (!r.ok) throw new Error('Could not resolve handle: ' + did);
-        did = (await r.json()).did;
-      }
-      return 'at://' + did + '/app.bsky.feed.post/' + parsed.rkey;
-    }
-
-    async function fetchThreadDown(atUri) {
-      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=1000&parentHeight=0');
-      if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.message || 'API error ' + r.status); }
-      return (await r.json()).thread;
-    }
-
-    async function fetchThreadUp(atUri) {
-      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=0&parentHeight=1000');
-      if (!r.ok) return null;
-      return (await r.json()).thread;
-    }
-
-    async function fetchPost(uri) {
-      const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(uri) + '&depth=0&parentHeight=0');
-      if (!r.ok) return null;
-      const data = await r.json();
-      if (data.thread?.$type !== 'app.bsky.feed.defs#threadViewPost') return null;
-      return data.thread.post;
-    }
-
-    async function fetchAllQuotePosts(atUri) {
-      const allPosts = [];
-      let cursor = null;
-      do {
-        let url = API + 'app.bsky.feed.getQuotes?uri=' + encodeURIComponent(atUri) + '&limit=100';
-        if (cursor) url += '&cursor=' + encodeURIComponent(cursor);
-        const r = await fetch(url);
-        if (!r.ok) break;
-        const data = await r.json();
-        allPosts.push(...(data.posts || []));
-        cursor = data.cursor || null;
-      } while (cursor);
-      return allPosts;
-    }
-
-    // ── Post helpers ─────────────────────────────────────────────────────────────
-
-    function avatarHue(str) {
-      let hash = 0;
-      for (let i = 0; i < str.length; i++) hash = str.charCodeAt(i) + ((hash << 5) - hash);
-      return Math.abs(hash) % 360;
-    }
-
-    function timeAgo(iso) {
-      if (!iso) return '';
-      const diff = Date.now() - new Date(iso).getTime();
-      const m = Math.floor(diff / 60000), h = Math.floor(diff / 3600000), d = Math.floor(diff / 86400000);
-      if (m < 1) return 'now';
-      if (h < 1) return m + 'm';
-      if (d < 1) return h + 'h';
-      if (d < 30) return d + 'd';
-      return new Date(iso).toLocaleDateString();
-    }
-
-    function postUrl(p) {
-      return 'https://bsky.app/profile/' + p.author.did + '/post/' + p.uri.split('/').pop();
-    }
-
-    function validReplies(node) {
-      return (node.replies || []).filter(r => r.$type === 'app.bsky.feed.defs#threadViewPost');
-    }
-
-    function viewRecordToPost(vr) {
-      let embed = null;
-      if (vr.embeds?.length) {
-        if (vr.embeds.length === 1) {
-          embed = vr.embeds[0];
-        } else {
-          const recEmbed = vr.embeds.find(e =>
-            e.$type === 'app.bsky.embed.record#view' || e.$type === 'app.bsky.embed.recordWithMedia#view');
-          const mediaEmbed = vr.embeds.find(e =>
-            e.$type === 'app.bsky.embed.images#view' || e.$type === 'app.bsky.embed.video#view' || e.$type === 'app.bsky.embed.external#view');
-          if (recEmbed && mediaEmbed) {
-            embed = { $type: 'app.bsky.embed.recordWithMedia#view', media: mediaEmbed, record: recEmbed };
-          } else { embed = recEmbed || mediaEmbed; }
-        }
-      }
-      return {
-        uri: vr.uri, cid: vr.cid, author: vr.author,
-        record: vr.value || {}, embed,
-        likeCount: vr.likeCount, repostCount: vr.repostCount, replyCount: vr.replyCount, indexedAt: vr.indexedAt
-      };
-    }
-
-    function extractQuoteStack(post) {
-      const stack = [post];
-      let embed = post.embed;
-      const seen = new Set([post.uri]);
-      while (embed) {
-        let vr = null;
-        if (embed.$type === 'app.bsky.embed.record#view' && embed.record?.$type === 'app.bsky.embed.record#viewRecord')
-          vr = embed.record;
-        else if (embed.$type === 'app.bsky.embed.recordWithMedia#view' && embed.record?.record?.$type === 'app.bsky.embed.record#viewRecord')
-          vr = embed.record.record;
-        if (!vr || seen.has(vr.uri)) break;
-        seen.add(vr.uri);
-        const fp = viewRecordToPost(vr);
-        stack.push(fp);
-        embed = fp.embed;
-      }
-      return stack;
-    }
-
-    function getQuotedUri(post) {
-      const rec = post.record || post;
-      const emb = rec.embed;
-      if (!emb) return null;
-      const t = emb.$type;
-      if (t === 'app.bsky.embed.record' && emb.record?.uri) return emb.record.uri;
-      if (t === 'app.bsky.embed.recordWithMedia' && emb.record?.record?.uri) return emb.record.record.uri;
-      return null;
-    }
-
     // ── Build graph data for D3 ──────────────────────────────────────────────────
 
-    // Follow a quote chain deeper by fetching posts individually.
-    // Starts from the last post in the inline stack and keeps going.
-    async function deepenQuoteChain(stack) {
-      const seen = new Set(stack.map(p => p.uri));
-      let last = stack[stack.length - 1];
-      const extra = [];
-      // Safety limit to avoid infinite loops
-      for (let i = 0; i < 50; i++) {
-        const quotedUri = getQuotedUri(last);
-        if (!quotedUri || seen.has(quotedUri)) break;
-        const post = await fetchPost(quotedUri);
-        if (!post) break;
-        seen.add(post.uri);
-        extra.push(post);
-        last = post;
-      }
-      return extra;
-    }
-
-    async function buildGraphData(seedUri, threadDown, threadUp, quotePosts) {
+    async function buildGraphData(seedUri, threadDown, threadUp, quoteWebResult) {
       const nodesMap = new Map();
       const links = [];
 
@@ -390,12 +244,16 @@
         links.push({ source: fullStack[i - 1].uri, target: fullStack[i].uri, type: 'quote' });
       }
 
-      // Quote posts (who quoted the seed)
-      if (quotePosts?.length) {
-        for (const qp of quotePosts) {
+      // Quote web (who quoted the seed, and who quoted those, etc.)
+      if (quoteWebResult?.allQuotePosts?.length) {
+        for (const qp of quoteWebResult.allQuotePosts) {
+          const quotedUri = qp._quotedUri || seedUri;
           if (qp.uri !== seedUri) {
             addNode(qp.uri, qp, 'quote-post');
-            links.push({ source: qp.uri, target: seedUri, type: 'quote' });
+            // Only add the quote link if it doesn't already exist
+            if (!links.some(l => l.source === qp.uri && l.target === quotedUri)) {
+              links.push({ source: qp.uri, target: quotedUri, type: 'quote' });
+            }
           }
         }
       }
@@ -502,6 +360,7 @@
     let currentSim = null;
     let graphData = null;
     let expandedCards = new Set();
+    let allExpanded = getUrlParam('ea') === '1';
     let seedUri = null;
     let prunedInfo = null; // { pruned, totalCount }
     let lastRawData = null; // cached for re-pruning without refetch
@@ -541,6 +400,7 @@
               <div class="flex items-center gap-1 flex-shrink-0">
                 <button id="btn-center" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">&#x2299;</button>
                 <button id="btn-fit" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Zoom to fit">Fit</button>
+                <button id="btn-expand-all" class="px-2 py-0.5 text-xs ${allExpanded ? 'bg-sky-100 text-sky-700' : 'bg-gray-100'} rounded hover:bg-gray-200" title="Expand/collapse all cards">${allExpanded ? 'Collapse all' : 'Expand all'}</button>
                 <a href="thread-reader?url=${encodeURIComponent(getUrlParam('url'))}"
                   class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 text-gray-700 no-underline" title="View as thread">&#x1f9f5; Thread</a>
               </div>
@@ -576,6 +436,46 @@
       if (loadBtn) loadBtn.addEventListener('click', () => doLoad());
       if (document.getElementById('btn-center')) document.getElementById('btn-center').addEventListener('click', centerOnSeed);
       if (document.getElementById('btn-fit')) document.getElementById('btn-fit').addEventListener('click', zoomToFit);
+      if (document.getElementById('btn-expand-all')) document.getElementById('btn-expand-all').addEventListener('click', toggleExpandAll);
+    }
+
+    // ── Expand helpers ──────────────────────────────────────────────────────────
+
+    function isExpanded(id) {
+      return allExpanded || expandedCards.has(id);
+    }
+
+    function collideRadius(d) {
+      if (isExpanded(d.id)) return d.type === 'seed' ? 200 : 180;
+      return d.type === 'seed' ? 140 : 110;
+    }
+
+    function refreshCards() {
+      if (!cardEls) return;
+      cardEls.each(function(d) {
+        const exp = isExpanded(d.id);
+        d3.select(this).classed('expanded', exp).html(renderCard(d, exp));
+      });
+    }
+
+    function reheatCollisions() {
+      if (!currentSim) return;
+      currentSim.force('collide').radius(collideRadius);
+      currentSim.alpha(0.5).restart();
+    }
+
+    function toggleExpandAll() {
+      allExpanded = !allExpanded;
+      setUrlParam('ea', allExpanded ? '1' : '');
+      expandedCards.clear();
+      refreshCards();
+      reheatCollisions();
+      // Re-render toolbar to update button label
+      const btn = document.getElementById('btn-expand-all');
+      if (btn) {
+        btn.textContent = allExpanded ? 'Collapse all' : 'Expand all';
+        btn.className = `px-2 py-0.5 text-xs ${allExpanded ? 'bg-sky-100 text-sky-700' : 'bg-gray-100'} rounded hover:bg-gray-200`;
+      }
     }
 
     // ── D3 Force Graph ───────────────────────────────────────────────────────────
@@ -689,7 +589,7 @@
           .theta(isVeryLarge ? 1.2 : 0.9)
         )
         .force('collide', d3.forceCollide()
-          .radius(d => d.type === 'seed' ? 140 : 110)
+          .radius(collideRadius)
           .strength(0.8)
           .iterations(isLarge ? 1 : 2)
         )
@@ -720,17 +620,19 @@
       cardEls = cardTransform.selectAll('.graph-card')
         .data(data.nodes, d => d.id)
         .join('div')
-        .attr('class', d => `graph-card type-${d.type}`)
-        .html(d => renderCard(d, false))
+        .attr('class', d => `graph-card type-${d.type}${isExpanded(d.id) ? ' expanded' : ''}`)
+        .html(d => renderCard(d, isExpanded(d.id)))
         .on('click', function(event, d) {
           event.stopPropagation();
-          if (expandedCards.has(d.id)) {
+          const wasExpanded = isExpanded(d.id);
+          if (wasExpanded) {
             expandedCards.delete(d.id);
-            d3.select(this).classed('expanded', false).html(renderCard(d, false));
           } else {
             expandedCards.add(d.id);
-            d3.select(this).classed('expanded', true).html(renderCard(d, true));
           }
+          const nowExpanded = isExpanded(d.id);
+          d3.select(this).classed('expanded', nowExpanded).html(renderCard(d, nowExpanded));
+          reheatCollisions();
         })
         .call(d3.drag()
           .on('start', (event, d) => {
@@ -782,7 +684,7 @@
           <span><span class="legend-line" style="background:#93c5fd"></span>reply</span>
           <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
         </div>
-        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom</div>
+        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Reheat after expand to settle</div>
       `;
       viewport.appendChild(legendDiv);
 
@@ -976,15 +878,16 @@
 
       try {
         const atUri = await resolveToAtUri(url);
-        const [downR, upR, quotesR] = await Promise.allSettled([
-          fetchThreadDown(atUri), fetchThreadUp(atUri), fetchAllQuotePosts(atUri),
+        const [downR, upR] = await Promise.allSettled([
+          fetchThreadDown(atUri), fetchThreadUp(atUri),
         ]);
         const down = downR.status === 'fulfilled' ? downR.value : null;
         if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
-        const allQuotes = quotesR.status === 'fulfilled' ? quotesR.value : [];
-        const rawData = await buildGraphData(atUri, down, up, allQuotes);
+        // Fetch the full quote web (quotes of quotes, up to 3 hops deep)
+        const quoteWeb = await fetchQuoteWeb(atUri, { maxDepth: 3, maxTotal: 500 });
+        const rawData = await buildGraphData(atUri, down, up, quoteWeb);
         lastRawData = rawData;
         const result = pruneGraph(rawData, maxNodes);
         prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };
