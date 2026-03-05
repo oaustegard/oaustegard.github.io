@@ -187,8 +187,6 @@
     const CARD_H = 108;
     const V_GAP = 40;   // vertical gap between ranks (dagre ranksep)
     const H_GAP = 16;   // horizontal gap between siblings (dagre nodesep)
-    const QUOTE_X_OFF = CARD_W + 56;
-    const QUOTE_Y_STEP = 48;
     const LAYOUT_PAD = 60;
     const VIRT_BUFFER = 300; // px margin around viewport for virtualization
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
@@ -416,9 +414,8 @@
     function computeLayout(graph, collapsedBranches) {
       const { nodes, edges, seedUri } = graph;
 
-      // Build a dagre graph for the thread portion (ancestors + seed + replies).
-      // Quoted posts and quote-posts get manual positioning to preserve spatial
-      // semantics (upper-left = what you quoted, right = who quoted you).
+      // Put EVERYTHING into a single dagre graph — thread tree, quoted chain,
+      // and quote posts. dagre will find a compact 2D arrangement.
       const g = new dagre.graphlib.Graph();
       g.setGraph({
         rankdir: 'TB',
@@ -429,26 +426,16 @@
       });
       g.setDefaultEdgeLabel(() => ({}));
 
-      // Walk ancestors → seed → reply tree, adding nodes & edges to dagre.
-      // Respect collapsed branches: stop recursing into collapsed subtrees.
-      const threadUris = new Set();
+      // Track which nodes we add to dagre
+      const addedUris = new Set();
 
-      function addThreadSubtree(uri) {
-        if (threadUris.has(uri) || !nodes.has(uri)) return;
-        const node = nodes.get(uri);
-        if (node.type === 'quoted' || node.type === 'quote-post') return;
-        threadUris.add(uri);
+      function addToDagre(uri) {
+        if (addedUris.has(uri) || !nodes.has(uri)) return;
+        addedUris.add(uri);
         g.setNode(uri, { width: CARD_W, height: CARD_H });
-        if (collapsedBranches.has(uri)) return;
-        for (const ch of node.children) {
-          if (nodes.has(ch)) {
-            addThreadSubtree(ch);
-            if (threadUris.has(ch)) g.setEdge(uri, ch);
-          }
-        }
       }
 
-      // Ancestors (root → … → seed parent)
+      // 1. Ancestors → seed chain
       const ancestorChain = [];
       let cur = seedUri;
       while (nodes.get(cur)?.parentId) {
@@ -458,10 +445,8 @@
           cur = pid;
         } else break;
       }
-      for (const a of ancestorChain) {
-        threadUris.add(a);
-        g.setNode(a, { width: CARD_W, height: CARD_H });
-      }
+      for (const a of ancestorChain) addToDagre(a);
+      addToDagre(seedUri);
       for (let i = 0; i < ancestorChain.length - 1; i++) {
         g.setEdge(ancestorChain[i], ancestorChain[i + 1]);
       }
@@ -469,55 +454,98 @@
         g.setEdge(ancestorChain[ancestorChain.length - 1], seedUri);
       }
 
-      // Seed + reply tree
-      addThreadSubtree(seedUri);
-
-      // Run dagre layout
-      dagre.layout(g);
-
-      // Extract positions (dagre gives center coords → convert to top-left)
-      const pos = new Map();
-      for (const uri of g.nodes()) {
-        const n = g.node(uri);
-        if (n) pos.set(uri, { x: n.x - CARD_W / 2, y: n.y - CARD_H / 2 });
+      // 2. Reply tree (respecting collapsed branches)
+      function addReplyTree(uri) {
+        if (collapsedBranches.has(uri)) return;
+        const node = nodes.get(uri);
+        if (!node) return;
+        for (const ch of node.children) {
+          if (nodes.has(ch) && !addedUris.has(ch)) {
+            addToDagre(ch);
+            g.setEdge(uri, ch);
+            addReplyTree(ch);
+          }
+        }
       }
+      addReplyTree(seedUri);
 
-      // Quoted posts (upper-left diagonal from seed)
-      const seedPos = pos.get(seedUri) || { x: 0, y: 0 };
+      // 3. Quoted chain (what seed quotes) — add as nodes with edges
       const quotedChain = [];
       let qCur = seedUri;
       while (true) {
         const edge = edges.find(e => e.type === 'quote' && e.from === qCur && nodes.get(e.to)?.type === 'quoted');
         if (!edge) break;
         quotedChain.push(edge.to);
+        addToDagre(edge.to);
+        // Reversed edge direction so dagre places quoted posts ABOVE seed
+        g.setEdge(edge.to, qCur);
         qCur = edge.to;
       }
-      for (let i = 0; i < quotedChain.length; i++) {
-        pos.set(quotedChain[i], {
-          x: seedPos.x - (i + 1) * QUOTE_X_OFF,
-          y: seedPos.y - (i + 1) * QUOTE_Y_STEP,
-        });
-      }
 
-      // Quote posts (right of the entire reply tree, sorted chronologically)
-      let replyMaxX = 0;
-      for (const p of pos.values()) {
-        if (p.x + CARD_W > replyMaxX) replyMaxX = p.x + CARD_W;
-      }
-      const qpStartX = replyMaxX + 56;
-
+      // 4. Quote posts (who quoted the seed) — add to the graph too
       const qpList = [];
       for (const edge of edges) {
-        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
+        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post') {
           qpList.push(edge.from);
+          addToDagre(edge.from);
+          // Edge FROM seed TO quote-post so dagre puts them below
+          g.setEdge(seedUri, edge.from);
+        }
       }
-      qpList.sort((a, b) => {
-        const tA = new Date(nodes.get(a)?.post?.record?.createdAt || 0);
-        const tB = new Date(nodes.get(b)?.post?.record?.createdAt || 0);
-        return tA - tB;
-      });
-      for (let i = 0; i < qpList.length; i++) {
-        pos.set(qpList[i], { x: qpStartX, y: seedPos.y + (i + 1) * (CARD_H + V_GAP) });
+
+      // Run dagre layout on the unified graph
+      dagre.layout(g);
+
+      // Extract X from dagre (compact horizontal packing), but compute Y from
+      // post timestamps so the vertical axis encodes TIME. This gives both
+      // space-efficient width and a meaningful time dimension.
+      const pos = new Map();
+
+      // Gather all timestamps to build a time scale
+      const times = [];
+      for (const uri of g.nodes()) {
+        const node = nodes.get(uri);
+        if (node) {
+          const t = new Date(node.post?.record?.createdAt || node.post?.indexedAt || 0).getTime();
+          times.push({ uri, t });
+        }
+      }
+      times.sort((a, b) => a.t - b.t);
+
+      // Map time to Y: earliest post at y=0, each subsequent post gets
+      // proportional spacing with a minimum gap of CARD_H + V_GAP/2
+      const TIME_ROW = CARD_H + V_GAP;  // minimum spacing between time slots
+      const timeToY = new Map();
+      if (times.length > 0) {
+        const t0 = times[0].t;
+        const tMax = times[times.length - 1].t;
+        const span = tMax - t0 || 1;
+        // Target height: enough rows for all nodes, proportionally distributed
+        const targetH = times.length * TIME_ROW;
+        for (const { uri, t } of times) {
+          const fraction = (t - t0) / span;
+          // Use proportional time mapping, but ensure minimum spacing
+          timeToY.set(uri, fraction * targetH);
+        }
+        // Enforce minimum gap: walk sorted nodes and push down if too close
+        let lastY = -Infinity;
+        for (const { uri } of times) {
+          let y = timeToY.get(uri);
+          if (y < lastY + TIME_ROW) y = lastY + TIME_ROW;
+          timeToY.set(uri, y);
+          lastY = y;
+        }
+      }
+
+      // Combine: X from dagre, Y from time
+      for (const uri of g.nodes()) {
+        const n = g.node(uri);
+        if (n) {
+          pos.set(uri, {
+            x: n.x - CARD_W / 2,
+            y: timeToY.get(uri) || 0,
+          });
+        }
       }
 
       // Normalize positions so everything starts at LAYOUT_PAD
