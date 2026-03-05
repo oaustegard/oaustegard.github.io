@@ -242,6 +242,17 @@
       return { posts: data.posts || [], cursor: data.cursor || null };
     }
 
+    async function fetchAllQuotePosts(atUri) {
+      const allPosts = [];
+      let cursor = null;
+      do {
+        const result = await fetchQuotePosts(atUri, 100, cursor);
+        allPosts.push(...result.posts);
+        cursor = result.cursor;
+      } while (cursor);
+      return allPosts;
+    }
+
     async function fetchSinglePost(uri) {
       const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(uri) + '&depth=0&parentHeight=0');
       if (!r.ok) return null;
@@ -466,8 +477,7 @@
 
       // ── Time-ordered Y positions ───────────────────────────────────────────
       // Collect all thread nodes (ancestors + seed + visible replies),
-      // sort chronologically, assign compact sequential Y with small bonus
-      // spacing for significant time gaps (>1h → +20px, >1d → +40px).
+      // sort chronologically, assign Y with full card-height spacing.
 
       const threadNodes = [];
       for (const a of ancestors) {
@@ -486,16 +496,16 @@
       // Sort chronologically
       threadNodes.sort((a, b) => a.t - b.t);
 
-      // Assign Y: tight initial spacing (compaction pass below resolves overlaps)
-      const BASE_Y = 12;
+      // Assign Y: compact sequential with small bonus gaps for time jumps
+      const BASE_Y = CARD_H + 4;
       const timeToY = new Map();
       let yPos = 0;
       for (let i = 0; i < threadNodes.length; i++) {
         if (i > 0) {
           const gap = threadNodes[i].t - threadNodes[i - 1].t;
           let bonus = 0;
-          if (gap > 86400000) bonus = 6;       // > 1 day
-          else if (gap > 3600000) bonus = 3;    // > 1 hour
+          if (gap > 86400000) bonus = 8;       // > 1 day
+          else if (gap > 3600000) bonus = 4;    // > 1 hour
           yPos += BASE_Y + bonus;
         }
         timeToY.set(threadNodes[i].uri, yPos);
@@ -561,24 +571,6 @@
           x: qpStartX + col * (CARD_W + H_GAP),
           y: (row + 1) * (CARD_H + V_GAP)
         });
-      }
-
-      // ── Y compaction: allow vertical overlap when X ranges don't overlap ──
-      const allPositioned = [...pos.entries()].map(([uri, p]) => ({
-        uri, x: p.x, y: p.y, time: getTime(uri)
-      })).sort((a, b) => a.time - b.time);
-      const placed = [];
-      const OVERLAP_GAP = 2;
-      for (const item of allPositioned) {
-        let minY = item.y;
-        for (const p of placed) {
-          // Only enforce vertical separation if X ranges overlap
-          if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
-            minY = Math.max(minY, p.y + CARD_H + OVERLAP_GAP);
-          }
-        }
-        pos.get(item.uri).y = minY;
-        placed.push({ x: item.x, y: minY });
       }
 
       // ── Normalize positions ────────────────────────────────────────────────
@@ -1028,29 +1020,19 @@
           const atUri = await resolveToAtUri(url);
           seedAtUri.current = atUri;
           const [downR, upR, quotesR] = await Promise.allSettled([
-            fetchThreadDown(atUri), fetchThreadUp(atUri), fetchQuotePosts(atUri, QUOTE_BATCH),
+            fetchThreadDown(atUri), fetchThreadUp(atUri), fetchAllQuotePosts(atUri),
           ]);
           const down = downR.status === 'fulfilled' ? downR.value : null;
           if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
             throw new Error('Thread not found or post is private');
           const up = upR.status === 'fulfilled' ? upR.value : null;
-          const qpResult = quotesR.status === 'fulfilled' ? quotesR.value : { posts: [], cursor: null };
-          setQuoteCursor(qpResult.cursor);
-          setGraph(buildGraph(atUri, down, up, qpResult.posts));
+          const allQuotes = quotesR.status === 'fulfilled' ? quotesR.value : [];
+          setQuoteCursor(null);
+          setGraph(buildGraph(atUri, down, up, allQuotes));
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       }
 
-      async function loadMoreQuotes() {
-        if (!quoteCursor || loadingMore || !seedAtUri.current) return;
-        setLoadingMore(true);
-        try {
-          const result = await fetchQuotePosts(seedAtUri.current, QUOTE_BATCH, quoteCursor);
-          setQuoteCursor(result.cursor);
-          if (result.posts.length > 0) setGraph(prev => prev ? addQuotePosts(prev, result.posts) : prev);
-        } catch (e) { /* user can retry */ }
-        finally { setLoadingMore(false); }
-      }
 
       useEffect(() => { const u = getUrlParam('url'); if (u) doLoad(u); }, []);
 
@@ -1113,7 +1095,10 @@
           else if (n.type === 'quoted') quoted++;
           else if (n.type === 'quote-post') qp++;
         }
-        return { ancestors, replies, quoted, qp };
+        const seed = graph.nodes.get(graph.seedUri);
+        const expectedReplies = seed?.post?.replyCount || 0;
+        const expectedQuotes = seed?.post?.quoteCount || 0;
+        return { ancestors, replies, quoted, qp, expectedReplies, expectedQuotes };
       }, [graph]);
 
       return html`
@@ -1134,14 +1119,11 @@
             </div>
             ${graph && html`
               <div class="flex items-center gap-1.5 text-xs text-gray-400 flex-shrink-0">
-                <span title="Visible / total">${visibleCount}/${nodeCount} posts</span>
+                <span title="Visible / total nodes">${visibleCount}/${nodeCount} nodes</span>
                 ${stats.ancestors > 0 && html`<span class="text-gray-300">·</span><span>${stats.ancestors} ancestor${stats.ancestors !== 1 ? 's' : ''}</span>`}
-                ${stats.replies > 0 && html`<span class="text-gray-300">·</span><span>${stats.replies} repl${stats.replies !== 1 ? 'ies' : 'y'}</span>`}
+                ${stats.replies > 0 && html`<span class="text-gray-300">·</span><span title=${stats.expectedReplies ? `Seed post reports ${stats.expectedReplies} direct replies; loaded ${stats.replies} total thread descendants` : ''}>${stats.replies} in thread</span>`}
                 ${stats.quoted > 0 && html`<span class="text-gray-300">·</span><span>${stats.quoted} quoted</span>`}
-                ${stats.qp > 0 && html`<span class="text-gray-300">·</span><span>${stats.qp} quote${stats.qp !== 1 ? 's' : ''}</span>`}
-                ${quoteCursor && html`<span class="text-gray-300">·</span><button
-                  onClick=${loadMoreQuotes} disabled=${loadingMore}
-                  class="text-sky-500 hover:text-sky-700 font-medium disabled:opacity-50">${loadingMore ? '…' : 'more quotes'}</button>`}
+                ${stats.qp > 0 && html`<span class="text-gray-300">·</span><span title=${stats.expectedQuotes ? `Seed post reports ${stats.expectedQuotes} quotes` : ''}>${stats.qp} quote post${stats.qp !== 1 ? 's' : ''}</span>`}
               </div>
               <div class="flex items-center gap-1 flex-shrink-0">
                 <button onClick=${zoomOut} class="px-1.5 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200 font-mono" title="Zoom out">−</button>
@@ -1171,8 +1153,8 @@
                     const p = layout.positions.get(uri);
                     // At very low zoom, render lightweight dots instead of full cards
                     if (zoomScale < CLUSTER_ZOOM && uri !== graph.seedUri) {
-                      const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
-                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:6px;border:1px solid #d1d5db;opacity:0.85;" />`;
+                      const colors = { seed: '#2563eb', ancestor: '#6b7280', reply: '#93c5fd', quoted: '#fb923c', 'quote-post': '#fbbf24' };
+                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#93c5fd'};border-radius:6px;border:1px solid #9ca3af;opacity:0.9;" />`;
                     }
                     return html`<${ConstellationCard}
                       key=${uri} node=${node} pos=${p}
