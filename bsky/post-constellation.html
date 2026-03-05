@@ -475,22 +475,54 @@
       }
       computeWidths(seedUri);
 
-      // ── X positions: tree branching, Y from tree depth ─────────────────────
-      // Children spread horizontally under parent, centered on parent.
-      // Y is determined by depth in the tree (each level = CARD_H + V_GAP).
-      const ROW_H = CARD_H + V_GAP;
+      // ── Time-ordered Y positions ───────────────────────────────────────────
+      // Collect all thread nodes (ancestors + seed + visible replies),
+      // sort chronologically, assign Y with full card-height spacing.
 
-      // Position ancestors above seed
-      for (let i = 0; i < ancestors.length; i++) {
-        const a = ancestors[i];
-        if (nodes.has(a)) {
-          pos.set(a, { x: 0, y: -(ancestors.length - i) * ROW_H });
+      const threadNodes = [];
+      for (const a of ancestors) {
+        if (nodes.has(a)) threadNodes.push({ uri: a, t: getTime(a) });
+      }
+      function collectReplies(uri) {
+        const node = nodes.get(uri);
+        if (!node) return;
+        threadNodes.push({ uri, t: getTime(uri) });
+        if (!collapsedBranches.has(uri)) {
+          for (const ch of (node.children || []).filter(c => nodes.has(c))) collectReplies(ch);
         }
       }
+      collectReplies(seedUri);
 
-      // Position seed + reply tree using depth-based Y
-      function assignPos(uri, x, depth) {
-        pos.set(uri, { x, y: depth * ROW_H });
+      // Sort chronologically
+      threadNodes.sort((a, b) => a.t - b.t);
+
+      // Assign Y: compact sequential with small bonus gaps for time jumps
+      const BASE_Y = CARD_H + 4;
+      const timeToY = new Map();
+      let yPos = 0;
+      for (let i = 0; i < threadNodes.length; i++) {
+        if (i > 0) {
+          const gap = threadNodes[i].t - threadNodes[i - 1].t;
+          let bonus = 0;
+          if (gap > 86400000) bonus = 8;       // > 1 day
+          else if (gap > 3600000) bonus = 4;    // > 1 hour
+          yPos += BASE_Y + bonus;
+        }
+        timeToY.set(threadNodes[i].uri, yPos);
+      }
+
+      // ── X positions: tree branching ────────────────────────────────────────
+      // Children spread horizontally under parent, centered on parent.
+      // Y comes from timeToY (chronological order).
+
+      // Position ancestors centered above seed (all at x=0)
+      for (const a of ancestors) {
+        pos.set(a, { x: 0, y: timeToY.get(a) || 0 });
+      }
+
+      // Position seed + reply tree
+      function assignX(uri, x) {
+        pos.set(uri, { x, y: timeToY.get(uri) || 0 });
         const node = nodes.get(uri);
         const ch = collapsedBranches.has(uri)
           ? []
@@ -501,11 +533,11 @@
         let sx = x + CARD_W / 2 - totalW / 2;
         for (const c of ch) {
           const cw = stw.get(c);
-          assignPos(c, sx + (cw - CARD_W) / 2, depth + 1);
+          assignX(c, sx + (cw - CARD_W) / 2);
           sx += cw + gap;
         }
       }
-      assignPos(seedUri, 0, 0);
+      assignX(seedUri, 0);
 
       // ── Quoted posts (upper-left diagonal) ─────────────────────────────────
       const quotedChain = [];
@@ -540,8 +572,6 @@
           y: (row + 1) * (CARD_H + V_GAP)
         });
       }
-
-      // No Y compaction needed — depth-based Y naturally spaces the tree
 
       // ── Normalize positions ────────────────────────────────────────────────
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
