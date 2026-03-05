@@ -27,11 +27,10 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 ## Features
 
 - **Three parallel API calls** on load: thread down (replies), thread up (ancestors), and quote posts
-- **Deterministic tree layout**: Same graph always looks the same
+- **dagre graph layout**: Uses the Sugiyama algorithm for compact, space-efficient hierarchical layout — nodes are packed tightly within each rank, minimizing edge crossings and wasted space
 - **Compact cards** with 2-line text preview; expand on click for full content and embeds
 - **SVG connection lines**: Solid blue for thread relationships, dashed orange with arrows for quotes
 - **Viewport virtualization**: Only cards and edges visible on screen (plus a 300px buffer) are rendered to the DOM, enabling smooth performance on large graphs
-- **Adaptive compaction**: When a node has many siblings, horizontal gaps shrink proportionally, keeping the tree shape while limiting spread
 - **Auto-collapse**: Nodes with more than 20 direct children start collapsed; click ▶ to expand and explore
 - **Zoom-aware rendering**: At low zoom levels (<0.35), cards are replaced with lightweight colored rectangles for fast rendering; zoom in to see full card content
 - **Branch collapse/expand**: Click the toggle on any reply node to collapse its subtree; shows descendant count so you know what's hidden
@@ -46,19 +45,19 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 
 - **Preact + HTM** for reactive UI (same stack as thread-reader.html)
 - **Tailwind CSS** via CDN for styling
+- **dagre** for compact hierarchical graph layout (Sugiyama algorithm)
 - **panzoom** (~3KB gzipped) for smooth pan/zoom with touch support
 - **Direct fetch** to Bluesky public API (no authentication required)
 
 ## Layout Algorithm
 
-The layout uses a two-pass tree algorithm:
+The layout is powered by **dagre** (Sugiyama algorithm), which handles the thread tree (ancestors + seed + replies) as a directed acyclic graph:
 
-1. **Bottom-up**: Compute subtree widths for each node in the reply tree
-2. **Top-down**: Assign x/y positions, centering children under their parent
+1. Nodes are assigned to **ranks** (depth levels) based on the thread hierarchy
+2. Within each rank, nodes are **packed tightly** to minimize edge crossings and horizontal spread
+3. The result is a compact tree that uses space efficiently — sibling subtrees share horizontal space instead of each leaf expanding to a full column
 
-When a node has many siblings, horizontal gaps between them shrink adaptively (full 28px gap for ≤4 siblings, down to 4px for very wide groups), keeping the tree shape visible while limiting horizontal spread. Nodes with more than 20 direct children start collapsed to keep the initial view navigable.
-
-Ancestors are placed in a single column above the seed. Quoted posts step diagonally to the upper-left. Quote posts are arranged vertically to the lower-right, positioned past the rightmost edge of the reply tree.
+Quoted posts (what the seed quotes) are placed diagonally upper-left of the seed. Quote posts (who quoted the seed) are arranged vertically to the right of the reply tree. Nodes with more than 20 direct children start collapsed to keep the initial view navigable.
 
 All positions are normalized so the minimum coordinate is padded from the canvas origin, ensuring no clipping.
 
