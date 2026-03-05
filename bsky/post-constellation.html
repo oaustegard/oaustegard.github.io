@@ -16,7 +16,6 @@
     }
   </script>
   <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
   <style>
     html, body { overscroll-behavior: none; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; overflow: hidden; }
@@ -185,9 +184,11 @@
 
     const CARD_W = 280;
     const CARD_H = 108;
-    const V_GAP = 24;   // vertical gap between ranks (dagre ranksep)
-    const H_GAP = 12;   // horizontal gap between siblings (dagre nodesep)
-    const LAYOUT_PAD = 60;
+    const V_GAP = 36;
+    const H_GAP = 20;
+    const QUOTE_X_OFF = CARD_W + 40;
+    const QUOTE_Y_STEP = 40;
+    const LAYOUT_PAD = 80;
     const VIRT_BUFFER = 300; // px margin around viewport for virtualization
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
     const CLUSTER_ZOOM = 0.35; // below this zoom, render dots instead of full cards
@@ -395,7 +396,6 @@
       return { nodes, edges, seedUri };
     }
 
-    // Add more quote posts to an existing graph (returns new graph object)
     function addQuotePosts(graph, quotePosts) {
       const nodes = new Map(graph.nodes);
       const edges = [...graph.edges];
@@ -408,111 +408,152 @@
       return { nodes, edges, seedUri: graph.seedUri };
     }
 
-    // ── Layout algorithm (dagre-powered) ────────────────────────────────────────
+    // ── Layout algorithm ────────────────────────────────────────────────────────
+    //
+    // Y-axis = chronological order (scroll down = later posts, like Bluesky timeline)
+    // X-axis = tree branching (children spread horizontally under parent)
+    // Compact sequential spacing with small bonus gaps for large time jumps.
 
     function computeLayout(graph, collapsedBranches) {
       const { nodes, edges, seedUri } = graph;
+      const pos = new Map();
 
-      // Put EVERYTHING into a single dagre graph — thread tree, quoted chain,
-      // and quote posts. dagre will find a compact 2D arrangement.
-      const g = new dagre.graphlib.Graph();
-      g.setGraph({
-        rankdir: 'TB',
-        nodesep: H_GAP,
-        ranksep: V_GAP,
-        marginx: 0,
-        marginy: 0,
-      });
-      g.setDefaultEdgeLabel(() => ({}));
-
-      // Track which nodes we add to dagre
-      const addedUris = new Set();
-
-      function addToDagre(uri) {
-        if (addedUris.has(uri) || !nodes.has(uri)) return;
-        addedUris.add(uri);
-        g.setNode(uri, { width: CARD_W, height: CARD_H });
+      // Helper: get post timestamp as epoch ms
+      function getTime(uri) {
+        const node = nodes.get(uri);
+        return new Date(node?.post?.record?.createdAt || node?.post?.indexedAt || 0).getTime();
       }
 
-      // 1. Ancestors → seed chain
-      const ancestorChain = [];
+      // Ancestors above seed
+      const ancestors = [];
       let cur = seedUri;
       while (nodes.get(cur)?.parentId) {
         const pid = nodes.get(cur).parentId;
         if (nodes.has(pid) && nodes.get(pid).type === 'ancestor') {
-          ancestorChain.unshift(pid);
+          ancestors.push(pid);
           cur = pid;
         } else break;
       }
-      for (const a of ancestorChain) addToDagre(a);
-      addToDagre(seedUri);
-      for (let i = 0; i < ancestorChain.length - 1; i++) {
-        g.setEdge(ancestorChain[i], ancestorChain[i + 1]);
-      }
-      if (ancestorChain.length > 0) {
-        g.setEdge(ancestorChain[ancestorChain.length - 1], seedUri);
+      ancestors.reverse(); // oldest first
+
+      // Adaptive horizontal gap: shrinks when a node has many children
+      function hGap(count) {
+        if (count <= 6) return H_GAP;
+        return Math.max(4, Math.round(H_GAP * 6 / count));
       }
 
-      // 2. Reply tree (respecting collapsed branches)
-      function addReplyTree(uri) {
-        if (collapsedBranches.has(uri)) return;
+      // Subtree widths (bottom-up) for X-axis branching
+      const stw = new Map();
+      function computeWidths(uri) {
+        const node = nodes.get(uri);
+        const ch = collapsedBranches.has(uri)
+          ? []
+          : (node?.children || []).filter(c => nodes.has(c));
+        if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
+        let total = 0;
+        for (const c of ch) total += computeWidths(c);
+        total += (ch.length - 1) * hGap(ch.length);
+        const w = Math.max(CARD_W, total);
+        stw.set(uri, w);
+        return w;
+      }
+      computeWidths(seedUri);
+
+      // ── Time-ordered Y positions ───────────────────────────────────────────
+      // Collect all thread nodes (ancestors + seed + visible replies),
+      // sort chronologically, assign compact sequential Y with small bonus
+      // spacing for significant time gaps (>1h → +20px, >1d → +40px).
+
+      const threadNodes = [];
+      for (const a of ancestors) {
+        if (nodes.has(a)) threadNodes.push({ uri: a, t: getTime(a) });
+      }
+      function collectReplies(uri) {
         const node = nodes.get(uri);
         if (!node) return;
-        for (const ch of node.children) {
-          if (nodes.has(ch) && !addedUris.has(ch)) {
-            addToDagre(ch);
-            g.setEdge(uri, ch);
-            addReplyTree(ch);
-          }
+        threadNodes.push({ uri, t: getTime(uri) });
+        if (!collapsedBranches.has(uri)) {
+          for (const ch of (node.children || []).filter(c => nodes.has(c))) collectReplies(ch);
         }
       }
-      addReplyTree(seedUri);
+      collectReplies(seedUri);
 
-      // 3. Quoted chain (what seed quotes) — add as nodes with edges
+      // Sort chronologically
+      threadNodes.sort((a, b) => a.t - b.t);
+
+      // Assign Y: compact sequential with bonus gaps for time jumps
+      const BASE_Y = CARD_H + 12; // tight spacing
+      const timeToY = new Map();
+      let yPos = 0;
+      for (let i = 0; i < threadNodes.length; i++) {
+        if (i > 0) {
+          const gap = threadNodes[i].t - threadNodes[i - 1].t;
+          let bonus = 0;
+          if (gap > 86400000) bonus = 40;      // > 1 day
+          else if (gap > 3600000) bonus = 20;   // > 1 hour
+          yPos += BASE_Y + bonus;
+        }
+        timeToY.set(threadNodes[i].uri, yPos);
+      }
+
+      // ── X positions: tree branching ────────────────────────────────────────
+      // Children spread horizontally under parent, centered on parent.
+      // Y comes from timeToY (chronological order).
+
+      // Position ancestors centered above seed (all at x=0)
+      for (const a of ancestors) {
+        pos.set(a, { x: 0, y: timeToY.get(a) || 0 });
+      }
+
+      // Position seed + reply tree
+      function assignX(uri, x) {
+        pos.set(uri, { x, y: timeToY.get(uri) || 0 });
+        const node = nodes.get(uri);
+        const ch = collapsedBranches.has(uri)
+          ? []
+          : (node?.children || []).filter(c => nodes.has(c));
+        if (ch.length === 0) return;
+        const gap = hGap(ch.length);
+        const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * gap;
+        let sx = x + CARD_W / 2 - totalW / 2;
+        for (const c of ch) {
+          const cw = stw.get(c);
+          assignX(c, sx + (cw - CARD_W) / 2);
+          sx += cw + gap;
+        }
+      }
+      assignX(seedUri, 0);
+
+      // ── Quoted posts (upper-left diagonal) ─────────────────────────────────
       const quotedChain = [];
       let qCur = seedUri;
       while (true) {
         const edge = edges.find(e => e.type === 'quote' && e.from === qCur && nodes.get(e.to)?.type === 'quoted');
         if (!edge) break;
         quotedChain.push(edge.to);
-        addToDagre(edge.to);
-        // Reversed edge direction so dagre places quoted posts ABOVE seed
-        g.setEdge(edge.to, qCur);
         qCur = edge.to;
       }
+      for (let i = 0; i < quotedChain.length; i++) {
+        pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
+      }
 
-      // 4. Quote posts (who quoted the seed) — chain them sequentially
-      //    so dagre spreads them across multiple ranks instead of one row.
-      //    Sort by time, then seed → qp1, qp1 → qp2, qp2 → qp3, etc.
+      // ── Quote posts (right column, sorted chronologically) ─────────────────
+      let replyMaxX = 0;
+      for (const p of pos.values()) {
+        if (p.x + CARD_W > replyMaxX) replyMaxX = p.x + CARD_W;
+      }
+      const qpStartX = replyMaxX + 40;
       const qpList = [];
       for (const edge of edges) {
-        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post') {
+        if (edge.type === 'quote' && edge.to === seedUri && nodes.get(edge.from)?.type === 'quote-post')
           qpList.push(edge.from);
-        }
       }
-      qpList.sort((a, b) => {
-        const tA = new Date(nodes.get(a)?.post?.record?.createdAt || 0);
-        const tB = new Date(nodes.get(b)?.post?.record?.createdAt || 0);
-        return tA - tB;
-      });
+      qpList.sort((a, b) => getTime(a) - getTime(b));
       for (let i = 0; i < qpList.length; i++) {
-        addToDagre(qpList[i]);
-        // Chain: seed → qp1 → qp2 → qp3 → ...
-        const parent = i === 0 ? seedUri : qpList[i - 1];
-        g.setEdge(parent, qpList[i]);
+        pos.set(qpList[i], { x: qpStartX, y: (i + 1) * (CARD_H + V_GAP) });
       }
 
-      // Run dagre layout on the unified graph
-      dagre.layout(g);
-
-      // Use dagre positions directly — it produces the most compact layout
-      const pos = new Map();
-      for (const uri of g.nodes()) {
-        const n = g.node(uri);
-        if (n) pos.set(uri, { x: n.x - CARD_W / 2, y: n.y - CARD_H / 2 });
-      }
-
-      // Normalize positions so everything starts at LAYOUT_PAD
+      // ── Normalize positions ────────────────────────────────────────────────
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const p of pos.values()) {
         if (p.x < minX) minX = p.x;
@@ -888,19 +929,13 @@
         });
         pzRef.current = pz;
 
-        // On transform: redraw minimap (rAF) + throttled viewRect update + zoom tracking
+        // On transform: redraw minimap (rAF) + throttled viewRect update
         let lastVR = 0;
         let lastZoom = 1;
         pz.on('transform', () => {
-          // Minimap: direct rAF draw, no state updates
           if (minimapDrawRef.current) requestAnimationFrame(minimapDrawRef.current);
-          // Track zoom scale for cluster rendering (only update on meaningful change)
           const t = pz.getTransform();
-          if (Math.abs(t.scale - lastZoom) > 0.02) {
-            lastZoom = t.scale;
-            setZoomScale(t.scale);
-          }
-          // ViewRect: throttled state update
+          if (Math.abs(t.scale - lastZoom) > 0.02) { lastZoom = t.scale; setZoomScale(t.scale); }
           const now = Date.now();
           if (now - lastVR > VIRT_THROTTLE) {
             lastVR = now;
@@ -965,10 +1000,8 @@
         try {
           const result = await fetchQuotePosts(seedAtUri.current, QUOTE_BATCH, quoteCursor);
           setQuoteCursor(result.cursor);
-          if (result.posts.length > 0) {
-            setGraph(prev => prev ? addQuotePosts(prev, result.posts) : prev);
-          }
-        } catch (e) { /* silently fail, user can retry */ }
+          if (result.posts.length > 0) setGraph(prev => prev ? addQuotePosts(prev, result.posts) : prev);
+        } catch (e) { /* user can retry */ }
         finally { setLoadingMore(false); }
       }
 
@@ -1084,45 +1117,24 @@
                   positions=${layout.positions}
                   canvasWidth=${layout.canvasWidth}
                   canvasHeight=${layout.canvasHeight} />
-                ${zoomScale < CLUSTER_ZOOM
-                  ? html`
-                    <!-- Cluster dots mode: render lightweight colored rectangles at low zoom -->
-                    ${Array.from(graph.nodes.entries())
-                      .filter(([uri]) => !visibleUris || visibleUris.has(uri))
-                      .filter(([uri]) => layout.positions.has(uri))
-                      .map(([uri, node]) => {
-                        const p = layout.positions.get(uri);
-                        const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
-                        return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:6px;border:1px solid #d1d5db;opacity:0.85;pointer-events:none;" />`;
-                      })}
-                    <!-- Seed card always rendered fully -->
-                    ${(() => {
-                      const seedNode = graph.nodes.get(graph.seedUri);
-                      const seedPos = layout.positions.get(graph.seedUri);
-                      if (!seedNode || !seedPos) return null;
-                      return html`<${ConstellationCard}
-                        key=${graph.seedUri} node=${seedNode} pos=${seedPos}
-                        expanded=${expandedCards.has(graph.seedUri)}
-                        collapsed=${collapsedBranches.has(graph.seedUri)}
-                        onToggle=${() => toggleCard(graph.seedUri)}
-                        onReseed=${reseed}
-                        onToggleCollapse=${toggleCollapse} />`;
-                    })()}`
-                  : html`
-                    ${Array.from(graph.nodes.entries())
-                      .filter(([uri]) => !visibleUris || visibleUris.has(uri))
-                      .filter(([uri]) => layout.positions.has(uri))
-                      .map(([uri, node]) => {
-                        const p = layout.positions.get(uri);
-                        return html`<${ConstellationCard}
-                          key=${uri} node=${node} pos=${p}
-                          expanded=${expandedCards.has(uri)}
-                          collapsed=${collapsedBranches.has(uri)}
-                          onToggle=${() => toggleCard(uri)}
-                          onReseed=${reseed}
-                          onToggleCollapse=${toggleCollapse} />`;
-                      })}`
-                }
+                ${Array.from(graph.nodes.entries())
+                  .filter(([uri]) => !visibleUris || visibleUris.has(uri))
+                  .filter(([uri]) => layout.positions.has(uri))
+                  .map(([uri, node]) => {
+                    const p = layout.positions.get(uri);
+                    // At very low zoom, render lightweight dots instead of full cards
+                    if (zoomScale < CLUSTER_ZOOM && uri !== graph.seedUri) {
+                      const colors = { seed: '#3b82f6', ancestor: '#9ca3af', reply: '#e5e7eb', quoted: '#fed7aa', 'quote-post': '#fde68a' };
+                      return html`<div key=${uri} style="position:absolute;left:${p.x}px;top:${p.y}px;width:${CARD_W}px;height:${CARD_H}px;background:${colors[node.type] || '#e5e7eb'};border-radius:6px;border:1px solid #d1d5db;opacity:0.85;" />`;
+                    }
+                    return html`<${ConstellationCard}
+                      key=${uri} node=${node} pos=${p}
+                      expanded=${expandedCards.has(uri)}
+                      collapsed=${collapsedBranches.has(uri)}
+                      onToggle=${() => toggleCard(uri)}
+                      onReseed=${reseed}
+                      onToggleCollapse=${toggleCollapse} />`;
+                  })}
               </div>
               <${Minimap}
                 nodes=${graph.nodes}
