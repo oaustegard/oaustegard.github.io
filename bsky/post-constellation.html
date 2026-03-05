@@ -16,6 +16,7 @@
     }
   </script>
   <script src="https://cdn.jsdelivr.net/npm/panzoom@9.4.3/dist/panzoom.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@dagrejs/dagre@1.1.4/dist/dagre.min.js"></script>
   <style>
     html, body { overscroll-behavior: none; }
     body { font-family: system-ui, -apple-system, sans-serif; margin: 0; overflow: hidden; }
@@ -184,11 +185,11 @@
 
     const CARD_W = 280;
     const CARD_H = 108;
-    const V_GAP = 48;
-    const H_GAP = 28;
+    const V_GAP = 40;   // vertical gap between ranks (dagre ranksep)
+    const H_GAP = 16;   // horizontal gap between siblings (dagre nodesep)
     const QUOTE_X_OFF = CARD_W + 56;
     const QUOTE_Y_STEP = 48;
-    const LAYOUT_PAD = 100;
+    const LAYOUT_PAD = 60;
     const VIRT_BUFFER = 300; // px margin around viewport for virtualization
     const VIRT_THROTTLE = 80; // ms between viewRect updates during pan/zoom
     const CLUSTER_ZOOM = 0.35; // below this zoom, render dots instead of full cards
@@ -410,74 +411,79 @@
       return { nodes, edges, seedUri: graph.seedUri };
     }
 
-    // ── Layout algorithm ────────────────────────────────────────────────────────
+    // ── Layout algorithm (dagre-powered) ────────────────────────────────────────
 
     function computeLayout(graph, collapsedBranches) {
       const { nodes, edges, seedUri } = graph;
-      const pos = new Map();
 
-      pos.set(seedUri, { x: 0, y: 0 });
+      // Build a dagre graph for the thread portion (ancestors + seed + replies).
+      // Quoted posts and quote-posts get manual positioning to preserve spatial
+      // semantics (upper-left = what you quoted, right = who quoted you).
+      const g = new dagre.graphlib.Graph();
+      g.setGraph({
+        rankdir: 'TB',
+        nodesep: H_GAP,
+        ranksep: V_GAP,
+        marginx: 0,
+        marginy: 0,
+      });
+      g.setDefaultEdgeLabel(() => ({}));
 
-      // Ancestors above seed
-      const ancestors = [];
+      // Walk ancestors → seed → reply tree, adding nodes & edges to dagre.
+      // Respect collapsed branches: stop recursing into collapsed subtrees.
+      const threadUris = new Set();
+
+      function addThreadSubtree(uri) {
+        if (threadUris.has(uri) || !nodes.has(uri)) return;
+        const node = nodes.get(uri);
+        if (node.type === 'quoted' || node.type === 'quote-post') return;
+        threadUris.add(uri);
+        g.setNode(uri, { width: CARD_W, height: CARD_H });
+        if (collapsedBranches.has(uri)) return;
+        for (const ch of node.children) {
+          if (nodes.has(ch)) {
+            addThreadSubtree(ch);
+            if (threadUris.has(ch)) g.setEdge(uri, ch);
+          }
+        }
+      }
+
+      // Ancestors (root → … → seed parent)
+      const ancestorChain = [];
       let cur = seedUri;
       while (nodes.get(cur)?.parentId) {
         const pid = nodes.get(cur).parentId;
         if (nodes.has(pid) && nodes.get(pid).type === 'ancestor') {
-          ancestors.push(pid);
+          ancestorChain.unshift(pid);
           cur = pid;
         } else break;
       }
-      ancestors.reverse();
-      for (let i = 0; i < ancestors.length; i++) {
-        pos.set(ancestors[i], { x: 0, y: -(ancestors.length - i) * (CARD_H + V_GAP) });
+      for (const a of ancestorChain) {
+        threadUris.add(a);
+        g.setNode(a, { width: CARD_W, height: CARD_H });
+      }
+      for (let i = 0; i < ancestorChain.length - 1; i++) {
+        g.setEdge(ancestorChain[i], ancestorChain[i + 1]);
+      }
+      if (ancestorChain.length > 0) {
+        g.setEdge(ancestorChain[ancestorChain.length - 1], seedUri);
       }
 
-      // Subtree widths (bottom-up), respecting collapsed branches
-      // Uses adaptive gap: when a node has many children, the gap between
-      // siblings shrinks so the tree stays compact while retaining its shape.
-      const stw = new Map();
-      function siblingGap(count) {
-        // Smooth reduction: full gap for ≤4, down to 4px for very wide nodes
-        if (count <= 4) return H_GAP;
-        return Math.max(4, Math.round(H_GAP * 4 / count));
-      }
-      function computeWidths(uri) {
-        const node = nodes.get(uri);
-        const ch = collapsedBranches.has(uri)
-          ? []
-          : (node?.children || []).filter(c => nodes.has(c));
-        if (ch.length === 0) { stw.set(uri, CARD_W); return CARD_W; }
-        let total = 0;
-        for (const c of ch) total += computeWidths(c);
-        total += (ch.length - 1) * siblingGap(ch.length);
-        const w = Math.max(CARD_W, total);
-        stw.set(uri, w);
-        return w;
-      }
-      computeWidths(seedUri);
+      // Seed + reply tree
+      addThreadSubtree(seedUri);
 
-      // Assign reply positions (top-down), respecting collapsed branches
-      function assignPos(uri, x, y) {
-        pos.set(uri, { x, y });
-        const node = nodes.get(uri);
-        const ch = collapsedBranches.has(uri)
-          ? []
-          : (node?.children || []).filter(c => nodes.has(c));
-        if (ch.length === 0) return;
-        const gap = siblingGap(ch.length);
-        const totalW = ch.reduce((s, c) => s + stw.get(c), 0) + (ch.length - 1) * gap;
-        let sx = x + CARD_W / 2 - totalW / 2;
-        const cy = y + CARD_H + V_GAP;
-        for (const c of ch) {
-          const cw = stw.get(c);
-          assignPos(c, sx + (cw - CARD_W) / 2, cy);
-          sx += cw + gap;
-        }
-      }
-      assignPos(seedUri, 0, 0);
+      // Run dagre layout
+      dagre.layout(g);
 
-      // Quoted posts (upper-left diagonal)
+      // Extract positions (dagre gives center coords → convert to top-left)
+      const pos = new Map();
+      for (const uri of g.nodes()) {
+        const n = g.node(uri);
+        if (n) pos.set(uri, { x: n.x - CARD_W / 2, y: n.y - CARD_H / 2 });
+      }
+
+      // Quoted posts (upper-left diagonal from seed)
+      const seedPos = pos.get(seedUri) || { x: 0, y: 0 };
       const quotedChain = [];
       let qCur = seedUri;
       while (true) {
@@ -487,16 +493,18 @@
         qCur = edge.to;
       }
       for (let i = 0; i < quotedChain.length; i++) {
-        pos.set(quotedChain[i], { x: -(i + 1) * QUOTE_X_OFF, y: -(i + 1) * QUOTE_Y_STEP });
+        pos.set(quotedChain[i], {
+          x: seedPos.x - (i + 1) * QUOTE_X_OFF,
+          y: seedPos.y - (i + 1) * QUOTE_Y_STEP,
+        });
       }
 
-      // Quote posts (lower-right of the entire reply tree, sorted chronologically)
-      // Find the rightmost edge of all positioned nodes so quotes don't overlap replies
+      // Quote posts (right of the entire reply tree, sorted chronologically)
       let replyMaxX = 0;
       for (const p of pos.values()) {
         if (p.x + CARD_W > replyMaxX) replyMaxX = p.x + CARD_W;
       }
-      const qpStartX = replyMaxX + 56; // gap between reply tree and quote column
+      const qpStartX = replyMaxX + 56;
 
       const qpList = [];
       for (const edge of edges) {
@@ -509,10 +517,10 @@
         return tA - tB;
       });
       for (let i = 0; i < qpList.length; i++) {
-        pos.set(qpList[i], { x: qpStartX, y: (i + 1) * (CARD_H + V_GAP) });
+        pos.set(qpList[i], { x: qpStartX, y: seedPos.y + (i + 1) * (CARD_H + V_GAP) });
       }
 
-      // Normalize positions
+      // Normalize positions so everything starts at LAYOUT_PAD
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
       for (const p of pos.values()) {
         if (p.x < minX) minX = p.x;
