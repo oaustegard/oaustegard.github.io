@@ -486,16 +486,16 @@
       // Sort chronologically
       threadNodes.sort((a, b) => a.t - b.t);
 
-      // Assign Y: compact sequential with small bonus gaps for time jumps
-      const BASE_Y = CARD_H + 4;
+      // Assign Y: tight initial spacing (compaction pass below resolves overlaps)
+      const BASE_Y = 12;
       const timeToY = new Map();
       let yPos = 0;
       for (let i = 0; i < threadNodes.length; i++) {
         if (i > 0) {
           const gap = threadNodes[i].t - threadNodes[i - 1].t;
           let bonus = 0;
-          if (gap > 86400000) bonus = 8;       // > 1 day
-          else if (gap > 3600000) bonus = 4;    // > 1 hour
+          if (gap > 86400000) bonus = 6;       // > 1 day
+          else if (gap > 3600000) bonus = 3;    // > 1 hour
           yPos += BASE_Y + bonus;
         }
         timeToY.set(threadNodes[i].uri, yPos);
@@ -561,6 +561,24 @@
           x: qpStartX + col * (CARD_W + H_GAP),
           y: (row + 1) * (CARD_H + V_GAP)
         });
+      }
+
+      // ── Y compaction: allow vertical overlap when X ranges don't overlap ──
+      const allPositioned = [...pos.entries()].map(([uri, p]) => ({
+        uri, x: p.x, y: p.y, time: getTime(uri)
+      })).sort((a, b) => a.time - b.time);
+      const placed = [];
+      const OVERLAP_GAP = 2;
+      for (const item of allPositioned) {
+        let minY = item.y;
+        for (const p of placed) {
+          // Only enforce vertical separation if X ranges overlap
+          if (item.x < p.x + CARD_W && p.x < item.x + CARD_W) {
+            minY = Math.max(minY, p.y + CARD_H + OVERLAP_GAP);
+          }
+        }
+        pos.get(item.uri).y = minY;
+        placed.push({ x: item.x, y: minY });
       }
 
       // ── Normalize positions ────────────────────────────────────────────────
