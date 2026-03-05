@@ -193,7 +193,7 @@
 
     // ── Build graph data for D3 ──────────────────────────────────────────────────
 
-    async function buildGraphData(seedUri, threadDown, threadUp, quoteWebResult) {
+    async function buildGraphData(seedUri, threadDown, threadUp) {
       const nodesMap = new Map();
       const links = [];
 
@@ -244,14 +244,24 @@
         links.push({ source: fullStack[i - 1].uri, target: fullStack[i].uri, type: 'quote' });
       }
 
-      // Quote web (who quoted the seed, and who quoted those, etc.)
-      if (quoteWebResult?.allQuotePosts?.length) {
-        for (const qp of quoteWebResult.allQuotePosts) {
-          const quotedUri = qp._quotedUri || seedUri;
-          if (qp.uri !== seedUri) {
-            addNode(qp.uri, qp, 'quote-post');
-            // Only add the quote link if it doesn't already exist
-            if (!links.some(l => l.source === qp.uri && l.target === quotedUri)) {
+      // Collect all URIs with quoteCount > 0 to seed the quote web
+      const quoteWebSeeds = [];
+      for (const node of nodesMap.values()) {
+        if ((node.post.quoteCount || 0) > 0) {
+          quoteWebSeeds.push(node.id);
+        }
+      }
+
+      // Fetch the full quote web (quotes of quotes, up to 3 hops deep)
+      if (quoteWebSeeds.length) {
+        const quoteWebResult = await fetchQuoteWeb(quoteWebSeeds, { maxDepth: 3, maxTotal: 500 });
+        if (quoteWebResult?.allQuotePosts?.length) {
+          for (const qp of quoteWebResult.allQuotePosts) {
+            const quotedUri = qp._quotedUri;
+            if (!nodesMap.has(qp.uri)) {
+              addNode(qp.uri, qp, 'quote-post');
+            }
+            if (quotedUri && !links.some(l => l.source === qp.uri && l.target === quotedUri)) {
               links.push({ source: qp.uri, target: quotedUri, type: 'quote' });
             }
           }
@@ -885,9 +895,7 @@
         if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
-        // Fetch the full quote web (quotes of quotes, up to 3 hops deep)
-        const quoteWeb = await fetchQuoteWeb(atUri, { maxDepth: 3, maxTotal: 500 });
-        const rawData = await buildGraphData(atUri, down, up, quoteWeb);
+        const rawData = await buildGraphData(atUri, down, up);
         lastRawData = rawData;
         const result = pruneGraph(rawData, maxNodes);
         prunedInfo = { pruned: result.pruned, totalCount: result.totalCount };

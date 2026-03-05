@@ -70,26 +70,29 @@ export async function fetchAllQuotePosts(atUri) {
 }
 
 /**
- * Recursively explore the "quote web" — BFS outward from the seed,
- * fetching who quoted each post.  Returns a Map<uri, post[]> where
- * each key is a quoted URI and the value is the array of posts that
- * quote it.
+ * Recursively explore the "quote web" — BFS outward from one or more
+ * seed URIs, fetching who quoted each post.  Returns a Map<uri, post[]>
+ * where each key is a quoted URI and the value is the array of posts
+ * that quote it.
  *
- * @param {string} seedUri       - Starting AT URI
+ * @param {string|string[]} seedUris   - Starting AT URI(s)
  * @param {Object} [opts]
- * @param {number} [opts.maxDepth=3]    - How many hops from the seed to explore
+ * @param {number} [opts.maxDepth=3]    - How many hops from the seeds to explore
  * @param {number} [opts.maxTotal=500]  - Stop after collecting this many quote-posts total
  * @param {Function} [opts.onProgress]  - Called with { depth, queued, fetched } on each level
  * @returns {Promise<{ quoteMap: Map, allQuotePosts: Object[] }>}
  */
-export async function fetchQuoteWeb(seedUri, opts = {}) {
+export async function fetchQuoteWeb(seedUris, opts = {}) {
   const { maxDepth = 3, maxTotal = 500, onProgress } = opts;
   const quoteMap = new Map();   // parentUri -> [quotePosts]
   const allPosts = [];          // flat array of all discovered quote posts
   const seen = new Set();       // URIs already queued/fetched
-  seen.add(seedUri);
 
-  let frontier = [seedUri];
+  // Accept single URI or array
+  const seeds = Array.isArray(seedUris) ? seedUris : [seedUris];
+  for (const s of seeds) seen.add(s);
+
+  let frontier = [...seeds];
 
   for (let depth = 0; depth < maxDepth && frontier.length > 0 && allPosts.length < maxTotal; depth++) {
     if (onProgress) onProgress({ depth, queued: frontier.length, fetched: allPosts.length });
