@@ -183,6 +183,7 @@
     import { render } from 'preact';
     import { useState, useEffect, useRef, useMemo, useCallback } from 'preact/hooks';
     import { html } from 'htm/preact';
+    import { fetchQuoteWeb } from './bsky-graph.js';
 
     // ── Constants ───────────────────────────────────────────────────────────────
 
@@ -341,7 +342,7 @@
       return { id: uri, post, type, parentId: null, children: [], subtreeWidth: CARD_W, descendantCount: 0 };
     }
 
-    function buildGraph(seedUri, threadDown, threadUp, quotePostsData) {
+    function buildGraph(seedUri, threadDown, threadUp, quoteWebPosts) {
       const nodes = new Map();
       const edges = [];
 
@@ -399,12 +400,15 @@
         edges.push({ from: stack[i - 1].uri, to: quoted.uri, type: 'quote' });
       }
 
-      // 5. Quote posts (who quoted the seed)
-      if (quotePostsData?.length) {
-        for (const qp of quotePostsData) {
-          if (!nodes.has(qp.uri) && qp.uri !== seedUri) {
+      // 5. Quote web posts (who quoted any post in the constellation)
+      if (quoteWebPosts?.length) {
+        for (const qp of quoteWebPosts) {
+          const quotedUri = qp._quotedUri;
+          if (!nodes.has(qp.uri)) {
             nodes.set(qp.uri, makeNode(qp.uri, qp, 'quote-post'));
-            edges.push({ from: qp.uri, to: seedUri, type: 'quote' });
+          }
+          if (quotedUri && !edges.some(e => e.from === qp.uri && e.to === quotedUri)) {
+            edges.push({ from: qp.uri, to: quotedUri, type: 'quote' });
           }
         }
       }
@@ -1019,16 +1023,31 @@
         try {
           const atUri = await resolveToAtUri(url);
           seedAtUri.current = atUri;
-          const [downR, upR, quotesR] = await Promise.allSettled([
-            fetchThreadDown(atUri), fetchThreadUp(atUri), fetchAllQuotePosts(atUri),
+          const [downR, upR] = await Promise.allSettled([
+            fetchThreadDown(atUri), fetchThreadUp(atUri),
           ]);
           const down = downR.status === 'fulfilled' ? downR.value : null;
           if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
             throw new Error('Thread not found or post is private');
           const up = upR.status === 'fulfilled' ? upR.value : null;
-          const allQuotes = quotesR.status === 'fulfilled' ? quotesR.value : [];
+
+          // Build initial graph to discover all posts with quoteCount > 0
+          const initialGraph = buildGraph(atUri, down, up, []);
+
+          // Collect all URIs with quoteCount > 0 for quote web exploration
+          const quoteWebSeeds = [];
+          for (const node of initialGraph.nodes.values()) {
+            if ((node.post.quoteCount || 0) > 0) quoteWebSeeds.push(node.id);
+          }
+
+          let quoteWebPosts = [];
+          if (quoteWebSeeds.length) {
+            const result = await fetchQuoteWeb(quoteWebSeeds);
+            quoteWebPosts = result.allQuotePosts;
+          }
+
           setQuoteCursor(null);
-          setGraph(buildGraph(atUri, down, up, allQuotes));
+          setGraph(buildGraph(atUri, down, up, quoteWebPosts));
         } catch (e) { setError(e.message); }
         finally { setLoading(false); }
       }
