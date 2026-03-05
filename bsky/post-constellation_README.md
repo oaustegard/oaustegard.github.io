@@ -27,11 +27,10 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 ## Features
 
 - **Three parallel API calls** on load: thread down (replies), thread up (ancestors), and quote posts
-- **dagre graph layout**: Uses the Sugiyama algorithm for compact, space-efficient hierarchical layout — nodes are packed tightly within each rank, minimizing edge crossings and wasted space
+- **Time-ordered layout**: Y-axis follows chronological order (scroll down = later posts, like Bluesky's timeline), X-axis shows tree branching structure with children spread horizontally under their parent
 - **Compact cards** with 2-line text preview; expand on click for full content and embeds
 - **SVG connection lines**: Solid blue for thread relationships, dashed orange with arrows for quotes
 - **Viewport virtualization**: Only cards and edges visible on screen (plus a 300px buffer) are rendered to the DOM, enabling smooth performance on large graphs
-- **Auto-collapse**: Nodes with more than 20 direct children start collapsed; click ▶ to expand and explore
 - **Zoom-aware rendering**: At low zoom levels (<0.35), cards are replaced with lightweight colored rectangles for fast rendering; zoom in to see full card content
 - **Branch collapse/expand**: Click the toggle on any reply node to collapse its subtree; shows descendant count so you know what's hidden
 - **Quote pagination**: Initial load fetches 25 quote posts; click "more quotes" in the toolbar to load additional batches
@@ -45,19 +44,17 @@ Each post is rendered as a card with avatar, author info, text preview, and enga
 
 - **Preact + HTM** for reactive UI (same stack as thread-reader.html)
 - **Tailwind CSS** via CDN for styling
-- **dagre** for compact hierarchical graph layout (Sugiyama algorithm)
 - **panzoom** (~3KB gzipped) for smooth pan/zoom with touch support
 - **Direct fetch** to Bluesky public API (no authentication required)
 
 ## Layout Algorithm
 
-The layout is powered by **dagre** (Sugiyama algorithm), which handles the thread tree (ancestors + seed + replies) as a directed acyclic graph:
+The layout uses a custom two-axis approach:
 
-1. Nodes are assigned to **ranks** (depth levels) based on the thread hierarchy
-2. Within each rank, nodes are **packed tightly** to minimize edge crossings and horizontal spread
-3. The result is a compact tree that uses space efficiently — sibling subtrees share horizontal space instead of each leaf expanding to a full column
-
-Quoted posts (what the seed quotes) are placed diagonally upper-left of the seed. Quote posts (who quoted the seed) are arranged vertically to the right of the reply tree. Nodes with more than 20 direct children start collapsed to keep the initial view navigable.
+1. **Y-axis = time**: All thread nodes (ancestors + seed + replies) are sorted chronologically and assigned compact sequential Y positions. Small bonus gaps are added for significant time jumps (>1 hour: +20px, >1 day: +40px) to hint at the passage of time without wasting space.
+2. **X-axis = tree branching**: Subtree widths are computed bottom-up, then children are spread horizontally under their parent. An adaptive gap function shrinks horizontal spacing when a node has many children, keeping wide-and-shallow trees compact.
+3. **Quoted posts** (what the seed quotes) are placed diagonally upper-left of the seed.
+4. **Quote posts** (who quoted the seed) are arranged in a column to the right of the reply tree, sorted chronologically.
 
 All positions are normalized so the minimum coordinate is padded from the canvas origin, ensuring no clipping.
 
@@ -72,7 +69,6 @@ All positions are normalized so the minimum coordinate is padded from the canvas
 
 ## Future Enhancements
 
-- Proportional time mode (vertical position maps to real time)
 - Expand sub-graphs for quote posts (load their own threads)
 - Load-more for truncated thread branches
 - Keyboard navigation
