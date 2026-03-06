@@ -918,26 +918,40 @@
       });
       resizeObserver.observe(viewport);
 
-      // Initial positions
+      // Initial positions — spread nodes in arcs by type, scaled by count
       const seedNode = data.nodes.find(n => n.id === data.seedUri);
       if (seedNode) { seedNode.fx = 0; seedNode.fy = 0; }
 
+      // Group non-seed nodes by type for even arc distribution
+      const groups = {};
       for (const node of data.nodes) {
-        if (node.type === 'ancestor') {
-          node.x = (Math.random() - 0.5) * 100;
-          node.y = -200 - Math.random() * 300;
-        } else if (node.type === 'reply') {
-          node.x = (Math.random() - 0.5) * 400;
-          node.y = 200 + Math.random() * 400;
-        } else if (node.type === 'quoted') {
-          node.x = -300 - Math.random() * 200;
-          node.y = (Math.random() - 0.5) * 200;
-        } else if (node.type === 'quote-post') {
-          node.x = 300 + Math.random() * 200;
-          node.y = (Math.random() - 0.5) * 400;
-        } else if (node.type === 'seed') {
-          node.x = 0; node.y = 0;
-        }
+        if (node.type === 'seed') { node.x = 0; node.y = 0; continue; }
+        (groups[node.type] = groups[node.type] || []).push(node);
+      }
+
+      const totalNonSeed = data.nodes.length - (seedNode ? 1 : 0);
+      const spread = Math.max(1, Math.sqrt(totalNonSeed)) * 80;
+
+      // Each type gets an angular sector radiating from center
+      const typeAngles = {
+        'ancestor':   { center: -Math.PI / 2, arc: Math.PI / 3 },   // top
+        'reply':      { center:  Math.PI / 2, arc: Math.PI / 2 },   // bottom
+        'quoted':     { center:  Math.PI,     arc: Math.PI / 3 },   // left
+        'quote-post': { center:  0,           arc: Math.PI / 3 },   // right
+      };
+
+      for (const [type, nodes] of Object.entries(groups)) {
+        const cfg = typeAngles[type] || { center: Math.random() * Math.PI * 2, arc: Math.PI / 3 };
+        const count = nodes.length;
+        const baseRadius = spread * 0.6;
+        nodes.forEach((node, i) => {
+          // Spread evenly across the arc; add slight randomness to avoid perfect overlap
+          const angle = cfg.center + (count > 1 ? (i / (count - 1) - 0.5) * cfg.arc : 0)
+                        + (Math.random() - 0.5) * 0.15;
+          const radius = baseRadius + (i % 3) * spread * 0.25 + Math.random() * spread * 0.15;
+          node.x = Math.cos(angle) * radius;
+          node.y = Math.sin(angle) * radius;
+        });
       }
 
       const nodeCount = data.nodes.length;
@@ -971,7 +985,13 @@
         )
         .force('center', d3.forceCenter(0, 0).strength(0.03))
         .alphaDecay(isVeryLarge ? 0.04 : 0.02)
-        .velocityDecay(0.4);
+        .velocityDecay(0.4)
+        .stop(); // stop auto-start so we can warm up first
+
+      // Warm up: run simulation silently to pre-settle the layout
+      const warmupTicks = isVeryLarge ? 60 : (isLarge ? 40 : 25);
+      for (let i = 0; i < warmupTicks; i++) sim.tick();
+      sim.restart();
 
       currentSim = sim;
 
