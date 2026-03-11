@@ -753,6 +753,94 @@
             return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
         }
 
+        // Extract tool name from label like "Tool: create_file" or "Tool Use: bash_tool"
+        function extractToolName(label) {
+            const m = label.match(/(?:Tool(?:\s*Use)?:\s*)(\S+)/i);
+            return m ? m[1] : label;
+        }
+
+        // Infer language from file extension for syntax context
+        function langFromPath(path) {
+            if (!path) return '';
+            const ext = path.split('.').pop().toLowerCase();
+            const map = { py: 'python', js: 'javascript', ts: 'typescript', jsx: 'jsx', tsx: 'tsx', html: 'html', css: 'css', json: 'json', md: 'markdown', sh: 'bash', yml: 'yaml', yaml: 'yaml', sql: 'sql', rs: 'rust', go: 'go', rb: 'ruby', xml: 'xml', toml: 'toml' };
+            return map[ext] || ext;
+        }
+
+        // Try to parse JSON from tool input; return null on failure
+        function tryParseToolInput(input) {
+            try { return JSON.parse(input); } catch { return null; }
+        }
+
+        // Smart tool rendering: format create_file, str_replace, bash_tool, view nicely
+        function renderToolInner(p) {
+            const toolName = extractToolName(p.label);
+            const parsed = tryParseToolInput(p.input);
+
+            // --- create_file ---
+            if (toolName === 'create_file' && parsed && parsed.file_text != null) {
+                const filePath = parsed.path || parsed.file_path || 'unknown';
+                const desc = parsed.description || p.message || '';
+                const lang = langFromPath(filePath);
+                let inner = '';
+                if (desc) inner += `<div class="tool-msg">${escHtml(desc)}</div>`;
+                inner += `<div class="tool-section"><div class="tool-file-header">${escHtml(filePath)}</div><pre><code class="${escHtml(lang)}">${escHtml(parsed.file_text)}</code></pre></div>`;
+                if (p.result) inner += `<div class="tool-section tool-result-compact">${escHtml(p.result)}</div>`;
+                return inner;
+            }
+
+            // --- str_replace ---
+            if (toolName === 'str_replace' && parsed && (parsed.old_str != null || parsed.new_str != null)) {
+                const filePath = parsed.path || parsed.file_path || 'unknown';
+                const desc = parsed.description || p.message || '';
+                let inner = '';
+                if (desc) inner += `<div class="tool-msg">${escHtml(desc)}</div>`;
+                inner += `<div class="tool-section"><div class="tool-file-header">${escHtml(filePath)}</div>`;
+                if (parsed.old_str) {
+                    inner += `<div class="tool-lbl">Remove</div><pre class="diff-remove"><code>${escHtml(parsed.old_str)}</code></pre>`;
+                }
+                if (parsed.new_str) {
+                    inner += `<div class="tool-lbl">Replace with</div><pre class="diff-add"><code>${escHtml(parsed.new_str)}</code></pre>`;
+                }
+                inner += `</div>`;
+                if (p.result) inner += `<div class="tool-section tool-result-compact">${escHtml(p.result)}</div>`;
+                return inner;
+            }
+
+            // --- bash_tool ---
+            if (toolName === 'bash_tool' && parsed && parsed.command != null) {
+                const desc = parsed.description || p.message || '';
+                let inner = '';
+                if (desc) inner += `<div class="tool-msg">${escHtml(desc)}</div>`;
+                inner += `<div class="tool-section"><pre class="bash-cmd"><code>${escHtml(parsed.command)}</code></pre></div>`;
+                if (p.result) {
+                    const errClass = p.isError ? ' tool-error' : '';
+                    inner += `<div class="tool-section"><div class="tool-lbl">Output</div><pre class="bash-output${errClass}"><code>${escHtml(p.result)}</code></pre></div>`;
+                }
+                return inner;
+            }
+
+            // --- view ---
+            if (toolName === 'view' && parsed && parsed.path) {
+                const desc = parsed.description || p.message || '';
+                let inner = '';
+                if (desc) inner += `<div class="tool-msg">${escHtml(desc)}</div>`;
+                inner += `<div class="tool-section"><div class="tool-file-header">${escHtml(parsed.path)}</div></div>`;
+                if (p.result) {
+                    const lang = langFromPath(parsed.path);
+                    inner += `<div class="tool-section"><pre><code class="${escHtml(lang)}">${escHtml(p.result)}</code></pre></div>`;
+                }
+                return inner;
+            }
+
+            // --- Default fallback ---
+            let inner = '';
+            if (p.message) inner += `<div class="tool-msg">${escHtml(p.message)}</div>`;
+            if (p.input) inner += `<div class="tool-section"><div class="tool-lbl">Input</div><pre><code>${escHtml(p.input)}</code></pre></div>`;
+            if (p.result) inner += `<div class="tool-section"><div class="tool-lbl">Result${p.isError ? ' (error)' : ''}</div><pre class="${p.isError ? 'tool-error' : ''}"><code>${escHtml(p.result)}</code></pre></div>`;
+            return inner;
+        }
+
         function claudeIcon() {
             return '<svg viewBox="0 0 24 24" width="24" height="24" fill="none"><path d="M16.604 2.698a1.25 1.25 0 0 0-2.092-.258L3.146 17.14a1.25 1.25 0 0 0 .99 2.022h5.39l-1.13 2.14a1.25 1.25 0 0 0 2.092.258L21.854 6.86a1.25 1.25 0 0 0-.99-2.022h-5.39l1.13-2.14Z" fill="#D97706"/></svg>';
         }
@@ -831,10 +919,7 @@
                             </div>`;
 
                     } else if (p.type === 'tool') {
-                        let inner = '';
-                        if (p.message) inner += `<div class="tool-msg">${escHtml(p.message)}</div>`;
-                        if (p.input) inner += `<div class="tool-section"><div class="tool-lbl">Input</div><pre><code>${escHtml(p.input)}</code></pre></div>`;
-                        if (p.result) inner += `<div class="tool-section"><div class="tool-lbl">Result${p.isError ? ' (error)' : ''}</div><pre class="${p.isError ? 'tool-error' : ''}"><code>${escHtml(p.result)}</code></pre></div>`;
+                        let inner = renderToolInner(p);
 
                         bodyHtml += `
                             <div class="msg assistant">
@@ -1004,6 +1089,42 @@ details[open] > summary::before { transform: rotate(90deg); }
 .tool-error { border-left: 3px solid #dc2626; }
 .thinking-pre { max-height: 400px; overflow-y: auto; }
 .thinking-pre code { color: #c4b5a0; }
+
+.tool-file-header {
+    font-family: 'Söhne Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 13px; font-weight: 600;
+    padding: 8px 14px; background: #3a3a3a; color: #b0aaaa;
+    border-radius: 8px 8px 0 0; margin-bottom: -1px;
+}
+.tool-file-header + pre { border-radius: 0 0 8px 8px; }
+.diff-remove {
+    background: #3b1a1a; color: #f5c6c6;
+    margin: 0; padding: 12px 14px; border-radius: 0;
+    font-size: 13px; overflow-x: auto; border-left: 3px solid #dc2626;
+}
+.diff-remove code { white-space: pre-wrap; word-break: break-word; color: inherit; background: none; padding: 0; }
+.diff-add {
+    background: #1a2e1a; color: #c6f5c6;
+    margin: 0; padding: 12px 14px; border-radius: 0 0 8px 8px;
+    font-size: 13px; overflow-x: auto; border-left: 3px solid #16a34a;
+}
+.diff-add code { white-space: pre-wrap; word-break: break-word; color: inherit; background: none; padding: 0; }
+.bash-cmd {
+    background: #1a1a2e; color: #a5d6ff;
+    margin: 0; padding: 12px 14px; border-radius: 8px;
+    font-size: 13px; overflow-x: auto;
+}
+.bash-cmd code { white-space: pre-wrap; word-break: break-word; color: inherit; background: none; padding: 0; }
+.bash-output {
+    background: #2b2b2b; color: #d4d4d4;
+    margin: 0; padding: 12px 14px; border-radius: 8px;
+    font-size: 13px; overflow-x: auto; max-height: 300px; overflow-y: auto;
+}
+.bash-output code { white-space: pre-wrap; word-break: break-word; color: inherit; background: none; padding: 0; }
+.tool-result-compact {
+    font-size: 13px; color: #888; padding: 6px 14px;
+    font-style: italic;
+}
 
 @media print {
     .header { position: static; }
