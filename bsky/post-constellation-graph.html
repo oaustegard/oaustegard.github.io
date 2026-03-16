@@ -268,6 +268,8 @@
     const EXPLORE_DWELL = 600;      // ms before auto-exploring a nearby node
     const EXPLORE_CHECK_MS = 400;   // ms between exploration checks
     const DISCOVER_FADE_MS = 1200;  // how long "just-discovered" class stays
+    const EXPLORE_COOLDOWN_MS = 1200; // min ms between successive explorations
+    const INITIAL_ZOOM_SCALE = 0.7;   // start zoomed in on seed
 
     // ── Fog-of-war state ──────────────────────────────────────────────────────────
     const exploredSet = new Set();    // URIs whose quotes we've fetched
@@ -275,6 +277,8 @@
     const newNodeSet = new Set();     // recently discovered (for fade-in)
     const dwellTimers = new Map();    // uri -> setTimeout id
     let torchEnabled = getUrlParam('torch') !== '0';
+    let explorePaused = false;         // user can pause exploration
+    let lastExploreTime = 0;           // timestamp of last exploration start
 
     // ── Build initial graph data (thread only, no quote web) ──────────────────────
 
@@ -427,6 +431,7 @@
         const explorable = countExplorableNodes();
         if (explorable > 0) parts.push(`<span style="color:#d97706">${explorable} unexplored</span>`);
         if (exploringSet.size > 0) parts.push(`<span style="color:#3b82f6" class="animate-pulse">exploring...</span>`);
+        if (explorePaused) parts.push(`<span style="color:#ef4444">paused</span>`);
         statsHtml = `<span class="text-xs text-gray-400">${parts.join(' &middot; ')}</span>`;
       }
 
@@ -446,6 +451,9 @@
             ${statsHtml}
             ${hasGraph ? `
               <div class="flex items-center gap-1 flex-shrink-0">
+                <button id="btn-pause" class="px-2 py-0.5 text-xs ${explorePaused ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'} rounded hover:bg-gray-200" title="${explorePaused ? 'Resume exploration' : 'Pause exploration'}">
+                  ${explorePaused ? '&#x25B6; Resume' : '&#x23F8; Pause'}
+                </button>
                 <button id="btn-torch" class="px-2 py-0.5 text-xs ${torchEnabled ? 'bg-amber-100' : 'bg-gray-100'} rounded hover:bg-gray-200" title="Toggle torch/fog-of-war">&#x1f526;</button>
                 <button id="btn-center" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Center on seed">&#x2299;</button>
                 <button id="btn-fit" class="px-2 py-0.5 text-xs bg-gray-100 rounded hover:bg-gray-200" title="Zoom to fit">Fit</button>
@@ -487,6 +495,7 @@
       if (document.getElementById('btn-fit')) document.getElementById('btn-fit').addEventListener('click', zoomToFit);
       if (document.getElementById('btn-expand-all')) document.getElementById('btn-expand-all').addEventListener('click', toggleExpandAll);
       if (document.getElementById('btn-torch')) document.getElementById('btn-torch').addEventListener('click', toggleTorch);
+      if (document.getElementById('btn-pause')) document.getElementById('btn-pause').addEventListener('click', toggleExplorePause);
     }
 
     function toggleTorch() {
@@ -496,6 +505,22 @@
       if (el) el.style.opacity = torchEnabled ? '1' : '0';
       const btn = document.getElementById('btn-torch');
       if (btn) btn.className = `px-2 py-0.5 text-xs ${torchEnabled ? 'bg-amber-100' : 'bg-gray-100'} rounded hover:bg-gray-200`;
+    }
+
+    function toggleExplorePause() {
+      explorePaused = !explorePaused;
+      const btn = document.getElementById('btn-pause');
+      if (btn) {
+        btn.innerHTML = explorePaused ? '&#x25B6; Resume' : '&#x23F8; Pause';
+        btn.title = explorePaused ? 'Resume exploration' : 'Pause exploration';
+        btn.className = `px-2 py-0.5 text-xs ${explorePaused ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'} rounded hover:bg-gray-200`;
+      }
+      if (explorePaused) {
+        // Clear pending dwell timers
+        for (const [, timer] of dwellTimers) clearTimeout(timer);
+        dwellTimers.clear();
+      }
+      updateStats();
     }
 
     // ── Expand helpers ──────────────────────────────────────────────────────────
@@ -665,7 +690,12 @@
     let exploreCheckTimer = null;
 
     function checkExploration() {
-      if (!graphData || !svg || !zoom) return;
+      if (!graphData || !svg || !zoom || explorePaused) return;
+
+      // Rate-limit: don't start new exploration if cooldown hasn't elapsed
+      if (exploringSet.size > 0) return; // only one at a time
+      const now = performance.now();
+      if (now - lastExploreTime < EXPLORE_COOLDOWN_MS) return;
 
       const viewport = document.getElementById('viewport');
       if (!viewport) return;
@@ -704,17 +734,17 @@
 
       if (nearCenter.length === 0) return;
 
-      // Sort by distance, explore closest first
+      // Sort by distance, explore closest first — only queue the nearest one
       nearCenter.sort((a, b) => a.dist - b.dist);
+      const closest = nearCenter[0];
 
-      for (const { node } of nearCenter) {
-        if (!dwellTimers.has(node.id)) {
-          const timer = setTimeout(() => {
-            dwellTimers.delete(node.id);
-            exploreNode(node.id);
-          }, EXPLORE_DWELL);
-          dwellTimers.set(node.id, timer);
-        }
+      if (!dwellTimers.has(closest.node.id)) {
+        const timer = setTimeout(() => {
+          dwellTimers.delete(closest.node.id);
+          lastExploreTime = performance.now();
+          exploreNode(closest.node.id);
+        }, EXPLORE_DWELL);
+        dwellTimers.set(closest.node.id, timer);
       }
     }
 
@@ -744,6 +774,7 @@
       const explorable = countExplorableNodes();
       if (explorable > 0) parts.push(`<span style="color:#d97706">${explorable} unexplored</span>`);
       if (exploringSet.size > 0) parts.push(`<span style="color:#3b82f6" class="animate-pulse">exploring...</span>`);
+      if (explorePaused) parts.push(`<span style="color:#ef4444">paused</span>`);
       statsEl.innerHTML = parts.join(' &middot; ');
     }
 
@@ -895,7 +926,7 @@
 
       // Zoom behavior
       zoom = d3.zoom()
-        .scaleExtent([0.05, 4])
+        .scaleExtent([0.1, 4])
         .on('zoom', (event) => {
           currentTransform = event.transform;
           const t = event.transform;
@@ -1093,7 +1124,7 @@
           <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
           <span><span class="legend-dot" style="background:#fbbf24;box-shadow:0 0 6px 2px rgba(251,191,36,0.4)"></span>explorable</span>
         </div>
-        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Pan toward glowing nodes to discover</div>
+        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Pan toward glowing nodes to discover (one at a time)</div>
       `;
       viewport.appendChild(legendDiv);
 
@@ -1121,23 +1152,13 @@
         sim.alpha(0.5).restart();
       });
 
-      // Initial zoom: fit all nodes, but cap scale so small graphs don't over-zoom
+      // Initial zoom: center on seed at a comfortable reading scale
+      // Don't zoom-to-fit all nodes — let the user discover by panning out
       setTimeout(() => {
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (const n of data.nodes) {
-          if (n.x < minX) minX = n.x;
-          if (n.y < minY) minY = n.y;
-          if (n.x > maxX) maxX = n.x;
-          if (n.y > maxY) maxY = n.y;
-        }
-        const pad = 250;
-        minX -= pad; minY -= pad; maxX += pad; maxY += pad;
-        const dx = maxX - minX || 1, dy = maxY - minY || 1;
-        const fitScale = Math.min(width / dx, height / dy);
-        // Cap: never zoom in more than 1.0, and treat ~100 nodes as the "full" density
-        const maxScale = Math.min(1.0, 100 / Math.max(nodeCount, 1));
-        const scale = Math.min(fitScale, maxScale) * 0.9;
-        const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+        const seedNode = data.nodes.find(n => n.id === data.seedUri);
+        const cx = seedNode ? seedNode.x : 0;
+        const cy = seedNode ? seedNode.y : 0;
+        const scale = INITIAL_ZOOM_SCALE;
         svg.transition().duration(500).call(
           zoom.transform,
           d3.zoomIdentity.translate(width / 2 - cx * scale, height / 2 - cy * scale).scale(scale)
@@ -1278,6 +1299,8 @@
       newNodeSet.clear();
       for (const [, timer] of dwellTimers) clearTimeout(timer);
       dwellTimers.clear();
+      explorePaused = false;
+      lastExploreTime = 0;
 
       renderApp({ loading: true, error: '', hasGraph: false });
       setUrlParam('url', url);
@@ -1292,29 +1315,9 @@
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
 
-        // Build initial graph — thread only, no quote web crawl
+        // Build initial graph — thread + quote chain only; quote-posts
+        // discovered progressively via fog-of-war as user pans/zooms
         const rawData = await buildGraphData(atUri, down, up);
-
-        // Auto-explore quotes for seed and all quoted nodes (what the seed quotes)
-        const urisToExplore = [atUri];
-        for (const n of rawData.nodes) {
-          if (n.type === 'quoted') urisToExplore.push(n.id);
-        }
-        for (const uri of urisToExplore) {
-          const node = rawData.nodes.find(n => n.id === uri);
-          if ((node?.post.quoteCount || 0) > 0) {
-            const quotes = await fetchAllQuotePosts(uri);
-            for (const qp of quotes) {
-              if (!rawData.nodes.some(n => n.id === qp.uri)) {
-                rawData.nodes.push({ id: qp.uri, post: qp, type: 'quote-post' });
-              }
-              if (!rawData.links.some(l => l.source === qp.uri && l.target === uri)) {
-                rawData.links.push({ source: qp.uri, target: uri, type: 'quote' });
-              }
-            }
-            exploredSet.add(uri);
-          }
-        }
 
         renderApp({ loading: false, error: '', hasGraph: true });
         initGraph(rawData);
