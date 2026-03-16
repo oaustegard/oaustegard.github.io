@@ -68,6 +68,23 @@ html,body{height:100%;background:var(--bg);color:var(--text);
   box-shadow:0 2px 12px rgba(0,0,0,.7);transition:transform .12s}
 .corner.active::before{transform:translate(-50%,-50%) scale(1.35);background:#fff}
 
+/* Corner loupe */
+.loupe{position:absolute;top:12px;left:50%;transform:translateX(-50%);
+  width:160px;height:160px;border-radius:16px;border:3px solid var(--accent);
+  background:#000;z-index:20;overflow:hidden;
+  box-shadow:0 4px 24px rgba(0,0,0,.8);display:none;pointer-events:none}
+.loupe.active{display:block}
+.loupe canvas{width:100%;height:100%;display:block}
+.loupe-cross{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:24px;height:24px;pointer-events:none}
+.loupe-cross::before,.loupe-cross::after{content:'';position:absolute;
+  background:var(--accent);opacity:.8}
+.loupe-cross::before{left:50%;top:0;width:1.5px;height:100%;transform:translateX(-50%)}
+.loupe-cross::after{top:50%;left:0;height:1.5px;width:100%;transform:translateY(-50%)}
+.loupe-label{position:absolute;bottom:4px;left:0;right:0;text-align:center;
+  font-size:10px;color:var(--accent);font-weight:600;letter-spacing:.5px;
+  text-shadow:0 1px 3px rgba(0,0,0,.9)}
+
 /* Toolbar */
 .toolbar{display:flex;gap:8px;padding:10px 12px;background:var(--surface);
   border-top:1px solid var(--border);flex-shrink:0}
@@ -142,6 +159,11 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       <div class="corner" data-i="1"></div>
       <div class="corner" data-i="2"></div>
       <div class="corner" data-i="3"></div>
+      <div class="loupe" id="loupe">
+        <canvas id="loupe-canvas" width="320" height="320"></canvas>
+        <div class="loupe-cross"></div>
+        <div class="loupe-label" id="loupe-label"></div>
+      </div>
     </div>
     <div class="toolbar">
       <button class="btn-s" id="btn-skip-correct">Skip</button>
@@ -798,16 +820,52 @@ const App = {
   },
   hideLoading() { document.getElementById('loading').classList.remove('active'); },
 
-  /* ── Corner Dragging ── */
+  /* ── Corner Dragging + Loupe ── */
   _initDrag() {
     const wrap = document.getElementById('crop-wrap');
     const handles = document.querySelectorAll('.corner');
+    const loupe = document.getElementById('loupe');
+    const loupeCanvas = document.getElementById('loupe-canvas');
+    const loupeLabel = document.getElementById('loupe-label');
+    const loupeCtx = loupeCanvas.getContext('2d');
+    const LOUPE_SIZE = 320;  // canvas pixels (2x CSS size for retina)
+    const ZOOM = 4;          // magnification factor
+    const cornerNames = ['Top Left', 'Top Right', 'Bottom Right', 'Bottom Left'];
+
     const getXY = e => e.touches ? e.touches[0] : e;
+
+    const renderLoupe = (imgX, imgY, idx) => {
+      loupeLabel.textContent = cornerNames[idx];
+      loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
+
+      // Source: area around the corner in the full-res image
+      const src = this._srcCanvas || (() => {
+        const c = document.createElement('canvas');
+        c.width = this.img.naturalWidth; c.height = this.img.naturalHeight;
+        c.getContext('2d').drawImage(this.img, 0, 0);
+        return c;
+      })();
+
+      // How many source pixels map into the loupe
+      const srcSpan = LOUPE_SIZE / ZOOM;
+      const sx = imgX - srcSpan / 2;
+      const sy = imgY - srcSpan / 2;
+
+      // Use drawImage to zoom: source rect → full loupe canvas
+      loupeCtx.imageSmoothingEnabled = true;
+      loupeCtx.imageSmoothingQuality = 'high';
+      loupeCtx.drawImage(src, sx, sy, srcSpan, srcSpan, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+    };
 
     const onStart = (e, idx) => {
       e.preventDefault();
       this.dragging = idx;
       handles[idx].classList.add('active');
+      loupe.classList.add('active');
+      // Render initial loupe position
+      if (this.corners[idx]) {
+        renderLoupe(this.corners[idx].x, this.corners[idx].y, idx);
+      }
     };
     const onMove = e => {
       if (this.dragging === null) return;
@@ -816,16 +874,17 @@ const App = {
       const c = document.getElementById('crop-canvas');
       const rect = c.getBoundingClientRect();
       const sx = c.width / rect.width, sy = c.height / rect.height;
-      this.corners[this.dragging] = {
-        x: Math.max(0, Math.min(c.width,  (t.clientX - rect.left) * sx)),
-        y: Math.max(0, Math.min(c.height, (t.clientY - rect.top)  * sy))
-      };
+      const imgX = Math.max(0, Math.min(c.width,  (t.clientX - rect.left) * sx));
+      const imgY = Math.max(0, Math.min(c.height, (t.clientY - rect.top)  * sy));
+      this.corners[this.dragging] = { x: imgX, y: imgY };
       this._drawCropOverlay();
       this._positionHandles();
+      renderLoupe(imgX, imgY, this.dragging);
     };
     const onEnd = () => {
       if (this.dragging !== null) handles[this.dragging].classList.remove('active');
       this.dragging = null;
+      loupe.classList.remove('active');
     };
 
     handles.forEach((h, i) => {
