@@ -58,7 +58,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
   align-items:center;justify-content:center;background:#000;min-height:0;
   padding:28px}
 .canvas-wrap canvas{max-width:100%;max-height:100%;display:block;
-  object-fit:contain}
+  object-fit:contain;transform:translateZ(0);-webkit-transform:translateZ(0)}
 
 /* Corner handles */
 .corner{position:absolute;width:56px;height:56px;transform:translate(-50%,-50%);
@@ -313,10 +313,10 @@ const App = {
         const bmp = await createImageBitmap(blob);
         let sw = bmp.width, sh = bmp.height;
 
-        // iOS Safari canvas size limit: ~16.7MP on older devices, higher on newer.
-        // If we exceed it, the canvas silently returns blank/downsampled data.
-        // Cap at a safe limit while preserving aspect ratio.
-        const MAX_CANVAS_AREA = 16_000_000; // conservative — works on all iOS devices
+        // iOS Safari 2D canvas has a ~16.7MP software limit, but with GPU compositing
+        // (translateZ(0) on the element) the limit is much higher (~64MP+).
+        // Cap conservatively at 48MP to handle ProRAW without issue.
+        const MAX_CANVAS_AREA = 48_000_000;
         const area = sw * sh;
         if (area > MAX_CANVAS_AREA) {
           const scale = Math.sqrt(MAX_CANVAS_AREA / area);
@@ -327,6 +327,10 @@ const App = {
 
         const c = document.createElement('canvas');
         c.width = sw; c.height = sh;
+        // Attach to DOM with GPU compositing hint so iOS uses GPU texture limits
+        // (display:none skips compositing; use offscreen positioning instead)
+        c.style.cssText = 'position:fixed;left:-9999px;top:0;transform:translateZ(0);-webkit-transform:translateZ(0)';
+        document.body.appendChild(c);
         c.getContext('2d').drawImage(bmp, 0, 0, sw, sh);
         bmp.close();
         this._srcCanvas = c;
@@ -836,6 +840,7 @@ const App = {
     this.hideLoading();
     // Reset state
     this.img = null;
+    if (this._srcCanvas?.parentNode) this._srcCanvas.parentNode.removeChild(this._srcCanvas);
     this._srcCanvas = null;
     this._loupeCanvas = null;
     this.correctedCanvas = null;
