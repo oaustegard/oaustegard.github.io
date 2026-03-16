@@ -1,6 +1,7 @@
 # etc/
-*Files: 1*
+*Files: 2*
 
 ## Files
 
 - **housing-affordability.html**
+- **index.html**
