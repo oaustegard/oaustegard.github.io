@@ -398,6 +398,12 @@
       </div>
     </div>
 
+    <!-- Domain Filter Banner -->
+    <div id="domainBanner" class="info hidden">
+      <strong>🌐 Showing bookmarklets for <span id="domainBannerName"></span></strong>
+      <button id="clearDomainFilter" class="secondary" style="margin-left: 1rem; margin-bottom: 0;">Show All</button>
+    </div>
+
     <!-- Install View -->
     <div id="installView">
       <div class="input-group">
@@ -497,6 +503,11 @@
 
         // Metadata template
         addMetadataBtn: document.getElementById('addMetadataBtn'),
+
+        // Domain banner
+        domainBanner: document.getElementById('domainBanner'),
+        domainBannerName: document.getElementById('domainBannerName'),
+        clearDomainFilter: document.getElementById('clearDomainFilter'),
 
         // Export
         exportButtons: document.getElementById('exportButtons'),
@@ -634,7 +645,17 @@
           populateDropdown();
           populateDomainFilter();
 
-          // Handle URL parameter
+          // Handle URL parameters
+          const urlDomain = getDomainFromURL();
+          if (urlDomain) {
+            // Set domain filter if the domain exists in our options
+            const domainExists = bookmarklets.some(b => b.metadata.domainList.includes(urlDomain));
+            if (domainExists) {
+              elements.domainFilter.value = urlDomain;
+              applyFilters();
+            }
+          }
+
           const urlBookmarklet = getBookmarkletFromURL();
           if (urlBookmarklet) {
             const matching = bookmarklets.find(b => b.filename === urlBookmarklet);
@@ -814,6 +835,23 @@
 
         state.filteredBookmarklets = filtered;
         populateDropdown();
+
+        // Show/hide domain banner
+        if (domainFilter) {
+          elements.domainBannerName.textContent = domainFilter;
+          elements.domainBanner.classList.remove('hidden');
+        } else {
+          elements.domainBanner.classList.add('hidden');
+        }
+
+        // Keep URL in sync with domain filter
+        const url = new URL(window.location);
+        if (domainFilter) {
+          url.searchParams.set('domain', domainFilter);
+        } else {
+          url.searchParams.delete('domain');
+        }
+        history.replaceState({}, '', url);
       }
 
       /* ============================================
@@ -914,13 +952,23 @@
       }
 
       function shareLink() {
-        if (!state.selectedBookmarklet) {
-          showWarning('Please select a bookmarklet first');
+        const domainFilter = elements.domainFilter.value;
+        if (!state.selectedBookmarklet && !domainFilter) {
+          showWarning('Please select a bookmarklet or domain filter first');
           return;
         }
 
         const url = new URL(window.location);
-        url.searchParams.set('bookmarklet', state.selectedBookmarklet.filename);
+        // Clear existing params for a clean share link
+        url.searchParams.delete('bookmarklet');
+        url.searchParams.delete('domain');
+
+        if (state.selectedBookmarklet) {
+          url.searchParams.set('bookmarklet', state.selectedBookmarklet.filename);
+        }
+        if (domainFilter) {
+          url.searchParams.set('domain', domainFilter);
+        }
 
         navigator.clipboard.writeText(url.toString()).then(() => {
           showSuccess('Share link copied to clipboard!');
@@ -939,12 +987,24 @@
         } else {
           url.searchParams.delete('bookmarklet');
         }
+        // Sync domain filter to URL
+        const domain = elements.domainFilter.value;
+        if (domain) {
+          url.searchParams.set('domain', domain);
+        } else {
+          url.searchParams.delete('domain');
+        }
         history.pushState({}, '', url);
       }
 
       function getBookmarkletFromURL() {
         const params = new URLSearchParams(window.location.search);
         return params.get('bookmarklet');
+      }
+
+      function getDomainFromURL() {
+        const params = new URLSearchParams(window.location.search);
+        return params.get('domain');
       }
 
       /* ============================================
@@ -1046,6 +1106,12 @@
         updateBookmarklet();
       });
 
+      // Clear domain filter banner
+      elements.clearDomainFilter.addEventListener('click', () => {
+        elements.domainFilter.value = '';
+        applyFilters();
+      });
+
       // Export buttons
       elements.downloadBtn.addEventListener('click', downloadBookmarklet);
       elements.copyCodeBtn.addEventListener('click', copyCode);
@@ -1053,6 +1119,11 @@
 
       // Browser navigation
       window.addEventListener('popstate', async () => {
+        // Restore domain filter from URL
+        const urlDomain = getDomainFromURL();
+        elements.domainFilter.value = urlDomain || '';
+        applyFilters();
+
         const urlBookmarklet = getBookmarkletFromURL();
         if (urlBookmarklet) {
           const bookmarklet = state.bookmarklets.find(b => b.filename === urlBookmarklet);
