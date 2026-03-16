@@ -6,7 +6,7 @@ A data-driven look at the US housing price-to-income ratio over six decades, wit
 
 ## Origin
 
-This page was prompted by [a Bluesky thread](https://bsky.app) (March 2026) in which someone discovered the price-to-income ratio metric and its historical progression for the first time. They noted that while everyone paying attention understands there's a housing access problem, the specific numbers — and particularly their trajectory over 60 years — are surprisingly unfamiliar to most people. The thread asked: "Did you know these numbers? If not, I wonder why not."
+This page was prompted by [a Bluesky thread by John Gordon (Faughnan)](https://bsky.app/profile/johngordon.bsky.social/post/3mh6ikm56nk2a) (March 2026) in which someone discovered the price-to-income ratio metric and its historical progression for the first time. They noted that while everyone paying attention understands there's a housing access problem, the specific numbers — and particularly their trajectory over 60 years — are surprisingly unfamiliar to most people. The thread asked: "Did you know these numbers? If not, I wonder why not."
 
 The claims in the thread (ratio of ~2.1 in 1960, ~2.6 as a "healthy" benchmark, over 5 since 2005) checked out. This page compiles the data behind those claims and presents it visually.
 
