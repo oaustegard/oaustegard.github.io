@@ -311,15 +311,27 @@ const App = {
       // Decode at full camera resolution via createImageBitmap
       try {
         const bmp = await createImageBitmap(blob);
-        // Transfer to an offscreen canvas (our authoritative full-res source)
+        let sw = bmp.width, sh = bmp.height;
+
+        // iOS Safari canvas size limit: ~16.7MP on older devices, higher on newer.
+        // If we exceed it, the canvas silently returns blank/downsampled data.
+        // Cap at a safe limit while preserving aspect ratio.
+        const MAX_CANVAS_AREA = 16_000_000; // conservative — works on all iOS devices
+        const area = sw * sh;
+        if (area > MAX_CANVAS_AREA) {
+          const scale = Math.sqrt(MAX_CANVAS_AREA / area);
+          sw = Math.round(sw * scale);
+          sh = Math.round(sh * scale);
+          console.log(`Source ${bmp.width}×${bmp.height} (${(area/1e6).toFixed(1)}MP) exceeds canvas limit, scaling to ${sw}×${sh}`);
+        }
+
         const c = document.createElement('canvas');
-        c.width = bmp.width; c.height = bmp.height;
-        c.getContext('2d').drawImage(bmp, 0, 0);
+        c.width = sw; c.height = sh;
+        c.getContext('2d').drawImage(bmp, 0, 0, sw, sh);
         bmp.close();
         this._srcCanvas = c;
-        // Create a lightweight Image for display (crop screen)
-        this.img = { naturalWidth: c.width, naturalHeight: c.height, _canvas: c };
-        console.log(`Loaded: ${c.width}×${c.height}`);
+        this.img = { naturalWidth: sw, naturalHeight: sh, _canvas: c };
+        console.log(`Loaded: ${sw}×${sh}`);
       } catch(_) {
         // Fallback for older browsers
         const du = URL.createObjectURL(blob);
@@ -859,7 +871,7 @@ const App = {
     const loupeLabel = document.getElementById('loupe-label');
     const loupeCtx = loupeCanvas.getContext('2d');
     const LOUPE_SIZE = 280;  // canvas resolution (2x CSS 140px for retina)
-    const ZOOM = 3;
+    const ZOOM = 1.5;        // gentle magnification — enough to see the edge clearly
     const cornerNames = ['Top Left', 'Top Right', 'Bottom Right', 'Bottom Left'];
     loupeCanvas.width = LOUPE_SIZE;
     loupeCanvas.height = LOUPE_SIZE;
