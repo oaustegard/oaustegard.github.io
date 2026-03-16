@@ -251,6 +251,7 @@ loadOpenCv();
 /* ── App ── */
 const App = {
   img: null,
+  _srcCanvas: null,       // full-res source canvas from createImageBitmap
   corners: [],          // [{x,y}] in image coords — TL TR BR BL
   correctedCanvas: null,
   baseImageData: null,   // pristine pixels after perspective correction
@@ -266,17 +267,47 @@ const App = {
   handleFile(file) {
     if (!file) return;
     this.showLoading('Loading image…');
+
+    // Read as ArrayBuffer first — allows full-res bitmap AND EXIF parsing
     const reader = new FileReader();
-    reader.onload = e => {
-      const dataUrl = e.target.result;
-      // Read existing EXIF
-      try { this._prefillMeta(piexif.load(dataUrl)); } catch(_) {}
-      const img = new Image();
-      img.onload = () => { this.img = img; this.hideLoading(); this.enterCrop(); };
-      img.onerror = () => { this.hideLoading(); alert('Could not load image.'); };
-      img.src = dataUrl;
+    reader.onload = async e => {
+      const buf = e.target.result;
+      const blob = new Blob([buf], { type: file.type });
+
+      // EXIF from the raw bytes (piexif needs data URL)
+      try {
+        const r2 = new FileReader();
+        const du = await new Promise(res => { r2.onload = ev => res(ev.target.result); r2.readAsDataURL(blob); });
+        this._prefillMeta(piexif.load(du));
+      } catch(_) {}
+
+      // Decode at full camera resolution via createImageBitmap
+      try {
+        const bmp = await createImageBitmap(blob);
+        // Transfer to an offscreen canvas (our authoritative full-res source)
+        const c = document.createElement('canvas');
+        c.width = bmp.width; c.height = bmp.height;
+        c.getContext('2d').drawImage(bmp, 0, 0);
+        bmp.close();
+        this._srcCanvas = c;
+        // Create a lightweight Image for display (crop screen)
+        this.img = { naturalWidth: c.width, naturalHeight: c.height, _canvas: c };
+        console.log(`Loaded: ${c.width}×${c.height}`);
+      } catch(_) {
+        // Fallback for older browsers
+        const du = URL.createObjectURL(blob);
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = du; });
+        URL.revokeObjectURL(du);
+        this._srcCanvas = null;
+        this.img = img;
+        console.log(`Loaded (fallback): ${img.naturalWidth}×${img.naturalHeight}`);
+      }
+
+      this.hideLoading();
+      this.enterCrop();
     };
-    reader.readAsDataURL(file);
+    reader.readAsArrayBuffer(file);
   },
 
   _prefillMeta(exif) {
@@ -301,6 +332,13 @@ const App = {
     } catch(_) {}
   },
 
+  // Draw source to a target canvas context (handles both Image and canvas-backed source)
+  _drawSrc(ctx, ...args) {
+    const src = this._srcCanvas || this.img;
+    if (args.length) ctx.drawImage(src, ...args);
+    else ctx.drawImage(src, 0, 0);
+  },
+
   /* ── Crop Screen ── */
   enterCrop() {
     this.showScreen('crop');
@@ -317,14 +355,12 @@ const App = {
   _drawCropImage() {
     const c = document.getElementById('crop-canvas');
     const wrap = document.getElementById('crop-wrap');
-    const img = this.img;
-    const scale = Math.min(wrap.clientWidth / img.naturalWidth,
-                           wrap.clientHeight / img.naturalHeight, 1);
-    c.width = img.naturalWidth;
-    c.height = img.naturalHeight;
-    c.style.width  = (img.naturalWidth  * scale) + 'px';
-    c.style.height = (img.naturalHeight * scale) + 'px';
-    c.getContext('2d').drawImage(img, 0, 0);
+    const w = this.img.naturalWidth, h = this.img.naturalHeight;
+    const scale = Math.min(wrap.clientWidth / w, wrap.clientHeight / h, 1);
+    c.width = w; c.height = h;
+    c.style.width  = (w * scale) + 'px';
+    c.style.height = (h * scale) + 'px';
+    this._drawSrc(c.getContext('2d'));
   },
 
   _defaultCorners() {
@@ -340,7 +376,7 @@ const App = {
     const c = document.getElementById('crop-canvas');
     const ctx = c.getContext('2d');
     ctx.clearRect(0, 0, c.width, c.height);
-    ctx.drawImage(this.img, 0, 0);
+    this._drawSrc(ctx);
     const co = this.corners;
     if (co.length !== 4) return;
 
@@ -390,55 +426,80 @@ const App = {
 
   _detectCornersSync() {
     try {
-      const img = this.img;
+      const w = this.img.naturalWidth, h = this.img.naturalHeight;
       const MAX = 800;
-      const scale = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight, 1);
-      const sw = Math.round(img.naturalWidth * scale);
-      const sh = Math.round(img.naturalHeight * scale);
+      const scale = Math.min(MAX / w, MAX / h, 1);
+      const sw = Math.round(w * scale), sh = Math.round(h * scale);
 
       const tmp = document.createElement('canvas');
       tmp.width = sw; tmp.height = sh;
-      tmp.getContext('2d').drawImage(img, 0, 0, sw, sh);
+      this._drawSrc(tmp.getContext('2d'), 0, 0, sw, sh);
 
       const src = cv.imread(tmp);
-      const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+      const gray = new cv.Mat();
       cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-      cv.Canny(blur, edges, 50, 150);
 
-      const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
-      cv.dilate(edges, edges, kernel);
+      // CLAHE for better local contrast (helps with similar-toned backgrounds)
+      const clahe = new cv.CLAHE(2.0, new cv.Size(8, 8));
+      const enhanced = new cv.Mat();
+      clahe.apply(gray, enhanced);
+      clahe.delete();
 
-      const contours = new cv.MatVector(), hier = new cv.Mat();
-      cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+      const blur = new cv.Mat();
+      cv.GaussianBlur(enhanced, blur, new cv.Size(5, 5), 0);
 
-      let bestQuad = null, bestArea = 0;
-      const minArea = sw * sh * 0.05;
+      // Multi-threshold sweep: try several Canny threshold pairs
+      const thresholds = [[30, 100], [50, 150], [75, 200], [20, 80]];
+      let bestQuad = null, bestScore = 0;
+      const minArea = sw * sh * 0.03;  // lower threshold — catch small photos
+      const imgArea = sw * sh;
 
-      for (let i = 0; i < contours.size(); i++) {
-        const cnt = contours.get(i);
-        const area = cv.contourArea(cnt);
-        if (area < minArea) continue;
-        const peri = cv.arcLength(cnt, true);
-        const approx = new cv.Mat();
-        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-        if (approx.rows === 4 && area > bestArea && cv.isContourConvex(approx)) {
-          bestArea = area;
-          bestQuad = [];
-          for (let j = 0; j < 4; j++) {
-            bestQuad.push({
-              x: approx.intPtr(j, 0)[0] / scale,
-              y: approx.intPtr(j, 0)[1] / scale
-            });
+      for (const [lo, hi] of thresholds) {
+        const edges = new cv.Mat();
+        cv.Canny(blur, edges, lo, hi);
+        const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+        cv.dilate(edges, edges, kernel);
+
+        const contours = new cv.MatVector(), hier = new cv.Mat();
+        cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+        for (let i = 0; i < contours.size(); i++) {
+          const cnt = contours.get(i);
+          const area = cv.contourArea(cnt);
+          if (area < minArea) continue;
+          const peri = cv.arcLength(cnt, true);
+          const approx = new cv.Mat();
+          cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+          if (approx.rows === 4 && cv.isContourConvex(approx)) {
+            // Score: prefer quads that are large but not the entire frame,
+            // and roughly rectangular (aspect ratio 0.3-3.0)
+            const pts = [];
+            for (let j = 0; j < 4; j++) pts.push({ x: approx.intPtr(j, 0)[0], y: approx.intPtr(j, 0)[1] });
+            const ordered = this._orderCorners(pts);
+            const qw = Math.hypot(ordered[1].x - ordered[0].x, ordered[1].y - ordered[0].y);
+            const qh = Math.hypot(ordered[3].x - ordered[0].x, ordered[3].y - ordered[0].y);
+            const aspect = qw / (qh || 1);
+            const areaRatio = area / imgArea;
+
+            // Penalize quads that are nearly the full image (likely frame edge)
+            // and quads with extreme aspect ratios
+            let score = area;
+            if (areaRatio > 0.92) score *= 0.3;
+            if (aspect < 0.3 || aspect > 3.0) score *= 0.2;
+
+            if (score > bestScore) {
+              bestScore = score;
+              bestQuad = ordered.map(p => ({ x: p.x / scale, y: p.y / scale }));
+            }
           }
+          approx.delete();
         }
-        approx.delete();
+        edges.delete(); kernel.delete(); contours.delete(); hier.delete();
       }
 
-      // Cleanup
-      [src, gray, blur, edges, kernel, contours, hier].forEach(m => m.delete());
+      [src, gray, enhanced, blur].forEach(m => m.delete());
 
-      this.corners = bestQuad ? this._orderCorners(bestQuad) : (this._defaultCorners(), this.corners);
+      this.corners = bestQuad || (this._defaultCorners(), this.corners);
     } catch (ex) {
       console.warn('Corner detection failed:', ex);
       this._defaultCorners();
@@ -473,17 +534,34 @@ const App = {
       const hLeft = Math.hypot(co[3].x - co[0].x, co[3].y - co[0].y);
       const hRight= Math.hypot(co[2].x - co[1].x, co[2].y - co[1].y);
 
-      let outW = Math.round(Math.max(wTop, wBot));
-      let outH = Math.round(Math.max(hLeft, hRight));
-      const maxDim = 4096;
-      const s = Math.min(maxDim / outW, maxDim / outH, 1);
-      outW = Math.round(outW * s);
-      outH = Math.round(outH * s);
+      // Natural dimensions from quad corners
+      let natW = Math.max(wTop, wBot);
+      let natH = Math.max(hLeft, hRight);
 
-      const srcC = document.createElement('canvas');
-      srcC.width = this.img.naturalWidth;
-      srcC.height = this.img.naturalHeight;
-      srcC.getContext('2d').drawImage(this.img, 0, 0);
+      // Scale up: the output should use full camera resolution.
+      // The source has more pixel data than the quad's pixel span — 
+      // warpPerspective with interpolation will extract it.
+      // Target: long edge = max(natural, MIN_OUTPUT), capped at MAX_OUTPUT.
+      const MIN_OUTPUT = 2048;
+      const MAX_OUTPUT = 4096;
+      const longEdge = Math.max(natW, natH);
+      const upscale = longEdge < MIN_OUTPUT ? MIN_OUTPUT / longEdge : 1;
+      let outW = Math.round(natW * upscale);
+      let outH = Math.round(natH * upscale);
+      // Cap
+      const downscale = Math.min(MAX_OUTPUT / outW, MAX_OUTPUT / outH, 1);
+      outW = Math.round(outW * downscale);
+      outH = Math.round(outH * downscale);
+
+      console.log(`Quad natural: ${Math.round(natW)}×${Math.round(natH)} → output: ${outW}×${outH}`);
+
+      // Build full-res source canvas
+      const srcC = this._srcCanvas || (() => {
+        const c = document.createElement('canvas');
+        c.width = this.img.naturalWidth; c.height = this.img.naturalHeight;
+        c.getContext('2d').drawImage(this.img, 0, 0);
+        return c;
+      })();
       const src = cv.imread(srcC);
 
       const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
@@ -495,7 +573,8 @@ const App = {
       ]);
       const M = cv.getPerspectiveTransform(srcPts, dstPts);
       const dst = new cv.Mat();
-      cv.warpPerspective(src, dst, M, new cv.Size(outW, outH));
+      // INTER_CUBIC for better quality when upscaling
+      cv.warpPerspective(src, dst, M, new cv.Size(outW, outH), cv.INTER_CUBIC);
 
       const outC = document.createElement('canvas');
       outC.width = outW; outC.height = outH;
@@ -513,13 +592,19 @@ const App = {
   },
 
   skipCorrection() {
-    // Use the full image without perspective transform
-    const c = document.createElement('canvas');
-    c.width = this.img.naturalWidth;
-    c.height = this.img.naturalHeight;
-    c.getContext('2d').drawImage(this.img, 0, 0);
-    this.correctedCanvas = c;
-    this.baseImageData = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+    // Use the full-res image without perspective transform
+    const c = this._srcCanvas || (() => {
+      const c = document.createElement('canvas');
+      c.width = this.img.naturalWidth; c.height = this.img.naturalHeight;
+      c.getContext('2d').drawImage(this.img, 0, 0);
+      return c;
+    })();
+    // Clone so we don't mutate the source
+    const out = document.createElement('canvas');
+    out.width = c.width; out.height = c.height;
+    out.getContext('2d').drawImage(c, 0, 0);
+    this.correctedCanvas = out;
+    this.baseImageData = out.getContext('2d').getImageData(0, 0, out.width, out.height);
     this.enterAdjust();
   },
 
@@ -688,6 +773,7 @@ const App = {
     this.hideLoading();
     // Reset state
     this.img = null;
+    this._srcCanvas = null;
     this.correctedCanvas = null;
     this.baseImageData = null;
     this.corners = [];
