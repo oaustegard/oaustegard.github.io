@@ -55,7 +55,8 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 
 /* Canvas area */
 .canvas-wrap{flex:1;position:relative;overflow:hidden;display:flex;
-  align-items:center;justify-content:center;background:#000;min-height:0}
+  align-items:center;justify-content:center;background:#000;min-height:0;
+  padding:16px}
 .canvas-wrap canvas{max-width:100%;max-height:100%;display:block;
   object-fit:contain}
 
@@ -378,7 +379,9 @@ const App = {
     const c = document.getElementById('crop-canvas');
     const wrap = document.getElementById('crop-wrap');
     const w = this.img.naturalWidth, h = this.img.naturalHeight;
-    const scale = Math.min(wrap.clientWidth / w, wrap.clientHeight / h, 1);
+    // Account for wrap padding (16px each side)
+    const availW = wrap.clientWidth - 32, availH = wrap.clientHeight - 32;
+    const scale = Math.min(availW / w, availH / h, 1);
     c.width = w; c.height = h;
     c.style.width  = (w * scale) + 'px';
     c.style.height = (h * scale) + 'px';
@@ -387,10 +390,9 @@ const App = {
 
   _defaultCorners() {
     const w = this.img.naturalWidth, h = this.img.naturalHeight;
-    const m = Math.min(w, h) * 0.05;
     this.corners = [
-      { x: m, y: m }, { x: w - m, y: m },
-      { x: w - m, y: h - m }, { x: m, y: h - m }
+      { x: 0, y: 0 }, { x: w, y: 0 },
+      { x: w, y: h }, { x: 0, y: h }
     ];
   },
 
@@ -503,15 +505,24 @@ const App = {
             const aspect = qw / (qh || 1);
             const areaRatio = area / imgArea;
 
-            // Penalize quads that are nearly the full image (likely frame edge)
-            // and quads with extreme aspect ratios
             let score = area;
-            if (areaRatio > 0.92) score *= 0.3;
+            // Slightly penalize near-full-frame quads (might just be the image border)
+            // but don't crush them — they could be valid
+            if (areaRatio > 0.92) score *= 0.6;
             if (aspect < 0.3 || aspect > 3.0) score *= 0.2;
 
             if (score > bestScore) {
               bestScore = score;
-              bestQuad = ordered.map(p => ({ x: p.x / scale, y: p.y / scale }));
+              // If quad is >90% of frame, it's probably the image border
+              // detected with slight rounding — snap to full bounds
+              if (areaRatio > 0.90) {
+                bestQuad = [
+                  { x: 0, y: 0 }, { x: w, y: 0 },
+                  { x: w, y: h }, { x: 0, y: h }
+                ];
+              } else {
+                bestQuad = ordered.map(p => ({ x: p.x / scale, y: p.y / scale }));
+              }
             }
           }
           approx.delete();
@@ -660,7 +671,7 @@ const App = {
     if (!src) return;
 
     c.width = src.width; c.height = src.height;
-    const sc = Math.min(wrap.clientWidth / src.width, wrap.clientHeight / src.height, 1);
+    const sc = Math.min((wrap.clientWidth - 32) / src.width, (wrap.clientHeight - 32) / src.height, 1);
     c.style.width  = (src.width  * sc) + 'px';
     c.style.height = (src.height * sc) + 'px';
 
