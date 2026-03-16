@@ -875,55 +875,86 @@ const App = {
     const loupeCanvas = document.getElementById('loupe-canvas');
     const loupeLabel = document.getElementById('loupe-label');
     const loupeCtx = loupeCanvas.getContext('2d');
-    const LOUPE_SIZE = 280;  // canvas resolution (2x CSS 140px for retina)
-    const ZOOM = 1.5;        // gentle magnification — enough to see the edge clearly
+    const LOUPE_SIZE = 280;
+    const ZOOM = 1.5;
     const cornerNames = ['Top Left', 'Top Right', 'Bottom Right', 'Bottom Left'];
     loupeCanvas.width = LOUPE_SIZE;
     loupeCanvas.height = LOUPE_SIZE;
 
     const getXY = e => e.touches ? e.touches[0] : e;
 
+    // Convert screen coords to image coords
+    const screenToImg = (clientX, clientY) => {
+      const c = document.getElementById('crop-canvas');
+      const rect = c.getBoundingClientRect();
+      const sx = c.width / rect.width, sy = c.height / rect.height;
+      return {
+        x: Math.max(0, Math.min(c.width,  (clientX - rect.left) * sx)),
+        y: Math.max(0, Math.min(c.height, (clientY - rect.top)  * sy))
+      };
+    };
+
+    // Find nearest corner to a screen position
+    const nearestCorner = (clientX, clientY) => {
+      const c = document.getElementById('crop-canvas');
+      const rect = c.getBoundingClientRect();
+      const wRect = wrap.getBoundingClientRect();
+      const sx = rect.width / c.width;
+      const sy = rect.height / c.height;
+      let bestIdx = 0, bestDist = Infinity;
+      this.corners.forEach((co, i) => {
+        // Corner position in screen coords
+        const cx = co.x * sx + rect.left;
+        const cy = co.y * sy + rect.top;
+        const d = Math.hypot(clientX - cx, clientY - cy);
+        if (d < bestDist) { bestDist = d; bestIdx = i; }
+      });
+      return bestIdx;
+    };
+
     let loupeFrame = 0;
+    let dragOffsetX = 0, dragOffsetY = 0;  // offset between finger and corner
+
     const renderLoupe = (imgX, imgY, idx) => {
-      // Position loupe away from the corner being dragged
-      // Bottom corners (2,3) → show loupe at top; Top corners (0,1) → show at bottom
       loupe.classList.remove('at-top', 'at-bottom');
       loupe.classList.add(idx >= 2 ? 'at-top' : 'at-bottom');
       loupeLabel.textContent = cornerNames[idx];
 
-      // Use rAF to avoid rendering faster than display
       cancelAnimationFrame(loupeFrame);
       loupeFrame = requestAnimationFrame(() => {
         loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
-
-        // Draw from cached medium-res source
         const lc = this._loupeCanvas;
         if (!lc) return;
         const ls = this._loupeScale;
-
-        // Convert image coords to loupe-cache coords
-        const lcx = imgX * ls;
-        const lcy = imgY * ls;
-
-        // Source span in loupe-cache pixels
+        const lcx = imgX * ls, lcy = imgY * ls;
         const srcSpan = LOUPE_SIZE / ZOOM;
-        const sx = lcx - srcSpan / 2;
-        const sy = lcy - srcSpan / 2;
-
         loupeCtx.imageSmoothingEnabled = true;
-        loupeCtx.drawImage(lc, sx, sy, srcSpan, srcSpan, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+        loupeCtx.drawImage(lc, lcx - srcSpan/2, lcy - srcSpan/2, srcSpan, srcSpan,
+                           0, 0, LOUPE_SIZE, LOUPE_SIZE);
       });
     };
 
-    const onStart = (e, idx) => {
+    const onStart = (e, forcedIdx) => {
       e.preventDefault();
+      const t = getXY(e);
+      const idx = forcedIdx ?? nearestCorner(t.clientX, t.clientY);
       this.dragging = idx;
-      handles[idx].classList.add('active');
+      handles.forEach((h, i) => h.classList.toggle('active', i === idx));
       loupe.classList.add('active');
-      if (this.corners[idx]) {
-        renderLoupe(this.corners[idx].x, this.corners[idx].y, idx);
-      }
+
+      // Compute offset: difference between touch position and corner position
+      // so the corner doesn't snap to the finger — it stays put until you move
+      const c = document.getElementById('crop-canvas');
+      const rect = c.getBoundingClientRect();
+      const sx = c.width / rect.width, sy = c.height / rect.height;
+      const touchImgX = (t.clientX - rect.left) * sx;
+      const touchImgY = (t.clientY - rect.top) * sy;
+      dragOffsetX = this.corners[idx].x - touchImgX;
+      dragOffsetY = this.corners[idx].y - touchImgY;
+
+      renderLoupe(this.corners[idx].x, this.corners[idx].y, idx);
     };
+
     const onMove = e => {
       if (this.dragging === null) return;
       e.preventDefault();
@@ -931,13 +962,17 @@ const App = {
       const c = document.getElementById('crop-canvas');
       const rect = c.getBoundingClientRect();
       const sx = c.width / rect.width, sy = c.height / rect.height;
-      const imgX = Math.max(0, Math.min(c.width,  (t.clientX - rect.left) * sx));
-      const imgY = Math.max(0, Math.min(c.height, (t.clientY - rect.top)  * sy));
+      // Apply offset so corner tracks relative to where you grabbed it
+      const rawX = (t.clientX - rect.left) * sx + dragOffsetX;
+      const rawY = (t.clientY - rect.top)  * sy + dragOffsetY;
+      const imgX = Math.max(0, Math.min(c.width,  rawX));
+      const imgY = Math.max(0, Math.min(c.height, rawY));
       this.corners[this.dragging] = { x: imgX, y: imgY };
       this._drawCropOverlay();
       this._positionHandles();
       renderLoupe(imgX, imgY, this.dragging);
     };
+
     const onEnd = () => {
       if (this.dragging !== null) handles[this.dragging].classList.remove('active');
       this.dragging = null;
@@ -945,10 +980,17 @@ const App = {
       cancelAnimationFrame(loupeFrame);
     };
 
+    // Touch/click on individual handles — start dragging that specific corner
     handles.forEach((h, i) => {
-      h.addEventListener('touchstart', e => onStart(e, i), { passive: false });
-      h.addEventListener('mousedown',  e => onStart(e, i));
+      h.addEventListener('touchstart', e => { e.stopPropagation(); onStart(e, i); }, { passive: false });
+      h.addEventListener('mousedown',  e => { e.stopPropagation(); onStart(e, i); });
     });
+
+    // Touch/click ANYWHERE in the wrap — find and drag the nearest corner
+    // This is the key fix: you don't have to hit the tiny handle at the edge
+    wrap.addEventListener('touchstart', e => onStart(e), { passive: false });
+    wrap.addEventListener('mousedown',  e => onStart(e));
+
     document.addEventListener('touchmove', onMove, { passive: false });
     document.addEventListener('mousemove', onMove);
     document.addEventListener('touchend', onEnd);
