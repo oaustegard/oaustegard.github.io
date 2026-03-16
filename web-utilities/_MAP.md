@@ -4,7 +4,7 @@
 ## Files
 
 - **aws-ping.html** — exports: `initializeMap, addDatacenters, selectRegion, clearSelection, showTooltip, updateRegionList, updateStats`
-- **bookmarklet-installer.html** — exports (25): `extractMetadata, hasMetadata, validateMetadata, insertMetadataTemplate, fetchBookmarklets, renderMetadataInfo, populateDropdown, populateDomainFilter`...
+- **bookmarklet-installer.html** — exports (26): `extractMetadata, hasMetadata, validateMetadata, insertMetadataTemplate, fetchBookmarklets, renderMetadataInfo, populateDropdown, populateDomainFilter`...
 - **csv-to-xslx.html** — exports: `handleCSVData, readFile, handlePaste, convertCSVToExcel, showDropOverlay, hideDropOverlay`
 - **gist-encryption.html** — exports: `extractGistId`
 - **index.html**
