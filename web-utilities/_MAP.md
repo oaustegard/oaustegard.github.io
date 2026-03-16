@@ -12,6 +12,6 @@
 - **pdf-compressor.html** — exports: `handleFile, format` — imports: `gs.mjs`
 - **pdf-highlighter.html** — exports (23): `PDFReader, confirmDiscardHighlights, loadPDF, extractAllText, renderAllPages, renderPage, setupScrollSync, getCurrentPdfPage`... — imports: `preact, hooks, preact`
 - **pdf-text-extractor.html** — exports (12): `parseUrlParams, fetchPdfFromUrl, initializeFromUrl, parsePageRange, updatePageRangeInfo, handleFile, generateOutput, generateMarkdown`...
-- **photo-scanner.html** — exports: `loadOpenCv, checkCv, getXY, renderLoupe, onStart, onMove, onEnd, onResize`
+- **photo-scanner.html** — exports (10): `loadOpenCv, checkCv, getXY, screenToImg, nearestCorner, renderLoupe, onStart, onMove`...
 - **trimmer.html** — exports (24): `parseHtmlToTree, nodeToObject, analyzeTableStructures, findTables, findRows, analyzeRepeatingPatterns, traverse, reconstructHtml`... — imports: `preact, hooks, preact`
 - **webex.html** — exports: `getSearchOrHash, getWebexLink, updateLinks`
