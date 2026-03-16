@@ -1,0 +1,807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="SnapScan">
+<meta name="theme-color" content="#0a0a0a">
+<title>SnapScan — Photo Scanner</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0a0a0a;--surface:#141414;--border:#252525;
+  --text:#e4e4e4;--dim:#777;--accent:#d4a024;--accent-bg:rgba(212,160,36,.12);
+  --danger:#c0392b;
+  --sat:env(safe-area-inset-top,0px);--sab:env(safe-area-inset-bottom,0px);
+  color-scheme:dark;
+}
+html,body{height:100%;background:var(--bg);color:var(--text);
+  font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;
+  -webkit-user-select:none;user-select:none;overflow:hidden;
+  touch-action:manipulation;-webkit-text-size-adjust:100%}
+#app{height:100%;display:flex;flex-direction:column;
+  padding-top:var(--sat);padding-bottom:var(--sab)}
+.screen{display:none;flex-direction:column;height:100%}
+.screen.active{display:flex}
+
+/* Header bar */
+.hdr{display:flex;align-items:center;justify-content:space-between;
+  padding:6px 4px;min-height:44px;flex-shrink:0}
+.hdr-title{font-size:17px;font-weight:600;letter-spacing:-.3px}
+.btn-t{background:none;border:none;color:var(--accent);
+  font:17px/1 -apple-system,sans-serif;padding:10px 14px;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;white-space:nowrap}
+.btn-t:active{opacity:.5}
+
+/* Capture screen */
+#screen-capture{justify-content:center;align-items:center;gap:16px}
+.app-icon{font-size:56px;opacity:.85}
+.app-name{font-size:32px;font-weight:700;letter-spacing:-.7px}
+.app-sub{font-size:14px;color:var(--dim);margin-top:-4px}
+.cap-btns{display:flex;flex-direction:column;gap:10px;width:260px;margin-top:28px}
+.btn-p{background:var(--accent);color:#0a0a0a;border:none;border-radius:12px;
+  padding:15px 20px;font:600 17px/1 -apple-system,sans-serif;cursor:pointer;
+  -webkit-tap-highlight-color:transparent}
+.btn-p:active{opacity:.7}
+.btn-s{background:var(--surface);color:var(--text);border:1px solid var(--border);
+  border-radius:12px;padding:15px 20px;font:500 17px/1 -apple-system,sans-serif;
+  cursor:pointer;-webkit-tap-highlight-color:transparent}
+.btn-s:active{opacity:.7}
+.cv-status{font-size:12px;color:var(--dim);margin-top:20px;text-align:center;
+  min-height:18px;padding:0 24px}
+.scan-count{font-size:13px;color:var(--dim);margin-top:4px}
+
+/* Canvas area */
+.canvas-wrap{flex:1;position:relative;overflow:hidden;display:flex;
+  align-items:center;justify-content:center;background:#000;min-height:0}
+.canvas-wrap canvas{max-width:100%;max-height:100%;display:block;
+  object-fit:contain}
+
+/* Corner handles */
+.corner{position:absolute;width:56px;height:56px;transform:translate(-50%,-50%);
+  cursor:grab;z-index:10;touch-action:none}
+.corner::before{content:'';position:absolute;top:50%;left:50%;
+  transform:translate(-50%,-50%);width:22px;height:22px;border-radius:50%;
+  background:var(--accent);border:3px solid #fff;
+  box-shadow:0 2px 12px rgba(0,0,0,.7);transition:transform .12s}
+.corner.active::before{transform:translate(-50%,-50%) scale(1.35);background:#fff}
+
+/* Toolbar */
+.toolbar{display:flex;gap:8px;padding:10px 12px;background:var(--surface);
+  border-top:1px solid var(--border);flex-shrink:0}
+.toolbar .btn-p,.toolbar .btn-s{flex:1;padding:13px 12px;font-size:15px;text-align:center}
+
+/* Adjustment controls */
+.ctrl{padding:8px 16px;background:var(--surface);border-top:1px solid var(--border);
+  flex-shrink:0}
+.ctrl-row{display:flex;align-items:center;justify-content:space-between;padding:5px 0}
+.ctrl-row label{font-size:13px;color:var(--dim);min-width:70px}
+.ctrl-row input[type=range]{flex:1;margin:0 8px;accent-color:var(--accent)}
+.ctrl-row .val{font-size:12px;color:var(--dim);min-width:34px;text-align:right;
+  font-variant-numeric:tabular-nums}
+
+/* Metadata */
+.meta{padding:10px 16px;background:var(--surface);border-top:1px solid var(--border);
+  display:flex;flex-direction:column;gap:8px;flex-shrink:0;
+  max-height:220px;overflow-y:auto;-webkit-overflow-scrolling:touch}
+.meta-row{display:flex;gap:8px;align-items:center}
+.meta-row label{font-size:11px;color:var(--dim);text-transform:uppercase;
+  letter-spacing:.5px;min-width:56px}
+.meta-row input{flex:1;background:var(--bg);border:1px solid var(--border);
+  border-radius:8px;padding:9px 10px;color:var(--text);
+  font:16px/1.2 -apple-system,sans-serif;-webkit-appearance:none}
+.btn-loc{background:var(--accent-bg);color:var(--accent);
+  border:1px solid rgba(212,160,36,.25);border-radius:8px;padding:9px 14px;
+  font:14px/1 -apple-system,sans-serif;cursor:pointer;
+  -webkit-tap-highlight-color:transparent;white-space:nowrap}
+.btn-loc:active{opacity:.6}
+.loc-info{font-size:11px;color:var(--dim);padding:0 0 0 64px}
+
+/* Loading overlay */
+#loading{position:fixed;inset:0;background:rgba(0,0,0,.82);display:none;
+  align-items:center;justify-content:center;z-index:100;flex-direction:column;gap:14px}
+#loading.active{display:flex}
+.spin{width:34px;height:34px;border:3px solid var(--border);
+  border-top-color:var(--accent);border-radius:50%;animation:sp .65s linear infinite}
+@keyframes sp{to{transform:rotate(360deg)}}
+#load-text{font-size:14px;color:var(--dim)}
+
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <!-- CAPTURE -->
+  <div id="screen-capture" class="screen active">
+    <div class="app-icon">📸</div>
+    <div class="app-name">SnapScan</div>
+    <div class="app-sub">Photo Scanner</div>
+    <div class="cap-btns">
+      <button class="btn-p" id="btn-camera">Take Photo</button>
+      <button class="btn-s" id="btn-library">Choose from Library</button>
+    </div>
+    <div class="cv-status" id="cv-status"></div>
+    <div class="scan-count" id="scan-count"></div>
+    <input type="file" accept="image/*" capture="environment" id="inp-cam" class="hidden">
+    <input type="file" accept="image/*" id="inp-lib" class="hidden">
+  </div>
+
+  <!-- CROP -->
+  <div id="screen-crop" class="screen">
+    <div class="hdr">
+      <button class="btn-t" id="btn-crop-cancel">Cancel</button>
+      <span class="hdr-title">Adjust Corners</span>
+      <button class="btn-t" id="btn-detect">Re-detect</button>
+    </div>
+    <div class="canvas-wrap" id="crop-wrap">
+      <canvas id="crop-canvas"></canvas>
+      <div class="corner" data-i="0"></div>
+      <div class="corner" data-i="1"></div>
+      <div class="corner" data-i="2"></div>
+      <div class="corner" data-i="3"></div>
+    </div>
+    <div class="toolbar">
+      <button class="btn-s" id="btn-skip-correct">Skip</button>
+      <button class="btn-p" id="btn-apply-crop">Correct &amp; Continue</button>
+    </div>
+  </div>
+
+  <!-- ADJUST -->
+  <div id="screen-adjust" class="screen">
+    <div class="hdr">
+      <button class="btn-t" id="btn-adj-back">Back</button>
+      <span class="hdr-title">Adjust &amp; Save</span>
+      <button class="btn-t" id="btn-save">Save</button>
+    </div>
+    <div class="canvas-wrap" id="adj-wrap">
+      <canvas id="adj-canvas"></canvas>
+    </div>
+    <div class="ctrl" id="adj-controls">
+      <div class="ctrl-row">
+        <label>White Bal.</label>
+        <input type="range" min="0" max="100" value="50" id="sl-wb">
+        <span class="val" id="v-wb">50</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Brightness</label>
+        <input type="range" min="-100" max="100" value="0" id="sl-bright">
+        <span class="val" id="v-bright">0</span>
+      </div>
+      <div class="ctrl-row">
+        <label>Contrast</label>
+        <input type="range" min="-100" max="100" value="0" id="sl-contrast">
+        <span class="val" id="v-contrast">0</span>
+      </div>
+    </div>
+    <div class="meta" id="adj-meta">
+      <div class="meta-row">
+        <label>Date</label>
+        <input type="date" id="meta-date">
+      </div>
+      <div class="meta-row">
+        <label>Time</label>
+        <input type="time" id="meta-time">
+      </div>
+      <div class="meta-row">
+        <label>Location</label>
+        <button class="btn-loc" id="btn-loc">Use Current</button>
+      </div>
+      <div class="loc-info" id="loc-info"></div>
+    </div>
+  </div>
+</div>
+
+<div id="loading"><div class="spin"></div><div id="load-text">Processing…</div></div>
+
+<!-- piexifjs for EXIF read/write -->
+<script src="https://cdn.jsdelivr.net/npm/piexifjs@1.0.6/piexif.min.js"></script>
+
+<script>
+'use strict';
+
+/* ── OpenCV Loader ── */
+let cvReady = false;
+function loadOpenCv() {
+  return new Promise(resolve => {
+    if (cvReady) return resolve();
+    const el = document.getElementById('cv-status');
+    el.textContent = 'Loading image processor…';
+    // Use OpenCV.js WASM build via jsDelivr (faster CDN)
+    const s = document.createElement('script');
+    s.src = 'https://docs.opencv.org/4.10.0/opencv.js';
+    s.async = true;
+    // OpenCV.js sets up cv as a promise or has onRuntimeInitialized
+    s.onload = () => {
+      function checkCv() {
+        if (typeof cv !== 'undefined') {
+          // cv might be a promise (WASM build) or direct object
+          if (cv.Mat) {
+            cvReady = true;
+            el.textContent = '';
+            resolve();
+          } else if (typeof cv.then === 'function') {
+            cv.then(m => { cv = m; cvReady = true; el.textContent = ''; resolve(); });
+          } else if (cv.onRuntimeInitialized !== undefined) {
+            cv.onRuntimeInitialized = () => { cvReady = true; el.textContent = ''; resolve(); };
+          } else {
+            // Poll fallback
+            const t = setInterval(() => {
+              if (cv.Mat) { clearInterval(t); cvReady = true; el.textContent = ''; resolve(); }
+            }, 100);
+          }
+        } else {
+          setTimeout(checkCv, 50);
+        }
+      }
+      checkCv();
+    };
+    s.onerror = () => {
+      el.textContent = 'Edge detection unavailable — manual corners only';
+      resolve();
+    };
+    document.head.appendChild(s);
+  });
+}
+loadOpenCv();
+
+
+/* ── App ── */
+const App = {
+  img: null,
+  corners: [],          // [{x,y}] in image coords — TL TR BR BL
+  correctedCanvas: null,
+  baseImageData: null,   // pristine pixels after perspective correction
+  meta: { lat: null, lng: null },
+  dragging: null,
+  scanCount: 0,
+  _adjDebounce: null,
+
+  /* ── Capture ── */
+  capture() { document.getElementById('inp-cam').click(); },
+  choose()  { document.getElementById('inp-lib').click(); },
+
+  handleFile(file) {
+    if (!file) return;
+    this.showLoading('Loading image…');
+    const reader = new FileReader();
+    reader.onload = e => {
+      const dataUrl = e.target.result;
+      // Read existing EXIF
+      try { this._prefillMeta(piexif.load(dataUrl)); } catch(_) {}
+      const img = new Image();
+      img.onload = () => { this.img = img; this.hideLoading(); this.enterCrop(); };
+      img.onerror = () => { this.hideLoading(); alert('Could not load image.'); };
+      img.src = dataUrl;
+    };
+    reader.readAsDataURL(file);
+  },
+
+  _prefillMeta(exif) {
+    if (!exif) return;
+    try {
+      const dt = exif.Exif?.[piexif.ExifIFD.DateTimeOriginal];
+      if (dt) {
+        const [d, t] = dt.split(' ');
+        document.getElementById('meta-date').value = d.replace(/:/g, '-');
+        if (t) document.getElementById('meta-time').value = t.substring(0, 5);
+      }
+    } catch(_) {}
+    try {
+      if (exif.GPS?.[piexif.GPSIFD.GPSLatitude]) {
+        this.meta.lat = piexif.GPSHelper.dmsRationalToDeg(
+          exif.GPS[piexif.GPSIFD.GPSLatitude], exif.GPS[piexif.GPSIFD.GPSLatitudeRef]);
+        this.meta.lng = piexif.GPSHelper.dmsRationalToDeg(
+          exif.GPS[piexif.GPSIFD.GPSLongitude], exif.GPS[piexif.GPSIFD.GPSLongitudeRef]);
+        document.getElementById('loc-info').textContent =
+          `${this.meta.lat.toFixed(5)}, ${this.meta.lng.toFixed(5)}`;
+      }
+    } catch(_) {}
+  },
+
+  /* ── Crop Screen ── */
+  enterCrop() {
+    this.showScreen('crop');
+    this._drawCropImage();
+    if (cvReady) {
+      this.detectCorners();
+    } else {
+      this._defaultCorners();
+      this._drawCropOverlay();
+      this._positionHandles();
+    }
+  },
+
+  _drawCropImage() {
+    const c = document.getElementById('crop-canvas');
+    const wrap = document.getElementById('crop-wrap');
+    const img = this.img;
+    const scale = Math.min(wrap.clientWidth / img.naturalWidth,
+                           wrap.clientHeight / img.naturalHeight, 1);
+    c.width = img.naturalWidth;
+    c.height = img.naturalHeight;
+    c.style.width  = (img.naturalWidth  * scale) + 'px';
+    c.style.height = (img.naturalHeight * scale) + 'px';
+    c.getContext('2d').drawImage(img, 0, 0);
+  },
+
+  _defaultCorners() {
+    const w = this.img.naturalWidth, h = this.img.naturalHeight;
+    const m = Math.min(w, h) * 0.05;
+    this.corners = [
+      { x: m, y: m }, { x: w - m, y: m },
+      { x: w - m, y: h - m }, { x: m, y: h - m }
+    ];
+  },
+
+  _drawCropOverlay() {
+    const c = document.getElementById('crop-canvas');
+    const ctx = c.getContext('2d');
+    ctx.clearRect(0, 0, c.width, c.height);
+    ctx.drawImage(this.img, 0, 0);
+    const co = this.corners;
+    if (co.length !== 4) return;
+
+    // Darken outside selection
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.rect(0, 0, c.width, c.height);
+    ctx.moveTo(co[0].x, co[0].y);
+    ctx.lineTo(co[3].x, co[3].y);
+    ctx.lineTo(co[2].x, co[2].y);
+    ctx.lineTo(co[1].x, co[1].y);
+    ctx.closePath();
+    ctx.fill('evenodd');
+    ctx.restore();
+
+    // Selection border
+    ctx.strokeStyle = '#d4a024';
+    ctx.lineWidth = Math.max(2, c.width / 500);
+    ctx.setLineDash([]);
+    ctx.beginPath();
+    ctx.moveTo(co[0].x, co[0].y);
+    for (let i = 1; i < 4; i++) ctx.lineTo(co[i].x, co[i].y);
+    ctx.closePath();
+    ctx.stroke();
+  },
+
+  _positionHandles() {
+    const c = document.getElementById('crop-canvas');
+    const cRect = c.getBoundingClientRect();
+    const wRect = document.getElementById('crop-wrap').getBoundingClientRect();
+    const sx = cRect.width / c.width;
+    const sy = cRect.height / c.height;
+    document.querySelectorAll('.corner').forEach((el, i) => {
+      if (i >= this.corners.length) return;
+      el.style.left = (this.corners[i].x * sx + (cRect.left - wRect.left)) + 'px';
+      el.style.top  = (this.corners[i].y * sy + (cRect.top  - wRect.top))  + 'px';
+    });
+  },
+
+  detectCorners() {
+    if (!cvReady) return;
+    this.showLoading('Detecting edges…');
+    // Yield to UI before heavy work
+    setTimeout(() => { this._detectCornersSync(); this.hideLoading(); }, 30);
+  },
+
+  _detectCornersSync() {
+    try {
+      const img = this.img;
+      const MAX = 800;
+      const scale = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight, 1);
+      const sw = Math.round(img.naturalWidth * scale);
+      const sh = Math.round(img.naturalHeight * scale);
+
+      const tmp = document.createElement('canvas');
+      tmp.width = sw; tmp.height = sh;
+      tmp.getContext('2d').drawImage(img, 0, 0, sw, sh);
+
+      const src = cv.imread(tmp);
+      const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+      cv.Canny(blur, edges, 50, 150);
+
+      const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+      cv.dilate(edges, edges, kernel);
+
+      const contours = new cv.MatVector(), hier = new cv.Mat();
+      cv.findContours(edges, contours, hier, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+
+      let bestQuad = null, bestArea = 0;
+      const minArea = sw * sh * 0.05;
+
+      for (let i = 0; i < contours.size(); i++) {
+        const cnt = contours.get(i);
+        const area = cv.contourArea(cnt);
+        if (area < minArea) continue;
+        const peri = cv.arcLength(cnt, true);
+        const approx = new cv.Mat();
+        cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
+        if (approx.rows === 4 && area > bestArea && cv.isContourConvex(approx)) {
+          bestArea = area;
+          bestQuad = [];
+          for (let j = 0; j < 4; j++) {
+            bestQuad.push({
+              x: approx.intPtr(j, 0)[0] / scale,
+              y: approx.intPtr(j, 0)[1] / scale
+            });
+          }
+        }
+        approx.delete();
+      }
+
+      // Cleanup
+      [src, gray, blur, edges, kernel, contours, hier].forEach(m => m.delete());
+
+      this.corners = bestQuad ? this._orderCorners(bestQuad) : (this._defaultCorners(), this.corners);
+    } catch (ex) {
+      console.warn('Corner detection failed:', ex);
+      this._defaultCorners();
+    }
+    this._drawCropOverlay();
+    this._positionHandles();
+  },
+
+  _orderCorners(pts) {
+    const sums  = pts.map(p => p.x + p.y);
+    const diffs = pts.map(p => p.y - p.x);
+    return [
+      pts[sums.indexOf(Math.min(...sums))],   // TL
+      pts[diffs.indexOf(Math.min(...diffs))],  // TR
+      pts[sums.indexOf(Math.max(...sums))],    // BR
+      pts[diffs.indexOf(Math.max(...diffs))]   // BL
+    ];
+  },
+
+  /* ── Perspective Correction ── */
+  applyCrop() {
+    if (!cvReady) { alert('Image processor still loading.'); return; }
+    this.showLoading('Correcting perspective…');
+    setTimeout(() => { this._applyCropSync(); this.hideLoading(); }, 30);
+  },
+
+  _applyCropSync() {
+    try {
+      const co = this.corners;
+      const wTop  = Math.hypot(co[1].x - co[0].x, co[1].y - co[0].y);
+      const wBot  = Math.hypot(co[2].x - co[3].x, co[2].y - co[3].y);
+      const hLeft = Math.hypot(co[3].x - co[0].x, co[3].y - co[0].y);
+      const hRight= Math.hypot(co[2].x - co[1].x, co[2].y - co[1].y);
+
+      let outW = Math.round(Math.max(wTop, wBot));
+      let outH = Math.round(Math.max(hLeft, hRight));
+      const maxDim = 4096;
+      const s = Math.min(maxDim / outW, maxDim / outH, 1);
+      outW = Math.round(outW * s);
+      outH = Math.round(outH * s);
+
+      const srcC = document.createElement('canvas');
+      srcC.width = this.img.naturalWidth;
+      srcC.height = this.img.naturalHeight;
+      srcC.getContext('2d').drawImage(this.img, 0, 0);
+      const src = cv.imread(srcC);
+
+      const srcPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        co[0].x, co[0].y, co[1].x, co[1].y,
+        co[2].x, co[2].y, co[3].x, co[3].y
+      ]);
+      const dstPts = cv.matFromArray(4, 1, cv.CV_32FC2, [
+        0, 0, outW, 0, outW, outH, 0, outH
+      ]);
+      const M = cv.getPerspectiveTransform(srcPts, dstPts);
+      const dst = new cv.Mat();
+      cv.warpPerspective(src, dst, M, new cv.Size(outW, outH));
+
+      const outC = document.createElement('canvas');
+      outC.width = outW; outC.height = outH;
+      cv.imshow(outC, dst);
+
+      [src, dst, M, srcPts, dstPts].forEach(m => m.delete());
+
+      this.correctedCanvas = outC;
+      this.baseImageData = outC.getContext('2d').getImageData(0, 0, outW, outH);
+      this.enterAdjust();
+    } catch (ex) {
+      console.error('Perspective correction failed:', ex);
+      alert('Correction failed — try adjusting corners.');
+    }
+  },
+
+  skipCorrection() {
+    // Use the full image without perspective transform
+    const c = document.createElement('canvas');
+    c.width = this.img.naturalWidth;
+    c.height = this.img.naturalHeight;
+    c.getContext('2d').drawImage(this.img, 0, 0);
+    this.correctedCanvas = c;
+    this.baseImageData = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+    this.enterAdjust();
+  },
+
+  /* ── Adjust Screen ── */
+  enterAdjust() {
+    this.showScreen('adjust');
+    // Reset sliders
+    document.getElementById('sl-wb').value = 50;
+    document.getElementById('sl-bright').value = 0;
+    document.getElementById('sl-contrast').value = 0;
+    this._updateSliderLabels();
+    this.renderAdjusted();
+  },
+
+  _updateSliderLabels() {
+    document.getElementById('v-wb').textContent = document.getElementById('sl-wb').value;
+    document.getElementById('v-bright').textContent = document.getElementById('sl-bright').value;
+    document.getElementById('v-contrast').textContent = document.getElementById('sl-contrast').value;
+  },
+
+  scheduleRender() {
+    this._updateSliderLabels();
+    clearTimeout(this._adjDebounce);
+    this._adjDebounce = setTimeout(() => this.renderAdjusted(), 30);
+  },
+
+  renderAdjusted() {
+    const c = document.getElementById('adj-canvas');
+    const wrap = document.getElementById('adj-wrap');
+    const src = this.correctedCanvas;
+    if (!src) return;
+
+    c.width = src.width; c.height = src.height;
+    const sc = Math.min(wrap.clientWidth / src.width, wrap.clientHeight / src.height, 1);
+    c.style.width  = (src.width  * sc) + 'px';
+    c.style.height = (src.height * sc) + 'px';
+
+    // Clone base pixels
+    const imgData = new ImageData(
+      new Uint8ClampedArray(this.baseImageData.data),
+      this.baseImageData.width, this.baseImageData.height
+    );
+
+    const wb       = +document.getElementById('sl-wb').value / 100;        // 0-1
+    const bright   = +document.getElementById('sl-bright').value;           // -100..100
+    const contrast = +document.getElementById('sl-contrast').value;         // -100..100
+
+    const d = imgData.data, len = d.length;
+
+    // 1) White balance (gray-world)
+    if (wb > 0.01) {
+      let rS = 0, gS = 0, bS = 0, n = 0;
+      for (let i = 0; i < len; i += 16) { rS += d[i]; gS += d[i+1]; bS += d[i+2]; n++; }
+      const rM = rS/n, gM = gS/n, bM = bS/n;
+      const gray = (rM + gM + bM) / 3;
+      const rSc = 1 + (gray/rM - 1) * wb;
+      const gSc = 1 + (gray/gM - 1) * wb;
+      const bSc = 1 + (gray/bM - 1) * wb;
+      for (let i = 0; i < len; i += 4) {
+        d[i]   = Math.min(255, d[i]   * rSc);
+        d[i+1] = Math.min(255, d[i+1] * gSc);
+        d[i+2] = Math.min(255, d[i+2] * bSc);
+      }
+    }
+
+    // 2) Brightness + Contrast (standard formula)
+    if (bright !== 0 || contrast !== 0) {
+      const bOff = bright * 2.55;                          // map to 0-255 range
+      const cFactor = (259 * (contrast + 255)) / (255 * (259 - contrast));
+      for (let i = 0; i < len; i += 4) {
+        d[i]   = Math.max(0, Math.min(255, cFactor * (d[i]   - 128) + 128 + bOff));
+        d[i+1] = Math.max(0, Math.min(255, cFactor * (d[i+1] - 128) + 128 + bOff));
+        d[i+2] = Math.max(0, Math.min(255, cFactor * (d[i+2] - 128) + 128 + bOff));
+      }
+    }
+
+    c.getContext('2d').putImageData(imgData, 0, 0);
+  },
+
+  /* ── Location ── */
+  getLocation() {
+    const el = document.getElementById('loc-info');
+    if (!navigator.geolocation) { el.textContent = 'Geolocation not available'; return; }
+    el.textContent = 'Getting location…';
+    navigator.geolocation.getCurrentPosition(
+      pos => {
+        this.meta.lat = pos.coords.latitude;
+        this.meta.lng = pos.coords.longitude;
+        el.textContent = `${this.meta.lat.toFixed(5)}, ${this.meta.lng.toFixed(5)}`;
+      },
+      err => { el.textContent = 'Unavailable: ' + err.message; },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  },
+
+  /* ── Save ── */
+  async save() {
+    this.showLoading('Preparing image…');
+    try {
+      // Re-render at current settings to make sure canvas is up to date
+      this.renderAdjusted();
+      const c = document.getElementById('adj-canvas');
+      const dataUrl = c.toDataURL('image/jpeg', 0.92);
+
+      // Build EXIF
+      const exifObj = { '0th': {}, Exif: {}, GPS: {}, '1st': {}, Interop: {} };
+      exifObj['0th'][piexif.ImageIFD.Orientation] = 1;
+      exifObj['0th'][piexif.ImageIFD.Software] = 'SnapScan';
+
+      const dateVal = document.getElementById('meta-date').value;
+      const timeVal = document.getElementById('meta-time').value || '00:00';
+      if (dateVal) {
+        const dt = dateVal.replace(/-/g, ':') + ' ' + timeVal + ':00';
+        exifObj.Exif[piexif.ExifIFD.DateTimeOriginal] = dt;
+        exifObj.Exif[piexif.ExifIFD.DateTimeDigitized] = dt;
+        exifObj['0th'][piexif.ImageIFD.DateTime] = dt;
+      }
+
+      if (this.meta.lat != null && this.meta.lng != null) {
+        exifObj.GPS[piexif.GPSIFD.GPSLatitudeRef]  = this.meta.lat >= 0 ? 'N' : 'S';
+        exifObj.GPS[piexif.GPSIFD.GPSLatitude]      = piexif.GPSHelper.degToDmsRational(Math.abs(this.meta.lat));
+        exifObj.GPS[piexif.GPSIFD.GPSLongitudeRef] = this.meta.lng >= 0 ? 'E' : 'W';
+        exifObj.GPS[piexif.GPSIFD.GPSLongitude]     = piexif.GPSHelper.degToDmsRational(Math.abs(this.meta.lng));
+      }
+
+      const newDataUrl = piexif.insert(piexif.dump(exifObj), dataUrl);
+
+      // Convert to blob
+      const bin = atob(newDataUrl.split(',')[1]);
+      const arr = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+      const blob = new Blob([arr], { type: 'image/jpeg' });
+
+      const filename = 'scan_' + (dateVal || new Date().toISOString().slice(0, 10)) + '.jpg';
+
+      // iOS: prefer share sheet (Save to Photos, AirDrop, etc.)
+      if (navigator.canShare) {
+        const file = new File([blob], filename, { type: 'image/jpeg' });
+        if (navigator.canShare({ files: [file] })) {
+          await navigator.share({ files: [file] });
+          this.scanCount++;
+          this._returnToCapture();
+          return;
+        }
+      }
+
+      // Fallback: download
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      this.scanCount++;
+      this._returnToCapture();
+    } catch (ex) {
+      if (ex.name !== 'AbortError') {
+        console.error('Save failed:', ex);
+        alert('Save failed: ' + ex.message);
+      }
+      this.hideLoading();
+    }
+  },
+
+  _returnToCapture() {
+    this.hideLoading();
+    // Reset state
+    this.img = null;
+    this.correctedCanvas = null;
+    this.baseImageData = null;
+    this.corners = [];
+    this.meta = { lat: null, lng: null };
+    document.getElementById('meta-date').value = '';
+    document.getElementById('meta-time').value = '';
+    document.getElementById('loc-info').textContent = '';
+    // Update count display
+    const el = document.getElementById('scan-count');
+    el.textContent = this.scanCount > 0 ? `${this.scanCount} photo${this.scanCount > 1 ? 's' : ''} scanned` : '';
+    this.showScreen('capture');
+  },
+
+  /* ── UI Helpers ── */
+  showScreen(name) {
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    document.getElementById('screen-' + name).classList.add('active');
+  },
+  showLoading(msg) {
+    document.getElementById('load-text').textContent = msg || 'Processing…';
+    document.getElementById('loading').classList.add('active');
+  },
+  hideLoading() { document.getElementById('loading').classList.remove('active'); },
+
+  /* ── Corner Dragging ── */
+  _initDrag() {
+    const wrap = document.getElementById('crop-wrap');
+    const handles = document.querySelectorAll('.corner');
+    const getXY = e => e.touches ? e.touches[0] : e;
+
+    const onStart = (e, idx) => {
+      e.preventDefault();
+      this.dragging = idx;
+      handles[idx].classList.add('active');
+    };
+    const onMove = e => {
+      if (this.dragging === null) return;
+      e.preventDefault();
+      const t = getXY(e);
+      const c = document.getElementById('crop-canvas');
+      const rect = c.getBoundingClientRect();
+      const sx = c.width / rect.width, sy = c.height / rect.height;
+      this.corners[this.dragging] = {
+        x: Math.max(0, Math.min(c.width,  (t.clientX - rect.left) * sx)),
+        y: Math.max(0, Math.min(c.height, (t.clientY - rect.top)  * sy))
+      };
+      this._drawCropOverlay();
+      this._positionHandles();
+    };
+    const onEnd = () => {
+      if (this.dragging !== null) handles[this.dragging].classList.remove('active');
+      this.dragging = null;
+    };
+
+    handles.forEach((h, i) => {
+      h.addEventListener('touchstart', e => onStart(e, i), { passive: false });
+      h.addEventListener('mousedown',  e => onStart(e, i));
+    });
+    document.addEventListener('touchmove', onMove, { passive: false });
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('touchend', onEnd);
+    document.addEventListener('mouseup', onEnd);
+  },
+
+  /* ── Init ── */
+  init() {
+    // File inputs
+    const cam = document.getElementById('inp-cam');
+    const lib = document.getElementById('inp-lib');
+    document.getElementById('btn-camera').addEventListener('click', () => cam.click());
+    document.getElementById('btn-library').addEventListener('click', () => lib.click());
+    cam.addEventListener('change', e => { this.handleFile(e.target.files[0]); e.target.value = ''; });
+    lib.addEventListener('change', e => { this.handleFile(e.target.files[0]); e.target.value = ''; });
+
+    // Crop screen
+    document.getElementById('btn-crop-cancel').addEventListener('click', () => this._returnToCapture());
+    document.getElementById('btn-detect').addEventListener('click', () => this.detectCorners());
+    document.getElementById('btn-apply-crop').addEventListener('click', () => this.applyCrop());
+    document.getElementById('btn-skip-correct').addEventListener('click', () => this.skipCorrection());
+
+    // Adjust screen
+    document.getElementById('btn-adj-back').addEventListener('click', () => { this.showScreen('crop'); this._drawCropOverlay(); this._positionHandles(); });
+    document.getElementById('btn-save').addEventListener('click', () => this.save());
+    document.getElementById('btn-loc').addEventListener('click', () => this.getLocation());
+
+    // Sliders
+    ['sl-wb', 'sl-bright', 'sl-contrast'].forEach(id => {
+      document.getElementById(id).addEventListener('input', () => this.scheduleRender());
+    });
+
+    // Corner dragging
+    this._initDrag();
+
+    // Orientation/resize handling
+    let rt;
+    const onResize = () => {
+      clearTimeout(rt);
+      rt = setTimeout(() => {
+        const active = document.querySelector('.screen.active');
+        if (active?.id === 'screen-crop' && this.img) {
+          this._drawCropImage();
+          this._drawCropOverlay();
+          this._positionHandles();
+        } else if (active?.id === 'screen-adjust' && this.correctedCanvas) {
+          this.renderAdjusted();
+        }
+      }, 120);
+    };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
+  }
+};
+
+App.init();
+</script>
+</body>
+</html>
