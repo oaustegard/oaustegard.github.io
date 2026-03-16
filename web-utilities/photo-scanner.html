@@ -54,9 +54,9 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .scan-count{font-size:13px;color:var(--dim);margin-top:4px}
 
 /* Canvas area */
-.canvas-wrap{flex:1;position:relative;overflow:hidden;display:flex;
+.canvas-wrap{flex:1;position:relative;overflow:visible;display:flex;
   align-items:center;justify-content:center;background:#000;min-height:0;
-  padding:16px}
+  padding:28px}
 .canvas-wrap canvas{max-width:100%;max-height:100%;display:block;
   object-fit:contain}
 
@@ -70,19 +70,21 @@ html,body{height:100%;background:var(--bg);color:var(--text);
 .corner.active::before{transform:translate(-50%,-50%) scale(1.35);background:#fff}
 
 /* Corner loupe */
-.loupe{position:absolute;top:12px;left:50%;transform:translateX(-50%);
-  width:160px;height:160px;border-radius:16px;border:3px solid var(--accent);
+.loupe{position:absolute;left:50%;transform:translateX(-50%);
+  width:140px;height:140px;border-radius:14px;border:2.5px solid var(--accent);
   background:#000;z-index:20;overflow:hidden;
   box-shadow:0 4px 24px rgba(0,0,0,.8);display:none;pointer-events:none}
+.loupe.at-top{top:8px;bottom:auto}
+.loupe.at-bottom{bottom:8px;top:auto}
 .loupe.active{display:block}
-.loupe canvas{width:100%;height:100%;display:block}
+.loupe canvas{width:100%;height:100%;display:block;image-rendering:auto}
 .loupe-cross{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-  width:24px;height:24px;pointer-events:none}
+  width:20px;height:20px;pointer-events:none}
 .loupe-cross::before,.loupe-cross::after{content:'';position:absolute;
   background:var(--accent);opacity:.8}
 .loupe-cross::before{left:50%;top:0;width:1.5px;height:100%;transform:translateX(-50%)}
 .loupe-cross::after{top:50%;left:0;height:1.5px;width:100%;transform:translateY(-50%)}
-.loupe-label{position:absolute;bottom:4px;left:0;right:0;text-align:center;
+.loupe-label{position:absolute;bottom:3px;left:0;right:0;text-align:center;
   font-size:10px;color:var(--accent);font-weight:600;letter-spacing:.5px;
   text-shadow:0 1px 3px rgba(0,0,0,.9)}
 
@@ -161,7 +163,7 @@ html,body{height:100%;background:var(--bg);color:var(--text);
       <div class="corner" data-i="2"></div>
       <div class="corner" data-i="3"></div>
       <div class="loupe" id="loupe">
-        <canvas id="loupe-canvas" width="320" height="320"></canvas>
+        <canvas id="loupe-canvas" width="280" height="280"></canvas>
         <div class="loupe-cross"></div>
         <div class="loupe-label" id="loupe-label"></div>
       </div>
@@ -275,6 +277,8 @@ loadOpenCv();
 const App = {
   img: null,
   _srcCanvas: null,       // full-res source canvas from createImageBitmap
+  _loupeCanvas: null,     // medium-res cached copy for loupe rendering
+  _loupeScale: 1,
   corners: [],          // [{x,y}] in image coords — TL TR BR BL
   correctedCanvas: null,
   baseImageData: null,   // pristine pixels after perspective correction
@@ -365,6 +369,7 @@ const App = {
   /* ── Crop Screen ── */
   enterCrop() {
     this.showScreen('crop');
+    this._buildLoupeCache();
     this._drawCropImage();
     if (cvReady) {
       this.detectCorners();
@@ -375,12 +380,25 @@ const App = {
     }
   },
 
+  // Medium-res copy for loupe rendering (avoids drawing from 12MP on every touchmove)
+  _buildLoupeCache() {
+    const w = this.img.naturalWidth, h = this.img.naturalHeight;
+    const MAX = 1600;
+    const scale = Math.min(MAX / w, MAX / h, 1);
+    const lw = Math.round(w * scale), lh = Math.round(h * scale);
+    const c = document.createElement('canvas');
+    c.width = lw; c.height = lh;
+    this._drawSrc(c.getContext('2d'), 0, 0, lw, lh);
+    this._loupeCanvas = c;
+    this._loupeScale = scale;  // ratio: loupe pixels / image pixels
+  },
+
   _drawCropImage() {
     const c = document.getElementById('crop-canvas');
     const wrap = document.getElementById('crop-wrap');
     const w = this.img.naturalWidth, h = this.img.naturalHeight;
-    // Account for wrap padding (16px each side)
-    const availW = wrap.clientWidth - 32, availH = wrap.clientHeight - 32;
+    // Account for wrap padding (28px each side)
+    const availW = wrap.clientWidth - 56, availH = wrap.clientHeight - 56;
     const scale = Math.min(availW / w, availH / h, 1);
     c.width = w; c.height = h;
     c.style.width  = (w * scale) + 'px';
@@ -671,7 +689,7 @@ const App = {
     if (!src) return;
 
     c.width = src.width; c.height = src.height;
-    const sc = Math.min((wrap.clientWidth - 32) / src.width, (wrap.clientHeight - 32) / src.height, 1);
+    const sc = Math.min((wrap.clientWidth - 56) / src.width, (wrap.clientHeight - 56) / src.height, 1);
     c.style.width  = (src.width  * sc) + 'px';
     c.style.height = (src.height * sc) + 'px';
 
@@ -807,6 +825,7 @@ const App = {
     // Reset state
     this.img = null;
     this._srcCanvas = null;
+    this._loupeCanvas = null;
     this.correctedCanvas = null;
     this.baseImageData = null;
     this.corners = [];
@@ -839,33 +858,44 @@ const App = {
     const loupeCanvas = document.getElementById('loupe-canvas');
     const loupeLabel = document.getElementById('loupe-label');
     const loupeCtx = loupeCanvas.getContext('2d');
-    const LOUPE_SIZE = 320;  // canvas pixels (2x CSS size for retina)
-    const ZOOM = 4;          // magnification factor
+    const LOUPE_SIZE = 280;  // canvas resolution (2x CSS 140px for retina)
+    const ZOOM = 3;
     const cornerNames = ['Top Left', 'Top Right', 'Bottom Right', 'Bottom Left'];
+    loupeCanvas.width = LOUPE_SIZE;
+    loupeCanvas.height = LOUPE_SIZE;
 
     const getXY = e => e.touches ? e.touches[0] : e;
 
+    let loupeFrame = 0;
     const renderLoupe = (imgX, imgY, idx) => {
+      // Position loupe away from the corner being dragged
+      // Bottom corners (2,3) → show loupe at top; Top corners (0,1) → show at bottom
+      loupe.classList.remove('at-top', 'at-bottom');
+      loupe.classList.add(idx >= 2 ? 'at-top' : 'at-bottom');
       loupeLabel.textContent = cornerNames[idx];
-      loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
 
-      // Source: area around the corner in the full-res image
-      const src = this._srcCanvas || (() => {
-        const c = document.createElement('canvas');
-        c.width = this.img.naturalWidth; c.height = this.img.naturalHeight;
-        c.getContext('2d').drawImage(this.img, 0, 0);
-        return c;
-      })();
+      // Use rAF to avoid rendering faster than display
+      cancelAnimationFrame(loupeFrame);
+      loupeFrame = requestAnimationFrame(() => {
+        loupeCtx.clearRect(0, 0, LOUPE_SIZE, LOUPE_SIZE);
 
-      // How many source pixels map into the loupe
-      const srcSpan = LOUPE_SIZE / ZOOM;
-      const sx = imgX - srcSpan / 2;
-      const sy = imgY - srcSpan / 2;
+        // Draw from cached medium-res source
+        const lc = this._loupeCanvas;
+        if (!lc) return;
+        const ls = this._loupeScale;
 
-      // Use drawImage to zoom: source rect → full loupe canvas
-      loupeCtx.imageSmoothingEnabled = true;
-      loupeCtx.imageSmoothingQuality = 'high';
-      loupeCtx.drawImage(src, sx, sy, srcSpan, srcSpan, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+        // Convert image coords to loupe-cache coords
+        const lcx = imgX * ls;
+        const lcy = imgY * ls;
+
+        // Source span in loupe-cache pixels
+        const srcSpan = LOUPE_SIZE / ZOOM;
+        const sx = lcx - srcSpan / 2;
+        const sy = lcy - srcSpan / 2;
+
+        loupeCtx.imageSmoothingEnabled = true;
+        loupeCtx.drawImage(lc, sx, sy, srcSpan, srcSpan, 0, 0, LOUPE_SIZE, LOUPE_SIZE);
+      });
     };
 
     const onStart = (e, idx) => {
@@ -873,7 +903,6 @@ const App = {
       this.dragging = idx;
       handles[idx].classList.add('active');
       loupe.classList.add('active');
-      // Render initial loupe position
       if (this.corners[idx]) {
         renderLoupe(this.corners[idx].x, this.corners[idx].y, idx);
       }
@@ -896,6 +925,7 @@ const App = {
       if (this.dragging !== null) handles[this.dragging].classList.remove('active');
       this.dragging = null;
       loupe.classList.remove('active');
+      cancelAnimationFrame(loupeFrame);
     };
 
     handles.forEach((h, i) => {
