@@ -1,6 +1,6 @@
 # Five Years of Your Life — US Housing Affordability, 1960–2025
 
-**Live page:** [oaustegard.github.io/etc/](https://oaustegard.github.io/etc/)
+**Live page:** [oaustegard.github.io/etc/housing-affordability.html](https://oaustegard.github.io/etc/housing-affordability.html)
 
 A data-driven look at the US housing price-to-income ratio over six decades, with interactive charts highlighting the national trajectory and stark regional divergence.
 
