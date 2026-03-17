@@ -15,7 +15,7 @@
 - **github-search.html** — exports: `sanitizeHTML, get3DaysAgoISO, extractLinksFromFacets, displayPost`
 - **index.html**
 - **list-to-list.html** — exports: `showStatus, showSection, updateProgress, toggleDropdown, parseListUrl, resolveHandle` — imports: `bsky-lib.js`
-- **post-constellation-graph.html** — exports (33): `buildGraphData, addNode, walkReplies, renderEmbed, escHtml, getUrlParam, setUrlParam, countExplorableNodes`... — imports: `bsky-graph.js`
+- **post-constellation-graph.html** — exports (35): `buildGraphData, addNode, walkReplies, renderEmbed, escHtml, getUrlParam, setUrlParam, isNodeExplorable`... — imports: `bsky-graph.js`
 - **processor.html** — imports (7): `bsky-core.js, bsky-thread.js, bsky-quote.js, bsky-search.js, bsky-core.js`...
 - **report.html** — imports: `BlueReport.js`
 - **starterpack-to-list.html** — exports: `followRedirectUrl, findStarterPackFromUrl, showStatus, showSection, updateProgress, toggleDropdown` — imports: `bsky-lib.js`
