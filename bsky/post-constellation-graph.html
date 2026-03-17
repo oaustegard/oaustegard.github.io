@@ -269,13 +269,20 @@
     const EXPLORE_CHECK_MS = 400;   // ms between exploration checks
     const DISCOVER_FADE_MS = 1200;  // how long "just-discovered" class stays
     const EXPLORE_COOLDOWN_MS = 1200; // min ms between successive explorations
-    const INITIAL_ZOOM_SCALE = 0.7;   // start zoomed in on seed
+    const INITIAL_ZOOM_SCALE = 0.85;  // start zoomed in on seed
+
+    // Initial load limits — prevents browser crash on viral posts
+    const MAX_INITIAL_REPLIES = 20;   // max direct replies to show on load
+    const INITIAL_REPLY_DEPTH = 1;    // only direct replies initially
 
     // ── Fog-of-war state ──────────────────────────────────────────────────────────
-    const exploredSet = new Set();    // URIs whose quotes we've fetched
-    const exploringSet = new Set();   // URIs currently being fetched
-    const newNodeSet = new Set();     // recently discovered (for fade-in)
-    const dwellTimers = new Map();    // uri -> setTimeout id
+    const exploredQuotes = new Set();   // URIs whose quotes we've fetched
+    const exploredReplies = new Set();  // URIs whose replies we've fetched
+    const exploringSet = new Set();     // URIs currently being fetched
+    const newNodeSet = new Set();       // recently discovered (for fade-in)
+    const dwellTimers = new Map();      // uri -> setTimeout id
+    // Track the full thread node so we can explore replies later
+    let fullThreadDown = null;
     let torchEnabled = getUrlParam('torch') !== '0';
     let explorePaused = false;         // user can pause exploration
     let lastExploreTime = 0;           // timestamp of last exploration start
@@ -309,20 +316,25 @@
         }
       }
 
-      // Reply tree
-      function walkReplies(threadNode) {
+      // Reply tree — limited to direct replies initially (deeper replies
+      // are discovered via fog-of-war as the user pans toward reply nodes)
+      let replyCount = 0;
+      function walkReplies(threadNode, depth) {
+        if (depth > INITIAL_REPLY_DEPTH) return;
         const replies = validReplies(threadNode);
         replies.sort((a, b) => (b.post.likeCount || 0) - (a.post.likeCount || 0));
         for (const reply of replies) {
+          if (replyCount >= MAX_INITIAL_REPLIES) return;
           const rUri = reply.post.uri;
           if (!nodesMap.has(rUri)) {
             addNode(rUri, reply.post, 'reply');
             links.push({ source: threadNode.post.uri, target: rUri, type: 'thread' });
-            walkReplies(reply);
+            replyCount++;
+            walkReplies(reply, depth + 1);
           }
         }
       }
-      walkReplies(threadDown);
+      walkReplies(threadDown, 1);
 
       // Quote chain (what seed quotes) — inline from API, then fetch deeper
       const stack = extractQuoteStack(threadDown.post);
@@ -407,11 +419,18 @@
     let allExpanded = getUrlParam('ea') === '1';
     let seedUri = null;
 
+    function isNodeExplorable(n) {
+      if (exploringSet.has(n.id)) return false;
+      const hasUnexploredQuotes = (n.post.quoteCount || 0) > 0 && !exploredQuotes.has(n.id);
+      const hasUnexploredReplies = (n.post.replyCount || 0) > 0 && !exploredReplies.has(n.id);
+      return hasUnexploredQuotes || hasUnexploredReplies;
+    }
+
     function countExplorableNodes() {
       if (!graphData) return 0;
       let c = 0;
       for (const n of graphData.nodes) {
-        if ((n.post.quoteCount || 0) > 0 && !exploredSet.has(n.id) && !exploringSet.has(n.id)) c++;
+        if (isNodeExplorable(n)) c++;
       }
       return c;
     }
@@ -470,7 +489,7 @@
                 <div style="text-align:center;padding:1.5rem">
                   <div style="font-size:3rem;margin-bottom:0.75rem">&#x1f30c;</div>
                   <p style="font-size:0.875rem;margin-bottom:0.25rem">Paste a Bluesky post URL to visualize its constellation</p>
-                  <p style="font-size:0.75rem;color:#d1d5db">Navigate toward glowing nodes to discover more &mdash; like a torch in a cave</p>
+                  <p style="font-size:0.75rem;color:#d1d5db">Explore threads, replies, and quote chains &mdash; pan toward glowing nodes to discover more</p>
                 </div>
               </div>
             ` : ''}
@@ -478,7 +497,7 @@
               <div style="display:flex;align-items:center;justify-content:center;height:100%;color:#9ca3af">
                 <div style="text-align:center">
                   <div style="font-size:1.25rem" class="animate-pulse">Loading...</div>
-                  <p style="font-size:0.75rem;margin-top:0.5rem">Fetching thread and ancestors</p>
+                  <p style="font-size:0.75rem;margin-top:0.5rem">Fetching thread, ancestors, and quote chain</p>
                 </div>
               </div>
             ` : ''}
@@ -567,20 +586,27 @@
     // ── Update explorable state on card elements ────────────────────────────────
 
     function updateCardExplorableState(sel, d) {
-      const qc = d.post.quoteCount || 0;
-      const isExplorable = qc > 0 && !exploredSet.has(d.id) && !exploringSet.has(d.id);
+      const explorable = isNodeExplorable(d);
       const isExploring = exploringSet.has(d.id);
       const isNew = newNodeSet.has(d.id);
       sel
-        .classed('explorable', isExplorable)
+        .classed('explorable', explorable)
         .classed('exploring', isExploring)
         .classed('just-discovered', isNew);
 
-      // Add/remove badge
+      // Add/remove badge showing unexplored counts
       let badge = sel.select('.quote-count-badge');
-      if (isExplorable && qc > 0) {
+      if (explorable) {
+        const parts = [];
+        const qc = d.post.quoteCount || 0;
+        const rc = d.post.replyCount || 0;
+        if (qc > 0 && !exploredQuotes.has(d.id)) parts.push(qc + 'q');
+        if (rc > 0 && !exploredReplies.has(d.id)) parts.push(rc + 'r');
+        const label = parts.join('/');
         if (badge.empty()) {
-          sel.append('div').attr('class', 'quote-count-badge').text(qc + 'q');
+          sel.append('div').attr('class', 'quote-count-badge').text(label);
+        } else {
+          badge.text(label);
         }
       } else {
         if (!badge.empty()) badge.remove();
@@ -597,21 +623,54 @@
     // ── Fog-of-war: explore a node's quotes ─────────────────────────────────────
 
     async function exploreNode(uri) {
-      if (exploredSet.has(uri) || exploringSet.has(uri)) return;
+      if (exploringSet.has(uri)) return;
+      const node = graphData?.nodes.find(n => n.id === uri);
+      if (!node) return;
+
+      const hasQuotes = (node.post.quoteCount || 0) > 0 && !exploredQuotes.has(uri);
+      const hasReplies = (node.post.replyCount || 0) > 0 && !exploredReplies.has(uri);
+      if (!hasQuotes && !hasReplies) return;
+
       exploringSet.add(uri);
       updateAllExplorableStates();
       updateStats();
 
       try {
-        const posts = await fetchAllQuotePosts(uri);
-        if (posts.length > 0 && graphData) {
-          addDiscoveredPosts(posts, uri);
+        // Explore quote posts
+        if (hasQuotes) {
+          const posts = await fetchAllQuotePosts(uri);
+          if (posts.length > 0 && graphData) {
+            addDiscoveredPosts(posts, uri, 'quote');
+          }
+          exploredQuotes.add(uri);
+        }
+
+        // Explore replies by fetching the thread for this specific post
+        if (hasReplies) {
+          const thread = await fetchThreadDown(uri, 2);
+          if (thread?.$type === 'app.bsky.feed.defs#threadViewPost' && graphData) {
+            const replyPosts = [];
+            function collectReplies(threadNode, depth) {
+              if (depth > 1) return; // only direct replies per exploration
+              const replies = validReplies(threadNode);
+              replies.sort((a, b) => (b.post.likeCount || 0) - (a.post.likeCount || 0));
+              for (const r of replies) {
+                if (replyPosts.length >= 15) return; // limit per exploration batch
+                replyPosts.push(r.post);
+                collectReplies(r, depth + 1);
+              }
+            }
+            collectReplies(thread, 1);
+            if (replyPosts.length > 0) {
+              addDiscoveredPosts(replyPosts, uri, 'reply');
+            }
+          }
+          exploredReplies.add(uri);
         }
       } catch (e) {
         console.warn('Explore failed for', uri, e);
       } finally {
         exploringSet.delete(uri);
-        exploredSet.add(uri);
         updateAllExplorableStates();
         updateStats();
       }
@@ -619,21 +678,25 @@
 
     // ── Add discovered posts to the live D3 graph ───────────────────────────────
 
-    function addDiscoveredPosts(posts, quotedUri) {
+    function addDiscoveredPosts(posts, parentUri, relationType) {
       if (!graphData || !currentSim) return;
 
       const newNodes = [];
       const newLinks = [];
 
-      // Find the position of the node that was quoted, to place new nodes nearby
-      const targetNode = graphData.nodes.find(n => n.id === quotedUri);
+      // Find the position of the parent node, to place new nodes nearby
+      const targetNode = graphData.nodes.find(n => n.id === parentUri);
       const baseX = targetNode ? targetNode.x : 0;
       const baseY = targetNode ? targetNode.y : 0;
+
+      const isReply = relationType === 'reply';
+      const nodeType = isReply ? 'reply' : 'quote-post';
+      const linkType = isReply ? 'thread' : 'quote';
 
       for (const qp of posts) {
         if (!graphData.nodes.some(n => n.id === qp.uri)) {
           const node = {
-            id: qp.uri, post: qp, type: 'quote-post',
+            id: qp.uri, post: qp, type: nodeType,
             x: baseX + (Math.random() - 0.5) * 200,
             y: baseY + (Math.random() - 0.5) * 200,
           };
@@ -641,13 +704,16 @@
           newNodes.push(node);
           newNodeSet.add(qp.uri);
         }
+        // For quotes: source quotes target. For replies: source (parent) -> target (reply)
+        const srcId = isReply ? parentUri : qp.uri;
+        const tgtId = isReply ? qp.uri : parentUri;
         const linkExists = graphData.links.some(l => {
           const sId = typeof l.source === 'object' ? l.source.id : l.source;
           const tId = typeof l.target === 'object' ? l.target.id : l.target;
-          return sId === qp.uri && tId === quotedUri;
+          return sId === srcId && tId === tgtId;
         });
         if (!linkExists) {
-          const link = { source: qp.uri, target: quotedUri, type: 'quote' };
+          const link = { source: srcId, target: tgtId, type: linkType };
           graphData.links.push(link);
           newLinks.push(link);
         }
@@ -714,8 +780,7 @@
 
       const nearCenter = [];
       for (const n of graphData.nodes) {
-        const qc = n.post.quoteCount || 0;
-        if (qc <= 0 || exploredSet.has(n.id) || exploringSet.has(n.id)) continue;
+        if (!isNodeExplorable(n)) continue;
         const dx = n.x - cx;
         const dy = n.y - cy;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -1120,11 +1185,11 @@
       legendDiv.className = 'legend';
       legendDiv.innerHTML = `
         <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-          <span><span class="legend-line" style="background:#93c5fd"></span>reply</span>
+          <span><span class="legend-line" style="background:#93c5fd"></span>thread</span>
           <span><span class="legend-line" style="background:#f97316;border-top:2px dashed #f97316;height:0"></span>quote</span>
           <span><span class="legend-dot" style="background:#fbbf24;box-shadow:0 0 6px 2px rgba(251,191,36,0.4)"></span>explorable</span>
         </div>
-        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click card to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Pan toward glowing nodes to discover (one at a time)</div>
+        <div style="margin-top:4px;font-size:9px;color:#9ca3af">Click to expand &middot; Drag to reposition &middot; Scroll to zoom &middot; Pan toward glowing nodes to discover replies &amp; quotes</div>
       `;
       viewport.appendChild(legendDiv);
 
@@ -1294,7 +1359,9 @@
       if (currentSim) { currentSim.stop(); currentSim = null; }
       stopExplorationChecks();
       graphData = null;
-      exploredSet.clear();
+      fullThreadDown = null;
+      exploredQuotes.clear();
+      exploredReplies.clear();
       exploringSet.clear();
       newNodeSet.clear();
       for (const [, timer] of dwellTimers) clearTimeout(timer);
@@ -1308,16 +1375,22 @@
       try {
         const atUri = await resolveToAtUri(url);
         const [downR, upR] = await Promise.allSettled([
-          fetchThreadDown(atUri), fetchThreadUp(atUri),
+          fetchThreadDown(atUri, INITIAL_REPLY_DEPTH), fetchThreadUp(atUri),
         ]);
         const down = downR.status === 'fulfilled' ? downR.value : null;
         if (!down || down.$type !== 'app.bsky.feed.defs#threadViewPost')
           throw new Error('Thread not found or post is private');
         const up = upR.status === 'fulfilled' ? upR.value : null;
 
-        // Build initial graph — thread + quote chain only; quote-posts
-        // discovered progressively via fog-of-war as user pans/zooms
+        // Build initial graph — limited thread + quote chain only;
+        // deeper replies and quote-posts discovered progressively
+        // via fog-of-war as user pans toward explorable nodes
+        fullThreadDown = down;
         const rawData = await buildGraphData(atUri, down, up);
+
+        // Mark seed as reply-explored (we loaded its direct replies)
+        // but NOT quote-explored (quotes are always progressive)
+        exploredReplies.add(atUri);
 
         renderApp({ loading: false, error: '', hasGraph: true });
         initGraph(rawData);
