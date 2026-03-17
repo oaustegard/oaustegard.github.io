@@ -31,8 +31,8 @@ export async function resolveToAtUri(input) {
 
 // ── Post / thread fetching ──────────────────────────────────────────────────
 
-export async function fetchThreadDown(atUri) {
-  const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=1000&parentHeight=0');
+export async function fetchThreadDown(atUri, depth = 1000) {
+  const r = await fetch(API + 'app.bsky.feed.getPostThread?uri=' + encodeURIComponent(atUri) + '&depth=' + depth + '&parentHeight=0');
   if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.message || 'API error ' + r.status); }
   return (await r.json()).thread;
 }
