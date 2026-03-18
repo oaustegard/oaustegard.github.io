@@ -1,11 +1,13 @@
 # bsky/
-*Files: 18*
+*Files: 20*
 
 ## Files
 
 - **BlueReport.js**
 - **at-protocol-extension.html**
 - **bsky-core.js** — exports (14): `initializeBskyCore, resetProcessing, anonymize, formatPostForOutput, getRelativeTime, safeGetCreatedAt, reconstructTextWithFacets, extractPostInfo`... — imports: `bsky-lib.js`
+- **bsky-engagement-demo.html** — imports: `bsky-engagement.js`
+- **bsky-engagement.js**
 - **bsky-graph.js** — exports (15): `parseBskyUrl, resolveToAtUri, fetchThreadDown, fetchThreadUp, fetchPost, fetchAllQuotePosts, fetchQuoteWeb, viewRecordToPost`...
 - **bsky-lib.js** — exports (15): `initializeLib, login, logout, checkStoredSession, getAgent, getAuthAgent, getPublicAgent, resolveSkyLink`...
 - **bsky-quote.js** — exports: `processQuotes` — imports: `bsky-core.js`
