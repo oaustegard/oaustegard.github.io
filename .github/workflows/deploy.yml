@@ -1,0 +1,121 @@
+# Deploy site to GitHub Pages without Jekyll.
+# The site is pure HTML/JS/CSS - no Liquid templates or layouts are used.
+# We handle Jekyll's two real jobs manually:
+#   1. Strip front matter from 404.html
+#   2. Generate sitemap.xml (replacing jekyll-sitemap plugin)
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - '.github/**'
+      - '.claude/**'
+      - '.gitignore'
+      - '_MAP.md'
+      - 'README*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Prepare deploy directory
+        run: |
+          mkdir -p /tmp/gh-deploy
+          rsync -a \
+            --exclude='.git/' \
+            --exclude='.github/' \
+            --exclude='.claude/' \
+            --exclude='Gemfile' \
+            --exclude='Gemfile.lock' \
+            --exclude='_config.yml' \
+            --exclude='_MAP.md' \
+            --exclude='_site/' \
+            --exclude='package.json' \
+            --exclude='package-lock.json' \
+            --exclude='playwright.config.js' \
+            --exclude='tests/' \
+            --exclude='AGENTS.md' \
+            --exclude='CLAUDE.md' \
+            --exclude='README.md' \
+            --exclude='LICENSE' \
+            ./ /tmp/gh-deploy/
+          # Strip Jekyll front matter from 404.html (only HTML file that has it)
+          python3 -c "
+          import re
+          with open('/tmp/gh-deploy/404.html', 'r') as f:
+              content = f.read()
+          content = re.sub(r'^---\n.*?\n---\n', '', content, flags=re.DOTALL)
+          with open('/tmp/gh-deploy/404.html', 'w') as f:
+              f.write(content)
+          "
+          # Generate sitemap.xml (replaces jekyll-sitemap plugin)
+          python3 - <<'EOF'
+          import os, datetime
+          base_url = "https://austegard.com"
+          now = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+          deploy_dir = "/tmp/gh-deploy"
+          urls = []
+          for root, dirs, files in os.walk(deploy_dir):
+              dirs[:] = sorted(d for d in dirs if not d.startswith('.'))
+              for f in sorted(files):
+                  if f.endswith('.html'):
+                      rel = os.path.relpath(os.path.join(root, f), deploy_dir)
+                      urls.append("/" + rel)
+          lines = [
+              '<?xml version="1.0" encoding="UTF-8"?>',
+              '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">',
+          ]
+          for url in sorted(urls):
+              lines.append(f'  <url><loc>{base_url}{url}</loc><lastmod>{now}</lastmod></url>')
+          lines.append('</urlset>')
+          with open(os.path.join(deploy_dir, "sitemap.xml"), "w") as f:
+              f.write("\n".join(lines) + "\n")
+          print(f"Generated sitemap.xml with {len(urls)} URLs")
+          EOF
+
+      - name: Create pages artifact
+        run: |
+          tar \
+            --dereference --hard-dereference \
+            --directory /tmp/gh-deploy \
+            -cvf "$RUNNER_TEMP/artifact.tar" \
+            --exclude=.git \
+            --exclude=.github \
+            .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: ${{ runner.temp }}/artifact.tar
+          retention-days: 1
+          if-no-files-found: error
+
+  deploy:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
