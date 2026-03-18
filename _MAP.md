@@ -1,10 +1,11 @@
 # oaustegard.github.io/
-*Files: 6 | Subdirectories: 11*
+*Files: 6 | Subdirectories: 12*
 
 ## Subdirectories
 
 - [ai-tools/](./ai-tools/_MAP.md)
 - [biking/](./biking/_MAP.md)
+- [blog/](./blog/_MAP.md)
 - [bsky/](./bsky/_MAP.md)
 - [etc/](./etc/_MAP.md)
 - [found/](./found/_MAP.md)
