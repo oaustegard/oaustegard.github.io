@@ -1,5 +1,5 @@
 # oaustegard.github.io/
-*Files: 6 | Subdirectories: 12*
+*Files: 7 | Subdirectories: 12*
 
 ## Subdirectories
 
@@ -19,6 +19,7 @@
 ## Files
 
 - **404.html** — exports: `showNotFoundMessage`
+- **atproto-did.html**
 - **index.html**
 - **no_ssl.html** — exports: `getQueryParam`
 - **playwright.config.js**
