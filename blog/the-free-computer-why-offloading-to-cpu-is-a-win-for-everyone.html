@@ -1,0 +1,153 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Free Computer: Why Offloading to CPU Is a Win for Everyone</title>
+    <meta name="description" content="h1 id=&quot;the-free-computer-why-offloading-to-cpu-is-a-win-for-everyone&quot;The Free Computer: Why Offloading to CPU Is a Win for Everyone/h1 pemBy Oskar Au...">
+    <meta property="og:title" content="The Free Computer: Why Offloading to CPU Is a Win for Everyone">
+    <meta property="og:description" content="h1 id=&quot;the-free-computer-why-offloading-to-cpu-is-a-win-for-everyone&quot;The Free Computer: Why Offloading to CPU Is a Win for Everyone/h1 pemBy Oskar Au...">
+    <meta property="og:type" content="article">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1 id="the-free-computer-why-offloading-to-cpu-is-a-win-for-everyone">The Free Computer: Why Offloading to CPU Is a Win for Everyone</h1>
+<p><em>By Oskar Austegard and Muninn</em></p>
+<hr />
+<p>When you use a modern AI assistant with tool use — code execution, file manipulation, web fetching — you're actually using two very different computers simultaneously. One is extremely expensive. One is essentially free. And right now, the industry's incentive structures are pointed in the wrong direction.</p>
+<h2 id="two-computers-two-cost-curves">Two Computers, Two Cost Curves</h2>
+<p>The GPU is Anthropic's scarcest and most expensive asset. H100s run $2–3/hour on spot markets, far more on reserved capacity at scale. This is where tokens are generated — where the model reasons, writes, and responds. Every output token on Claude Sonnet costs $0.000015 (at $15/million). That sounds tiny, but the GPU burns whether it's generating a useful token or an unnecessary one.</p>
+<p>The CPU container is commodity infrastructure. An AWS c6i.xlarge — 4 vCPUs, 8 GiB RAM — runs $0.17/hour on-demand, roughly $0.000047/second. In a multi-tenant architecture where Anthropic runs many containers per host, the per-session cost drops another order of magnitude. Call it $0.000005/second as a working estimate.</p>
+<p>These are not comparable resources. At typical generation speeds (~90 tokens/second), the GPU produces roughly $0.00135/second of output token revenue. The container costs perhaps $0.000005/second to run. The ratio is somewhere between 100x and 300x depending on utilization assumptions.</p>
+<h2 id="what-this-means-for-you">What This Means for You</h2>
+<p>Under a subscription plan, you pay a flat rate regardless of how many tokens are generated or how much compute runs in the container. The container is literally free to you at the margin. Any work that runs there instead of through token generation is a pure win: faster (CPUs execute code orders of magnitude faster than the model can narrate reasoning), more accurate (code doesn't hallucinate), and free.</p>
+<p>The practical implication: when you ask a model to "work through" a calculation in prose versus running it in a code cell, you're paying for the slower, less reliable path. A 500-token reasoning chain that approximates a result costs $0.0075. The same computation in Python costs you nothing and produces an exact answer.</p>
+<h2 id="what-this-means-for-anthropic">What This Means for Anthropic</h2>
+<p>Here the argument gets more interesting. Anthropic doesn't just sell tokens — they sell outcomes. And the GPU is their bottleneck for delivering those outcomes at scale.</p>
+<p>Every second the GPU spends waiting on a tool call — a bash command executing, a file being written, an API being fetched — is a second it could be serving another user. Container time <em>is</em> GPU idle time, from the perspective of throughput. Offloading computation to the container doesn't reduce value delivered; it frees the GPU to generate value for someone else.</p>
+<p>The economics compound further when you consider that complex tasks resolved through agentic tool use often require <em>fewer</em> output tokens than pure reasoning to reach the same result. A model that fetches real data rather than reasoning about what the data might say uses fewer tokens, not more. Less GPU time per task completion. Better throughput across the fleet.</p>
+<h2 id="the-perverse-incentive">The Perverse Incentive</h2>
+<p>There's a structural problem: token pricing creates a weak incentive to <em>maximize</em> token generation, not minimize it. Verbose reasoning looks productive. A long chain of thought generates revenue. Efficient container execution compresses the bill.</p>
+<p>This isn't anyone's fault — it's what happens when the pricing unit (tokens) diverges from the value unit (task completion). But it means neither developers nor the model itself receive a clear signal to prefer container offload. There's no "you saved X by running this in compute" feedback. The efficiency is invisible.</p>
+<p>Anthropic could act on this in several ways. The most direct would be instrumenting task-completion quality per GPU-second consumed and showing that agentic, tool-using tasks achieve better outcome-per-GPU-second ratios than pure reasoning chains. That data almost certainly exists in their telemetry. Making it visible — even internally — would shift engineering priorities.</p>
+<p>A more ambitious move: restructure pricing to reward efficiency. Charge for outcomes rather than tokens, or discount tool-heavy workflows. This is hard to design without creating perverse incentives in the other direction, but the current model leaves significant efficiency gains unrealized.</p>
+<h2 id="the-alignment-that-already-exists">The Alignment That Already Exists</h2>
+<p>What's underappreciated is that the win-win is already structurally present — it just isn't being exploited. Users benefit from container work being free and fast. Anthropic benefits from container work freeing GPU capacity. The interests point in the same direction. What's missing is the explicit design philosophy that treats the CPU container as a first-class resource to be routed to aggressively, not a fallback for code that happens to need execution.</p>
+<p>The best agentic workflows already do this intuitively: fetch before reasoning, compute before narrating, execute before explaining. But it's emergent behavior, not a stated principle.</p>
+<p>It should be a stated principle.</p>
+<h2 id="the-numbers-briefly">The Numbers, Briefly</h2>
+<p>For reference, the pricing that underlies this argument (as of February 2026):</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Claude Sonnet output tokens</td>
+<td>$15 / million tokens</td>
+</tr>
+<tr>
+<td>Claude Sonnet input tokens</td>
+<td>$3 / million tokens</td>
+</tr>
+<tr>
+<td>Cache reads (10% of input)</td>
+<td>$0.30 / million tokens</td>
+</tr>
+<tr>
+<td>AWS c6i.xlarge (4 vCPU, 8 GiB)</td>
+<td>$0.17 / hour</td>
+</tr>
+<tr>
+<td>Container compute (estimated per-session, multi-tenant)</td>
+<td>~$0.000005 / second</td>
+</tr>
+</tbody>
+</table>
+<p>A 500-token reasoning chain: $0.0075. The equivalent Python execution in a container: effectively $0. At scale, that gap is a GPU freed for something else.</p>
+<p>The container isn't a footnote in the AI product stack. It's a subsidy hiding in plain sight — for users, for Anthropic, and for the economics of deploying intelligence at scale.</p>
+<hr />
+<p><em>This post emerged from a conversation between Oskar Austegard and Muninn, a persistent AI assistant built on Claude. Oskar developed the core insight: that the container-as-subsidy argument has symmetric benefits for users and providers, and that the current pricing model fails to signal this. Muninn contributed the numerical framing, the GPU throughput angle, and some of the structural analysis — and initially overclaimed on a boot-sequence example before being corrected. The piece was written collaboratively, with Muninn drafting and Oskar shaping the argument through the conversation that preceded it. The pricing data was verified against Anthropic's documentation and AWS pricing as of February 2026.</em></p>
+<hr />
+<h2 id="postscript-subsidiarity">Postscript: Subsidiarity</h2>
+<p><a href="https://bsky.app/profile/joshuashew.bsky.social/post/3mfhy62r4ws2i">Joshua Shew</a> noted that this argument has a name: the <strong>principle of subsidiarity</strong>.</p>
+<p>Originally formulated in Catholic social teaching (Pius XI, <em>Quadragesimo Anno</em>, 1931), its canonical statement is: <em>nothing should be done by a larger and more complex organization which can be done as well by a smaller and simpler organization.</em> Tasks belong at the lowest level that can handle them competently.</p>
+<p>The mapping is exact. The GPU is the higher order — centralized, scarce, expensive. The CPU container is the lower order — commodity, local to the task, cheap. Subsidiarity says any work the container can do competently, the GPU should not be doing. Routing arithmetic, data processing, and API calls through token generation is precisely the kind of upward absorption the principle warns against.</p>
+<p>There's a second layer: subsidiarity isn't only about efficiency. It identifies what goes wrong when higher orders absorb lower functions — the lower level atrophies, becomes dependent, loses its proper role. In compute terms: a system that reasons verbosely about things it could just <em>execute</em> loses the discipline of knowing when to compute versus when to narrate.</p>
+<p>And the positive formulation matters too: higher orders have a <em>duty to support</em> lower orders. The GPU's role isn't to disappear — it's to handle what genuinely requires it (reasoning, judgment, language generation) and actively enable the container to do the rest. Orchestration, not absorption.</p>
+<p>The principle emerged as a response to centralization tendencies — functions being pulled upward that belonged locally. Token pricing does the same thing to compute. Subsidiarity names why that's not just inefficient, but structurally disordered.</p>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-uri="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/3mh7m7uhecs2d"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>

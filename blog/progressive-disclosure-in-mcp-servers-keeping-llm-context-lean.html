@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Progressive Disclosure in MCP Servers: Keeping LLM Context Lean</title>
+    <meta name="description" content="h1 id=&quot;progressive-disclosure-in-mcp-servers-keeping-llm-context-lean&quot;Progressive Disclosure in MCP Servers: Keeping LLM Context Lean/h1 pMCP (Model Co...">
+    <meta property="og:title" content="Progressive Disclosure in MCP Servers: Keeping LLM Context Lean">
+    <meta property="og:description" content="h1 id=&quot;progressive-disclosure-in-mcp-servers-keeping-llm-context-lean&quot;Progressive Disclosure in MCP Servers: Keeping LLM Context Lean/h1 pMCP (Model Co...">
+    <meta property="og:type" content="article">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1 id="progressive-disclosure-in-mcp-servers-keeping-llm-context-lean">Progressive Disclosure in MCP Servers: Keeping LLM Context Lean</h1>
+<p>MCP (Model Context Protocol) servers give LLMs access to external systems, but naive implementations waste thousands of tokens on tool schemas and verbose responses. This post covers patterns for context-efficient MCP design.</p>
+<h2 id="the-problem-schema-and-response-bloat">The Problem: Schema and Response Bloat</h2>
+<p>A typical API wrapper exposes one MCP tool per endpoint. Each tool carries its own schema into the LLM's context window. An integration with 8 operations might consume ~480 tokens in schema alone; a gateway pattern can reduce this to ~120 tokens—a 75% reduction.</p>
+<p>The tax compounds across every enabled MCP server. A workspace with 5-6 servers can burn 2,000+ tokens before the conversation starts.</p>
+<p>Response verbosity compounds the problem. APIs return everything; LLMs need only what's relevant to the current task.</p>
+<h2 id="pattern-1-gateway-tool-with-action-dispatch">Pattern 1: Gateway Tool with Action Dispatch</h2>
+<p>Consolidate operations into a single tool with an <code>action</code> discriminator:</p>
+<div class="codehilite"><pre><span></span><code><span class="nd">@mcp</span><span class="o">.</span><span class="n">tool</span><span class="p">()</span>
+<span class="k">async</span> <span class="k">def</span><span class="w"> </span><span class="nf">gateway</span><span class="p">(</span>
+    <span class="n">action</span><span class="p">:</span> <span class="n">Literal</span><span class="p">[</span><span class="s2">&quot;discover&quot;</span><span class="p">,</span> <span class="s2">&quot;list&quot;</span><span class="p">,</span> <span class="s2">&quot;get&quot;</span><span class="p">,</span> <span class="s2">&quot;search&quot;</span><span class="p">,</span> <span class="s2">&quot;export&quot;</span><span class="p">],</span>
+    <span class="nb">id</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="n">query</span><span class="p">:</span> <span class="nb">str</span> <span class="o">|</span> <span class="kc">None</span> <span class="o">=</span> <span class="kc">None</span><span class="p">,</span>
+    <span class="c1"># ... other params with defaults</span>
+<span class="p">)</span> <span class="o">-&gt;</span> <span class="nb">dict</span><span class="p">:</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Service gateway. Actions: discover, list, get, search, export.&quot;&quot;&quot;</span>
+
+    <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;discover&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span><span class="o">...</span><span class="p">}</span>  <span class="c1"># Capability manifest</span>
+    <span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;list&quot;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="p">{</span><span class="o">...</span><span class="p">}</span>
+    <span class="c1"># dispatch to implementations</span>
+</code></pre></div>
+
+<p>The LLM sees one tool schema. The docstring hints at available actions. Full documentation lives behind <code>discover</code>.</p>
+<h2 id="pattern-2-on-demand-capability-discovery">Pattern 2: On-Demand Capability Discovery</h2>
+<p>Instead of cramming usage details into the schema, expose a <code>discover</code> action that returns structured guidance only when needed:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">if</span> <span class="n">action</span> <span class="o">==</span> <span class="s2">&quot;discover&quot;</span><span class="p">:</span>
+    <span class="k">return</span> <span class="p">{</span>
+        <span class="s2">&quot;CRITICAL_RULES&quot;</span><span class="p">:</span> <span class="p">[</span>
+            <span class="s2">&quot;Hard constraints the LLM must never violate&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;Filesystem or permission boundaries&quot;</span><span class="p">,</span> 
+            <span class="s2">&quot;Token hygiene requirements&quot;</span>
+        <span class="p">],</span>
+        <span class="s2">&quot;ACTION_SELECTION&quot;</span><span class="p">:</span> <span class="p">{</span>
+            <span class="s2">&quot;search&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;purpose&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;use_when&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">},</span>
+            <span class="s2">&quot;export&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;purpose&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">,</span> <span class="s2">&quot;use_when&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">}</span>
+        <span class="p">},</span>
+        <span class="s2">&quot;capabilities&quot;</span><span class="p">:</span> <span class="p">[</span><span class="o">...</span><span class="p">],</span>
+        <span class="s2">&quot;filters&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">}</span>
+    <span class="p">}</span>
+</code></pre></div>
+
+<p>Simple requests skip discovery entirely. Complex workflows pay the documentation tax once per session.</p>
+<h2 id="pattern-3-response-embedded-guidance">Pattern 3: Response-Embedded Guidance</h2>
+<p>External "skills" or system prompts drift out of sync with server behavior. Embed guidance directly in responses, scoped to the data just returned:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">response</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;data&quot;</span><span class="p">:</span> <span class="n">results</span><span class="p">}</span>
+
+<span class="k">if</span> <span class="n">results_contain_sensitive_pattern</span><span class="p">:</span>
+    <span class="n">response</span><span class="p">[</span><span class="s2">&quot;GUIDANCE&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="p">{</span>
+        <span class="s2">&quot;note&quot;</span><span class="p">:</span> <span class="s2">&quot;Results contain [pattern] requiring special handling&quot;</span><span class="p">,</span>
+        <span class="s2">&quot;workflow&quot;</span><span class="p">:</span> <span class="p">[</span>
+            <span class="s2">&quot;Step 1: ...&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;Step 2: ...&quot;</span><span class="p">,</span>
+            <span class="s2">&quot;NEVER do X&quot;</span>
+        <span class="p">]</span>
+    <span class="p">}</span>
+<span class="k">return</span> <span class="n">response</span>
+</code></pre></div>
+
+<p>The LLM receives instructions at the moment of decision, tied to specific data. No stale documentation. No wasted tokens when the guidance doesn't apply.</p>
+<h2 id="pattern-4-default-on-response-filtering">Pattern 4: Default-On Response Filtering</h2>
+<p>APIs return complete objects. LLMs usually need a subset. Filter and compact responses by default:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># API returns</span>
+<span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;abc123&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="s2">&quot;2025-01-05T14:32:05.882Z&quot;</span><span class="p">,</span> 
+ <span class="s2">&quot;author&quot;</span><span class="p">:</span> <span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;u789&quot;</span><span class="p">,</span> <span class="s2">&quot;email&quot;</span><span class="p">:</span> <span class="s2">&quot;jdoe@example.com&quot;</span><span class="p">,</span> <span class="s2">&quot;displayName&quot;</span><span class="p">:</span> <span class="s2">&quot;Doe, John&quot;</span><span class="p">,</span> <span class="s2">&quot;avatar&quot;</span><span class="p">:</span> <span class="s2">&quot;...&quot;</span><span class="p">},</span>
+ <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello&quot;</span><span class="p">,</span> <span class="s2">&quot;metadata&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">}}</span>
+
+<span class="c1"># Server returns (compact=True, default)</span>
+<span class="p">{</span><span class="s2">&quot;ts&quot;</span><span class="p">:</span> <span class="s2">&quot;2025-01-05T14:32&quot;</span><span class="p">,</span> <span class="s2">&quot;from&quot;</span><span class="p">:</span> <span class="s2">&quot;jdoe&quot;</span><span class="p">,</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello&quot;</span><span class="p">}</span>
+
+<span class="c1"># Server returns (compact=False, when IDs needed for follow-up)</span>
+<span class="p">{</span><span class="s2">&quot;id&quot;</span><span class="p">:</span> <span class="s2">&quot;abc123&quot;</span><span class="p">,</span> <span class="s2">&quot;created&quot;</span><span class="p">:</span> <span class="s2">&quot;2025-01-05T14:32:05.882Z&quot;</span><span class="p">,</span> <span class="s2">&quot;author&quot;</span><span class="p">:</span> <span class="p">{</span><span class="o">...</span><span class="p">},</span> <span class="s2">&quot;content&quot;</span><span class="p">:</span> <span class="s2">&quot;Hello&quot;</span><span class="p">}</span>
+</code></pre></div>
+
+<p>Design principles:</p>
+<ul>
+<li>Strip fields the LLM won't use (avatars, internal IDs, verbose timestamps)</li>
+<li>Normalize repeated structures (deduplicate authors into a lookup table)</li>
+<li>Offer a full-fidelity mode for workflows that need complete data</li>
+<li>Document when to use which mode</li>
+</ul>
+<h2 id="pattern-5-proactive-warnings">Pattern 5: Proactive Warnings</h2>
+<p>When response data could cause downstream problems, warn explicitly:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">if</span> <span class="nb">len</span><span class="p">(</span><span class="n">results</span><span class="p">)</span> <span class="o">&gt;</span> <span class="mi">100</span><span class="p">:</span>
+    <span class="n">response</span><span class="p">[</span><span class="s2">&quot;WARNING&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;Large result set. Consider narrower filters.&quot;</span>
+
+<span class="k">if</span> <span class="n">total_chars</span> <span class="o">&gt;</span> <span class="mi">50000</span><span class="p">:</span>
+    <span class="n">response</span><span class="p">[</span><span class="s2">&quot;TOKEN_WARNING&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="sa">f</span><span class="s2">&quot;~</span><span class="si">{</span><span class="n">total_chars</span><span class="w"> </span><span class="o">//</span><span class="w"> </span><span class="mi">4</span><span class="si">}</span><span class="s2"> tokens. Consider pagination or smaller scope.&quot;</span>
+
+<span class="k">if</span> <span class="n">results_written_to_external_filesystem</span><span class="p">:</span>
+    <span class="n">response</span><span class="p">[</span><span class="s2">&quot;NOTE&quot;</span><span class="p">]</span> <span class="o">=</span> <span class="s2">&quot;File written to user&#39;s machine. You cannot access it.&quot;</span>
+</code></pre></div>
+
+<p>This steers the LLM toward self-correction before problems manifest.</p>
+<h2 id="implementation-checklist">Implementation Checklist</h2>
+<p>A context-efficient MCP server:</p>
+<ul>
+<li>[ ] Single gateway tool with action dispatch (or minimal tool count with clear separation)</li>
+<li>[ ] <code>discover</code> action for on-demand capability documentation</li>
+<li>[ ] Response-embedded guidance, scoped to returned data</li>
+<li>[ ] Compact output by default; full fidelity opt-in</li>
+<li>[ ] Proactive warnings for large responses, permission boundaries, token hazards</li>
+<li>[ ] Default limits on unbounded operations (pagination, result caps)</li>
+</ul>
+<h2 id="appendix-embedded-skill-template">Appendix: Embedded Skill Template</h2>
+<p>For MCP authors who want to provide skill-like guidance to consuming LLMs, structure your <code>discover</code> response (or documentation) like this:</p>
+<div class="codehilite"><pre><span></span><code><span class="cp">## Critical Rules</span>
+<span class="o">-</span><span class="w"> </span><span class="p">[</span><span class="n">Hard</span><span class="w"> </span><span class="n">constraints</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="n">filesystem</span><span class="w"> </span><span class="n">boundaries</span><span class="p">,</span><span class="w"> </span><span class="n">token</span><span class="w"> </span><span class="n">limits</span><span class="p">,</span><span class="w"> </span><span class="n">permission</span><span class="w"> </span><span class="n">scope</span><span class="p">]</span>
+
+<span class="cp">## Action Selection</span>
+<span class="o">|</span><span class="w"> </span><span class="n">Action</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Returns</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Use</span><span class="w"> </span><span class="n">When</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|--------|---------|----------|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">list</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Collection</span><span class="w"> </span><span class="n">summary</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Need</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">browse</span><span class="o">/</span><span class="n">select</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">get</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Single</span><span class="w"> </span><span class="n">item</span><span class="w"> </span><span class="n">detail</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Have</span><span class="w"> </span><span class="n">specific</span><span class="w"> </span><span class="n">ID</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">search</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Filtered</span><span class="w"> </span><span class="n">results</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Need</span><span class="w"> </span><span class="n">subset</span><span class="w"> </span><span class="n">matching</span><span class="w"> </span><span class="n">criteria</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">export</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">File</span><span class="w"> </span><span class="n">path</span><span class="w"> </span><span class="p">(</span><span class="n">external</span><span class="p">)</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">User</span><span class="w"> </span><span class="n">wants</span><span class="w"> </span><span class="n">local</span><span class="w"> </span><span class="k">copy</span><span class="w"> </span><span class="o">|</span>
+
+<span class="cp">## Parameter Reference  </span>
+<span class="o">|</span><span class="w"> </span><span class="n">Param</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Default</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Notes</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|-------|---------|-------|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">compact</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nb">true</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="nb">false</span><span class="w"> </span><span class="n">when</span><span class="w"> </span><span class="n">IDs</span><span class="w"> </span><span class="n">needed</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">follow</span><span class="o">-</span><span class="n">up</span><span class="w"> </span><span class="n">calls</span><span class="w"> </span><span class="o">|</span>
+<span class="o">|</span><span class="w"> </span><span class="n">limit</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="mi">50</span><span class="w"> </span><span class="o">|</span><span class="w"> </span><span class="n">Cap</span><span class="w"> </span><span class="n">results</span><span class="p">;</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="n">pagination</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="n">more</span><span class="w"> </span><span class="o">|</span>
+
+<span class="cp">## Common Workflows</span>
+<span class="o">**</span><span class="p">[</span><span class="n">Workflow</span><span class="w"> </span><span class="n">name</span><span class="p">]</span><span class="o">**:</span><span class="w"> </span><span class="n">step</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">step</span><span class="w"> </span><span class="mi">2</span><span class="w"> </span><span class="err">→</span><span class="w"> </span><span class="n">completion</span><span class="w"> </span><span class="n">criteria</span>
+
+<span class="cp">## Output Modes</span>
+<span class="o">-</span><span class="w"> </span><span class="n">compact</span><span class="w"> </span><span class="p">(</span><span class="k">default</span><span class="p">)</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="n">what</span><span class="err">&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">included</span><span class="p">],</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="p">[</span><span class="n">scenarios</span><span class="p">]</span>
+<span class="o">-</span><span class="w"> </span><span class="n">full</span><span class="o">:</span><span class="w"> </span><span class="p">[</span><span class="n">what</span><span class="err">&#39;</span><span class="n">s</span><span class="w"> </span><span class="n">added</span><span class="p">],</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="p">[</span><span class="n">scenarios</span><span class="p">]</span>
+</code></pre></div>
+
+<p>This gives LLMs enough information to use the tool correctly without external prompts that drift from actual behavior.</p>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-uri="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/3mbq254kdvd2x"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>

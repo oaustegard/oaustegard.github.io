@@ -1,0 +1,576 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Numbers Every Claude.ai Container Skill Developer Should Know</title>
+    <meta name="description" content="h1 id=&quot;numbers-every-claudeai-skill-developer-should-know&quot;Numbers Every Claude.ai Skill Developer Should Know/h1 pemInspired by a href=&quot;https://high...">
+    <meta property="og:title" content="Numbers Every Claude.ai Container Skill Developer Should Know">
+    <meta property="og:description" content="h1 id=&quot;numbers-every-claudeai-skill-developer-should-know&quot;Numbers Every Claude.ai Skill Developer Should Know/h1 pemInspired by a href=&quot;https://high...">
+    <meta property="og:type" content="article">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1 id="numbers-every-claudeai-skill-developer-should-know">Numbers Every Claude.ai Skill Developer Should Know</h1>
+<p><em>Inspired by <a href="https://highscalability.com/google-pro-tip-use-back-of-the-envelope-calculations-to-choo/">Jeff Dean's "Numbers Everyone Should Know"</a> — adapted for the Claude.ai Container Compute Environment. Empirically researched and written by Claude opus 4.6</em></p>
+<p>Jeff Dean's insight was that engineers who internalize a few key performance numbers can evaluate design alternatives on the back of an envelope — without building prototypes. The same principle applies to designing Skills for Claude.ai. Every tool call, file read, package install, and line of generated code has both a <strong>time cost</strong> (user-experienced latency) and a <strong>token cost</strong> (dollars). Skill authors who know these numbers will write faster, cheaper, and more effective skills. Those who don't will produce skills that feel sluggish and burn through token budgets.</p>
+<p>This document provides the reference numbers, measured empirically in a live Claude.ai container (February 2026). Skim the summary table, absorb the design rules, and refer to the appendix when you need specifics.</p>
+<hr />
+<h2 id="at-a-glance">At a Glance</h2>
+<div class="codehilite"><pre><span></span><code><span class="n">Python</span><span class="w"> </span><span class="n">startup</span><span class="w">                              </span><span class="mi">40</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Import</span><span class="w"> </span><span class="n">numpy</span><span class="w">                               </span><span class="mi">200</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Import</span><span class="w"> </span><span class="n">pandas</span><span class="w">                              </span><span class="mi">860</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Import</span><span class="w"> </span><span class="n">sklearn</span><span class="w">                           </span><span class="mi">2</span><span class="p">,</span><span class="mi">750</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">uv</span><span class="w"> </span><span class="n">pip</span><span class="w"> </span><span class="n">install</span><span class="w"> </span><span class="p">(</span><span class="n">any</span><span class="w"> </span><span class="n">complexity</span><span class="p">)</span><span class="w">          </span><span class="o">~</span><span class="mi">800</span><span class="w"> </span><span class="n">ms</span><span class="w">       </span><span class="err">←</span><span class="w"> </span><span class="n">always</span><span class="w"> </span><span class="n">use</span><span class="w"> </span><span class="n">uv</span>
+<span class="n">pip</span><span class="w"> </span><span class="n">install</span><span class="w"> </span><span class="p">(</span><span class="n">light</span><span class="p">)</span><span class="w">                      </span><span class="mi">3</span><span class="p">,</span><span class="mi">500</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">pip</span><span class="w"> </span><span class="n">install</span><span class="w"> </span><span class="p">(</span><span class="n">heavy</span><span class="p">)</span><span class="w">                     </span><span class="mi">91</span><span class="p">,</span><span class="mi">000</span><span class="w"> </span><span class="n">ms</span><span class="w">       </span><span class="err">←</span><span class="w"> </span><span class="mi">113</span><span class="err">×</span><span class="w"> </span><span class="n">slower</span><span class="w"> </span><span class="n">than</span><span class="w"> </span><span class="n">uv</span>
+<span class="n">npm</span><span class="w"> </span><span class="n">install</span><span class="w"> </span><span class="n">express</span><span class="w">                      </span><span class="mi">4</span><span class="p">,</span><span class="mi">500</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Playwright</span><span class="w"> </span><span class="n">browser</span><span class="w"> </span><span class="n">launch</span><span class="w">               </span><span class="mi">1</span><span class="p">,</span><span class="mi">725</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Write</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">MB</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="n">disk</span><span class="w">                        </span><span class="mi">84</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Read</span><span class="w"> </span><span class="mi">100</span><span class="w"> </span><span class="n">MB</span><span class="w"> </span><span class="n">from</span><span class="w"> </span><span class="n">disk</span><span class="w">                       </span><span class="mi">42</span><span class="w"> </span><span class="n">ms</span>
+<span class="n">Tool</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="nb">round</span><span class="o">-</span><span class="n">trip</span><span class="w"> </span><span class="p">(</span><span class="n">minimum</span><span class="p">)</span><span class="w">           </span><span class="mi">3</span><span class="p">,</span><span class="mi">000</span><span class="w"> </span><span class="n">ms</span><span class="w">       </span><span class="err">←</span><span class="w"> </span><span class="n">the</span><span class="w"> </span><span class="n">dominant</span><span class="w"> </span><span class="n">cost</span>
+<span class="n">Tool</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="nb">round</span><span class="o">-</span><span class="n">trip</span><span class="w"> </span><span class="p">(</span><span class="n">web_search</span><span class="p">)</span><span class="w">    </span><span class="mi">5</span><span class="p">,</span><span class="mi">000</span><span class="err">–</span><span class="mi">10</span><span class="p">,</span><span class="mi">000</span><span class="w"> </span><span class="n">ms</span>
+
+<span class="o">---</span><span class="w"> </span><span class="n">Token</span><span class="w"> </span><span class="n">costs</span><span class="w"> </span><span class="n">at</span><span class="w"> </span><span class="n">Opus</span><span class="w"> </span><span class="mf">4.5</span><span class="w"> </span><span class="n">rates</span><span class="w"> </span><span class="p">(</span><span class="o">$</span><span class="mi">5</span><span class="o">/$</span><span class="mi">25</span><span class="w"> </span><span class="n">per</span><span class="w"> </span><span class="n">MTok</span><span class="w"> </span><span class="ow">in</span><span class="o">/</span><span class="n">out</span><span class="p">)</span><span class="w"> </span><span class="o">---</span>
+<span class="mi">1</span><span class="w"> </span><span class="k">tool</span><span class="w"> </span><span class="n">call</span><span class="w"> </span><span class="n">overhead</span><span class="w">                    </span><span class="o">~</span><span class="mi">50</span><span class="w"> </span><span class="n">tokens</span><span class="w">      </span><span class="o">~$</span><span class="mf">0.001</span>
+<span class="n">Read</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="n">KB</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="p">(</span><span class="n">input</span><span class="p">)</span><span class="w">              </span><span class="o">~</span><span class="mi">2</span><span class="p">,</span><span class="mi">600</span><span class="w"> </span><span class="n">tokens</span><span class="w">      </span><span class="o">~$</span><span class="mf">0.013</span>
+<span class="n">Write</span><span class="w"> </span><span class="mi">10</span><span class="w"> </span><span class="n">KB</span><span class="w"> </span><span class="n">file</span><span class="w"> </span><span class="p">(</span><span class="n">output</span><span class="p">)</span><span class="w">            </span><span class="o">~</span><span class="mi">2</span><span class="p">,</span><span class="mi">600</span><span class="w"> </span><span class="n">tokens</span><span class="w">      </span><span class="o">~$</span><span class="mf">0.065</span><span class="w">  </span><span class="err">←</span><span class="w"> </span><span class="mi">5</span><span class="err">×</span><span class="w"> </span><span class="n">reading</span>
+<span class="n">web_search</span><span class="w"> </span><span class="n">result</span><span class="w">                 </span><span class="mi">2</span><span class="p">,</span><span class="mi">000</span><span class="err">–</span><span class="mi">5</span><span class="p">,</span><span class="mi">000</span><span class="w"> </span><span class="n">tokens</span><span class="w">     </span><span class="o">~$</span><span class="mf">0.01</span><span class="err">–</span><span class="mf">0.03</span>
+<span class="n">web_fetch</span><span class="w"> </span><span class="n">full</span><span class="w"> </span><span class="n">page</span><span class="w">              </span><span class="mi">5</span><span class="p">,</span><span class="mi">000</span><span class="err">–</span><span class="mi">50</span><span class="p">,</span><span class="mi">000</span><span class="w"> </span><span class="n">tokens</span><span class="w">     </span><span class="o">~$</span><span class="mf">0.03</span><span class="err">–</span><span class="mf">0.25</span>
+<span class="n">web_fetch</span><span class="w"> </span><span class="p">(</span><span class="n">token</span><span class="o">-</span><span class="n">limited</span><span class="w"> </span><span class="n">to</span><span class="w"> </span><span class="mi">100</span><span class="p">)</span><span class="w">       </span><span class="o">~</span><span class="mi">130</span><span class="w"> </span><span class="n">tokens</span><span class="w">      </span><span class="o">~$</span><span class="mf">0.001</span>
+</code></pre></div>
+
+<hr />
+<h2 id="design-rules">Design Rules</h2>
+<h3 id="1-batch-everything-into-single-tool-calls">1. Batch everything into single tool calls</h3>
+<p>The ~3–4 second tool call round-trip dominates any operation that takes less than a second internally. This is the single most important optimization for skill design.</p>
+<p><strong>Bad</strong>: 5 <code>view</code> calls to read 5 files → 15–20 seconds, 125 output tokens of overhead<br />
+<strong>Good</strong>: 1 <code>bash cat file1 file2 ...</code> call → 3–4 seconds, 45 output tokens of overhead</p>
+<h3 id="2-always-use-uv-never-pip">2. Always use <code>uv</code>, never <code>pip</code></h3>
+<p><code>uv pip install</code> is 4.5× faster for light packages and <strong>113× faster</strong> for heavy dependency trees (91s → 0.8s). The container ships with <code>uv</code> 0.9.26 pre-installed. There is no reason to ever use <code>pip</code>.</p>
+<h3 id="3-check-whats-pre-installed-before-designing-a-skill">3. Check what's pre-installed before designing a skill</h3>
+<p>The container ships with a massive set of pre-installed Python packages: pandas, numpy, matplotlib, scikit-learn, scipy, openpyxl, python-docx, python-pptx, reportlab, pdfplumber, playwright, lxml, beautifulsoup4, Pillow, seaborn, requests, flask, markitdown, and many more. Node has pptxgenjs, sharp, mermaid, marked, pdf-lib, playwright, and typescript. Any skill that installs one of these is wasting 1–90 seconds for nothing.</p>
+<h3 id="4-output-tokens-are-5-input-tokens-treat-writes-as-expensive">4. Output tokens are 5× input tokens — treat writes as expensive</h3>
+<p>Reading a 10 KB file costs ~$0.013 (input tokens). Writing one costs ~$0.065 (output tokens). This makes <code>str_replace</code> for targeted edits far more economical than regenerating entire files, and makes the "iterate in <code>/home/claude</code>, copy once to outputs" pattern important for multi-step workflows.</p>
+<h3 id="5-use-view-with-line-ranges-aggressively">5. Use <code>view</code> with line ranges aggressively</h3>
+<p>Reading an entire 10 KB file to check one section costs ~2,600 input tokens. Reading 5 specific lines costs ~80. That's a <strong>32× difference</strong>. Inspect structure first (<code>wc -l</code>, <code>head</code>), then target specific ranges.</p>
+<h3 id="6-control-web_fetch-ingestion">6. Control <code>web_fetch</code> ingestion</h3>
+<p>An uncontrolled <code>web_fetch</code> can dump 50,000 input tokens into context. Always use <code>text_content_token_limit</code>. For checking if a page exists or grabbing a headline, 100–200 tokens is plenty.</p>
+<h3 id="7-front-load-context-in-system-prompts-caching-makes-it-nearly-free">7. Front-load context in system prompts (caching makes it nearly free)</h3>
+<p>Prompt caching gives 90% savings on cache reads. Skill instructions in the system prompt pay full price on the first turn but only 10% on every subsequent turn. This makes detailed, information-rich skill instructions economically sound — the amortized cost is low.</p>
+<h3 id="8-work-in-homeclaude-deliver-to-mntuser-dataoutputs">8. Work in <code>/home/claude</code>, deliver to <code>/mnt/user-data/outputs</code></h3>
+<p>Write throughput to <code>/mnt/user-data/outputs</code> is 2.4× slower than <code>/home/claude</code>. For any multi-step file generation, always work in the home directory and copy the final artifact to outputs.</p>
+<h3 id="9-know-the-file-inspection-decision-matrix">9. Know the file-inspection decision matrix</h3>
+<table>
+<thead>
+<tr>
+<th>Goal</th>
+<th>Best approach</th>
+<th>Token cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Does file exist?</td>
+<td><code>bash ls -la</code></td>
+<td>~50</td>
+</tr>
+<tr>
+<td>File size / line count?</td>
+<td><code>bash wc -lc</code></td>
+<td>~50</td>
+</tr>
+<tr>
+<td>Read specific lines</td>
+<td><code>view</code> with range</td>
+<td>~80 + lines</td>
+</tr>
+<tr>
+<td>Read full small file</td>
+<td><code>view</code> (auto-truncates at ~16K chars)</td>
+<td>~2,600 for 10 KB</td>
+</tr>
+<tr>
+<td>Read full large file</td>
+<td><code>view</code> (safe) — <code>bash cat</code> has <strong>no</strong> truncation limit</td>
+<td>varies</td>
+</tr>
+<tr>
+<td>Multiple file ops</td>
+<td>Single <code>bash</code> call</td>
+<td>one overhead charge</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="what-we-cant-measure-from-inside">What We Can't Measure From Inside</h2>
+<p>These numbers require external observation (a bookmarklet or Claude in Chrome, planned for Phase 2):</p>
+<ul>
+<li>End-to-end response time as seen by the user (message send → response complete)</li>
+<li>Claude's thinking/generation time between tool calls</li>
+<li>Streaming start latency (time to first visible token)</li>
+<li>Tool call dispatch latency isolated from Claude's processing</li>
+<li>Exact token counts per turn (would need API response headers or billing data)</li>
+</ul>
+<hr />
+<h2 id="appendix-a-container-specifications">Appendix A: Container Specifications</h2>
+<p><strong>OS</strong>: Ubuntu 24.04.3 LTS, kernel 4.4.0<br />
+<strong>CPU</strong>: 4 cores (model undisclosed)<br />
+<strong>RAM</strong>: 9 GB<br />
+<strong>Disk</strong>: 10 GB (shared <code>/home/claude</code> and <code>/mnt/user-data</code>)<br />
+<strong>Python</strong>: 3.12.3 | <strong>Node</strong>: 22.22.0 | <strong>npm</strong>: 10.9.4 | <strong>uv</strong>: 0.9.26 | <strong>git</strong>: 2.43.0</p>
+<p>The container filesystem resets between tasks. All benchmarks reflect fresh container state.</p>
+<h2 id="appendix-b-detailed-benchmarks">Appendix B: Detailed Benchmarks</h2>
+<h3 id="b1-file-io">B.1 File I/O</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Write 100 MB (<code>/home/claude</code>)</td>
+<td>84 ms (~1.2 GB/s)</td>
+</tr>
+<tr>
+<td>Read 100 MB (<code>/home/claude</code>)</td>
+<td>42 ms (~2.4 GB/s)</td>
+</tr>
+<tr>
+<td>Write 50 MB (<code>/home/claude</code>)</td>
+<td>50 ms (~1 GB/s)</td>
+</tr>
+<tr>
+<td>Write 50 MB (<code>/mnt/user-data/outputs</code>)</td>
+<td>122 ms (~410 MB/s)</td>
+</tr>
+<tr>
+<td>Create 1,000 small files</td>
+<td>213 ms (0.21 ms/file)</td>
+</tr>
+</tbody>
+</table>
+<h3 id="b2-python-import-times-cold-isolated-process">B.2 Python Import Times (cold, isolated process)</h3>
+<table>
+<thead>
+<tr>
+<th>Library</th>
+<th>Time</th>
+<th>Pre-installed?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>json</code> / <code>csv</code></td>
+<td>17–21 ms</td>
+<td>✅ stdlib</td>
+</tr>
+<tr>
+<td><code>lxml</code></td>
+<td>2 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>PIL</code> / Pillow</td>
+<td>4 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>reportlab</code></td>
+<td>15 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>bs4</code> (BeautifulSoup)</td>
+<td>191 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>numpy</code></td>
+<td>200 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>docx</code> (python-docx)</td>
+<td>223 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>scipy</code></td>
+<td>229 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>pptx</code> (python-pptx)</td>
+<td>368 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>matplotlib</code></td>
+<td>495 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>pdfplumber</code></td>
+<td>276 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>requests</code></td>
+<td>314 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>flask</code></td>
+<td>359 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>openpyxl</code></td>
+<td>511 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>matplotlib.pyplot</code></td>
+<td>837 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>pandas</code></td>
+<td>858 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>markitdown</code></td>
+<td>1,913 ms</td>
+<td>✅</td>
+</tr>
+<tr>
+<td><code>sklearn</code></td>
+<td>2,752 ms</td>
+<td>✅</td>
+</tr>
+</tbody>
+</table>
+<h3 id="b3-compute-operations">B.3 Compute Operations</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Python interpreter startup</td>
+<td>41 ms</td>
+</tr>
+<tr>
+<td>Node.js interpreter startup</td>
+<td>53 ms</td>
+</tr>
+<tr>
+<td>Simple Python script (json serialize)</td>
+<td>57 ms</td>
+</tr>
+<tr>
+<td><code>gzip</code> 1 MB text</td>
+<td>20 ms</td>
+</tr>
+<tr>
+<td><code>gzip</code> 1 MB random data</td>
+<td>43 ms</td>
+</tr>
+<tr>
+<td>Numpy 1000×1000 matrix multiply</td>
+<td>317 ms</td>
+</tr>
+<tr>
+<td>Pandas groupby on 100K rows</td>
+<td>1,071 ms</td>
+</tr>
+<tr>
+<td>Playwright Chromium launch + close</td>
+<td>1,725 ms</td>
+</tr>
+</tbody>
+</table>
+<h3 id="b4-package-installation">B.4 Package Installation</h3>
+<table>
+<thead>
+<tr>
+<th>Method</th>
+<th>Package</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uv pip install</code></td>
+<td>httpx (light)</td>
+<td>773 ms</td>
+</tr>
+<tr>
+<td><code>pip install</code></td>
+<td>httpx (light)</td>
+<td>3,512 ms</td>
+</tr>
+<tr>
+<td><code>uv pip install</code></td>
+<td>ydata-profiling (heavy)</td>
+<td>803 ms</td>
+</tr>
+<tr>
+<td><code>pip install</code></td>
+<td>ydata-profiling (heavy)</td>
+<td>91,039 ms</td>
+</tr>
+<tr>
+<td><code>npm install</code></td>
+<td>express</td>
+<td>4,533 ms</td>
+</tr>
+</tbody>
+</table>
+<h3 id="b5-network-post-proxy-initialization">B.5 Network (post-proxy-initialization)</h3>
+<table>
+<thead>
+<tr>
+<th>Operation</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DNS resolution (via local proxy)</td>
+<td>&lt; 0.1 ms</td>
+</tr>
+<tr>
+<td>TCP connect (via proxy)</td>
+<td>&lt; 1 ms</td>
+</tr>
+<tr>
+<td>curl fetch 77 KB (pypi.org)</td>
+<td>53 ms</td>
+</tr>
+<tr>
+<td>curl fetch 800 KB (npmjs.org)</td>
+<td>116 ms</td>
+</tr>
+<tr>
+<td>curl to github.com (301 redirect)</td>
+<td>185 ms</td>
+</tr>
+<tr>
+<td>First request in new container</td>
+<td><strong>may fail</strong> — proxy init, retry once</td>
+</tr>
+</tbody>
+</table>
+<h3 id="b6-tool-call-round-trip-overhead">B.6 Tool Call Round-Trip Overhead</h3>
+<p>Measured as wall-clock deltas between consecutive <code>date +%s%N</code> calls across minimal bash_tool invocations. Includes Claude's inter-call processing + API dispatch + execution.</p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Observed Range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bash_tool</code> (minimal echo)</td>
+<td>3–4 seconds</td>
+</tr>
+<tr>
+<td><code>view</code> (small file range)</td>
+<td>3–5 seconds</td>
+</tr>
+<tr>
+<td><code>create_file</code></td>
+<td>3–5 seconds</td>
+</tr>
+<tr>
+<td><code>web_fetch</code> (small page, token-limited)</td>
+<td>5–8 seconds</td>
+</tr>
+<tr>
+<td><code>web_search</code></td>
+<td>5–10 seconds</td>
+</tr>
+</tbody>
+</table>
+<h3 id="b7-token-economics">B.7 Token Economics</h3>
+<p><strong>API pricing (Feb 2026):</strong></p>
+<table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Input / MTok</th>
+<th>Output / MTok</th>
+<th>Cache Read / MTok</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Opus 4.5</td>
+<td>$5.00</td>
+<td>$25.00</td>
+<td>$0.50</td>
+</tr>
+<tr>
+<td>Sonnet 4.5</td>
+<td>$3.00</td>
+<td>$15.00</td>
+<td>$0.30</td>
+</tr>
+<tr>
+<td>Haiku 4.5</td>
+<td>$1.00</td>
+<td>$5.00</td>
+<td>$0.10</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Per-tool token costs:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Tool</th>
+<th>Invocation (output)</th>
+<th>Result (input)</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>bash_tool</code></td>
+<td>~30–50</td>
+<td>~20 + stdout</td>
+<td>Stdout as JSON</td>
+</tr>
+<tr>
+<td><code>view</code> (directory)</td>
+<td>~20–30</td>
+<td>~50–200</td>
+<td>2-level listing</td>
+</tr>
+<tr>
+<td><code>view</code> (file, full)</td>
+<td>~20–30</td>
+<td>~30 + content</td>
+<td>Truncates at ~16K chars</td>
+</tr>
+<tr>
+<td><code>view</code> (file, range)</td>
+<td>~20–30</td>
+<td>~30 + range</td>
+<td>Most token-efficient</td>
+</tr>
+<tr>
+<td><code>create_file</code></td>
+<td>~25 + content</td>
+<td>~15</td>
+<td>Content is output tokens!</td>
+</tr>
+<tr>
+<td><code>str_replace</code></td>
+<td>~30 + strings</td>
+<td>~15</td>
+<td>Both strings are output tokens</td>
+</tr>
+<tr>
+<td><code>web_search</code></td>
+<td>~10–15</td>
+<td>~1,000–5,000</td>
+<td>Varies by result richness</td>
+</tr>
+<tr>
+<td><code>web_fetch</code></td>
+<td>~15–20</td>
+<td>controllable</td>
+<td>Use <code>text_content_token_limit</code></td>
+</tr>
+<tr>
+<td><code>present_files</code></td>
+<td>~15–20</td>
+<td>~15</td>
+<td>Minimal</td>
+</tr>
+</tbody>
+</table>
+<h2 id="appendix-c-methodology">Appendix C: Methodology</h2>
+<p>All timings measured with <code>date +%s%N</code> (nanosecond precision) inside the container. Python import times measured in isolated processes (separate <code>python3 -c</code> invocations) to avoid module caching effects. Tool call round-trip times are upper bounds that include Claude's inter-call processing. Package install times are single-shot and may vary with network conditions. Token estimates use ~4 characters per token for English text. Pricing sourced from Anthropic's documentation and third-party analysis, February 2026.</p>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-uri="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/3merfxd2saa2x"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>

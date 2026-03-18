@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Portable Agent State with AgentFS: A Proof of Concept</title>
+    <meta name="description" content="h1 id=&quot;portable-agent-state-with-agentfs-a-proof-of-concept&quot;Portable Agent State with AgentFS: A Proof of Concept/h1 p(Written by Claude Opus 4.5 under...">
+    <meta property="og:title" content="Portable Agent State with AgentFS: A Proof of Concept">
+    <meta property="og:description" content="h1 id=&quot;portable-agent-state-with-agentfs-a-proof-of-concept&quot;Portable Agent State with AgentFS: A Proof of Concept/h1 p(Written by Claude Opus 4.5 under...">
+    <meta property="og:type" content="article">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1 id="portable-agent-state-with-agentfs-a-proof-of-concept">Portable Agent State with AgentFS: A Proof of Concept</h1>
+<p>(Written by Claude Opus 4.5 under the direction of Oskar Austegard)</p>
+<p>AgentFS is a SQLite-based filesystem designed for AI agents, developed by Turso. The core idea: store all agent state—files, key-value data, tool call history—in a single portable database file. I tested whether this could enable continuity between local development and cloud-based AI environments like Claude's computer use sandbox.</p>
+<p>Short answer: it works, with caveats.</p>
+<h2 id="what-agentfs-provides">What AgentFS Provides</h2>
+<p>AgentFS offers three storage abstractions in one SQLite file:</p>
+<ul>
+<li><strong>Filesystem</strong>: POSIX-like file operations (read, write, mkdir, etc.)</li>
+<li><strong>Key-Value Store</strong>: JSON-serialized state storage</li>
+<li><strong>Tool Call Tracking</strong>: Audit trail of tool invocations with timing and error data</li>
+</ul>
+<p>On Linux (and macOS with macFUSE), you can mount the database as a real filesystem via FUSE, letting agents use standard Unix tools like <code>git</code>, <code>grep</code>, and <code>diff</code> without SDK integration. See <a href="https://turso.tech/blog/agentfs-fuse">AgentFS with FUSE</a> for details.</p>
+<p>The motivation is explained in <a href="https://turso.tech/blog/agentfs">The Missing Abstraction for AI Agents</a>: agents need auditability, reproducibility, and portability. A single queryable SQLite file delivers all three.</p>
+<h2 id="the-portability-question">The Portability Question</h2>
+<p>Could you use AgentFS to maintain state across sessions in a sandboxed AI environment? Specifically:</p>
+<ol>
+<li>Work locally (via FUSE mount or SDK)</li>
+<li>Upload the .db file to Claude's environment</li>
+<li>Have Claude read/modify the state</li>
+<li>Download the updated database</li>
+<li>Continue locally</li>
+</ol>
+<h2 id="the-test">The Test</h2>
+<p>I installed the AgentFS npm SDK in Claude's computer use environment and ran through the core operations:</p>
+<div class="codehilite"><pre><span></span><code>npm<span class="w"> </span>install<span class="w"> </span>agentfs-sdk
+</code></pre></div>
+
+<p>Then created a test database with:</p>
+<ul>
+<li>KV entries: project config, session context</li>
+<li>Files: README.md, Python source, data notes</li>
+<li>Tool calls: simulated web_search, code_execution, and a failed file_read</li>
+</ul>
+<p>All SDK operations worked:</p>
+<div class="codehilite"><pre><span></span><code>=== Key-Value Store ===
+project:name: My Portable Project
+project:config: {&quot;version&quot;:&quot;1.0.0&quot;,&quot;lastModified&quot;:&quot;2025-12-16T15:10:52.139Z&quot;...}
+
+=== Filesystem ===
+Root directory contents: README.md, data, src
+/src contents: analysis.py
+
+=== Tool Call History ===
+code_execution: 1 calls, 1 succeeded, avg 2000ms
+file_read: 1 calls, 0 succeeded, avg 200ms
+web_search: 1 calls, 1 succeeded, avg 1500ms
+</code></pre></div>
+
+<p>The database file was created, populated, and readable. Roundtrip verified.</p>
+<h2 id="the-wal-gotcha">The WAL Gotcha</h2>
+<p>SQLite uses Write-Ahead Logging by default. The actual data lives in <code>.db-wal</code> until checkpointed. If you only copy the <code>.db</code> file, you get an empty database.</p>
+<p>For portable copies, you need both files:</p>
+<div class="codehilite"><pre><span></span><code>test-agent.db      (4KB - schema only)
+test-agent.db-wal  (709KB - actual data)
+</code></pre></div>
+
+<p>Or force a checkpoint before copying (the SDK doesn't expose this directly, so you'd need raw SQL access or to close and reopen the database).</p>
+<h2 id="what-works">What Works</h2>
+<ul>
+<li>SDK installs and runs in Claude's Node.js environment</li>
+<li>All three APIs (KV, filesystem, tool calls) function correctly</li>
+<li>Database files can be uploaded, modified, and downloaded</li>
+<li>State persists across the roundtrip</li>
+</ul>
+<h2 id="what-doesnt-or-might-not">What Doesn't (or Might Not)</h2>
+<ul>
+<li><strong>FUSE mounting</strong>: Almost certainly won't work in containerized AI environments—requires kernel module access</li>
+<li><strong>Large files</strong>: The 709KB WAL for a few small files suggests overhead. Large binary files may be impractical</li>
+<li><strong>Concurrent access</strong>: No testing of multi-agent or concurrent modification scenarios</li>
+<li><strong>Session reliability</strong>: Depends on the AI environment's file handling; no guarantees the sandbox preserves state between tool calls in edge cases</li>
+</ul>
+<h2 id="practical-use-cases">Practical Use Cases</h2>
+<p>This pattern could be useful for:</p>
+<ul>
+<li><strong>Iterative projects</strong>: Upload context at session start, download state at end, continue later</li>
+<li><strong>Debugging agent behavior</strong>: Query the tool_calls table to see what an agent actually did</li>
+<li><strong>Snapshotting</strong>: Copy the db file to create restore points (<code>cp agent.db agent-checkpoint.db</code>)</li>
+<li><strong>Local development with cloud execution</strong>: Develop locally with FUSE mount, upload for cloud agent runs</li>
+</ul>
+<p>It's probably not useful for:</p>
+<ul>
+<li>High-frequency state synchronization</li>
+<li>Large binary asset storage</li>
+<li>Anything requiring real-time collaboration</li>
+<li>Production systems (the project is explicitly Alpha)</li>
+</ul>
+<h2 id="implementation-sketch-for-skills">Implementation Sketch for Skills</h2>
+<p>A Claude skill using AgentFS for portable state might look like:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1">// At session start</span>
+<span class="k">import</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">AgentFS</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="kr">from</span><span class="w"> </span><span class="s1">&#39;agentfs-sdk&#39;</span><span class="p">;</span>
+
+<span class="kd">const</span><span class="w"> </span><span class="nx">dbPath</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;/mnt/user-data/uploads/project-state.db&#39;</span><span class="p">;</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">agent</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">AgentFS</span><span class="p">.</span><span class="nx">open</span><span class="p">({</span><span class="w"> </span><span class="nx">path</span><span class="o">:</span><span class="w"> </span><span class="nx">dbPath</span><span class="w"> </span><span class="p">});</span>
+
+<span class="c1">// Read prior context</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">context</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">kv</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;session:context&#39;</span><span class="p">);</span>
+<span class="kd">const</span><span class="w"> </span><span class="nx">lastFile</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="k">await</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">kv</span><span class="p">.</span><span class="nx">get</span><span class="p">(</span><span class="s1">&#39;session:lastFile&#39;</span><span class="p">);</span>
+
+<span class="c1">// Do work...</span>
+<span class="k">await</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">fs</span><span class="p">.</span><span class="nx">writeFile</span><span class="p">(</span><span class="s1">&#39;/output/result.txt&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">output</span><span class="p">);</span>
+<span class="k">await</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">kv</span><span class="p">.</span><span class="nx">set</span><span class="p">(</span><span class="s1">&#39;session:lastFile&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;/output/result.txt&#39;</span><span class="p">);</span>
+
+<span class="c1">// Record tool usage</span>
+<span class="k">await</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">tools</span><span class="p">.</span><span class="nx">record</span><span class="p">(</span><span class="s1">&#39;analysis&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">startTime</span><span class="p">,</span><span class="w"> </span><span class="nx">endTime</span><span class="p">,</span><span class="w"> </span><span class="nx">params</span><span class="p">,</span><span class="w"> </span><span class="nx">result</span><span class="p">);</span>
+
+<span class="k">await</span><span class="w"> </span><span class="nx">agent</span><span class="p">.</span><span class="nx">close</span><span class="p">();</span>
+
+<span class="c1">// Copy to outputs (remember the WAL!)</span>
+<span class="c1">// User downloads both files</span>
+</code></pre></div>
+
+<h2 id="conclusion">Conclusion</h2>
+<p>AgentFS works as advertised in Claude's environment. The SDK is functional, the database is portable, and the abstraction makes sense. Whether it's useful depends on your workflow—if you're already doing multi-session agent work and want queryable state history, it's worth trying.</p>
+<p>The project is Alpha software. Don't use it for anything you can't afford to lose.</p>
+<h2 id="links">Links</h2>
+<ul>
+<li><a href="https://github.com/tursodatabase/agentfs">GitHub: tursodatabase/agentfs</a> (Alpha)</li>
+<li><a href="https://github.com/tursodatabase/agentfs/blob/main/MANUAL.md">User Manual</a></li>
+<li><a href="https://turso.tech/blog/agentfs">Blog: The Missing Abstraction for AI Agents</a></li>
+<li><a href="https://turso.tech/blog/agentfs-fuse">Blog: AgentFS with FUSE</a></li>
+</ul>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-uri="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/3ma4hmdq3n42p"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>

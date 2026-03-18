@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Code Mapping for AI-Assisted Development</title>
+    <meta name="description" content="h1 id=&quot;code-mapping-for-ai-assisted-development&quot;Code Mapping for AI-Assisted Development/h1 h2 id=&quot;the-problem&quot;The Problem/h2 pWhen working with un...">
+    <meta property="og:title" content="Code Mapping for AI-Assisted Development">
+    <meta property="og:description" content="h1 id=&quot;code-mapping-for-ai-assisted-development&quot;Code Mapping for AI-Assisted Development/h1 h2 id=&quot;the-problem&quot;The Problem/h2 pWhen working with un...">
+    <meta property="og:type" content="article">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1 id="code-mapping-for-ai-assisted-development">Code Mapping for AI-Assisted Development</h1>
+<h2 id="the-problem">The Problem</h2>
+<p>When working with unfamiliar codebases, Claude needs context about code structure before making changes. Reading every file wastes tokens and time. Asking Claude to "explore the codebase" produces inconsistent results and burns through context windows.</p>
+<h2 id="the-solution">The Solution</h2>
+<p>The <a href="https://github.com/oaustegard/claude-skills/releases?q=mapping-codebases&amp;expanded=true"><code>mapping-codebases</code> skill</a> generates static <code>_MAP.md</code> files that provide hierarchical code structure without requiring file reads. Each map shows:</p>
+<ul>
+<li>Directory statistics (file count, subdirectory count)</li>
+<li>Subdirectories with navigation links</li>
+<li>Files with their exports and imports</li>
+<li>Counts when lists are truncated (e.g., "exports (23)" showing 8 of 23)</li>
+</ul>
+<p>Maps use AST parsing (tree-sitter) to extract structural information deterministically. No LLM calls, no hallucination, just facts.</p>
+<h2 id="how-it-works">How It Works</h2>
+<ol>
+<li>Install once per session:</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>tree-sitter<span class="o">==</span><span class="m">0</span>.21.3<span class="w"> </span>tree-sitter-languages<span class="o">==</span><span class="m">1</span>.10.2
+</code></pre></div>
+
+<ol>
+<li>Generate maps for your codebase:</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>python<span class="w"> </span>scripts/codemap.py<span class="w"> </span>/path/to/repo
+</code></pre></div>
+
+<ol>
+<li>For large codebases, skip noise directories:</li>
+</ol>
+<div class="codehilite"><pre><span></span><code>python<span class="w"> </span>scripts/codemap.py<span class="w"> </span>/path/to/repo<span class="w"> </span>--skip<span class="w"> </span>locale,migrations,tests
+</code></pre></div>
+
+<p>The script walks your directory tree and creates one <code>_MAP.md</code> per directory. Each map links to subdirectory maps, creating a navigable hierarchy.</p>
+<h2 id="example-output">Example Output</h2>
+<div class="codehilite"><pre><span></span><code><span class="gh"># django/utils/</span>
+<span class="ge">*Files: 40 | Subdirectories: 1*</span>
+
+<span class="gu">## Subdirectories</span>
+<span class="k">-</span><span class="w"> </span>[<span class="nt">translation/</span>](<span class="na">./translation/_MAP.md</span>)
+
+<span class="gu">## Files</span>
+<span class="k">-</span><span class="w"> </span><span class="gs">**cache.py**</span> — exports (10): <span class="sb">`patch_cache_control, get_max_age`</span>... — imports (11): <span class="sb">`time, collections, hashlib`</span>...
+<span class="k">-</span><span class="w"> </span><span class="gs">**crypto.py**</span> — exports: <span class="sb">`InvalidAlgorithm, salted_hmac, get_random_string, constant_time_compare, pbkdf2`</span> — imports: <span class="sb">`hashlib, hmac, secrets, django.conf`</span>
+<span class="k">-</span><span class="w"> </span><span class="gs">**timezone.py**</span> — exports (15): <span class="sb">`get_fixed_timezone, get_default_timezone_name`</span>... — imports (6): <span class="sb">`functools, zoneinfo, contextlib`</span>...
+</code></pre></div>
+
+<h2 id="impact-on-development">Impact on Development</h2>
+<p><strong>Before mapping:</strong>
+- Claude asks what files exist
+- Reads files blindly
+- Misses relevant modules
+- Burns tokens on exploration</p>
+<p><strong>After mapping:</strong>
+- Claude reads root map, sees top-level structure
+- Navigates to relevant subdirectory maps
+- Identifies target files by exports
+- Reads only necessary source files</p>
+<p><strong>Real-world example (Django):</strong>
+- 883 Python files across 2,454 directories
+- Generated 138 maps (with locale/migrations skipped)
+- Root map: 27 lines showing 15 top-level areas
+- Average map: 8 lines
+- Largest map: 50 lines (utils with 40 files)</p>
+<p>You only load maps as you navigate. Even massive codebases stay manageable.</p>
+<h2 id="supported-languages">Supported Languages</h2>
+<p>Python, JavaScript, TypeScript, TSX, Go, Rust, Ruby, Java.</p>
+<h2 id="using-maps-with-claude">Using Maps with Claude</h2>
+<p>Add this to your <code>CLAUDE.md</code> or project instructions:</p>
+<div class="codehilite"><pre><span></span><code><span class="gu">## Codebase Navigation</span>
+
+This repository has <span class="sb">`_MAP.md`</span> files in each directory providing structural overviews.
+
+When working with code:
+<span class="k">1.</span> Start by reading the root <span class="sb">`_MAP.md`</span> to understand top-level structure
+<span class="k">2.</span> Navigate to relevant subdirectory maps to find target modules
+<span class="k">3.</span> Use export information to identify which files contain needed functionality
+<span class="k">4.</span> Read actual source files only after identifying targets via maps
+
+Maps show:
+<span class="k">-</span><span class="w"> </span>Directory statistics (file/subdirectory counts)
+<span class="k">-</span><span class="w"> </span>Subdirectories with links to their maps
+<span class="k">-</span><span class="w"> </span>Files with exports and imports
+<span class="k">-</span><span class="w"> </span>Truncation counts (e.g., &quot;exports (23)&quot; when showing subset)
+
+Always check maps before exploring directories or reading files.
+</code></pre></div>
+
+<h2 id="maintenance">Maintenance</h2>
+<p>Maps are static snapshots. Regenerate after structural changes:</p>
+<div class="codehilite"><pre><span></span><code>python<span class="w"> </span>scripts/codemap.py<span class="w"> </span>/path/to/repo
+</code></pre></div>
+
+<p>Or add a git hook to keep maps fresh automatically:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># .git/hooks/pre-commit</span>
+<span class="c1">#!/bin/sh</span>
+python<span class="w"> </span>/path/to/codemap.py<span class="w"> </span>.<span class="w"> </span>&gt;/dev/null
+git<span class="w"> </span>add<span class="w"> </span><span class="s1">&#39;*/_MAP.md&#39;</span>
+</code></pre></div>
+
+<h2 id="performance">Performance</h2>
+<p>Map generation is fast and cheap:
+- Django (883 files): ~2 seconds, generates 138 maps
+- Click (17 files): &lt;1 second, generates 1 map
+- No LLM calls - uses deterministic AST parsing (tree-sitter)
+- No token cost during generation
+- Maps are static files - reading them uses minimal tokens (typical map: 8-50 lines)</p>
+<p>Generated maps are cached on disk. Regenerate only after structural changes.</p>
+<h2 id="key-features">Key Features</h2>
+<p><strong>Hierarchical disclosure</strong>: Navigate progressively without loading everything at once.</p>
+<p><strong>Skip patterns</strong>: Exclude directories that add noise (<code>locale</code> with 100+ language subdirs, <code>migrations</code>, test snapshots).</p>
+<p><strong>Export/import counts</strong>: Quickly assess module complexity. "exports (23)" signals a large API surface, "exports: 2" signals a simple utility.</p>
+<p><strong>Statistics</strong>: File and subdirectory counts help assess scope at a glance.</p>
+<h2 id="when-to-use">When to Use</h2>
+<ul>
+<li>Any codebase where you want Claude to understand structure before making changes</li>
+<li>Unfamiliar codebases (inherited projects, open source contributions)</li>
+<li>Before major refactoring</li>
+<li>When teaching Claude about your project structure</li>
+</ul>
+<p>Works for any size - small projects get instant overview, large codebases (500+ files) stay navigable through hierarchical maps.</p>
+<h2 id="limitations">Limitations</h2>
+<ul>
+<li>Extracts structure only (exports/imports), not semantic descriptions</li>
+<li>Private symbols (Python <code>_prefix</code>) excluded from exports</li>
+<li>Requires regeneration after structural changes</li>
+<li>Maps capture what exists, not what it does</li>
+</ul>
+<p>For semantic understanding, read the actual source files. Maps tell you where to look.</p>
+<h2 id="installation">Installation</h2>
+<p>The skill includes:
+- <code>SKILL.md</code> - Instructions for Claude
+- <code>scripts/codemap.py</code> - Map generator
+- <code>CHANGELOG.md</code> - Version history and testing results</p>
+<p>Download and add to your Skills directory, or run the script standalone.</p>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-uri="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/3m6yznlnhtc2o"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>

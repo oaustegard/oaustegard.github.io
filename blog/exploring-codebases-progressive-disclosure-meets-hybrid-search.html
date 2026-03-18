@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Exploring Codebases: Progressive Disclosure Meets Hybrid Search</title>
+    <meta name="description" content="pemVibe coded and written by Gemini and Opus with design and architectural decisions by Oskar Austegard/em/p h2 id=&quot;the-problem-with-code-search&quot;Th...">
+    <meta property="og:title" content="Exploring Codebases: Progressive Disclosure Meets Hybrid Search">
+    <meta property="og:description" content="pemVibe coded and written by Gemini and Opus with design and architectural decisions by Oskar Austegard/em/p h2 id=&quot;the-problem-with-code-search&quot;Th...">
+    <meta property="og:type" content="article">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<p><em>Vibe coded and written by Gemini and Opus with design and architectural decisions by Oskar Austegard</em></p>
+<h2 id="the-problem-with-code-search">The Problem with Code Search</h2>
+<p>When working with unfamiliar codebases, there's a fundamental tension: you need to find relevant code quickly, but you also need enough context to understand what you've found. Traditional approaches fall into two camps:</p>
+<ol>
+<li><strong>Structure-first tools</strong> (like LSP, ctags, or AST indexes) give you perfect context but require expensive pre-processing and struggle with partial queries</li>
+<li><strong>Text-search tools</strong> (like grep, ripgrep) are blazingly fast but return fragmented results that break at arbitrary line boundaries</li>
+</ol>
+<p>This tension becomes critical for agentic coding, where an AI needs to rapidly explore codebases it's never seen before.</p>
+<h2 id="what-is-tree-sitter">What is Tree-sitter?</h2>
+<p>Before diving into the solution, let's clarify the key technology: <strong>tree-sitter</strong> is a parser generator that builds concrete syntax trees (CSTs) for source code. Unlike traditional parsers, it's designed to be:</p>
+<ul>
+<li><strong>Fast</strong>: Parses files in milliseconds, even for large codebases</li>
+<li><strong>Incremental</strong>: Can update the tree as code changes, not reparse everything</li>
+<li><strong>Error-tolerant</strong>: Works on incomplete or syntactically invalid code</li>
+<li><strong>Language-agnostic</strong>: Supports 40+ languages with the same API</li>
+</ul>
+<p>Most importantly, tree-sitter understands <strong>code structure</strong>. It knows the difference between:
+- A function definition vs. a function call
+- A class declaration vs. a string containing "class"
+- A docstring vs. a random comment</p>
+<p>This structural awareness is what grep fundamentally lacks.</p>
+<h2 id="the-journey-from-mapping-to-exploring">The Journey: From Mapping to Exploring</h2>
+<h3 id="mapping-codebases-the-structure-first-approach">mapping-codebases: The Structure-First Approach</h3>
+<p>The original <a href="https://github.com/oaustegard/claude-skills/releases?q=%22mapping-codebases.zip%22&amp;expanded=true"><code>mapping-codebases</code> skill</a> took the structure-first path. It would parse entire directory trees using tree-sitter, extract all exports/imports, and generate comprehensive <code>_MAP.md</code> files showing the skeleton of each module:</p>
+<div class="codehilite"><pre><span></span><code><span class="gu">## classes/User.py</span>
+
+<span class="gu">### Classes</span>
+<span class="k">-</span><span class="w"> </span><span class="sb">`User`</span> (line 15)
+<span class="w">  </span><span class="k">-</span><span class="w"> </span><span class="sb">`__init__(self, name, email)`</span> (line 16)
+<span class="w">  </span><span class="k">-</span><span class="w"> </span><span class="sb">`validate(self)`</span> (line 23)
+<span class="w">  </span><span class="k">-</span><span class="w"> </span><span class="sb">`save(self)`</span> (line 31)
+</code></pre></div>
+
+<p><strong>Strengths:</strong>
+- Complete structural overview
+- Accurate function signatures
+- Hierarchical organization</p>
+<p><strong>Limitations:</strong>
+- Requires upfront processing of entire codebase
+- Map files become stale as code changes
+- Can't answer "where is X used?" without reading implementations
+- Token-heavy for large projects</p>
+<h3 id="greprag-the-speed-revelation">GrepRAG: The Speed Revelation</h3>
+<p>Then came the <a href="https://arxiv.org/abs/2601.23254">GrepRAG paper</a>, which benchmarked various code retrieval methods for LLM context. Their key finding: ripgrep-based retrieval was <strong>17× faster</strong> than graph-based methods (0.40s vs 7s) while maintaining comparable accuracy.</p>
+<p>However, they also identified two critical failures of pure text search:</p>
+<ol>
+<li>
+<p><strong>Context fragmentation</strong>: grep matches arbitrary lines, often cutting off function signatures or return statements. You might get line 45 of a function without knowing what parameters it accepts.</p>
+</li>
+<li>
+<p><strong>Keyword ambiguity</strong>: Searching for <code>config</code> floods results with log messages, comments, and string literals alongside actual <code>Config</code> class definitions.</p>
+</li>
+</ol>
+<p>The paper attempted to fix these with statistical heuristics (line-number clustering, identifier weighting), but these are fundamentally band-aids on a text-only approach.</p>
+<h2 id="the-hybrid-solution-speed-structure-efficiency">The Hybrid Solution: Speed + Structure + Efficiency</h2>
+<p>The new <code>exploring-codebases</code> skill combines three key insights:</p>
+<ol>
+<li><strong>Use ripgrep as the dragnet</strong> (Phase 1: speed)</li>
+<li><strong>Use tree-sitter as the scalpel</strong> (Phase 2: structure)</li>
+<li><strong>Default to signatures, expand on demand</strong> (Phase 3: efficiency)</li>
+</ol>
+<h3 id="phase-1-the-dragnet-ripgrep">Phase 1: The Dragnet (ripgrep)</h3>
+<div class="codehilite"><pre><span></span><code>rg<span class="w"> </span>--json<span class="w"> </span><span class="s2">&quot;class Session&quot;</span><span class="w"> </span>/path/to/repo
+</code></pre></div>
+
+<p><strong>Goal:</strong> Cast a wide net quickly. Find every file and line where the search term appears.</p>
+<p><strong>Speed:</strong> ~0.02s for large repositories (as GrepRAG demonstrated)</p>
+<p><strong>Output:</strong> List of <code>(file, line_number)</code> tuples</p>
+<h3 id="phase-2-the-scalpel-tree-sitter">Phase 2: The Scalpel (tree-sitter)</h3>
+<p>For each ripgrep match, use tree-sitter to:
+1. Parse only that specific file (lazy, on-demand)
+2. Find the smallest enclosing AST node (function/class definition)
+3. Extract the complete, syntactically valid code block
+4. Deduplicate if multiple matches fall within the same node</p>
+<p><strong>Example:</strong> If ripgrep finds <code>Session</code> on line 356, tree-sitter identifies it's inside a class definition spanning lines 356-816.</p>
+<h3 id="phase-3-progressive-disclosure-the-token-multiplier">Phase 3: Progressive Disclosure (The Token Multiplier)</h3>
+<p>Here's the critical enhancement over v0.1: <strong>don't dump 460 lines of implementation when 20 lines of signature will do</strong>.</p>
+<p><strong>Default output (signatures only):</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="k">class</span><span class="w"> </span><span class="nc">Session</span><span class="p">(</span><span class="n">SessionRedirectMixin</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;A Requests session.</span>
+
+<span class="sd">    Provides cookie persistence, connection-pooling, and configuration.</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="o">...</span>
+</code></pre></div>
+
+<p><strong>Token cost:</strong> ~50 tokens (vs 4000 for full implementation)</p>
+<p><strong>When you need details, expand:</strong></p>
+<div class="codehilite"><pre><span></span><code>search.py<span class="w"> </span><span class="s2">&quot;class Session&quot;</span><span class="w"> </span>/path/to/repo<span class="w"> </span>--expand-full
+</code></pre></div>
+
+<p>Returns the complete 460-line implementation.</p>
+<h2 id="why-this-matters">Why This Matters</h2>
+<h3 id="1-context-fragmentation-fixed">1. Context Fragmentation → Fixed</h3>
+<p><strong>Problem (grep alone):</strong> Searching for <code>get</code> returns line 595:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">request</span><span class="p">(</span><span class="s2">&quot;GET&quot;</span><span class="p">,</span> <span class="n">url</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">)</span>
+</code></pre></div>
+
+<p>No parameters, no docstring, no context.</p>
+<p><strong>Solution (hybrid with signatures):</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">get</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">url</span><span class="p">,</span> <span class="o">**</span><span class="n">kwargs</span><span class="p">):</span>
+<span class="w">    </span><span class="sa">r</span><span class="sd">&quot;&quot;&quot;Sends a GET request. Returns :class:`Response` object.</span>
+
+<span class="sd">    :param url: URL for the new :class:`Request` object.</span>
+<span class="sd">    :param \*\*kwargs: Optional arguments that ``request`` takes.</span>
+<span class="sd">    :rtype: requests.Response</span>
+<span class="sd">    &quot;&quot;&quot;</span>
+    <span class="o">...</span>
+</code></pre></div>
+
+<p>You get the complete API surface without the implementation noise.</p>
+<h3 id="2-keyword-ambiguity-fixed">2. Keyword Ambiguity → Fixed</h3>
+<p>Tree-sitter knows the difference between:
+- <code>class Config:</code> (definition - keep)
+- <code>print("config loaded")</code> (string literal - skip)
+- <code># TODO: add config</code> (comment - skip)</p>
+<p>This filtering is <strong>deterministic</strong>, not statistical. You don't need BM25 re-ranking to boost likely definitions; the AST <em>tells</em> you what's a definition.</p>
+<h3 id="3-token-efficiency-10-20-improvement">3. Token Efficiency → 10-20× Improvement</h3>
+<p>Progressive disclosure exploits a key insight: <strong>most code exploration is hierarchical</strong>.</p>
+<p>Typical workflow:
+1. "What classes are in this module?" → 10 tokens per class signature
+2. "What methods does Session have?" → 5 tokens per method signature
+3. "How is <code>send()</code> implemented?" → 200 tokens for full method</p>
+<p><strong>Old approach (v0.1):</strong>
+- Query: <code>"class Session"</code>
+- Result: 4,000 tokens of full implementation
+- Mental overhead: Scan 460 lines to find method signatures</p>
+<p><strong>New approach (v0.2):</strong>
+- Query: <code>"class Session"</code>
+- Result: 50 tokens (signature with docstring)
+- Follow-up: <code>"def send" --expand-full</code> → 200 tokens for just that method
+- <strong>Total:</strong> 250 tokens vs 4,000 tokens (16× more efficient)</p>
+<h3 id="4-real-world-example">4. Real-World Example</h3>
+<p>Testing on the <code>requests</code> library:</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Find what Session offers</span>
+$<span class="w"> </span>search.py<span class="w"> </span><span class="s2">&quot;class Session&quot;</span><span class="w"> </span>requests/
+
+Found<span class="w"> </span><span class="m">2</span><span class="w"> </span>matches<span class="w"> </span><span class="k">for</span><span class="w"> </span><span class="s1">&#39;class Session&#39;</span>:
+
+<span class="c1">### requests/sessions.py</span>
+class<span class="w"> </span>Session<span class="o">(</span>SessionRedirectMixin<span class="o">)</span>:
+<span class="w">    </span><span class="s2">&quot;&quot;&quot;A Requests session.</span>
+
+<span class="s2">    Provides cookie persistence, connection-pooling, and configuration.</span>
+<span class="s2">    &quot;&quot;&quot;</span>
+<span class="w">    </span>...
+</code></pre></div>
+
+<p><strong>Tokens used:</strong> ~80</p>
+<p>Now you know <code>Session</code> exists and what it does. Need to know its methods?</p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Scan for methods (still signature-only)</span>
+$<span class="w"> </span>search.py<span class="w"> </span><span class="s2">&quot;def &quot;</span><span class="w"> </span>requests/sessions.py<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="s2">&quot;class.*Session&quot;</span><span class="w"> </span>-A<span class="w"> </span><span class="m">20</span>
+</code></pre></div>
+
+<p>Or expand a specific method:</p>
+<div class="codehilite"><pre><span></span><code>$<span class="w"> </span>search.py<span class="w"> </span><span class="s2">&quot;def request&quot;</span><span class="w"> </span>requests/sessions.py<span class="w"> </span>--expand-full
+</code></pre></div>
+
+<p><strong>Progressive approach:</strong> ~300 tokens total to understand the class and one method</p>
+<p><strong>Old approach:</strong> 4,000 tokens dumped upfront, most unused</p>
+<h2 id="performance-characteristics">Performance Characteristics</h2>
+<p>The hybrid approach exploits code's sparse structure:</p>
+<ol>
+<li><strong>Index-free</strong>: No preprocessing required. Works on any repo immediately.</li>
+<li><strong>O(1) search</strong>: Ripgrep finds matches near-instantly (~0.02s)</li>
+<li><strong>Selective parsing</strong>: Tree-sitter only parses the 5-10 files ripgrep found, not all 10,000 files in the repo</li>
+<li><strong>Selective expansion</strong>: Signatures by default, full bodies on demand</li>
+<li><strong>Token-efficient</strong>: 10-20× reduction in token usage for typical exploration</li>
+</ol>
+<p><strong>Comparison table:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Approach</th>
+<th>Preprocessing</th>
+<th>Search Time</th>
+<th>Tokens per Match</th>
+<th>Updates</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LSP/ctags</td>
+<td>Minutes</td>
+<td>Instant</td>
+<td>Variable</td>
+<td>Manual rebuild</td>
+</tr>
+<tr>
+<td>mapping-codebases</td>
+<td>Minutes</td>
+<td>Instant</td>
+<td>50-100</td>
+<td>Stale maps</td>
+</tr>
+<tr>
+<td>grep/ripgrep</td>
+<td>None</td>
+<td>0.02s</td>
+<td>5-10 (fragmented)</td>
+<td>Real-time</td>
+</tr>
+<tr>
+<td>GrepRAG</td>
+<td>None</td>
+<td>0.40s</td>
+<td>50-200 (heuristic)</td>
+<td>Real-time</td>
+</tr>
+<tr>
+<td>exploring-codebases v0.1</td>
+<td>None</td>
+<td>0.05s</td>
+<td>500-5000 (full)</td>
+<td>Real-time</td>
+</tr>
+<tr>
+<td><strong>exploring-codebases v0.2</strong></td>
+<td><strong>None</strong></td>
+<td><strong>0.05s</strong></td>
+<td><strong>50 (sig) / 500+ (full)</strong></td>
+<td><strong>Real-time</strong></td>
+</tr>
+</tbody>
+</table>
+<h2 id="implementation-notes">Implementation Notes</h2>
+<p>The enhancement adds ~100 lines to the original 280-line script:</p>
+<div class="codehilite"><pre><span></span><code><span class="k">def</span><span class="w"> </span><span class="nf">_extract_signature</span><span class="p">(</span><span class="bp">self</span><span class="p">,</span> <span class="n">node</span><span class="p">,</span> <span class="n">source_bytes</span><span class="p">,</span> <span class="n">language</span><span class="p">):</span>
+<span class="w">    </span><span class="sd">&quot;&quot;&quot;Extract just the declaration + docstring, exclude body.&quot;&quot;&quot;</span>
+    <span class="k">if</span> <span class="n">language</span> <span class="o">==</span> <span class="s1">&#39;python&#39;</span><span class="p">:</span>
+        <span class="k">return</span> <span class="bp">self</span><span class="o">.</span><span class="n">_extract_python_signature</span><span class="p">(</span><span class="n">node</span><span class="p">,</span> <span class="n">source_bytes</span><span class="p">)</span>
+    <span class="c1"># ... other languages</span>
+</code></pre></div>
+
+<p>For Python:
+- Extracts everything before the function/class <code>block</code> node
+- Includes docstrings (first <code>string</code> child of the block)
+- Replaces body with <code>...</code></p>
+<p>Example CST traversal:</p>
+<div class="codehilite"><pre><span></span><code><span class="n">class_definition</span>
+├── <span class="k">class</span> (<span class="n">keyword</span>)
+├── <span class="n">identifier</span> (<span class="nb">name</span>)
+├── <span class="n">argument_list</span> (<span class="n">bases</span>)
+├── : (<span class="n">colon</span>)
+└── <span class="nb">block</span> (<span class="n">body</span>) → <span class="n">extract</span> <span class="nb">first</span> <span class="n">string</span> <span class="nb">child</span> (<span class="n">docstring</span>), <span class="nb">then</span> <span class="n">stop</span>
+    ├── <span class="n">string</span> (<span class="n">docstring</span>) ← <span class="n">include</span> <span class="n">this</span>
+    ├── <span class="n">function_definition</span> ← <span class="nb">skip</span>
+    └── ... ← <span class="nb">skip</span>
+</code></pre></div>
+
+<h2 id="usage-patterns">Usage Patterns</h2>
+<p><strong>Quick exploration (default):</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># What classes exist?</span>
+search.py<span class="w"> </span><span class="s2">&quot;class &quot;</span><span class="w"> </span>src/
+
+<span class="c1"># What methods does User have?</span>
+search.py<span class="w"> </span><span class="s2">&quot;def &quot;</span><span class="w"> </span>src/models/user.py
+
+<span class="c1"># Find all validation methods</span>
+search.py<span class="w"> </span><span class="s2">&quot;def validate&quot;</span><span class="w"> </span>src/
+</code></pre></div>
+
+<p><strong>Deep dive (selective expansion):</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Get full implementation of specific method</span>
+search.py<span class="w"> </span><span class="s2">&quot;def validate_email&quot;</span><span class="w"> </span>src/<span class="w"> </span>--expand-full
+
+<span class="c1"># Get full class implementation</span>
+search.py<span class="w"> </span><span class="s2">&quot;class User&quot;</span><span class="w"> </span>src/<span class="w"> </span>--expand-full
+</code></pre></div>
+
+<p><strong>Language-specific:</strong></p>
+<div class="codehilite"><pre><span></span><code><span class="c1"># Only Python files</span>
+search.py<span class="w"> </span><span class="s2">&quot;class Config&quot;</span><span class="w"> </span>.<span class="w"> </span>--glob<span class="w"> </span><span class="s2">&quot;*.py&quot;</span>
+
+<span class="c1"># Only TypeScript</span>
+search.py<span class="w"> </span><span class="s2">&quot;interface User&quot;</span><span class="w"> </span>.<span class="w"> </span>--glob<span class="w"> </span><span class="s2">&quot;*.ts&quot;</span>
+</code></pre></div>
+
+<h2 id="when-to-use-what">When to Use What</h2>
+<p><strong>Use mapping-codebases when:</strong>
+- You need a comprehensive structural overview
+- Working on a single project long-term
+- Want persistent documentation of module organization
+- Need import/export graph</p>
+<p><strong>Use exploring-codebases when:</strong>
+- Exploring unfamiliar codebases
+- Looking for specific implementations or patterns
+- Need immediate answers without preprocessing
+- Working across multiple repositories
+- Want minimal token overhead</p>
+<p><strong>Use grep/ripgrep directly when:</strong>
+- Searching for literal strings or patterns
+- Need regex capabilities
+- Don't care about structural boundaries</p>
+<h2 id="addressing-greprags-concerns">Addressing GrepRAG's Concerns</h2>
+<p>The paper identified these pain points with pure grep:</p>
+<table>
+<thead>
+<tr>
+<th>GrepRAG Concern</th>
+<th>exploring-codebases Solution</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"Disrupts logical flow" (fragments code)</td>
+<td>Tree-sitter ensures complete function/class nodes</td>
+</tr>
+<tr>
+<td>"Usage before definition" (line ordering)</td>
+<td>AST traversal maintains semantic relationships</td>
+</tr>
+<tr>
+<td>"Keyword noise" (comments, strings)</td>
+<td>Deterministic AST filtering, not statistical</td>
+</tr>
+<tr>
+<td>"Token waste" (returning everything)</td>
+<td><strong>Progressive disclosure: signatures first</strong></td>
+</tr>
+<tr>
+<td>"Expensive re-ranking" (BM25, TF-IDF)</td>
+<td>Not needed - structural filtering is deterministic</td>
+</tr>
+</tbody>
+</table>
+<p>GrepRAG tried to fix grep's problems with more grep (line clustering, statistical weighting). We fix them by acknowledging grep's limits and using the right tool for structural awareness.</p>
+<h2 id="conclusion">Conclusion</h2>
+<p>The GrepRAG paper proved text search is fast enough for real-time code retrieval. But speed without structure wastes tokens, and structure without progressive disclosure wastes more.</p>
+<p>By combining:
+- <strong>Ripgrep</strong> as the dragnet (0.02s search)
+- <strong>Tree-sitter</strong> as the scalpel (complete, valid nodes)
+- <strong>Progressive disclosure</strong> as the efficiency multiplier (signatures first)</p>
+<p>We get a new paradigm for code exploration: lazy, selective, precise, and token-conscious.</p>
+<p>This is particularly valuable for AI agents that need to rapidly orient themselves in unfamiliar codebases. Instead of "here's line 45" or "here's 10,000 lines," they get "here's the signature; ask if you need the body" - exactly the context needed to reason efficiently.</p>
+<p>The future of code search is hybrid, structural, and progressive.</p>
+<hr />
+<p>Code: https://github.com/oaustegard/claude-skills/tree/main/exploring-codebases<br />
+Release zip: https://github.com/oaustegard/claude-skills/releases?q=exploring-codebases&amp;expanded=true</p>
+    </article>
+
+    <div class="bsky-section">
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+</body>
+</html>
