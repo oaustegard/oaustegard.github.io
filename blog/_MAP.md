@@ -1,5 +1,5 @@
 # blog/
-*Files: 38*
+*Files: 39*
 
 ## Files
 
@@ -34,6 +34,7 @@
 - **the-experts-edge-what-a-chip-analysts-ai-obsession-teaches-everyone.html** — imports: `bsky-engagement.js`
 - **the-free-computer-why-offloading-to-cpu-is-a-win-for-everyone.html** — imports: `bsky-engagement.js`
 - **the-higher-order-problem-subsidiarity-llms-and-the-atrophy-of-knowledge-work.html** — imports: `bsky-engagement.js`
+- **the-pendulum-and-the-ratchet.html**
 - **the-persuasion-architecture-of-obliteratus.html**
 - **the-same-red-lines-different-ink.html** — imports: `bsky-engagement.js`
 - **the-wrong-kind-of-correct.html**
