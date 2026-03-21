@@ -103,7 +103,9 @@ async function init() {
     if (!post) return;
 
     const replyCount = post.replyCount || 0;
-    if (replyCount < MIN_REPLIES) return;
+    const quoteCount = post.quoteCount || 0;
+    const totalEngagement = replyCount + quoteCount;
+    if (totalEngagement < MIN_REPLIES) return;
 
     // Build the bsky.app URL for the constellation graph
     const bskyUrl = makeBskyUrl(did, parsed.rkey);
@@ -123,7 +125,7 @@ async function init() {
     const section = document.createElement('section');
     section.className = 'constellation-section';
     section.innerHTML = `
-      <h3>Conversation Graph · ${replyCount} replies</h3>
+      <h3>Conversation Graph · ${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}${quoteCount > 0 ? ` · ${quoteCount} ${quoteCount === 1 ? 'quote' : 'quotes'}` : ''}</h3>
       <iframe
         class="constellation-iframe"
         src="${iframeSrc}"
