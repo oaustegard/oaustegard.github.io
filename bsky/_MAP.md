@@ -1,10 +1,11 @@
 # bsky/
-*Files: 20*
+*Files: 21*
 
 ## Files
 
 - **BlueReport.js**
 - **at-protocol-extension.html**
+- **bsky-constellation-embed.js**
 - **bsky-core.js** — exports (14): `initializeBskyCore, resetProcessing, anonymize, formatPostForOutput, getRelativeTime, safeGetCreatedAt, reconstructTextWithFacets, extractPostInfo`... — imports: `bsky-lib.js`
 - **bsky-engagement-demo.html** — imports: `bsky-engagement.js`
 - **bsky-engagement.js**
