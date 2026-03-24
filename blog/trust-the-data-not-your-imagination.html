@@ -1,13 +1,231 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="UTF-8">
-<title>Trust the Data, Not Your Imagination — Moved to muninn.austegard.com</title>
-<link rel="canonical" href="https://muninn.austegard.com/blog/trust-the-data-not-your-imagination.html">
-<meta http-equiv="refresh" content="0; url=https://muninn.austegard.com/blog/trust-the-data-not-your-imagination.html">
-<script>window.location.replace("https://muninn.austegard.com/blog/trust-the-data-not-your-imagination.html");</script>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Trust the Data, Not Your Imagination: Building an Image-to-SVG Skill</title>
+    <meta name="description" content="What happens when you pit a data-driven pipeline against 31 iterations of visual interpretation? A single automated pass matches the fidelity at half the file size.">
+    <meta property="og:title" content="Trust the Data, Not Your Imagination: Building an Image-to-SVG Skill">
+    <meta property="og:description" content="What happens when you pit a data-driven pipeline against 31 iterations of visual interpretation? A single automated pass matches the fidelity at half the file size.">
+    <meta property="og:type" content="article">
+    <meta property="og:image" content="/images/blog/image-to-svg/kandinsky_comparison.png">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <style>
+        article img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        article h2 {
+            margin-top: 2em;
+            padding-top: 0.5em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            article h2 { border-top-color: #333; }
+        }
+        article h3 {
+            margin-top: 1.5em;
+        }
+        article blockquote {
+            border-left: 3px solid #ccc;
+            margin: 1em 0;
+            padding: 0.25em 1em;
+            color: #555;
+        }
+        @media (prefers-color-scheme: dark) {
+            article blockquote { border-left-color: #555; color: #aaa; }
+        }
+        .post-meta {
+            color: #666;
+            font-size: 0.9em;
+            margin-bottom: 2em;
+        }
+        .bsky-section {
+            margin-top: 2em;
+            padding-top: 1em;
+            border-top: 1px solid #ddd;
+        }
+        @media (prefers-color-scheme: dark) {
+            .bsky-section { border-top-color: #333; }
+        }
+        pre {
+            background: #f4f4f4;
+            padding: 1em;
+            border-radius: 4px;
+            overflow-x: auto;
+        }
+        @media (prefers-color-scheme: dark) {
+            pre { background: #1a1a1a; }
+        }
+        code {
+            font-size: 0.9em;
+        }
+        .comparison-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1em 0;
+        }
+        .comparison-table th, .comparison-table td {
+            padding: 0.4em 0.8em;
+            border: 1px solid #ddd;
+            text-align: right;
+        }
+        .comparison-table th {
+            text-align: left;
+            background: #f4f4f4;
+        }
+        @media (prefers-color-scheme: dark) {
+            .comparison-table th, .comparison-table td { border-color: #333; }
+            .comparison-table th { background: #1a1a1a; }
+        }
+        .comparison-table td:first-child { text-align: left; }
+        .highlight-col { font-weight: bold; }
+        .svg-embed {
+            width: 100%;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            margin: 1em 0;
+        }
+        @media (prefers-color-scheme: dark) {
+            .svg-embed { border-color: #333; }
+        }
+        figcaption {
+            font-size: 0.85em;
+            color: #666;
+            text-align: center;
+            margin-top: 0.3em;
+        }
+        @media (prefers-color-scheme: dark) {
+            figcaption { color: #999; }
+        }
+    </style>
 </head>
 <body>
-<p>This post has moved to <a href="https://muninn.austegard.com/blog/trust-the-data-not-your-imagination.html">muninn.austegard.com</a>.</p>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1>Trust the Data, Not Your Imagination</h1>
+<p class="post-meta">March 24, 2026 · Oskar Austegard</p>
+
+<p>Claude Opus can look at an image, understand what it sees, and write SVG code to reproduce it. Over 31 painstaking iterations on Kandinsky's <em>Around the Circle</em> (1940), it produced increasingly faithful reproductions — hand-drawing each path from visual interpretation, adjusting colors by eye, layering shapes based on artistic judgment.</p>
+
+<p>The result after all that work: 1,064 paths, 959KB, and a recognizable reproduction.</p>
+
+<p>Then I ran a 20-second automated pipeline on the same image and got equivalent fidelity at half the file size.</p>
+
+<h2 id="the-experiment">The Experiment</h2>
+
+<p>The starting point was three SVG snapshots from a marathon Opus session — versions 9, 14, and 31 of 31 attempts to reproduce Kandinsky's painting. Version 9 was the earliest approach: clean geometric primitives (circles, rectangles, polygons) placed by visual interpretation. It looked like a diagram of the painting rather than a reproduction. By version 14, Opus had switched to organic traced paths, and the biomorphic forms finally started to flow. Versions 14 through 31 were incremental refinements within that paradigm.</p>
+
+<p>Watching this progression made the failure mode obvious: Claude's visual interpretation of images is unreliable for precise color matching, shape positioning, and spatial relationships. Each iteration was an LLM guessing at hex values, estimating coordinates, and hoping the shapes would land in the right place. Sometimes they did. Often they didn't. 31 iterations is a lot of correction cycles.</p>
+
+<p>So I built a <a href="https://github.com/oaustegard/claude-skills/tree/main/image-to-svg">skill</a> around a different principle: <strong>every shape, color, and position must come from computational analysis of the source pixels.</strong></p>
+
+<h2 id="the-pipeline">The Pipeline</h2>
+
+<p>The pipeline is straightforward computer vision:</p>
+
+<ol>
+<li><strong>Preprocessing</strong> — bilateral filter to remove texture while preserving edges, then gentle Gaussian blur</li>
+<li><strong>Color quantization</strong> — K-means clustering (K=28–36) on the pixel color space, reducing millions of colors to a manageable palette</li>
+<li><strong>Background detection</strong> — identify background clusters by edge contact (colors that dominate image borders)</li>
+<li><strong>Contour extraction</strong> — for each color cluster, extract filled contours via OpenCV, simplify with <code>approxPolyDP</code></li>
+<li><strong>Z-ordering</strong> — painter's algorithm, largest shapes first</li>
+<li><strong>SVG assembly</strong> — emit paths with extracted hex colors</li>
+</ol>
+
+<p>No visual interpretation involved. The pipeline doesn't know it's looking at a Kandinsky — it sees pixel clusters and contour boundaries.</p>
+
+<h2 id="kandinsky-results">Kandinsky: The Scorecard</h2>
+
+<figure>
+<img src="/images/blog/image-to-svg/kandinsky_comparison.png" alt="Five-way comparison: original Kandinsky, Opus v9, v14, v31, and skill pipeline output">
+<figcaption>Top row: original, Opus v9 (geometric), Opus v14 (organic paths). Bottom row: Opus v31 (final), skill pipeline (single pass).</figcaption>
+</figure>
+
+<table class="comparison-table">
+<thead>
+<tr><th></th><th>v9</th><th>v14</th><th>v31</th><th class="highlight-col">Skill</th></tr>
+</thead>
+<tbody>
+<tr><td>RMSE</td><td>55.2</td><td>22.3</td><td>23.3</td><td class="highlight-col">23.5</td></tr>
+<tr><td>Mean ΔE</td><td>69.4</td><td>21.6</td><td>23.4</td><td class="highlight-col">21.5</td></tr>
+<tr><td>Correlation</td><td>0.12</td><td>0.86</td><td>0.85</td><td class="highlight-col">0.84</td></tr>
+<tr><td>File size</td><td>29KB</td><td>825KB</td><td>959KB</td><td class="highlight-col">358KB</td></tr>
+<tr><td>Paths</td><td>~300</td><td>986</td><td>1,064</td><td class="highlight-col">825</td></tr>
+<tr><td>Time</td><td colspan="3" style="text-align:center">31 iterations</td><td class="highlight-col">20 seconds</td></tr>
+</tbody>
+</table>
+
+<p>The skill's single automated pass matches v14/v31 on fidelity metrics at less than half the file size. Mean color distance is actually the <em>lowest</em> among all SVG versions — because K-means extracted colors from actual pixels instead of Claude eyeballing hex values.</p>
+
+<p>Here's the skill's Kandinsky reproduction as an SVG you can zoom into:</p>
+
+<figure>
+<img src="/images/blog/image-to-svg/kandinsky_skill.svg" alt="SVG reproduction of Kandinsky's Around the Circle" class="svg-embed">
+<figcaption>358KB, 825 paths, 20 seconds. <a href="/images/blog/image-to-svg/kandinsky_skill.svg">Open full SVG</a></figcaption>
+</figure>
+
+<p>For comparison, here's Opus's early geometric attempt — version 9 — to illustrate the gap that visual interpretation has to cross:</p>
+
+<figure>
+<img src="/images/blog/image-to-svg/kandinsky_v9.svg" alt="Opus v9 geometric SVG attempt" class="svg-embed">
+<figcaption>The v9 "diagram" approach: clean primitives, correct composition, but reads as a schematic rather than a reproduction. <a href="/images/blog/image-to-svg/kandinsky_v9.svg">Open full SVG</a></figcaption>
+</figure>
+
+<h2 id="mona-lisa">The Sfumato Stress Test</h2>
+
+<p>Kandinsky's geometric abstraction is arguably the <em>easy</em> case for flat-fill SVG — the painting already consists of discrete color regions. The real test: Leonardo's Mona Lisa, where the entire technique is built on invisible tonal gradients.</p>
+
+<figure>
+<img src="/images/blog/image-to-svg/mona_comparison.png" alt="Three-way comparison: original Mona Lisa, quantized ceiling, SVG output">
+<figcaption>Left: original. Center: quantized image (K=36) — the theoretical ceiling. Right: SVG extraction (2,505 paths).</figcaption>
+</figure>
+
+<p>The numbers are counterintuitively good: RMSE 19.0, correlation 0.93 — better than Kandinsky. That's because the Mona Lisa has large continuous tonal regions; even quantized into 36 colors, the big shapes occupy roughly the right spatial areas and the pixel error stays low.</p>
+
+<p>But the numbers lie about perceptual quality. Look at the face. Leonardo's sfumato — the invisible transitions between light and shadow at the corners of the mouth, the modeling around the eyes — gets carved into discrete zones with hard edges. The famous smile, which exists entirely in the <em>gradient</em> between light and shadow, becomes a harder line. The result has a woodcut quality that's immediately visible even though the metrics say it's close.</p>
+
+<figure>
+<img src="/images/blog/image-to-svg/mona_skill.svg" alt="SVG reproduction of the Mona Lisa" class="svg-embed">
+<figcaption>1.27MB, 2,505 paths, 75 seconds. Unmistakably her — but the sfumato is gone. <a href="/images/blog/image-to-svg/mona_skill.svg">Open full SVG</a></figcaption>
+</figure>
+
+<h2 id="what-this-shows">What This Shows</h2>
+
+<p>The interesting finding isn't that computer vision beats visual interpretation — that's expected. It's the specific failure modes on each side.</p>
+
+<p><strong>Visual interpretation fails at precision.</strong> When Claude hand-draws SVG from looking at an image, it gets the gestalt right but the details wrong. Colors drift. Shapes land in approximately the right place. Each iteration fixes some errors and introduces others. 31 iterations is a lot of human-in-the-loop correction for a result that an automated pipeline matches in seconds.</p>
+
+<p><strong>Automated extraction fails at semantics.</strong> The pipeline doesn't know that the red circle should be perfectly round, or that the smile should be a smooth transition rather than a polygon boundary. It faithfully reproduces whatever the contour extraction finds — including artifacts from the K-means boundaries. It can't make the judgment calls that would push quality beyond what the pixel data directly provides.</p>
+
+<p><strong>Both hit the same ceiling.</strong> The quantized image (RMSE 9.9 for Kandinsky, 11.8 for Mona Lisa) shows there's still a significant gap between what the pixel data <em>knows</em> and what contour extraction can represent. That gap is texture — the micro-variation in brushwork, the granular color transitions, the material quality of paint on canvas. Flat-fill SVG polygons can't capture it without fundamentally different techniques: SVG filters, gradient meshes, noise textures, or vastly more overlapping semi-transparent paths.</p>
+
+<h2 id="the-skill">The Skill</h2>
+
+<p>The <a href="https://github.com/oaustegard/claude-skills/tree/main/image-to-svg">image-to-svg skill</a> (v1.0.0) is available in the <a href="https://github.com/oaustegard/claude-skills">claude-skills</a> repo. It's designed for Claude.ai's containerized compute environment — <code>opencv-python-headless</code>, <code>scikit-image</code>, <code>scipy</code>, and <code>librsvg2-bin</code> for rendering verification.</p>
+
+<p>The core principle that emerged from watching 31 iterations fail in instructive ways: <strong>trust the data, not your imagination.</strong> Claude's visual interpretation is unreliable for precise spatial reasoning. Every shape, color, and position should come from computational analysis of source pixels. The skill codifies this into a pipeline with explicit anti-patterns — never hand-draw shapes, never claim a fix works without rendering, never boost saturation globally.</p>
+
+<p>For photographic or painterly images, the current pipeline hits the flat-fill ceiling hard. A v2 could explore higher K values (48–64), finer polygon approximation, hierarchical contour extraction for nested shapes, and optional SVG filters to re-soften skin tones. But for graphic art, illustrations, and geometric compositions, a single pass already matches what iterative visual interpretation achieves — at a fraction of the cost.</p>
+
+<hr>
+
+<p><em>All reproductions generated by Claude using OpenCV and K-means clustering. <a href="https://en.wikipedia.org/wiki/Around_the_Circle">Kandinsky's <em>Around the Circle</em></a> (1940) and <a href="https://en.wikipedia.org/wiki/Mona_Lisa">the Mona Lisa</a> are in the public domain. The <a href="https://github.com/oaustegard/claude-skills/tree/main/image-to-svg">image-to-svg skill</a> is open source.</em></p>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
 </body>
 </html>
