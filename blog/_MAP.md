@@ -1,5 +1,5 @@
 # blog/
-*Files: 39*
+*Files: 40*
 
 ## Files
 
@@ -39,6 +39,7 @@
 - **the-same-red-lines-different-ink.html**
 - **the-wrong-kind-of-correct.html**
 - **things-you-should-never-do-in-2026-part-i.html**
+- **trust-the-data-not-your-imagination.html** — imports: `bsky-engagement.js`
 - **what-head-start-does.html**
 - **when-the-raven-goes-multimodal.html**
 - **yes-llms-can-be-computers-now-what.html**
