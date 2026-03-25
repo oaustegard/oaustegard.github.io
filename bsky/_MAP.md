@@ -4,7 +4,7 @@
 ## Files
 
 - **BlueReport.js**
-- **anything-to-list.html** — exports (16): `$, showAlert, clearAlert, show, hide, logLine, resolveShortUrl, resolveHandle`... — imports: `bsky-lib.js`
+- **anything-to-list.html** — exports (17): `$, showAlert, clearAlert, show, hide, logLine, resolveShortUrl, resolveHandle`... — imports: `bsky-lib.js`
 - **at-protocol-extension.html**
 - **bsky-constellation-embed.js**
 - **bsky-core.js** — exports (14): `initializeBskyCore, resetProcessing, anonymize, formatPostForOutput, getRelativeTime, safeGetCreatedAt, reconstructTextWithFacets, extractPostInfo`... — imports: `bsky-lib.js`
