@@ -1,8 +1,13 @@
 # blog/
-*Files: 41*
+*Files: 42 | Subdirectories: 1*
+
+## Subdirectories
+
+- [what-can-claude-actually-see/](./what-can-claude-actually-see/_MAP.md)
 
 ## Files
 
+- **_template.html** — imports: `bsky-engagement.js`
 - **a-productive-evening-against-a-bleak-backdrop.html**
 - **a-technical-biography-part-i-from-dulles-to-929-memories.html**
 - **anthropic-platform-wishlist.html**
@@ -40,7 +45,7 @@
 - **the-wrong-kind-of-correct.html**
 - **things-you-should-never-do-in-2026-part-i.html**
 - **trust-the-data-not-your-imagination.html** — imports: `bsky-engagement.js`
-- **what-can-claude-actually-see.html**
+- **what-can-claude-actually-see.html** — imports: `bsky-engagement.js`
 - **what-head-start-does.html**
 - **when-the-raven-goes-multimodal.html**
 - **yes-llms-can-be-computers-now-what.html**
