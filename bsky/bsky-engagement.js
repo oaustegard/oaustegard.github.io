@@ -34,8 +34,8 @@ const BSKY_PUBLIC_API = 'https://public.api.bsky.app/xrpc';
 const WIDGET_CSS = `
   .bsky-engagement {
     --bsky-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --bsky-text: #1a1a2e;
-    --bsky-text-secondary: #64748b;
+    --bsky-text: inherit;
+    --bsky-text-secondary: rgba(0, 0, 0, 0.5);
     --bsky-bg: transparent;
     --bsky-bg-hover: rgba(0, 0, 0, 0.04);
     --bsky-border: rgba(0, 0, 0, 0.12);
@@ -52,10 +52,14 @@ const WIDGET_CSS = `
     max-width: 100%;
   }
 
+  /* Isolate from page link/em styles */
+  .bsky-engagement a { color: inherit; text-decoration: none; }
+  .bsky-engagement em { color: inherit; }
+
   .bsky-engagement[data-theme="dark"],
   .bsky-engagement.bsky-dark {
     --bsky-text: #e2e8f0;
-    --bsky-text-secondary: #94a3b8;
+    --bsky-text-secondary: rgba(255, 255, 255, 0.5);
     --bsky-bg: transparent;
     --bsky-bg-hover: rgba(255, 255, 255, 0.06);
     --bsky-border: rgba(255, 255, 255, 0.12);
@@ -65,7 +69,7 @@ const WIDGET_CSS = `
   @media (prefers-color-scheme: dark) {
     .bsky-engagement[data-theme="auto"] {
       --bsky-text: #e2e8f0;
-      --bsky-text-secondary: #94a3b8;
+      --bsky-text-secondary: rgba(255, 255, 255, 0.5);
       --bsky-bg: transparent;
       --bsky-bg-hover: rgba(255, 255, 255, 0.06);
       --bsky-border: rgba(255, 255, 255, 0.12);
