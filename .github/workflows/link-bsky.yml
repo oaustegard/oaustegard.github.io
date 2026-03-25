@@ -1,0 +1,94 @@
+name: Link Bluesky post
+
+on:
+  workflow_dispatch:
+    inputs:
+      post:
+        description: "Blog post filename (e.g. my-post.html)"
+        required: true
+        type: string
+      bsky_url:
+        description: "Bluesky post URL (e.g. https://bsky.app/profile/austegard.com/post/abc123)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  link:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Link Bluesky post
+        run: |
+          python3 - "${{ inputs.post }}" "${{ inputs.bsky_url }}" << 'PYEOF'
+          import sys, re, urllib.request, json
+
+          post_file = f"blog/{sys.argv[1]}"
+          bsky_url = sys.argv[2]
+
+          # Convert bsky.app URL to AT URI
+          # https://bsky.app/profile/austegard.com/post/abc123 → need DID + rkey
+          m = re.match(r'https://bsky\.app/profile/([^/]+)/post/([^/]+)', bsky_url)
+          if not m:
+              print(f"ERROR: Can't parse URL: {bsky_url}")
+              sys.exit(1)
+          handle, rkey = m.group(1), m.group(2)
+
+          # Resolve handle to DID
+          resp = urllib.request.urlopen(
+              f"https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle={handle}")
+          did = json.loads(resp.read())["did"]
+          at_uri = f"at://{did}/app.bsky.feed.post/{rkey}"
+          print(f"AT URI: {at_uri}")
+
+          with open(post_file) as f:
+              content = f.read()
+
+          changed = False
+
+          # Add bsky:uri meta if missing
+          if 'name="bsky:uri"' not in content:
+              content = content.replace(
+                  '</head>',
+                  f'    <meta name="bsky:uri" content="{at_uri}">\n</head>')
+              changed = True
+
+          # Add widget markup if missing
+          if 'bsky-engagement.js' not in content:
+              widget = f'''    <div class="bsky-section">
+              <div id="bsky-engagement" data-bsky-sort="likes" data-bsky-theme="auto"></div>
+              <noscript><p><a href="{bsky_url}">Discuss on Bluesky</a></p></noscript>
+          </div>
+          <script>
+          (function() {{
+              var m = document.querySelector('meta[name="bsky\\\\:uri"]');
+              if (m && m.content && !m.content.includes('...'))
+                  document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
+          }})();
+          </script>
+          <script type="module" src="/bsky/bsky-engagement.js"></script>'''
+              content = content.replace('</body>', widget + '\n</body>')
+              changed = True
+
+          if changed:
+              with open(post_file, 'w') as f:
+                  f.write(content)
+              print(f"Updated {post_file}")
+          else:
+              print(f"{post_file} already linked")
+          PYEOF
+
+      - name: Commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "blog/${{ inputs.post }}"
+          if git diff --cached --quiet; then
+            echo "No changes"
+          else
+            git commit -m "Link Bluesky post to blog/${{ inputs.post }}"
+            git push
+          fi
