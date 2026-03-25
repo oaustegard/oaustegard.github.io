@@ -213,6 +213,12 @@ def generate_index(posts, config):
             f'alt="{escape(config.get("hero_alt", ""))}" class="blog-hero">\n'
         )
 
+    # Sister blog link (austegard → muninn, or vice versa)
+    sister_html = ""
+    if config.get("sister_blog"):
+        s = config["sister_blog"]
+        sister_html = f'\n    <p class="sister-blog">{s["text"]}</p>'
+
     # Provenance footer (austegard has one)
     provenance_html = ""
     if config.get("provenance"):
@@ -259,6 +265,7 @@ def generate_index(posts, config):
         .post-date {{ display: block; font-size: 0.85em; color: var(--muted, #666); margin-top: 0.15em; }}
         .post-desc {{ font-size: 0.95em; margin-top: 0.25em; }}
         .provenance {{ font-size: 0.9em; color: var(--muted, #666); margin-top: 2em; }}
+        .sister-blog {{ font-size: 0.95em; margin-top: 2em; padding-top: 1em; border-top: 1px solid var(--rule, #ddd); }}
     </style>
 </head>
 <body>
@@ -269,7 +276,7 @@ def generate_index(posts, config):
 
     <ul class="post-list">
 {post_list}
-    </ul>{provenance_html}{footer_html}
+    </ul>{sister_html}{provenance_html}{footer_html}
 </body>
 </html>
 """
