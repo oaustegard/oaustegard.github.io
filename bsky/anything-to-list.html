@@ -657,18 +657,26 @@ function showSubOptions(sourceDesc) {
 /* ─── Source Resolvers ─── */
 const API = 'https://public.api.bsky.app/xrpc';
 
+/* Auth-aware fetch: sends JWT when logged in */
+function apiFetch(endpoint, params) {
+    const agent = getAuthAgent();
+    const qs = new URLSearchParams(params);
+    /* Use PDS when authed (some endpoints like search need it), public API otherwise */
+    const base = agent?.session?.accessJwt ? 'https://bsky.social/xrpc' : API;
+    const opts = agent?.session?.accessJwt
+        ? { headers: { Authorization: `Bearer ${agent.session.accessJwt}` } }
+        : {};
+    return fetch(`${base}/${endpoint}?${qs}`, opts);
+}
+
 async function fetchPaginated(endpoint, params, itemsKey, limit = 0, progressLabel = '') {
-    const agent = getAgent();
     let all = [];
     let cursor = null;
     let page = 0;
     do {
         const p = { ...params, limit: 100 };
         if (cursor) p.cursor = cursor;
-        const url = `${API}/${endpoint}?` + new URLSearchParams(p);
-        const r = await fetch(url, agent?.session?.accessJwt
-            ? { headers: { Authorization: `Bearer ${agent.session.accessJwt}` } }
-            : {});
+        const r = await apiFetch(endpoint, p);
         if (!r.ok) throw new Error(`API error ${r.status}: ${endpoint}`);
         const data = await r.json();
         const items = data[itemsKey] || [];
@@ -779,7 +787,7 @@ async function resolveSource(sourceDesc) {
             }
             if (sub === 'replies') {
                 logLine(`Fetching thread…`);
-                const r = await fetch(`${API}/app.bsky.feed.getPostThread?` + new URLSearchParams({ uri: sourceDesc.uri, depth: 50 }));
+                const r = await apiFetch('app.bsky.feed.getPostThread', { uri: sourceDesc.uri, depth: 50 });
                 if (!r.ok) throw new Error('Failed to fetch thread');
                 const data = await r.json();
                 function walkReplies(node) {
@@ -813,7 +821,7 @@ async function resolveSource(sourceDesc) {
         do {
             const p = { q: sourceDesc.query, limit: 100 };
             if (cursor3) p.cursor = cursor3;
-            const r = await fetch(`${API}/app.bsky.feed.searchPosts?` + new URLSearchParams(p));
+            const r = await apiFetch('app.bsky.feed.searchPosts', p);
             if (!r.ok) throw new Error(`Search API error: ${r.status}`);
             const data = await r.json();
             for (const post of (data.posts || [])) {
@@ -837,7 +845,7 @@ async function resolveSource(sourceDesc) {
         do {
             const p = { q: `#${sourceDesc.tag}`, limit: 100 };
             if (cursor4) p.cursor = cursor4;
-            const r = await fetch(`${API}/app.bsky.feed.searchPosts?` + new URLSearchParams(p));
+            const r = await apiFetch('app.bsky.feed.searchPosts', p);
             if (!r.ok) throw new Error(`Search API error: ${r.status}`);
             const data = await r.json();
             for (const post of (data.posts || [])) {
