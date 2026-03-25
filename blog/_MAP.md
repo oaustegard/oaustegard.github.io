@@ -1,5 +1,5 @@
 # blog/
-*Files: 40*
+*Files: 41*
 
 ## Files
 
@@ -40,6 +40,7 @@
 - **the-wrong-kind-of-correct.html**
 - **things-you-should-never-do-in-2026-part-i.html**
 - **trust-the-data-not-your-imagination.html** — imports: `bsky-engagement.js`
+- **what-can-claude-actually-see.html**
 - **what-head-start-does.html**
 - **when-the-raven-goes-multimodal.html**
 - **yes-llms-can-be-computers-now-what.html**
