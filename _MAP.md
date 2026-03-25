@@ -1,5 +1,5 @@
 # oaustegard.github.io/
-*Files: 6 | Subdirectories: 12*
+*Files: 7 | Subdirectories: 12*
 
 ## Subdirectories
 
@@ -23,4 +23,5 @@
 - **no_ssl.html** — exports: `getQueryParam`
 - **playwright.config.js**
 - **pv.html** — imports: `htmlpreview.js`
+- **style-guide.html** — exports: `toggleTheme, updateSwatches`
 - **tools.html**
