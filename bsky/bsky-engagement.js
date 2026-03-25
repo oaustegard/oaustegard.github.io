@@ -36,11 +36,11 @@ const WIDGET_CSS = `
     --bsky-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     --bsky-text: #1a1a2e;
     --bsky-text-secondary: #64748b;
-    --bsky-bg: #ffffff;
-    --bsky-bg-hover: #f8fafc;
-    --bsky-border: #e2e8f0;
+    --bsky-bg: transparent;
+    --bsky-bg-hover: rgba(0, 0, 0, 0.04);
+    --bsky-border: rgba(0, 0, 0, 0.12);
     --bsky-accent: #0085ff;
-    --bsky-accent-subtle: #e8f4ff;
+    --bsky-accent-subtle: rgba(0, 133, 255, 0.08);
     --bsky-heart: #ec4899;
     --bsky-repost: #22c55e;
     --bsky-reply: #0085ff;
@@ -56,20 +56,20 @@ const WIDGET_CSS = `
   .bsky-engagement.bsky-dark {
     --bsky-text: #e2e8f0;
     --bsky-text-secondary: #94a3b8;
-    --bsky-bg: #1e293b;
-    --bsky-bg-hover: #334155;
-    --bsky-border: #334155;
-    --bsky-accent-subtle: #1e3a5f;
+    --bsky-bg: transparent;
+    --bsky-bg-hover: rgba(255, 255, 255, 0.06);
+    --bsky-border: rgba(255, 255, 255, 0.12);
+    --bsky-accent-subtle: rgba(0, 133, 255, 0.15);
   }
 
   @media (prefers-color-scheme: dark) {
     .bsky-engagement[data-theme="auto"] {
       --bsky-text: #e2e8f0;
       --bsky-text-secondary: #94a3b8;
-      --bsky-bg: #1e293b;
-      --bsky-bg-hover: #334155;
-      --bsky-border: #334155;
-      --bsky-accent-subtle: #1e3a5f;
+      --bsky-bg: transparent;
+      --bsky-bg-hover: rgba(255, 255, 255, 0.06);
+      --bsky-border: rgba(255, 255, 255, 0.12);
+      --bsky-accent-subtle: rgba(0, 133, 255, 0.15);
     }
   }
 
@@ -79,7 +79,6 @@ const WIDGET_CSS = `
     align-items: center;
     gap: 1.25rem;
     padding: 0.75rem 0;
-    border-bottom: 1px solid var(--bsky-border);
     margin-bottom: 0.75rem;
     flex-wrap: wrap;
   }
@@ -113,7 +112,6 @@ const WIDGET_CSS = `
     flex-wrap: wrap;
     gap: 0;
     padding: 0.5rem 0;
-    border-bottom: 1px solid var(--bsky-border);
     margin-bottom: 0.75rem;
   }
 
@@ -121,7 +119,7 @@ const WIDGET_CSS = `
     width: 28px;
     height: 28px;
     border-radius: 50%;
-    border: 2px solid var(--bsky-bg);
+    border: 2px solid var(--bsky-avatar-ring, #fff);
     margin-left: -6px;
     object-fit: cover;
     transition: transform 0.15s ease;
@@ -157,6 +155,29 @@ const WIDGET_CSS = `
   .bsky-cta svg {
     width: 14px;
     height: 14px;
+  }
+
+  /* ── Quote posts ── */
+  .bsky-quotes-list {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.75rem 0;
+  }
+
+  .bsky-quote {
+    padding: 0.6rem 0;
+    border-bottom: 1px solid var(--bsky-border);
+  }
+
+  .bsky-quote:last-child { border-bottom: none; }
+
+  .bsky-quotes-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--bsky-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
   }
 
   /* ── Comments ── */
@@ -434,6 +455,14 @@ async function fetchLikes(atUri, limit = 50) {
   return resp.json();
 }
 
+async function fetchQuotes(atUri, limit = 25) {
+  const resp = await fetch(
+    `${BSKY_PUBLIC_API}/app.bsky.feed.getQuotes?uri=${encodeURIComponent(atUri)}&limit=${limit}`
+  );
+  if (!resp.ok) throw new Error(`Quotes fetch failed: ${resp.status}`);
+  return resp.json();
+}
+
 /* ── Rendering ─────────────────────────────────────────────────────── */
 
 function renderStats(post, bskyUrl) {
@@ -482,6 +511,46 @@ function renderLikers(likes, maxShow = 20) {
     html += `<span class="bsky-likers-overflow">+${overflow} more</span>`;
   }
   html += '</div>';
+  return html;
+}
+
+function renderQuotes(quotes) {
+  if (!quotes || quotes.length === 0) return '';
+
+  let html = '<div class="bsky-quotes-label">Quote posts</div>';
+  html += '<ul class="bsky-quotes-list">';
+  for (const post of quotes) {
+    const author = post.author;
+    const record = post.record || {};
+    const rkey = post.uri?.split('/').pop();
+    const postUrl = makeBskyUrl(author.handle, rkey);
+    const profileUrl = `https://bsky.app/profile/${author.handle}`;
+
+    html += `
+      <li class="bsky-quote">
+        <div class="bsky-comment-header">
+          <a href="${profileUrl}" target="_blank" rel="noopener">
+            ${author.avatar
+              ? `<img class="bsky-comment-avatar" src="${author.avatar}" alt="" loading="lazy"/>`
+              : `<span class="bsky-comment-avatar" style="background:var(--bsky-border);display:inline-block"></span>`
+            }
+          </a>
+          <a href="${profileUrl}" target="_blank" rel="noopener" class="bsky-comment-author">
+            ${escapeHtml(author.displayName || author.handle)}
+          </a>
+          <span class="bsky-comment-handle">@${escapeHtml(author.handle)}</span>
+          <a href="${postUrl}" target="_blank" rel="noopener" class="bsky-comment-time" title="${new Date(record.createdAt).toLocaleString()}">
+            ${timeAgo(record.createdAt)}
+          </a>
+        </div>
+        <div class="bsky-comment-body">${renderRichText(record.text || '', record.facets)}</div>
+        <div class="bsky-comment-meta">
+          ${(post.likeCount || 0) > 0 ? `<span class="bsky-comment-stat"><span style="color:var(--bsky-heart)">${ICONS.heart}</span> ${post.likeCount}</span>` : ''}
+          ${(post.repostCount || 0) > 0 ? `<span class="bsky-comment-stat"><span style="color:var(--bsky-repost)">${ICONS.repost}</span> ${post.repostCount}</span>` : ''}
+        </div>
+      </li>`;
+  }
+  html += '</ul>';
   return html;
 }
 
@@ -577,10 +646,11 @@ async function initWidget(container) {
     const atUri = makeAtUri(did, parsed.rkey);
     const bskyUrl = makeBskyUrl(parsed.actor, parsed.rkey);
 
-    // Fetch thread and likes in parallel
-    const [threadData, likesData] = await Promise.all([
+    // Fetch thread, likes, and quotes in parallel
+    const [threadData, likesData, quotesData] = await Promise.all([
       fetchThread(atUri, maxDepth + 2),
-      showMode !== 'comments' ? fetchLikes(atUri, 50).catch(() => ({ likes: [] })) : Promise.resolve({ likes: [] })
+      showMode !== 'comments' ? fetchLikes(atUri, 50).catch(() => ({ likes: [] })) : Promise.resolve({ likes: [] }),
+      showMode !== 'comments' ? fetchQuotes(atUri, 25).catch(() => ({ posts: [] })) : Promise.resolve({ posts: [] })
     ]);
 
     const thread = threadData.thread;
@@ -601,6 +671,11 @@ async function initWidget(container) {
     // Liker avatars
     if ((showMode === 'all' || showMode === 'stats') && likesData.likes?.length > 0) {
       html += renderLikers(likesData.likes);
+    }
+
+    // Quote posts
+    if ((showMode === 'all' || showMode === 'stats') && quotesData.posts?.length > 0) {
+      html += renderQuotes(quotesData.posts);
     }
 
     // CTA
@@ -625,7 +700,7 @@ async function initWidget(container) {
 
     // Dispatch success event
     container.dispatchEvent(new CustomEvent('bsky:loaded', {
-      detail: { post, replies, likes: likesData.likes }
+      detail: { post, replies, likes: likesData.likes, quotes: quotesData.posts }
     }));
 
   } catch (err) {
