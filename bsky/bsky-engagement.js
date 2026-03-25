@@ -34,7 +34,7 @@ const BSKY_PUBLIC_API = 'https://public.api.bsky.app/xrpc';
 const WIDGET_CSS = `
   .bsky-engagement {
     --bsky-font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    --bsky-text: inherit;
+    --bsky-text: rgba(0, 0, 0, 0.85);
     --bsky-text-secondary: rgba(0, 0, 0, 0.5);
     --bsky-bg: transparent;
     --bsky-bg-hover: rgba(0, 0, 0, 0.04);
@@ -52,10 +52,6 @@ const WIDGET_CSS = `
     max-width: 100%;
   }
 
-  /* Isolate from page link/em styles */
-  .bsky-engagement a { color: inherit; text-decoration: none; }
-  .bsky-engagement em { color: inherit; }
-
   .bsky-engagement[data-theme="dark"],
   .bsky-engagement.bsky-dark {
     --bsky-text: #e2e8f0;
@@ -64,17 +60,6 @@ const WIDGET_CSS = `
     --bsky-bg-hover: rgba(255, 255, 255, 0.06);
     --bsky-border: rgba(255, 255, 255, 0.12);
     --bsky-accent-subtle: rgba(0, 133, 255, 0.15);
-  }
-
-  @media (prefers-color-scheme: dark) {
-    .bsky-engagement[data-theme="auto"] {
-      --bsky-text: #e2e8f0;
-      --bsky-text-secondary: rgba(255, 255, 255, 0.5);
-      --bsky-bg: transparent;
-      --bsky-bg-hover: rgba(255, 255, 255, 0.06);
-      --bsky-border: rgba(255, 255, 255, 0.12);
-      --bsky-accent-subtle: rgba(0, 133, 255, 0.15);
-    }
   }
 
   /* ── Stats bar ── */
@@ -634,7 +619,21 @@ async function initWidget(container) {
   const maxDepth = parseInt(container.getAttribute('data-bsky-max-depth') || '3', 10);
   const sortMode = container.getAttribute('data-bsky-sort') || 'likes';
   const showMode = container.getAttribute('data-bsky-show') || 'all';
-  const theme = container.getAttribute('data-bsky-theme') || 'auto';
+  let theme = container.getAttribute('data-bsky-theme') || 'auto';
+
+  // For "auto": detect from actual page background, not prefers-color-scheme.
+  // A page may be always-light regardless of system dark mode preference.
+  if (theme === 'auto') {
+    const bg = getComputedStyle(container.parentElement || document.body).backgroundColor;
+    const m = bg.match(/\d+/g);
+    if (m && m.length >= 3) {
+      const lum = (0.299 * +m[0] + 0.587 * +m[1] + 0.114 * +m[2]) / 255;
+      theme = lum < 0.5 ? 'dark' : 'light';
+    } else {
+      // transparent or unresolvable — fall back to media query
+      theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    }
+  }
 
   container.classList.add('bsky-engagement');
   container.setAttribute('data-theme', theme);
