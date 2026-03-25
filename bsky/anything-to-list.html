@@ -941,26 +941,34 @@ $('resolveBtn').addEventListener('click', async () => {
     resolvedAccounts = [];
 
     try {
-        const raw = sourceInput.value;
-        const desc = await classify(raw);
-        logLine(`Detected: <span class="hl">${desc.type}</span>`);
+        let useDesc;
 
-        /* Some types need sub-options before resolving */
-        const needsSub = showSubOptions(desc);
-        if (needsSub && btn.textContent === 'Classifying…') {
-            /* First click: show sub-options, change button to "Fetch" */
-            btn.textContent = 'Fetch Accounts';
-            btn.disabled = false;
-            btn.dataset.desc = JSON.stringify(desc);
-            show(logContainer);
-            return;
+        if (btn.dataset.desc) {
+            /* Second click — sub-options already visible, user has configured them */
+            useDesc = JSON.parse(btn.dataset.desc);
+            delete btn.dataset.desc;
+        } else {
+            /* First click — classify the input */
+            const raw = sourceInput.value;
+            const desc = await classify(raw);
+            logLine(`Detected: <span class="hl">${desc.type}</span>`);
+
+            /* Some types need sub-options before resolving */
+            const needsSub = showSubOptions(desc);
+            if (needsSub) {
+                /* Show sub-options, change button to "Fetch", wait for second click */
+                btn.textContent = 'Fetch Accounts';
+                btn.disabled = false;
+                btn.dataset.desc = JSON.stringify(desc);
+                show(logContainer);
+                return;
+            }
+            useDesc = desc;
         }
 
         /* Resolve */
         btn.textContent = 'Resolving…';
         show(logContainer);
-        const useDesc = btn.dataset.desc ? JSON.parse(btn.dataset.desc) : desc;
-        delete btn.dataset.desc;
 
         resolvedAccounts = await resolveSource(useDesc);
         logLine(`<span class="ok">✓ ${resolvedAccounts.length} unique accounts resolved</span>`);
