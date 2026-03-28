@@ -88,7 +88,7 @@ def extract_meta(filepath):
     if not pub:
         # Fallback: parse date from .post-meta or .post-date text
         date_match = re.search(
-            r'class="post-(?:meta|date)"[^>]*>.*?'
+            r'class="(?:post-(?:meta|date)|byline)"[^>]*>.*?'
             r'(\w+ \d{1,2},\s*\d{4}|'          # "March 21, 2026"
             r'\d{4}-\d{2}-\d{2})',               # "2026-03-21"
             content, re.DOTALL | re.IGNORECASE
