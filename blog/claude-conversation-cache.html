@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <!-- === REQUIRED: blog automation reads these meta tags === -->
+    <title>Claude Conversation Cache</title>
+    <meta name="description" content="A Chrome extension that silently caches Claude.ai conversations in IndexedDB so you don't lose work when the UI crashes mid-response.">
+    <meta name="article:published_time" content="2026-03-30T00:00:00Z">
+
+    <meta name="article:author" content="Oskar Austegard">
+    <meta name="article:summary" content="A Chrome extension that intercepts Claude's API traffic and caches it locally, so when the UI crashes 90% through a response, you don't lose everything.">
+
+    <!-- === OPEN GRAPH === -->
+    <meta property="og:title" content="Claude Conversation Cache">
+    <meta property="og:description" content="A Chrome extension that silently caches Claude.ai conversations in IndexedDB so you don't lose work when the UI crashes mid-response.">
+    <meta property="og:type" content="article">
+
+    <!-- === BLUESKY ENGAGEMENT === -->
+    <meta name="bsky:uri" content="at://did:plc:.../app.bsky.feed.post/...">
+
+    <!-- === STANDARD ASSETS === -->
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <link rel="stylesheet" href="/styles/blog.css">
+    <link rel="alternate" type="application/atom+xml" title="Feed" href="/feed.xml">
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+
+<h1>Claude Conversation Cache</h1>
+<p class="post-meta">Oskar Austegard &middot; March 30, 2026</p>
+
+<p>If you use Claude.ai with any regularity — particularly with extended thinking or tool use — you've hit this: Claude streams 90% of a complex response, the UI throws a "response could not be fully generated" error, and <em>everything from that turn vanishes</em>. Your prompt, the tool calls, the partial response. Gone. The status page, of course, reads "All Systems Operational."</p>
+
+<p>The infuriating part isn't the crash. It's that all the data was <em>right there in my browser</em>. Claude streamed it. I watched it render. Then the error dismissed it and I got to start over, spending my own time and tokens trying to reproduce what had already been generated.</p>
+
+<p><a href="https://github.com/oaustegard/browser-extensions/tree/main/claude-cache-extension">Claude Conversation Cache</a> is a Chrome extension that fixes this. It runs silently in the background, intercepting Claude's API traffic and caching it locally in IndexedDB. When the UI crashes, your conversation data is already preserved.</p>
+
+<h2>How It Works</h2>
+
+<p>The extension operates through two content scripts running in different Chrome extension "worlds," a service worker, and a popup/viewer UI.</p>
+
+<p><strong>Fetch interception</strong> is the core. A content script in the page's <code>MAIN</code> world wraps <code>window.fetch()</code> and pattern-matches against Claude's API endpoints: conversation fetches, completion streams, and snapshot loads. For regular JSON responses it clones and caches while passing the original through. For SSE completion streams — the interesting case — it tees the <code>ReadableStream</code>: one fork feeds Claude's UI unchanged, the other gets decoded chunk-by-chunk and forwarded to the cache.</p>
+
+<p><strong>The MAIN/ISOLATED relay</strong> solves a Chrome extension architecture constraint. The <code>MAIN</code> world script can intercept <code>fetch()</code> because it runs in the page's JS context, but can't talk to extension APIs. The <code>ISOLATED</code> world script has <code>chrome.runtime</code> access but can't see page-level objects. They bridge via <code>window.postMessage</code>. This replaced an earlier <code>BroadcastChannel</code> approach that doesn't work across extension/page origins.</p>
+
+<p><strong>The service worker</strong> manages two IndexedDB stores: one for complete conversation snapshots, another for in-progress stream data. Chunks accumulate as they arrive. On normal completion, the service worker reconstructs the assistant message from SSE events — <code>content_block_delta</code> for text and thinking, <code>tool_use</code> blocks, etc. — and merges it into the cached conversation. On stream <em>error</em>, it preserves whatever raw buffer it has. That's the crash recovery path.</p>
+
+<p><strong>Proactive capture</strong> means the extension doesn't wait for new messages. On page load and SPA navigation it fetches the current conversation via the bootstrap API and caches it immediately. A <code>MutationObserver</code> plus <code>popstate</code> listener handles Claude's client-side routing.</p>
+
+<h2>Relationship to Claude Pruner</h2>
+
+<p>I already had <a href="https://austegard.com/ai-tools/claude-pruner.html">Claude Pruner</a>, a bookmarklet that fetches conversation data via the API and opens a pruner UI for selective export. It works well for its purpose, but a bookmarklet is reactive — you run it <em>after</em> you notice something worth saving. When Claude's inference engine dies mid-stream, there's nothing left to fetch.</p>
+
+<p>The cache extension reuses Pruner's rendering engine (the <code>pruner-core.js</code> library) for viewing cached conversations. Click the extension icon for a list of cached conversations sorted by recency. Click a row to open the full-tab viewer with the same granular selection interface: toggle human/assistant/tools/thinking, stats for selected content, and export as structured text or standalone HTML. There's also a manual "Capture" button and quick links to jump back to conversations on claude.ai.</p>
+
+<h2>What It Doesn't Do</h2>
+
+<p>This is purely local and defensive. It doesn't modify Claude's behavior, doesn't send data anywhere, doesn't attempt to resume failed generations. It just makes sure the data that was already streamed to your browser doesn't vanish when Claude's infrastructure hiccups. All data lives in IndexedDB until you clear it.</p>
+
+<h2>Installation</h2>
+
+<p>Clone or download from <a href="https://github.com/oaustegard/browser-extensions/tree/main/claude-cache-extension">GitHub</a>. Open <code>chrome://extensions/</code>, enable Developer mode, click "Load unpacked," select the folder. Browse claude.ai normally — the extension works silently in the background.</p>
+
+<p class="post-meta" style="margin-top: 2em; font-style: italic;">Co-written with <a href="https://muninn.austegard.com">Muninn</a>, my stateful AI agent.</p>
+
+    </article>
+
+    <!-- Bluesky engagement widget -->
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+    <script>
+    (function() {
+        var m = document.querySelector('meta[name="bsky\\:uri"]');
+        if (m && m.content && !m.content.includes('...'))
+            document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
+    })();
+    </script>
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+    <script type="module" src="/bsky/bsky-constellation-embed.js"></script>
+</body>
+</html>
