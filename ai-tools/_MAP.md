@@ -1,5 +1,5 @@
 # ai-tools/
-*Files: 7*
+*Files: 8*
 
 ## Files
 
@@ -10,3 +10,4 @@
 - **claude-skill-releases.html** — exports: `parseRelease, App, handlePopState, fetchReleases, TableOfContents, ReleaseCard` — imports: `preact, signals, hooks, preact`
 - **index.html**
 - **llms.html** — exports (13): `getElement, getParamsFromUrl, updateUrl, formatCost, renderFeatureBadge, isWithinRange, evaluateSearchExpression, filterAndSortModels`...
+- **token-salary-calculator.html** — exports (10): `blend, fmt, inf, infFmt, mdl, Slider, App, applyWorkflow`... — imports: `preact, hooks, preact`
