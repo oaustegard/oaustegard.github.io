@@ -32,13 +32,14 @@
 <div id="app"></div>
 <script type="module">
 import { render } from 'preact';
-import { useState, useMemo } from 'preact/hooks';
+import { useState, useMemo, useEffect } from 'preact/hooks';
 import { html } from 'htm/preact';
 
 const LOCATIONS = [
   { label: "Bay Area", salary: 400000 },
   { label: "NYC / Seattle", salary: 350000 },
   { label: "Austin / Denver", salary: 280000 },
+  { label: "Remote US", salary: 210000 },
   { label: "London", salary: 150000 },
   { label: "Berlin", salary: 120000 },
   { label: "Bangalore", salary: 60000 },
@@ -98,16 +99,38 @@ const S = { // shared styles
   warn: { color:"#b45309", fontSize:12, marginTop:5 },
 };
 
+// Query string parameter sync
+const QSP_KEYS = { t:'targetTasks', l:'locIdx', k:'tokPerTask', h:'hrsOnTasks', p:'hrsPerTask', o:'outputPct', m:'oversightMin', w:'wfIdx', c:'customSalary' };
+function readQSP() {
+  const u = new URLSearchParams(location.search), o = {};
+  for (const [short, full] of Object.entries(QSP_KEYS)) {
+    const v = u.get(short); if (v != null) o[full] = Number(v);
+  }
+  return o;
+}
+function writeQSP(state) {
+  const u = new URLSearchParams();
+  for (const [short, full] of Object.entries(QSP_KEYS)) {
+    if (state[full] != null) u.set(short, state[full]);
+  }
+  history.replaceState(null, '', '?' + u.toString());
+}
+
 function App() {
-  const [targetTasks, setTargetTasks] = useState(200);
-  const [locIdx, setLocIdx] = useState(1);
-  const [tokPerTask, setTokPerTask] = useState(350000);
-  const [hrsOnTasks, setHrsOnTasks] = useState(4);
-  const [hrsPerTask, setHrsPerTask] = useState(1.5);
-  const [outputPct, setOutputPct] = useState(7);
-  const [oversightMin, setOversightMin] = useState(8);
-  const [customSalary, setCustomSalary] = useState(200000);
-  const [wfIdx, setWfIdx] = useState(1);
+  const qsp = useMemo(() => readQSP(), []);
+  const [targetTasks, setTargetTasks] = useState(qsp.targetTasks ?? 200);
+  const [locIdx, setLocIdx] = useState(qsp.locIdx ?? 1);
+  const [tokPerTask, setTokPerTask] = useState(qsp.tokPerTask ?? 350000);
+  const [hrsOnTasks, setHrsOnTasks] = useState(qsp.hrsOnTasks ?? 4);
+  const [hrsPerTask, setHrsPerTask] = useState(qsp.hrsPerTask ?? 1.5);
+  const [outputPct, setOutputPct] = useState(qsp.outputPct ?? 7);
+  const [oversightMin, setOversightMin] = useState(qsp.oversightMin ?? 8);
+  const [customSalary, setCustomSalary] = useState(qsp.customSalary ?? 200000);
+  const [wfIdx, setWfIdx] = useState(qsp.wfIdx ?? 1);
+
+  useEffect(() => {
+    writeQSP({ targetTasks, locIdx, tokPerTask, hrsOnTasks, hrsPerTask, outputPct, oversightMin, wfIdx, customSalary });
+  }, [targetTasks, locIdx, tokPerTask, hrsOnTasks, hrsPerTask, outputPct, oversightMin, wfIdx, customSalary]);
 
   const salary = LOCATIONS[locIdx].salary ?? customSalary;
   const rate = blend(outputPct);
@@ -166,7 +189,7 @@ function App() {
     <div style=${{marginBottom:28}}>
       <div style=${{fontSize:12,textTransform:"uppercase",letterSpacing:"0.15em",color:"#c8ff00",marginBottom:8}}>Task-first calculator</div>
       <h1 style=${{fontSize:28,fontWeight:700,margin:0,lineHeight:1.2,color:"#f0f0f0"}}>What does it cost to ship ${targetTasks} tasks/day?</h1>
-      <p style=${{fontSize:14,color:"#666",marginTop:8,lineHeight:1.6,maxWidth:580}}>
+      <p style=${{fontSize:14,color:"#666",marginTop:8,lineHeight:1.6}}>
         Engineers have 8 hours. Token budgets that exceed human oversight capacity are waste.
         Riffing on <a href="https://aifoc.us/the-token-salary/">Kinlan's analysis</a> of Yegge's and Huang's models. Opus 4.6 pricing via OpenRouter (prompt caching reflected in input rate).
       </p>
@@ -210,7 +233,7 @@ function App() {
       </div>
       <${Slider} label="Output token %" value=${outputPct} onChange=${v=>{setOutputPct(v);clrWf()}}
         min=1 max=30 step=1 format=${v=>`${v}%`}
-        sub=${`In $${IN_RATE} · Out $${OUT_RATE} → $${rate.toFixed(3)}/1M blended`} />
+        sub=${`In $${IN_RATE} (reflects caching) · Out $${OUT_RATE} → $${rate.toFixed(3)}/1M blended`} />
 
       <!-- Location -->
       <div style=${{marginTop:6}}>
@@ -412,7 +435,12 @@ function App() {
     </div>
 
     <div style=${{marginTop:20,fontSize:11,color:"#333",textAlign:"center",lineHeight:1.5}}>
-      Opus 4.6 · $${IN_RATE}/1M in · $${OUT_RATE}/1M out · ${outputPct}% output → $${rate.toFixed(3)}/1M blended · ${MAX_HRS}h workday · ${DAYS} days/yr
+      Opus 4.6 · $${IN_RATE}/1M in (reflects caching) · $${OUT_RATE}/1M out · ${outputPct}% output → $${rate.toFixed(3)}/1M blended · ${MAX_HRS}h workday · ${DAYS} days/yr
+    </div>
+
+    <div style=${{marginTop:14,textAlign:"center"}}>
+      <button onClick=${()=>{navigator.clipboard.writeText(location.href);const b=event.target;b.textContent="Copied!";setTimeout(()=>b.textContent="Copy link to share these settings",1500)}}
+        style=${{background:"#161616",border:"1px solid #222",color:"#777",borderRadius:5,padding:"8px 16px",fontSize:12,cursor:"pointer"}}>Copy link to share these settings</button>
     </div>
 
   </div>`;
