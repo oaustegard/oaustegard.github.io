@@ -5,4 +5,4 @@
 
 - **housing-affordability.html**
 - **index.html**
-- **rain-on-rock.html**
+- **rain-on-rock.html** — exports: `goToSlide, hideHint`
