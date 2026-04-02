@@ -1,5 +1,5 @@
 # blog/
-*Files: 42 | Subdirectories: 1*
+*Files: 43 | Subdirectories: 1*
 
 ## Subdirectories
 
@@ -12,6 +12,7 @@
 - **a-technical-biography-part-i-from-dulles-to-929-memories.html**
 - **anthropic-platform-wishlist.html**
 - **building-atproto-publishing-utilities-from-scratch-no-sdk-required.html**
+- **claude-conversation-cache.html** — imports: `bsky-engagement.js, bsky-constellation-embed.js`
 - **claude-desktop-the-missing-agentic-framework.html**
 - **claude-project-instructions-assistant.html**
 - **claude-user-style-for-eliciting-honest-self-reporting.html** — imports: `bsky-engagement.js`
