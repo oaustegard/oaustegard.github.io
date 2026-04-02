@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="ai-disclosure" content="ai-assisted">
+    <title>Token Salary Calculator — Task-First</title>
+    <style>
+      * { font-family: 'JetBrains Mono','SF Mono','Fira Code',monospace; box-sizing: border-box; }
+      body { margin: 0; background: #0a0a0a; color: #e0e0e0; }
+      input[type=range]{height:4px;background:#222;border-radius:2px;outline:none;-webkit-appearance:none;width:100%;accent-color:#c8ff00;}
+      input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#c8ff00;cursor:pointer;}
+      input[type=number]{background:#111;border:1px solid #2a2a2a;color:#e0e0e0;padding:7px 10px;border-radius:5px;font-size:15px;width:150px;outline:none;}
+      input[type=number]:focus{border-color:#c8ff00;}
+      a { color: #999; text-decoration: none; border-bottom: 1px solid #444; }
+      a:hover { color: #c8ff00; border-color: #c8ff00; }
+      table { width: 100%; border-collapse: collapse; }
+    </style>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/preact@10.25.4",
+        "preact/hooks": "https://esm.sh/preact@10.25.4/hooks",
+        "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+      }
+    }
+    </script>
+</head>
+<body>
+<div id="app"></div>
+<script type="module">
+import { render } from 'preact';
+import { useState, useMemo } from 'preact/hooks';
+import { html } from 'htm/preact';
+
+const LOCATIONS = [
+  { label: "Bay Area", salary: 400000 },
+  { label: "NYC / Seattle", salary: 350000 },
+  { label: "Austin / Denver", salary: 280000 },
+  { label: "London", salary: 150000 },
+  { label: "Berlin", salary: 120000 },
+  { label: "Bangalore", salary: 60000 },
+  { label: "Custom", salary: null },
+];
+
+const WORKFLOWS = [
+  { label: "Copilot assist", desc: "Human drives, AI autocompletes", hrsOnTasks: 6, hrsPerTask: 1.0, tokensPerTask: 150000, outputPct: 5, oversightMin: 3 },
+  { label: "Agent pair", desc: "Human specs, agent implements", hrsOnTasks: 4, hrsPerTask: 1.5, tokensPerTask: 350000, outputPct: 7, oversightMin: 8 },
+  { label: "Heavy agentic", desc: "Claude Code / Codex sessions", hrsOnTasks: 2, hrsPerTask: 1.5, tokensPerTask: 750000, outputPct: 10, oversightMin: 12 },
+  { label: "Fully autonomous", desc: "Human reviews, AI does all", hrsOnTasks: 0.5, hrsPerTask: 1.5, tokensPerTask: 1500000, outputPct: 12, oversightMin: 20 },
+];
+
+const IN_RATE = 1.90, OUT_RATE = 25.00, DAYS = 260, MAX_HRS = 8;
+const blend = (opct) => (1 - opct / 100) * IN_RATE + (opct / 100) * OUT_RATE;
+const fmt = (n) => {
+  if (n < 0) return `-${fmt(-n)}`;
+  if (n >= 1e9) return `$${(n / 1e9).toFixed(1)}B`;
+  if (n >= 1e6) return `$${(n / 1e6).toFixed(1)}M`;
+  if (n >= 1e3) return `$${(n / 1e3).toFixed(0)}K`;
+  return `$${n.toFixed(0)}`;
+};
+const inf = (v) => v === Infinity ? "∞" : v;
+const infFmt = (v) => v === Infinity ? "—" : fmt(v);
+
+function mdl(salary, tokenMult, hrsOnTasks, hrsPerTask, oversightMin, cpt) {
+  const humanTpd = hrsPerTask > 0 ? hrsOnTasks / hrsPerTask : 0;
+  const hrsOnOversight = Math.max(0, MAX_HRS - hrsOnTasks);
+  const tokenBudgetDay = (salary * tokenMult) / DAYS;
+  const aiFundable = tokenBudgetDay / cpt;
+  const aiCapacity = oversightMin > 0 ? hrsOnOversight / (oversightMin / 60) : 0;
+  const aiEffective = Math.min(aiFundable, aiCapacity);
+  const wasted = Math.max(0, aiFundable - aiCapacity);
+  const wastedPct = aiFundable > 0 ? (wasted / aiFundable) * 100 : 0;
+  const totalTpd = humanTpd + aiEffective;
+  return { aiFundable, aiCapacity, aiEffective, wasted, wastedPct, totalTpd, humanTpd, hrsOnTasks, hrsOnOversight };
+}
+
+function Slider({ label, value, onChange, min, max, step, format, sub }) {
+  return html`<div style=${{marginBottom:20}}>
+    <div style=${{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+      <span style=${{fontSize:13,textTransform:"uppercase",letterSpacing:"0.06em",color:"#8a8a8a"}}>${label}</span>
+      <span style=${{fontSize:22,color:"#e0e0e0",fontWeight:600}}>${format(value)}</span>
+    </div>
+    ${sub && html`<div style=${{fontSize:12,color:"#666",marginBottom:5}}>${sub}</div>`}
+    <input type="range" min=${min} max=${max} step=${step} value=${value} onInput=${e => onChange(Number(e.target.value))} />
+  </div>`;
+}
+
+const S = { // shared styles
+  panel: { background:"#0e0e0e", border:"1px solid #1a1a1a", borderRadius:10 },
+  card: (hl) => ({ background: hl ? "linear-gradient(135deg,#1a1f0a,#0f1208)" : "#0e0e0e", border: hl ? "1px solid #c8ff0033" : "1px solid #1e1e1e", borderRadius:10, padding:"20px 22px", flex:1, minWidth:240 }),
+  title: (hl) => ({ fontSize:12, textTransform:"uppercase", letterSpacing:"0.08em", color: hl ? "#c8ff00" : "#777", marginBottom:14 }),
+  big: { fontSize:36, color:"#e8e8e8", fontWeight:700, lineHeight:1 },
+  bigLbl: { fontSize:12, color:"#666", marginTop:4 },
+  detail: { fontSize:13, color:"#888", lineHeight:1.7, marginTop:12 },
+  warn: { color:"#b45309", fontSize:12, marginTop:5 },
+};
+
+function App() {
+  const [targetTasks, setTargetTasks] = useState(200);
+  const [locIdx, setLocIdx] = useState(1);
+  const [tokPerTask, setTokPerTask] = useState(350000);
+  const [hrsOnTasks, setHrsOnTasks] = useState(4);
+  const [hrsPerTask, setHrsPerTask] = useState(1.5);
+  const [outputPct, setOutputPct] = useState(7);
+  const [oversightMin, setOversightMin] = useState(8);
+  const [customSalary, setCustomSalary] = useState(200000);
+  const [wfIdx, setWfIdx] = useState(1);
+
+  const salary = LOCATIONS[locIdx].salary ?? customSalary;
+  const rate = blend(outputPct);
+  const cpt = (tokPerTask / 1e6) * rate;
+  const hrsOnOversight = MAX_HRS - hrsOnTasks;
+  const humanTpd = hrsPerTask > 0 ? hrsOnTasks / hrsPerTask : 0;
+  const aiCapPerEng = oversightMin > 0 ? hrsOnOversight / (oversightMin / 60) : 0;
+
+  const applyWorkflow = (i) => {
+    setWfIdx(i); const w = WORKFLOWS[i];
+    setHrsOnTasks(w.hrsOnTasks); setHrsPerTask(w.hrsPerTask);
+    setTokPerTask(w.tokensPerTask); setOutputPct(w.outputPct); setOversightMin(w.oversightMin);
+  };
+  const clrWf = () => setWfIdx(-1);
+
+  const results = useMemo(() => {
+    const run = (sal) => {
+      const j = mdl(sal, 0.5, hrsOnTasks, hrsPerTask, oversightMin, cpt);
+      const jEng = j.totalTpd > 0 ? Math.ceil(targetTasks / j.totalTpd) : Infinity;
+      const s = mdl(sal, 1.0, hrsOnTasks, hrsPerTask, oversightMin, cpt);
+      const sEng = s.totalTpd > 0 ? Math.ceil(targetTasks / s.totalTpd) : Infinity;
+      const baselineTpd = hrsPerTask > 0 ? MAX_HRS / hrsPerTask : 0;
+      const bEng = baselineTpd > 0 ? Math.ceil(targetTasks / baselineTpd) : Infinity;
+      return {
+        jensen: { m: j, eng: jEng, bud: jEng * sal * 1.5 },
+        steve: { m: s, eng: sEng, bud: sEng * sal * 2 },
+        baseline: { eng: bEng, bud: bEng * sal, tpd: baselineTpd },
+        pure: { bud: targetTasks * DAYS * cpt },
+      };
+    };
+    const mainR = run(salary);
+    const _hTpd = hrsPerTask > 0 ? hrsOnTasks / hrsPerTask : 0;
+    const _aiCap = oversightMin > 0 ? (MAX_HRS - hrsOnTasks) / (oversightMin / 60) : 0;
+    const tpe = _hTpd + _aiCap;
+    const mvtEng = tpe > 0 ? Math.ceil(targetTasks / tpe) : Infinity;
+    const mvtAi = Math.max(0, targetTasks - mvtEng * _hTpd);
+    const mvtTok = mvtAi * cpt * DAYS, mvtSal = mvtEng * salary, mvtTot = mvtSal + mvtTok;
+    const pureBud = targetTasks * DAYS * cpt;
+    const scenarios = [
+      { label:"Baseline", sub:"Humans only · 8h/day", eng:mainR.baseline.eng, salaryC:mainR.baseline.bud, tokenC:0, total:mainR.baseline.bud },
+      { label:"Huang", sub:"All + 50% tokens", eng:mainR.jensen.eng, salaryC:mainR.jensen.eng*salary, tokenC:mainR.jensen.eng*salary*0.5, total:mainR.jensen.bud },
+      { label:"Yegge", sub:"Cut 50%, redirect", eng:mainR.steve.eng, salaryC:mainR.steve.eng*salary, tokenC:mainR.steve.eng*salary, total:mainR.steve.bud },
+      { label:"Min viable", sub:"Oversight-constrained", eng:mvtEng, salaryC:mvtSal, tokenC:mvtTok, total:mvtTot },
+      { label:"Pure tokens", sub:"No humans", eng:0, salaryC:0, tokenC:pureBud, total:pureBud },
+    ].filter(s => s.eng !== Infinity);
+    return { main:mainR, byLoc:LOCATIONS.filter(l=>l.salary).map(l=>({...l,r:run(l.salary)})), scenarios, mvtEng, mvtTok, mvtSal, mvtTot, mvtAi, aiCapPerEng:_aiCap, tpe };
+  }, [salary, targetTasks, tokPerTask, hrsOnTasks, hrsPerTask, outputPct, oversightMin, cpt]);
+
+  const r = results.main;
+  const oh = Math.min(hrsOnOversight, r.steve.m.aiEffective * (oversightMin / 60));
+  const slack = MAX_HRS - hrsOnTasks - oh;
+
+  return html`<div style=${{padding:"32px 24px",maxWidth:760,margin:"0 auto"}}>
+
+    <!-- Header -->
+    <div style=${{marginBottom:28}}>
+      <div style=${{fontSize:12,textTransform:"uppercase",letterSpacing:"0.15em",color:"#c8ff00",marginBottom:8}}>Task-first calculator</div>
+      <h1 style=${{fontSize:28,fontWeight:700,margin:0,lineHeight:1.2,color:"#f0f0f0"}}>What does it cost to ship ${targetTasks} tasks/day?</h1>
+      <p style=${{fontSize:14,color:"#666",marginTop:8,lineHeight:1.6,maxWidth:580}}>
+        Engineers have 8 hours. Token budgets that exceed human oversight capacity are waste.
+        Riffing on <a href="https://aifoc.us/the-token-salary/">Kinlan's analysis</a> of Yegge's and Huang's models. Opus 4.6 at list price, no caching discount.
+      </p>
+    </div>
+
+    <!-- Workflow presets -->
+    <div style=${{...S.panel, padding:"18px 20px", marginBottom:14}}>
+      <div style=${{fontSize:12,textTransform:"uppercase",letterSpacing:"0.08em",color:"#8a8a8a",marginBottom:10}}>Workflow mode</div>
+      <div style=${{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(155px,1fr))",gap:8}}>
+        ${WORKFLOWS.map((w,i) => html`<button key=${i} onClick=${()=>applyWorkflow(i)} style=${{
+          background:wfIdx===i?"#c8ff0012":"#111", border:wfIdx===i?"1px solid #c8ff0044":"1px solid #1e1e1e",
+          borderRadius:7, padding:"12px 14px", cursor:"pointer", textAlign:"left", color:"inherit",
+        }}>
+          <div style=${{fontSize:13,color:wfIdx===i?"#c8ff00":"#ccc",fontWeight:600,marginBottom:3}}>${w.label}</div>
+          <div style=${{fontSize:11,color:"#666",lineHeight:1.4}}>${w.desc}</div>
+          <div style=${{fontSize:11,color:"#555",marginTop:4}}>${w.hrsOnTasks}h tasks · ${(MAX_HRS-w.hrsOnTasks)}h oversight · ${w.oversightMin}m/review</div>
+        </button>`)}
+      </div>
+    </div>
+
+    <!-- Sliders -->
+    <div style=${{...S.panel, padding:"22px 20px", marginBottom:14}}>
+      <${Slider} label="Target tasks per day" value=${targetTasks} onChange=${setTargetTasks}
+        min=10 max=5000 step=10 format=${v=>v.toLocaleString()} />
+      <${Slider} label="Tokens per task" value=${tokPerTask} onChange=${v=>{setTokPerTask(v);clrWf()}}
+        min=50000 max=3000000 step=25000
+        format=${v=>v>=1e6?`${(v/1e6).toFixed(2)}M`:`${(v/1000).toFixed(0)}K`}
+        sub=${`$${cpt.toFixed(3)}/task at $${rate.toFixed(3)}/1M blended`} />
+
+      <div style=${{fontSize:12,textTransform:"uppercase",letterSpacing:"0.08em",color:"#8a8a8a",marginBottom:4,marginTop:8}}>How the 8-hour day is spent</div>
+      <${Slider} label="Hours doing tasks" value=${hrsOnTasks} onChange=${v=>{setHrsOnTasks(v);clrWf()}}
+        min=0 max=8 step=0.5 format=${v=>`${v}h`}
+        sub=${`→ ${humanTpd.toFixed(1)} human tasks/day · leaves ${hrsOnOversight.toFixed(1)}h for oversight`} />
+      <div style=${{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+        <${Slider} label="Hours per human task" value=${hrsPerTask} onChange=${v=>{setHrsPerTask(v);clrWf()}}
+          min=0.25 max=4 step=0.25 format=${v=>`${v}h`}
+          sub=${`→ ${humanTpd.toFixed(1)} tasks in ${hrsOnTasks}h`} />
+        <${Slider} label="AI task review time" value=${oversightMin} onChange=${v=>{setOversightMin(v);clrWf()}}
+          min=1 max=45 step=1 format=${v=>`${v}min`}
+          sub=${`→ ${aiCapPerEng.toFixed(0)} AI tasks in ${hrsOnOversight.toFixed(1)}h`} />
+      </div>
+      <${Slider} label="Output token %" value=${outputPct} onChange=${v=>{setOutputPct(v);clrWf()}}
+        min=1 max=30 step=1 format=${v=>`${v}%`}
+        sub=${`In $${IN_RATE} · Out $${OUT_RATE} → $${rate.toFixed(3)}/1M blended`} />
+
+      <!-- Location -->
+      <div style=${{marginTop:6}}>
+        <div style=${{fontSize:12,textTransform:"uppercase",letterSpacing:"0.08em",color:"#8a8a8a",marginBottom:10}}>Engineer compensation</div>
+        <div style=${{display:"flex",flexWrap:"wrap",gap:6}}>
+          ${LOCATIONS.map((p,i)=>html`<button key=${i} onClick=${()=>setLocIdx(i)} style=${{
+            background:locIdx===i?"#c8ff00":"#161616", color:locIdx===i?"#0a0a0a":"#999",
+            border:locIdx===i?"1px solid #c8ff00":"1px solid #222",
+            borderRadius:5, padding:"7px 13px", fontSize:12, cursor:"pointer", fontWeight:locIdx===i?600:400,
+          }}>${p.label}${p.salary?` ${fmt(p.salary)}`:""}</button>`)}
+        </div>
+        ${LOCATIONS[locIdx].salary==null && html`<div style=${{marginTop:10}}>
+          <input type="number" value=${customSalary} onInput=${e=>setCustomSalary(Number(e.target.value))} />
+        </div>`}
+      </div>
+    </div>
+
+    <!-- Time budget bar -->
+    <div style=${{...S.panel, padding:"16px 20px", marginBottom:14}}>
+      <div style=${{fontSize:12,textTransform:"uppercase",letterSpacing:"0.08em",color:"#8a8a8a",marginBottom:10}}>Engineer's 8-hour day</div>
+      <div style=${{display:"flex",height:36,borderRadius:5,overflow:"hidden",border:"1px solid #1e1e1e"}}>
+        ${hrsOnTasks > 0 && html`<div style=${{width:`${(hrsOnTasks/MAX_HRS)*100}%`,background:"#3b82f6",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#fff",minWidth:40}}>
+          ${hrsOnTasks > 0.3 ? `${hrsOnTasks}h tasks → ${humanTpd.toFixed(1)}` : ""}
+        </div>`}
+        ${oh > 0 && html`<div style=${{width:`${(oh/MAX_HRS)*100}%`,background:"#c8ff0088",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#0a0a0a",minWidth:40}}>
+          ${oh > 0.3 ? `${oh.toFixed(1)}h review → ${r.steve.m.aiEffective.toFixed(0)}` : ""}
+        </div>`}
+        ${slack > 0.05 && html`<div style=${{flex:1,background:"#1a1a1a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,color:"#666"}}>${slack.toFixed(1)}h slack</div>`}
+      </div>
+      <div style=${{fontSize:12,color:"#777",marginTop:8}}>
+        ${humanTpd.toFixed(1)} human + ${r.steve.m.aiEffective.toFixed(1)} AI = <span style=${{color:"#ddd"}}>${r.steve.m.totalTpd.toFixed(1)} tasks/eng/day</span>
+        <span style=${{color:"#555"}}> (Yegge model)</span>
+      </div>
+      ${r.steve.m.wastedPct > 1 && html`<div style=${{fontSize:12,color:"#b45309",marginTop:8}}>
+        Token budget funds ${r.steve.m.aiFundable.toFixed(1)} AI tasks but engineer can only review ${r.steve.m.aiCapacity.toFixed(0)} — ${r.steve.m.wastedPct.toFixed(0)}% of tokens wasted
+      </div>`}
+    </div>
+
+    <!-- Result cards row 1 -->
+    <div style=${{display:"flex",flexWrap:"wrap",gap:12,marginBottom:12}}>
+      <div style=${S.card(false)}>
+        <div style=${S.title(false)}>Baseline · Humans only · 8h/day on tasks</div>
+        <div style=${{display:"flex",gap:24,flexWrap:"wrap"}}>
+          <div><div style=${S.big}>${inf(r.baseline.eng)}</div><div style=${S.bigLbl}>engineers</div></div>
+          <div><div style=${S.big}>${infFmt(r.baseline.bud)}</div><div style=${S.bigLbl}>annual budget</div></div>
+        </div>
+        <div style=${S.detail}>${r.baseline.tpd.toFixed(1)} tasks/eng/day (8h ÷ ${hrsPerTask}h/task) × ${inf(r.baseline.eng)} engineers</div>
+      </div>
+      <div style=${S.card(false)}>
+        <div style=${S.title(false)}>Pure tokens · No humans</div>
+        <div style=${{display:"flex",gap:24,flexWrap:"wrap"}}>
+          <div><div style=${S.big}>0</div><div style=${S.bigLbl}>engineers</div></div>
+          <div><div style=${S.big}>${fmt(r.pure.bud)}</div><div style=${S.bigLbl}>annual budget</div></div>
+        </div>
+        <div style=${S.detail}>${targetTasks} × ${DAYS}d × $${cpt.toFixed(3)}/task</div>
+      </div>
+    </div>
+
+    <!-- Result cards row 2 -->
+    <div style=${{display:"flex",flexWrap:"wrap",gap:12,marginBottom:24}}>
+      <div style=${S.card(false)}>
+        <div style=${S.title(false)}>Huang · Keep all + 50% in tokens</div>
+        <div style=${{display:"flex",gap:24,flexWrap:"wrap"}}>
+          <div><div style=${S.big}>${inf(r.jensen.eng)}</div><div style=${S.bigLbl}>engineers</div></div>
+          <div><div style=${S.big}>${infFmt(r.jensen.bud)}</div><div style=${S.bigLbl}>annual budget</div></div>
+        </div>
+        <div style=${S.detail}>
+          <div>${r.jensen.m.totalTpd.toFixed(1)} tasks/eng/day (${humanTpd.toFixed(1)} human + ${r.jensen.m.aiEffective.toFixed(1)} AI)</div>
+          <div style=${{color:"#666",fontSize:12}}>${fmt(salary*1.5)}/eng (${fmt(salary)} + ${fmt(salary*0.5)} tokens)</div>
+          ${r.jensen.m.wastedPct > 1 && html`<div style=${S.warn}>⚠ ${r.jensen.m.wastedPct.toFixed(0)}% tokens wasted — funds ${r.jensen.m.aiFundable.toFixed(1)}, can oversee ${r.jensen.m.aiCapacity.toFixed(0)}</div>`}
+        </div>
+      </div>
+      <div style=${S.card(true)}>
+        <div style=${S.title(true)}>Yegge · Cut 50%, redirect to tokens</div>
+        <div style=${{display:"flex",gap:24,flexWrap:"wrap"}}>
+          <div><div style=${S.big}>${inf(r.steve.eng)}</div><div style=${S.bigLbl}>engineers</div></div>
+          <div><div style=${S.big}>${infFmt(r.steve.bud)}</div><div style=${S.bigLbl}>annual budget</div></div>
+        </div>
+        <div style=${S.detail}>
+          <div>${r.steve.m.totalTpd.toFixed(1)} tasks/eng/day (${humanTpd.toFixed(1)} human + ${r.steve.m.aiEffective.toFixed(1)} AI)</div>
+          <div style=${{color:"#666",fontSize:12}}>${fmt(salary*2)}/eng (${fmt(salary)} + ${fmt(salary)} tokens)</div>
+          ${r.steve.m.wastedPct > 1 && html`<div style=${S.warn}>⚠ ${r.steve.m.wastedPct.toFixed(0)}% tokens wasted — funds ${r.steve.m.aiFundable.toFixed(1)}, can oversee ${r.steve.m.aiCapacity.toFixed(0)}</div>`}
+        </div>
+      </div>
+    </div>
+
+    <!-- Quiet part -->
+    <div style=${{...S.panel, padding:"20px 22px", marginBottom:18}}>
+      <div style=${{fontSize:13,textTransform:"uppercase",letterSpacing:"0.1em",color:"#c8ff00",marginBottom:14}}>The quiet part out loud</div>
+      ${(()=>{
+        const b = r.baseline.bud;
+        const rows = [
+          { label:"Baseline", eng:r.baseline.eng, bud:b },
+          { label:"Huang", eng:r.jensen.eng, bud:r.jensen.bud },
+          { label:"Yegge", eng:r.steve.eng, bud:r.steve.bud },
+          { label:"Tokens only", eng:0, bud:r.pure.bud },
+        ];
+        return html`<div style=${{fontSize:14,color:"#999",lineHeight:1.8}}>
+          <div style=${{display:"grid",gridTemplateColumns:"auto 1fr",gap:"4px 16px"}}>
+            ${rows.map((row,i)=>{
+              const diff = b - row.bud;
+              return html`<span style=${{color:"#666"}}>${row.label}</span>
+              <span>
+                <span style=${{color:"#ddd"}}>${inf(row.eng)}</span> eng, <span style=${{color:"#ddd"}}>${row.eng===Infinity?"—":fmt(row.bud)}</span>/yr
+                ${i>0 && row.eng!==Infinity && diff!==0 && html`<span style=${{color:diff>0?"#4ade80":"#ef4444",marginLeft:8}}>
+                  ${diff>0?"saves":"costs"} ${fmt(Math.abs(diff))} (${(diff/b*100).toFixed(0)}%)
+                </span>`}
+              </span>`;
+            })}
+          </div>
+          <div style=${{marginTop:16,padding:"14px 16px",background:"#0a0a0a",border:"1px solid #1e1e1e",borderRadius:7,fontSize:13,color:"#777",lineHeight:1.7}}>
+            <div style=${{color:"#b45309",marginBottom:6,fontSize:13}}>Reality check</div>
+            <div>With an 8h cap, each Yegge-model engineer handles <span style=${{color:"#ccc"}}>${r.steve.m.totalTpd.toFixed(1)}</span> tasks/day
+              — ${humanTpd.toFixed(1)} human tasks (${hrsOnTasks}h at ${hrsPerTask}h each), plus up to ${r.steve.m.aiCapacity.toFixed(0)} AI tasks (${hrsOnOversight.toFixed(1)}h at ${oversightMin}min each).
+              ${r.steve.m.wastedPct > 10 ? ` But ${r.steve.m.wastedPct.toFixed(0)}% of the token budget is unspendable — there aren't enough hours to review what the AI produces.` : ""}
+            </div>
+            <div style=${{marginTop:6}}>The bottleneck is never tokens. It's the human hours to define, dispatch, and verify work. Both models assume a queue of perfectly-scoped tasks that doesn't exist in practice.</div>
+          </div>
+        </div>`;
+      })()}
+    </div>
+
+    <!-- Scenario comparison -->
+    ${(()=>{
+      const { scenarios, mvtEng, mvtTok, mvtSal, mvtTot, aiCapPerEng:aCap } = results;
+      if (!scenarios.length) return null;
+      const maxTotal = Math.max(...scenarios.map(s=>s.total));
+      return html`<div style=${{...S.panel, padding:"20px 22px", marginBottom:18}}>
+        <div style=${{fontSize:13,textTransform:"uppercase",letterSpacing:"0.08em",color:"#c8ff00",marginBottom:6}}>Cost comparison · ${targetTasks} tasks/day</div>
+        <div style=${{fontSize:12,color:"#666",marginBottom:18}}>Annual budget split: salary vs. tokens. "Min viable" is the smallest team with enough oversight hours.</div>
+        <div style=${{display:"flex",flexDirection:"column",gap:10}}>
+          ${scenarios.map((s,i)=>{
+            const barW = maxTotal>0?(s.total/maxTotal)*100:0;
+            const salPct = s.total>0?(s.salaryC/s.total)*100:0;
+            const tokPct = 100-salPct;
+            const isOpt = s.label==="Min viable";
+            return html`<div key=${i}>
+              <div style=${{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:4}}>
+                <div style=${{display:"flex",alignItems:"baseline",gap:10}}>
+                  <span style=${{fontSize:14,color:isOpt?"#c8ff00":"#ccc",fontWeight:isOpt?600:400}}>${s.label}</span>
+                  <span style=${{fontSize:11,color:"#555"}}>${s.sub}</span>
+                </div>
+                <div style=${{display:"flex",gap:14,fontSize:13,color:"#999"}}>
+                  <span>${s.eng} eng</span>
+                  <span style=${{color:isOpt?"#c8ff00":"#ddd",fontWeight:600}}>${fmt(s.total)}/yr</span>
+                </div>
+              </div>
+              <div style=${{width:`${Math.max(barW,1)}%`,height:28,borderRadius:4,display:"flex",overflow:"hidden",border:isOpt?"1px solid #c8ff0044":"1px solid #1e1e1e"}}>
+                ${salPct>0 && html`<div style=${{width:`${salPct}%`,background:isOpt?"#3d5a1e":"#2a2a2a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:"#aaa",minWidth:salPct>15?50:0}}>${salPct>15?`${fmt(s.salaryC)} salary`:""}</div>`}
+                ${tokPct>0 && html`<div style=${{width:`${tokPct}%`,background:isOpt?"#c8ff0033":"#1a1a1a",display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,color:isOpt?"#c8ff00":"#777",minWidth:tokPct>15?50:0}}>${tokPct>15?`${fmt(s.tokenC)} tokens`:""}</div>`}
+              </div>
+            </div>`;
+          })}
+        </div>
+        ${mvtEng!==Infinity && html`<div style=${{marginTop:18,padding:"14px 16px",background:"linear-gradient(135deg,#1a1f0a,#0f1208)",border:"1px solid #c8ff0033",borderRadius:7}}>
+          <div style=${{fontSize:12,color:"#c8ff00",marginBottom:8,textTransform:"uppercase",letterSpacing:"0.08em"}}>Minimum viable team</div>
+          <div style=${{display:"flex",gap:28,flexWrap:"wrap",marginBottom:10}}>
+            <div><div style=${S.big}>${mvtEng}</div><div style=${S.bigLbl}>engineers</div></div>
+            <div><div style=${S.big}>${fmt(mvtSal)}</div><div style=${S.bigLbl}>salary/yr</div></div>
+            <div><div style=${S.big}>${fmt(mvtTok)}</div><div style=${S.bigLbl}>tokens/yr</div></div>
+            <div><div style=${S.big}>${fmt(mvtTot)}</div><div style=${S.bigLbl}>total/yr</div></div>
+          </div>
+          <div style=${{fontSize:13,color:"#888",lineHeight:1.7}}>
+            Each engineer does ${humanTpd.toFixed(1)} human tasks + ${aCap.toFixed(1)} AI tasks/day
+            (${hrsOnTasks}h on tasks + ${hrsOnOversight.toFixed(1)}h on review = ${MAX_HRS}h).
+            ${mvtTot < r.steve.bud ? ` Saves ${fmt(r.steve.bud-mvtTot)} vs. Yegge and ${fmt(r.jensen.bud-mvtTot)} vs. Huang — because it sizes the token budget to the work, not to a salary formula.` : ""}
+          </div>
+        </div>`}
+      </div>`;
+    })()}
+
+    <!-- Geo table -->
+    <div style=${{...S.panel, padding:"20px 22px"}}>
+      <div style=${{fontSize:13,textTransform:"uppercase",letterSpacing:"0.1em",color:"#777",marginBottom:12}}>Geographic arbitrage · same ${targetTasks} tasks/day</div>
+      <div style=${{overflowX:"auto"}}>
+        <table style=${{fontSize:13}}>
+          <thead><tr style=${{borderBottom:"1px solid #222"}}>
+            ${["","Comp","Yegge eng","Yegge $/yr","Waste","Huang eng","Huang $/yr","Waste"].map((h,i)=>
+              html`<th key=${i} style=${{textAlign:i===0?"left":"right",padding:"8px 7px",color:"#666",fontWeight:400,fontSize:11}}>${h}</th>`
+            )}
+          </tr></thead>
+          <tbody>
+            ${results.byLoc.map((loc,i)=>{
+              const active = loc.salary===salary;
+              return html`<tr key=${i} style=${{borderBottom:"1px solid #1a1a1a",background:active?"#111":"transparent"}}>
+                <td style=${{padding:"9px 7px",color:active?"#c8ff00":"#bbb"}}>${loc.label}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:"#777"}}>${fmt(loc.salary)}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:"#ddd"}}>${loc.r.steve.eng}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:"#ddd"}}>${fmt(loc.r.steve.bud)}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:loc.r.steve.m.wastedPct>10?"#b45309":"#555"}}>${loc.r.steve.m.wastedPct>1?`${loc.r.steve.m.wastedPct.toFixed(0)}%`:"—"}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:"#aaa"}}>${loc.r.jensen.eng}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:"#aaa"}}>${fmt(loc.r.jensen.bud)}</td>
+                <td style=${{textAlign:"right",padding:"9px 7px",color:loc.r.jensen.m.wastedPct>10?"#b45309":"#555"}}>${loc.r.jensen.m.wastedPct>1?`${loc.r.jensen.m.wastedPct.toFixed(0)}%`:"—"}</td>
+              </tr>`;
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <div style=${{marginTop:20,fontSize:11,color:"#333",textAlign:"center",lineHeight:1.5}}>
+      Opus 4.6 · $${IN_RATE}/1M in · $${OUT_RATE}/1M out · ${outputPct}% output → $${rate.toFixed(3)}/1M blended · ${MAX_HRS}h workday · ${DAYS} days/yr
+    </div>
+
+  </div>`;
+}
+
+render(html`<${App} />`, document.getElementById('app'));
+</script>
+</body>
+</html>
