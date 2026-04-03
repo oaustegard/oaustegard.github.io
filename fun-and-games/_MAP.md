@@ -1,5 +1,5 @@
 # fun-and-games/
-*Files: 16*
+*Files: 17*
 
 ## Files
 
@@ -17,5 +17,6 @@
 - **poetry-playground.html** — exports: `ParticleCanvas, animate, handleResize, TypographyControls, PoetryDisplay, renderWord, App, regeneratePoem` — imports: `preact, signals, hooks, preact`
 - **shader.html** — exports: `App, resize, handleWheel, animate` — imports: `preact, hooks, preact`
 - **speedo.html** — exports: `toMph, updateDisplay, handlePosition, handleError, startTracking, requestWakeLock, enableNoSleepAudio, disableNoSleepAudio`
+- **strudel-composer.html**
 - **unicorn-spotter.html** — exports: `initApp`
 - **yingyang.html** — exports (9): `resize, drawWhiteBase, alphaAt, gradAt, resetBalls, reflect, keepInside, collideYY`...
