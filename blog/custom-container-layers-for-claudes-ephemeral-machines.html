@@ -40,13 +40,11 @@
 <h1>Custom Container Layers for Claude's Ephemeral Machines</h1>
 <p class="post-meta">April 3, 2026 · Oskar Austegard</p>
 
-<p>Here's a thing that everyone who uses Claude seriously hits eventually: the container resets.</p>
+<p>Claude.ai and Claude Code on the Web both run in ephemeral containers. Every session starts from a fresh Ubuntu box — packages, path config, everything gone. That's how it works, and it's fine for most people.</p>
 
-<p>Every Claude.ai conversation, every Claude Code on the Web session — you get a fresh Ubuntu box. Your packages are gone. Your skills are gone. Your path configuration, your Python dependencies, your carefully installed toolchain — all of it, vaporized. You start from scratch, every time.</p>
+<p>But if you've built a workflow that depends on custom packages, fetched repos, or path configuration — like <a href="/blog/a-technical-biography-part-i-from-dulles-to-929-memories.html">Muninn</a>, the stateful memory agent I run on Claude — your boot sequence starts doing real work. Mine fetches a skills repo from GitHub, installs Python path entries, sources credentials, queries a Turso database. Repeated, from scratch, every single session.</p>
 
-<p>If you've built any kind of persistent workflow on Claude — like <a href="/blog/a-technical-biography-part-i-from-dulles-to-929-memories.html">Muninn</a>, my stateful memory agent — your boot sequence grows. Mine fetches a skills repo, installs Python path entries, sources credentials, queries a database. It's not slow exactly, but it's <em>repeated work</em>, and it adds up across dozens of sessions a day.</p>
-
-<p>So I asked what seemed like an obvious question: <strong>could we just use a Dockerfile?</strong></p>
+<p>At some point I asked what seemed like an obvious question: <strong>could we just use a Dockerfile?</strong></p>
 
 <h2>The Idea</h2>
 
@@ -78,7 +76,7 @@ EXPOSE 8080</code></pre>
 
 <h2>The Cache</h2>
 
-<p>The real payoff isn't the parser — it's the caching layer.</p>
+<p>The parser is straightforward. The more interesting part is the caching.</p>
 
 <p>On first build, the executor snapshots what changed. Not the entire filesystem — just the <em>delta</em>. It captures a baseline of well-known install paths before executing, then diffs against it afterward. Only new files from package installs get included. <code>FETCH</code> destinations are captured in full. The result is a tarball, typically 2–3 MB, that gets pushed to a GitHub Release as an asset.</p>
 
@@ -103,7 +101,7 @@ Session start
 
 <h2>The uv Shim</h2>
 
-<p>Here's the part I'm most pleased with. Mid-session, you install a package you didn't anticipate:</p>
+<p>There's also a shim for capturing ad-hoc installs. Mid-session, you install a package you didn't anticipate:</p>
 
 <pre><code>source ./scripts/uv_shim.sh ./Containerfile
 uv pip install --system scikit-learn</code></pre>
@@ -147,18 +145,16 @@ uv pip install --system scikit-learn</code></pre>
 
 <h2>What This Isn't</h2>
 
-<p>It's not a real container builder. It doesn't do layer caching per-instruction (though it could). It doesn't handle multi-stage builds. It doesn't work with Docker registries. It's a ~400-line Python parser that executes shell commands and tarballs the results. The Dockerfile format is borrowed for familiarity, not fidelity.</p>
-
-<p>But that's the point. The containers are ephemeral. The spec doesn't need to be.</p>
+<p>It's not a real container builder. It doesn't do layer caching per-instruction (though it could). It doesn't handle multi-stage builds. It doesn't work with Docker registries. It's a ~400-line Python parser that executes shell commands and tarballs the results. The Dockerfile format is borrowed for familiarity, not fidelity — but the containers are ephemeral, and the spec doesn't need to be.</p>
 
 <h2>Try It</h2>
 
 <ul>
-<li><strong><a href="https://github.com/oaustegard/container-layer-test">container-layer-test</a></strong> — open this repo in Claude Code on the Web and watch the SessionStart hook do its thing</li>
+<li><strong><a href="https://github.com/oaustegard/container-layer-test">container-layer-test</a></strong> — a working example repo with SessionStart hooks for Claude Code on the Web</li>
 <li><strong><a href="https://github.com/oaustegard/claude-skills/tree/main/container-layer">container-layer skill</a></strong> — the parser, executor, cache, and uv shim</li>
 </ul>
 
-<p>If you're building persistent workflows on Claude and tired of reinstalling your world every session, this is the missing piece. It's also, as far as I can tell, something nobody else has tried — which either means it's a good idea or a terrible one. The PRs suggest the former.</p>
+<p>To use caching, you'll need to create your own GitHub repo for storing layer tarballs (the default target is configurable via <code>--repo</code>). Without a cache repo, the Containerfile still executes — you just rebuild from scratch each session, which is where you were anyway.</p>
 
 <hr>
 
