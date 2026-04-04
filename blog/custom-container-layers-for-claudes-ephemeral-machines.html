@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="ai-disclosure" content="ai-assisted">
+    <title>Custom Container Layers for Claude's Ephemeral Machines</title>
+    <meta name="description" content="Claude's containers reset every session. So we built a Dockerfile parser that caches your environment as a GitHub Release asset and restores it in seconds.">
+    <meta property="og:title" content="Custom Container Layers for Claude's Ephemeral Machines">
+    <meta property="og:description" content="Claude's containers reset every session. So we built a Dockerfile parser that caches your environment as a GitHub Release asset and restores it in seconds.">
+    <meta property="og:type" content="article">
+    <meta name="article:published_time" content="2026-04-03T00:00:00Z">
+    <meta name="bsky:uri" content="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/...">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <link rel="stylesheet" href="/styles/blog.css">
+    <link rel="alternate" type="application/atom+xml" title="Oskar Austegard" href="/feed.xml">
+    <style>
+        .arch-diagram {
+            background: var(--bg-alt, #f5f2eb);
+            border: 1px solid var(--rule, #d5cfc3);
+            border-radius: 6px;
+            padding: 1.2em;
+            font-family: monospace;
+            font-size: 0.85em;
+            line-height: 1.6;
+            overflow-x: auto;
+            margin: 1.5em 0;
+        }
+        @media (prefers-color-scheme: dark) {
+            .arch-diagram { background: var(--bg-alt, #1a1a1a); border-color: var(--rule, #333); }
+        }
+        code { font-size: 0.9em; }
+        pre { line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+<h1>Custom Container Layers for Claude's Ephemeral Machines</h1>
+<p class="post-meta">April 3, 2026 · Oskar Austegard</p>
+
+<p>Here's a thing that everyone who uses Claude seriously hits eventually: the container resets.</p>
+
+<p>Every Claude.ai conversation, every Claude Code on the Web session — you get a fresh Ubuntu box. Your packages are gone. Your skills are gone. Your path configuration, your Python dependencies, your carefully installed toolchain — all of it, vaporized. You start from scratch, every time.</p>
+
+<p>If you've built any kind of persistent workflow on Claude — like <a href="/blog/a-technical-biography-part-i-from-dulles-to-929-memories.html">Muninn</a>, my stateful memory agent — your boot sequence grows. Mine fetches a skills repo, installs Python path entries, sources credentials, queries a database. It's not slow exactly, but it's <em>repeated work</em>, and it adds up across dozens of sessions a day.</p>
+
+<p>So I asked what seemed like an obvious question: <strong>could we just use a Dockerfile?</strong></p>
+
+<h2>The Idea</h2>
+
+<p>Not to build an actual Docker image — we don't control the base image and there's no daemon to speak of. But to use the Dockerfile <em>as a declarative spec</em> for the environment, parse and execute the instructions we care about, and cache the result.</p>
+
+<p>The Dockerfile format is already a well-understood DSL for exactly this purpose. And if Anthropic ever does expose custom base images (please), you've already got the spec ready to go.</p>
+
+<p>We call it a <code>Containerfile</code> to avoid confusion with actual Docker builds. It supports the subset that matters in an ephemeral container:</p>
+
+<pre><code># Fetch a GitHub repo
+FETCH github:oaustegard/claude-skills /mnt/skills/user
+
+# Install Python packages
+RUN uv pip install --system httpx pandas
+
+# Configure paths
+RUN echo '/mnt/skills/user/remembering' &gt; /usr/local/lib/python3.11/dist-packages/muninn.pth
+SNAPSHOT /usr/local/lib/python3.11/dist-packages/muninn.pth
+
+# Set environment
+ENV MY_VAR=hello
+WORKDIR /home/user
+
+# Dockerfile-only instructions are silently ignored
+FROM ubuntu:24.04
+EXPOSE 8080</code></pre>
+
+<p><code>FETCH</code>, <code>RUN</code>, <code>ENV</code>, <code>WORKDIR</code>, <code>SNAPSHOT</code> — that's the active vocabulary. Everything else (<code>FROM</code>, <code>EXPOSE</code>, <code>CMD</code>, etc.) is silently skipped, so you can maintain a file that's valid-ish Dockerfile syntax while only the relevant parts execute.</p>
+
+<h2>The Cache</h2>
+
+<p>The real payoff isn't the parser — it's the caching layer.</p>
+
+<p>On first build, the executor snapshots what changed. Not the entire filesystem — just the <em>delta</em>. It captures a baseline of well-known install paths before executing, then diffs against it afterward. Only new files from package installs get included. <code>FETCH</code> destinations are captured in full. The result is a tarball, typically 2–3 MB, that gets pushed to a GitHub Release as an asset.</p>
+
+<p>The cache key is a SHA-256 hash of the Containerfile contents. Change a line, and the hash changes, triggering a rebuild. You can also salt it with external signals:</p>
+
+<pre><code>python3 -m scripts.cli \
+    --invalidate-on oaustegard/claude-skills \
+    restore ./Containerfile</code></pre>
+
+<p>The <code>--invalidate-on</code> flag fetches the HEAD SHA of the specified repo and mixes it into the cache key. Push a commit to your skills repo? The cache auto-invalidates. Next session does a full rebuild and re-caches.</p>
+
+<div class="arch-diagram">
+Session start
+  → Hash Containerfile (+ optional repo HEAD SHAs)
+  → Check GitHub Releases for matching tag
+  → Hit?  → curl 2.7 MB tarball → tar xzf → done (seconds)
+  → Miss? → Execute each instruction
+         → Snapshot filesystem delta
+         → Push tarball to GitHub Releases
+         → Next session gets the fast path
+</div>
+
+<h2>The uv Shim</h2>
+
+<p>Here's the part I'm most pleased with. Mid-session, you install a package you didn't anticipate:</p>
+
+<pre><code>source ./scripts/uv_shim.sh ./Containerfile
+uv pip install --system scikit-learn</code></pre>
+
+<p>The shim is a bash function that wraps <code>uv</code>. It proxies the real install, and on success, appends <code>RUN uv pip install --system scikit-learn</code> to your Containerfile. Your ad-hoc install is now part of the spec. Next time you build, it's baked in.</p>
+
+<p>It strips transient flags like <code>--break-system-packages</code> from the captured line (the executor auto-adds those during build), so the Containerfile stays clean.</p>
+
+<h2>Claude Code on the Web</h2>
+
+<p>The integration for Claude Code on the Web uses the <code>SessionStart</code> hook — a shell command that fires automatically when a session starts, with stdout injected into Claude's context:</p>
+
+<pre><code>// .claude/settings.json
+{
+  "hooks": {
+    "SessionStart": [{
+      "matcher": "",
+      "hooks": [{
+        "type": "command",
+        "command": "bash ./boot-ccotw.sh 2>&amp;1 || true"
+      }]
+    }]
+  }
+}</code></pre>
+
+<p>The boot script bootstraps the container-layer skill itself (a ~30 KB fetch from GitHub), then uses it to process the Containerfile. It's turtles all the way down — the tool that builds the cache is itself fetched fresh each session, but it's small enough that this is negligible.</p>
+
+<p>For Claude.ai chat (project instructions), it's the same flow but triggered from the boot script block in project instructions instead of a hook.</p>
+
+<h2>What It Cost to Get Working</h2>
+
+<p>Three PRs on the test repo before the CCotW integration worked cleanly:</p>
+
+<ol>
+<li><strong>Python version mismatch</strong> — CCotW runs Python 3.11, not 3.12. The <code>dist-packages</code> path was wrong.</li>
+<li><strong><code>set -e</code> vs. glob patterns</strong> — <code>for envfile in ./*.env</code> returns a literal <code>./*.env</code> when no files match, the <code>[ -f ]</code> test fails, and <code>set -e</code> kills the entire script. Classic.</li>
+<li><strong>Snapshot scope</strong> — snapshotting only the <code>.pth</code> file missed the actual packages. Need to snapshot the full <code>dist-packages</code> directory to capture pip-installed dependencies.</li>
+</ol>
+
+<p>All the kinds of bugs that are trivial in retrospect and maddening in the moment. The working version is <a href="https://github.com/oaustegard/container-layer-test">oaustegard/container-layer-test</a>.</p>
+
+<h2>What This Isn't</h2>
+
+<p>It's not a real container builder. It doesn't do layer caching per-instruction (though it could). It doesn't handle multi-stage builds. It doesn't work with Docker registries. It's a ~400-line Python parser that executes shell commands and tarballs the results. The Dockerfile format is borrowed for familiarity, not fidelity.</p>
+
+<p>But that's the point. The containers are ephemeral. The spec doesn't need to be.</p>
+
+<h2>Try It</h2>
+
+<ul>
+<li><strong><a href="https://github.com/oaustegard/container-layer-test">container-layer-test</a></strong> — open this repo in Claude Code on the Web and watch the SessionStart hook do its thing</li>
+<li><strong><a href="https://github.com/oaustegard/claude-skills/tree/main/container-layer">container-layer skill</a></strong> — the parser, executor, cache, and uv shim</li>
+</ul>
+
+<p>If you're building persistent workflows on Claude and tired of reinstalling your world every session, this is the missing piece. It's also, as far as I can tell, something nobody else has tried — which either means it's a good idea or a terrible one. The PRs suggest the former.</p>
+
+<hr>
+
+<p><em>Built in a single Claude.ai session. The skill, cache repo, test repo, all three debugging PRs, and this blog post were produced in one conversation with Claude Opus 4.6.</em></p>
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-uri="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/..."
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+
+    <script>
+    (function() {
+        var m = document.querySelector('meta[name="bsky\\:uri"]');
+        if (m && m.content && !m.content.includes('...'))
+            document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
+    })();
+    </script>
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>
