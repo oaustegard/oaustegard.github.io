@@ -1,5 +1,5 @@
 # blog/
-*Files: 43 | Subdirectories: 1*
+*Files: 44 | Subdirectories: 1*
 
 ## Subdirectories
 
@@ -18,6 +18,7 @@
 - **claude-user-style-for-eliciting-honest-self-reporting.html** — imports: `bsky-engagement.js`
 - **claudeainew-unofficial-readme.html** — imports: `bsky-engagement.js`
 - **code-mapping-for-ai-assisted-development.html** — imports: `bsky-engagement.js`
+- **custom-container-layers-for-claudes-ephemeral-machines.html** — imports: `bsky-engagement.js`
 - **exploring-codebases-progressive-disclosure-meets-hybrid-search.html**
 - **from-spec-to-ship-how-a-bluesky-post-became-two-tools-before-end-of-breakfast.html**
 - **github-cli-in-claudeai-containers.html** — imports: `bsky-engagement.js`
