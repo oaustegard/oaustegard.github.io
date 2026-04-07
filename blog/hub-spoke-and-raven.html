@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="ai-disclosure" content="ai-assisted">
+
+    <title>Hub, Spoke, and Raven: A Stateful Agent on Claude's Ephemeral Containers</title>
+    <meta name="description" content="How we turned Claude Code on the Web into a persistent multi-repo development environment with a stateful AI agent that remembers across sessions.">
+    <meta name="article:published_time" content="2026-04-07T00:00:00Z">
+    <meta name="article:author" content="Oskar Austegard">
+
+    <meta property="og:title" content="Hub, Spoke, and Raven: A Stateful Agent on Claude's Ephemeral Containers">
+    <meta property="og:description" content="How we turned Claude Code on the Web into a persistent multi-repo development environment with a stateful AI agent that remembers across sessions.">
+    <meta property="og:type" content="article">
+
+    <meta name="bsky:uri" content="at://did:plc:.../app.bsky.feed.post/...">
+
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <link rel="stylesheet" href="/styles/blog.css">
+    <link rel="alternate" type="application/atom+xml" title="Oskar Austegard" href="/feed.xml">
+    <style>
+        .arch-diagram {
+            background: var(--bg-alt, #f5f2eb);
+            border: 1px solid var(--rule, #d5cfc3);
+            border-radius: 6px;
+            padding: 1.2em;
+            font-family: monospace;
+            font-size: 0.85em;
+            line-height: 1.6;
+            overflow-x: auto;
+            margin: 1.5em 0;
+        }
+        @media (prefers-color-scheme: dark) {
+            .arch-diagram { background: var(--bg-alt, #1a1a1a); border-color: var(--rule, #333); }
+        }
+        .telemetry {
+            font-family: monospace;
+            font-size: 0.85em;
+            line-height: 1.8;
+        }
+        .telemetry .bar { color: var(--sage, #7a9e7e); }
+        code { font-size: 0.9em; }
+        pre { line-height: 1.5; }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+
+<h1>Hub, Spoke, and Raven</h1>
+<p class="post-meta">April 7, 2026 &middot; Oskar Austegard</p>
+
+<p>A few days ago I wrote about <a href="/blog/custom-container-layers-for-claudes-ephemeral-machines.html">building a container layer cache</a> for Claude Code on the Web — a Dockerfile-like spec that snapshots your environment as a tarball and restores it in milliseconds. That solved the environment problem: packages, CLIs, and path config survive across sessions.</p>
+
+<p>But a persistent environment isn't the same as a persistent <em>agent</em>. And a single repo isn't a development workflow. What I actually wanted was this: open a Claude Code session on the web, have it boot in seconds with my tools installed, my skills loaded, and my AI agent — <a href="https://muninn.austegard.com">Muninn</a> — already present with its identity, memory, and operational context. Then work across multiple GitHub repos, not just the one the session opened in.</p>
+
+<p>That's what's running now. Here's how it fits together.</p>
+
+<h2>The Stack</h2>
+
+<p>Three layers, each solving a different problem:</p>
+
+<svg viewBox="0 0 680 420" xmlns="http://www.w3.org/2000/svg" style="max-width:680px;width:100%;height:auto;margin:1.5em auto;display:block;" role="img" aria-label="Architecture diagram showing four stacked layers: ephemeral container, cached container layer, fresh skills, and stateful Muninn agent">
+  <style>
+    .layer-label { font: bold 14px system-ui, sans-serif; }
+    .layer-desc { font: 12px system-ui, sans-serif; opacity: 0.75; }
+    .badge-text { font: bold 10px system-ui, sans-serif; }
+    .bracket-text { font: 11px system-ui, sans-serif; letter-spacing: 0.5px; }
+  </style>
+  <!-- Layer 0: Ephemeral container -->
+  <rect x="40" y="320" width="520" height="80" rx="8" fill="#64748b" opacity="0.12" stroke="#64748b" stroke-width="1.5"/>
+  <text x="60" y="352" class="layer-label" fill="#475569">Ephemeral Ubuntu Container</text>
+  <text x="60" y="372" class="layer-desc" fill="#475569">Fresh every session — the platform we build on</text>
+  <!-- Layer 1: Container layer -->
+  <rect x="40" y="225" width="520" height="80" rx="8" fill="#7a9e7e" opacity="0.15" stroke="#7a9e7e" stroke-width="1.5"/>
+  <text x="60" y="257" class="layer-label" fill="#4a7a50">Container Layer</text>
+  <text x="60" y="277" class="layer-desc" fill="#4a7a50">httpx, libsql, gh CLI — cached as tarball, restored in ms</text>
+  <!-- Badge: cached -->
+  <rect x="460" y="243" width="80" height="22" rx="11" fill="#7a9e7e" opacity="0.25"/>
+  <text x="500" y="258" text-anchor="middle" class="badge-text" fill="#4a7a50">CACHED</text>
+  <!-- Layer 2: Skills -->
+  <rect x="40" y="130" width="520" height="80" rx="8" fill="#d4a04a" opacity="0.15" stroke="#d4a04a" stroke-width="1.5"/>
+  <text x="60" y="162" class="layer-label" fill="#92700a">Skills (~70)</text>
+  <text x="60" y="182" class="layer-desc" fill="#92700a">Fetched from GitHub every session — always current, never cached</text>
+  <!-- Badge: fresh -->
+  <rect x="460" y="148" width="80" height="22" rx="11" fill="#d4a04a" opacity="0.25"/>
+  <text x="500" y="163" text-anchor="middle" class="badge-text" fill="#92700a">FRESH</text>
+  <!-- Layer 3: Muninn -->
+  <rect x="40" y="35" width="520" height="80" rx="8" fill="#4a5a8a" opacity="0.15" stroke="#4a5a8a" stroke-width="1.5"/>
+  <text x="60" y="67" class="layer-label" fill="#3a4a7a">Muninn (Stateful Agent)</text>
+  <text x="60" y="87" class="layer-desc" fill="#3a4a7a">Identity, memories, ops loaded from Turso DB every session</text>
+  <!-- Badge: stateful -->
+  <rect x="447" y="53" width="93" height="22" rx="11" fill="#4a5a8a" opacity="0.25"/>
+  <text x="493" y="68" text-anchor="middle" class="badge-text" fill="#3a4a7a">STATEFUL</text>
+  <!-- Right-side bracket: cached -->
+  <line x1="590" y1="235" x2="600" y2="235" stroke="#7a9e7e" stroke-width="1.5"/>
+  <line x1="600" y1="235" x2="600" y2="390" stroke="#7a9e7e" stroke-width="1.5"/>
+  <line x1="590" y1="390" x2="600" y2="390" stroke="#7a9e7e" stroke-width="1.5"/>
+  <text x="612" y="318" class="bracket-text" fill="#4a7a50" transform="rotate(-90 612 318)">persists across sessions</text>
+  <!-- Right-side bracket: fresh -->
+  <line x1="590" y1="45" x2="600" y2="45" stroke="#d4a04a" stroke-width="1.5"/>
+  <line x1="600" y1="45" x2="600" y2="200" stroke="#d4a04a" stroke-width="1.5"/>
+  <line x1="590" y1="200" x2="600" y2="200" stroke="#d4a04a" stroke-width="1.5"/>
+  <text x="612" y="128" class="bracket-text" fill="#92700a" transform="rotate(-90 612 128)">loaded every session</text>
+</svg>
+
+<p>The key design decision: <strong>separate what's slow-changing from what's fast-changing</strong>. System packages and CLI tools rarely change — cache them aggressively. Skills evolve constantly — always fetch fresh. Agent identity is persistent state in a database — load it every time. Each layer has its own caching strategy because each layer has a different rate of change.</p>
+
+<h2>Hub and Spoke</h2>
+
+<p>Claude Code on the Web opens a session in one repository. That's your working directory, your git context, your <code>CLAUDE.md</code>. But real work often spans multiple repos — a skills repo, a cache storage repo, a blog, an app.</p>
+
+<p>The solution is a hub/spoke model. One repo — <a href="https://github.com/oaustegard/claude-workspace"><code>claude-workspace</code></a> — is the <strong>hub</strong>. It contains the boot scripts, the Containerfile, the session hooks. It exists to configure and launch the environment. I don't write application code in it.</p>
+
+<p>Everything else is a <strong>spoke</strong>:</p>
+
+<ul>
+<li><a href="https://github.com/oaustegard/claude-skills"><code>claude-skills</code></a> — the skills fetched at boot. When Muninn needs to fix or extend a skill mid-session, it opens a PR here directly.</li>
+<li><a href="https://github.com/oaustegard/claude-container-layers"><code>claude-container-layers</code></a> — stores cached tarballs and archived transcripts. Managed automatically by the boot and stop hooks.</li>
+<li><a href="https://github.com/oaustegard/oaustegard.github.io"><code>oaustegard.github.io</code></a> — this blog.</li>
+<li>Several others — an AT Protocol app, browser extensions, bookmarklets.</li>
+</ul>
+
+<p>The glue is <code>gh</code>, the GitHub CLI. It's installed in the container layer (one of the things we cache), authenticated via a <code>GH_TOKEN</code> in the project's env files. With <code>gh</code> available, Muninn can clone repos, create branches, push commits, open PRs, read issues — across any of my repos, not just the hub.</p>
+
+<p>This is why the container layer matters beyond convenience. Without cached <code>gh</code>, every session would need to download and install it before doing any cross-repo work. With it, the agent can start working across repos immediately.</p>
+
+<h2>Loading the Raven</h2>
+
+<p>The boot sequence is orchestrated by <code>.claude/settings.json</code> hooks — specifically, a <code>SessionStart</code> hook that fires automatically when a session begins:</p>
+
+<pre><code>{
+  "hooks": {
+    "SessionStart": [{
+      "hooks": [{
+        "type": "command",
+        "command": "bash ./boot-ccotw.sh 2>&1 || echo 'Boot failed (non-fatal)'"
+      }]
+    }]
+  }
+}</code></pre>
+
+<p>The boot script (<code>boot-ccotw.sh</code>) does four things in sequence:</p>
+
+<ol>
+<li><strong>Restore the container layer</strong> — apply the cached Containerfile. If the cache hits (which it almost always does), this takes ~4ms.</li>
+<li><strong>Fetch skills</strong> — pull the latest tarball from <code>claude-skills</code> on GitHub. Always fresh, never cached. ~1.4 seconds.</li>
+<li><strong>Emit skills metadata</strong> — parse each skill's <code>SKILL.md</code> and output an XML block listing names, descriptions, and locations. This lands in Claude's context window, so the agent knows what tools it has.</li>
+<li><strong>Run post-boot</strong> — execute <code>post-boot.sh</code>, which loads Muninn.</li>
+</ol>
+
+<p>The post-boot script is minimal:</p>
+
+<pre><code>cd /mnt/skills/user/remembering
+python3 -c "from scripts import boot; print(boot(telemetry=True))"</code></pre>
+
+<p>That <code>boot()</code> call connects to a Turso database and loads:</p>
+
+<ul>
+<li><strong>Profile</strong> — identity, personality, voice, values, tensions to navigate</li>
+<li><strong>Ops</strong> — operational instructions: memory discipline, grounding safeguards, dev workflow preferences</li>
+<li><strong>Recall triggers</strong> — a precomputed index of topics the agent has memories about, for fast retrieval</li>
+<li><strong>Recent flights</strong> — the most recent GitHub issues created by Muninn (we call them "flights" — the raven flies out, reports back)</li>
+<li><strong>Reminders</strong> — pending tasks with due dates</li>
+<li><strong>Constellation</strong> — the list of spoke repos and their status</li>
+</ul>
+
+<p>All of this is printed to stdout, which the SessionStart hook captures and injects into Claude's context window. When the conversation begins, the agent doesn't need to be told who it is or how to behave — it already knows.</p>
+
+<h2>Session Lifecycle</h2>
+
+<p>Sessions have a shape: they start, they run, they end. The hooks give each phase a purpose.</p>
+
+<svg viewBox="0 0 600 460" xmlns="http://www.w3.org/2000/svg" style="max-width:600px;width:100%;height:auto;margin:1.5em auto;display:block;" role="img" aria-label="Session lifecycle diagram showing boot, run, and stop phases">
+  <style>
+    .phase-label { font: bold 13px system-ui, sans-serif; }
+    .step-text { font: 12px system-ui, sans-serif; }
+    .timing { font: bold 11px monospace; }
+    .phase-dim { font: 12px system-ui, sans-serif; opacity: 0.6; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#64748b"/>
+    </marker>
+  </defs>
+
+  <!-- SessionStart phase -->
+  <rect x="20" y="10" width="560" height="195" rx="8" fill="#7a9e7e" opacity="0.08" stroke="#7a9e7e" stroke-width="1"/>
+  <text x="40" y="35" class="phase-label" fill="#4a7a50">SessionStart</text>
+
+  <text x="60" y="62" class="step-text" fill="#334155">Restore container layer</text>
+  <text x="430" y="62" class="timing" fill="#7a9e7e">4 ms</text>
+
+  <line x1="60" y1="74" x2="480" y2="74" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="94" class="step-text" fill="#334155">Fetch skills from GitHub</text>
+  <text x="430" y="94" class="timing" fill="#d4a04a">1.4 s</text>
+
+  <line x1="60" y1="106" x2="480" y2="106" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="126" class="step-text" fill="#334155">Emit skills XML to context window</text>
+
+  <line x1="60" y1="138" x2="480" y2="138" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="158" class="step-text" fill="#334155">post-boot.sh → boot() from Turso</text>
+  <text x="430" y="158" class="timing" fill="#4a5a8a">4.5 s</text>
+
+  <line x1="60" y1="170" x2="480" y2="170" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="192" class="step-text" fill="#4a7a50" font-weight="bold">= Agent ready with tools, identity, and memory</text>
+
+  <!-- Arrow down -->
+  <line x1="300" y1="210" x2="300" y2="250" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Session runs -->
+  <rect x="120" y="255" width="360" height="50" rx="25" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="300" y="285" text-anchor="middle" class="phase-dim" fill="#64748b">Session runs — user interacts with Muninn</text>
+
+  <!-- Arrow down -->
+  <line x1="300" y1="310" x2="300" y2="345" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- SessionEnd phase -->
+  <rect x="20" y="350" width="560" height="100" rx="8" fill="#64748b" opacity="0.08" stroke="#64748b" stroke-width="1"/>
+  <text x="40" y="378" class="phase-label" fill="#475569">SessionEnd / Stop</text>
+
+  <text x="60" y="404" class="step-text" fill="#334155">persist-transcript.sh → find .jsonl → archive to GitHub Release</text>
+
+  <text x="60" y="432" class="step-text" fill="#475569" font-weight="bold">= Session preserved for future reference</text>
+</svg>
+
+<p>The stop hook is fire-and-forget — errors are silenced, and missing credentials cause a silent no-op. The transcript is a <code>.jsonl</code> file that Claude Code writes to <code>~/.claude/projects/</code>. The script tars it up and pushes it to a GitHub Release on the container-layers repo, both as a per-session archive (tagged with timestamp and session ID) and as a rolling <code>transcripts-latest</code> bundle.</p>
+
+<p>This isn't about nostalgia. Transcripts are useful for debugging boot failures, reviewing what Muninn actually did in a session, and occasionally for training data to improve skills and ops.</p>
+
+<h2>Boot Telemetry</h2>
+
+<p>When <code>BOOT_TELEMETRY=1</code> is set, the boot script emits per-phase timing data. Here's a real boot from today:</p>
+
+<div class="telemetry">
+<pre>Environment ready (cached).
+⏱ bash:env_source       4ms
+⏱ bash:skills_fetch  1401ms
+⏱ bash:post_boot     6686ms
+
+  Post-boot breakdown (Python):
+  config_fetch        379ms <span class="bar">███████</span>
+  github_detect         1ms <span class="bar">█</span>
+  ops_topics          565ms <span class="bar">███████████</span>
+  utilities          1849ms <span class="bar">████████████████████████████████████</span>
+  tasks               217ms <span class="bar">████</span>
+  flights             272ms <span class="bar">█████</span>
+  reminders           616ms <span class="bar">████████████</span>
+  format              573ms <span class="bar">███████████</span>
+  TOTAL              4472ms</pre>
+</div>
+
+<p>The telemetry isn't vanity — it drove actual design decisions. The <code>utilities</code> phase (loading recall triggers, initializing caches) dominates at 1.8 seconds. That's the next optimization target. Without the telemetry bars staring at you every session, you'd guess wrong about where the time goes.</p>
+
+<h2>What Makes This Different</h2>
+
+<p>The individual pieces aren't novel. Caching builds, loading config from a database, using CLI tools across repos — people do all of these. What's unusual is stacking them into a coherent boot sequence for an AI agent on an ephemeral platform:</p>
+
+<ul>
+<li><strong>Container persistence</strong> — the environment survives session boundaries</li>
+<li><strong>Agent persistence</strong> — the agent's identity and memory survive session boundaries</li>
+<li><strong>Skill freshness</strong> — capabilities are always current, deliberately not cached</li>
+<li><strong>Multi-repo reach</strong> — the agent works across repositories, not within one</li>
+<li><strong>Lifecycle hooks</strong> — sessions have defined start and stop behaviors</li>
+</ul>
+
+<p>The result is that I open a Claude Code session on the web, wait about 8 seconds, and I'm talking to Muninn — who knows who it is, remembers our previous conversations, has 70 skills loaded, can work across 10 repos, and will archive this session's transcript when we're done.</p>
+
+<p>Not bad for an ephemeral container.</p>
+
+<h2>Try It</h2>
+
+<p>You don't need the full Muninn stack to benefit from this pattern. The container layer is a standalone skill you can drop into any Claude Code on the Web project:</p>
+
+<ul>
+<li><a href="https://github.com/oaustegard/container-layer-test"><code>container-layer-test</code></a> — a working demo repo with <code>SessionStart</code> hooks, a sample <code>Containerfile</code>, and step-by-step setup instructions</li>
+<li><a href="https://github.com/oaustegard/claude-skills/tree/main/container-layer"><code>container-layer</code> skill</a> — the parser, executor, cache, and uv shim</li>
+</ul>
+
+<p>A <code>Containerfile</code> + <code>SessionStart</code> hook + a few spoke repos and <code>gh</code> gets you a persistent multi-repo development environment. The stateful agent on top is optional — but once you have the infrastructure, it's a natural next step.</p>
+
+<p>The container layer skill is documented in detail in the <a href="/blog/custom-container-layers-for-claudes-ephemeral-machines.html">previous post</a>. Muninn's memory architecture is described on <a href="https://muninn.austegard.com">muninn.austegard.com</a>.</p>
+
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+    <script>
+    (function() {
+        var m = document.querySelector('meta[name="bsky\\:uri"]');
+        if (m && m.content && !m.content.includes('...'))
+            document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
+    })();
+    </script>
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>
