@@ -62,24 +62,49 @@
 
 <p>Three layers, each solving a different problem:</p>
 
-<div class="arch-diagram">
-┌─────────────────────────────────────────────────┐
-│  Muninn (stateful agent)                        │
-│  Identity, memories, ops loaded from Turso DB   │
-│  Loaded fresh every session via post-boot.sh    │
-├─────────────────────────────────────────────────┤
-│  Skills (always fresh)                          │
-│  Fetched from GitHub every session              │
-│  ~70 skills: charting, Bluesky, memory, etc.    │
-├─────────────────────────────────────────────────┤
-│  Container layer (cached)                       │
-│  httpx, libsql, gh CLI — restored from tarball  │
-│  Rebuilt only when Containerfile changes         │
-├─────────────────────────────────────────────────┤
-│  Ephemeral Ubuntu container (platform)          │
-│  Fresh every session — this is what we build on │
-└─────────────────────────────────────────────────┘
-</div>
+<svg viewBox="0 0 680 420" xmlns="http://www.w3.org/2000/svg" style="max-width:680px;width:100%;height:auto;margin:1.5em auto;display:block;" role="img" aria-label="Architecture diagram showing four stacked layers: ephemeral container, cached container layer, fresh skills, and stateful Muninn agent">
+  <style>
+    .layer-label { font: bold 14px system-ui, sans-serif; }
+    .layer-desc { font: 12px system-ui, sans-serif; opacity: 0.75; }
+    .badge-text { font: bold 10px system-ui, sans-serif; }
+    .bracket-text { font: 11px system-ui, sans-serif; letter-spacing: 0.5px; }
+  </style>
+  <!-- Layer 0: Ephemeral container -->
+  <rect x="40" y="320" width="520" height="80" rx="8" fill="#64748b" opacity="0.12" stroke="#64748b" stroke-width="1.5"/>
+  <text x="60" y="352" class="layer-label" fill="#475569">Ephemeral Ubuntu Container</text>
+  <text x="60" y="372" class="layer-desc" fill="#475569">Fresh every session — the platform we build on</text>
+  <!-- Layer 1: Container layer -->
+  <rect x="40" y="225" width="520" height="80" rx="8" fill="#7a9e7e" opacity="0.15" stroke="#7a9e7e" stroke-width="1.5"/>
+  <text x="60" y="257" class="layer-label" fill="#4a7a50">Container Layer</text>
+  <text x="60" y="277" class="layer-desc" fill="#4a7a50">httpx, libsql, gh CLI — cached as tarball, restored in ms</text>
+  <!-- Badge: cached -->
+  <rect x="460" y="243" width="80" height="22" rx="11" fill="#7a9e7e" opacity="0.25"/>
+  <text x="500" y="258" text-anchor="middle" class="badge-text" fill="#4a7a50">CACHED</text>
+  <!-- Layer 2: Skills -->
+  <rect x="40" y="130" width="520" height="80" rx="8" fill="#d4a04a" opacity="0.15" stroke="#d4a04a" stroke-width="1.5"/>
+  <text x="60" y="162" class="layer-label" fill="#92700a">Skills (~70)</text>
+  <text x="60" y="182" class="layer-desc" fill="#92700a">Fetched from GitHub every session — always current, never cached</text>
+  <!-- Badge: fresh -->
+  <rect x="460" y="148" width="80" height="22" rx="11" fill="#d4a04a" opacity="0.25"/>
+  <text x="500" y="163" text-anchor="middle" class="badge-text" fill="#92700a">FRESH</text>
+  <!-- Layer 3: Muninn -->
+  <rect x="40" y="35" width="520" height="80" rx="8" fill="#4a5a8a" opacity="0.15" stroke="#4a5a8a" stroke-width="1.5"/>
+  <text x="60" y="67" class="layer-label" fill="#3a4a7a">Muninn (Stateful Agent)</text>
+  <text x="60" y="87" class="layer-desc" fill="#3a4a7a">Identity, memories, ops loaded from Turso DB every session</text>
+  <!-- Badge: stateful -->
+  <rect x="447" y="53" width="93" height="22" rx="11" fill="#4a5a8a" opacity="0.25"/>
+  <text x="493" y="68" text-anchor="middle" class="badge-text" fill="#3a4a7a">STATEFUL</text>
+  <!-- Right-side bracket: cached -->
+  <line x1="590" y1="235" x2="600" y2="235" stroke="#7a9e7e" stroke-width="1.5"/>
+  <line x1="600" y1="235" x2="600" y2="390" stroke="#7a9e7e" stroke-width="1.5"/>
+  <line x1="590" y1="390" x2="600" y2="390" stroke="#7a9e7e" stroke-width="1.5"/>
+  <text x="612" y="318" class="bracket-text" fill="#4a7a50" transform="rotate(-90 612 318)">persists across sessions</text>
+  <!-- Right-side bracket: fresh -->
+  <line x1="590" y1="45" x2="600" y2="45" stroke="#d4a04a" stroke-width="1.5"/>
+  <line x1="600" y1="45" x2="600" y2="200" stroke="#d4a04a" stroke-width="1.5"/>
+  <line x1="590" y1="200" x2="600" y2="200" stroke="#d4a04a" stroke-width="1.5"/>
+  <text x="612" y="128" class="bracket-text" fill="#92700a" transform="rotate(-90 612 128)">loaded every session</text>
+</svg>
 
 <p>The key design decision: <strong>separate what's slow-changing from what's fast-changing</strong>. System packages and CLI tools rarely change — cache them aggressively. Skills evolve constantly — always fetch fresh. Agent identity is persistent state in a database — load it every time. Each layer has its own caching strategy because each layer has a different rate of change.</p>
 
@@ -148,23 +173,62 @@ python3 -c "from scripts import boot; print(boot(telemetry=True))"</code></pre>
 
 <p>Sessions have a shape: they start, they run, they end. The hooks give each phase a purpose.</p>
 
-<div class="arch-diagram">
-SessionStart
-  → boot-ccotw.sh
-    → Restore container layer (4ms, cached)
-    → Fetch skills (1.4s, always fresh)
-    → Emit skills XML to context
-    → post-boot.sh → boot() from Turso (4.5s)
-  = Agent ready with tools, identity, and memory
+<svg viewBox="0 0 600 460" xmlns="http://www.w3.org/2000/svg" style="max-width:600px;width:100%;height:auto;margin:1.5em auto;display:block;" role="img" aria-label="Session lifecycle diagram showing boot, run, and stop phases">
+  <style>
+    .phase-label { font: bold 13px system-ui, sans-serif; }
+    .step-text { font: 12px system-ui, sans-serif; }
+    .timing { font: bold 11px monospace; }
+    .phase-dim { font: 12px system-ui, sans-serif; opacity: 0.6; }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L8,3 L0,6" fill="#64748b"/>
+    </marker>
+  </defs>
 
-[Session runs — user interacts with Muninn]
+  <!-- SessionStart phase -->
+  <rect x="20" y="10" width="560" height="195" rx="8" fill="#7a9e7e" opacity="0.08" stroke="#7a9e7e" stroke-width="1"/>
+  <text x="40" y="35" class="phase-label" fill="#4a7a50">SessionStart</text>
 
-SessionEnd / Stop
-  → persist-transcript.sh
-    → Find session transcript (.jsonl)
-    → Archive to GitHub Release (per-session + rolling latest)
-  = Session preserved for future reference
-</div>
+  <text x="60" y="62" class="step-text" fill="#334155">Restore container layer</text>
+  <text x="430" y="62" class="timing" fill="#7a9e7e">4 ms</text>
+
+  <line x1="60" y1="74" x2="480" y2="74" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="94" class="step-text" fill="#334155">Fetch skills from GitHub</text>
+  <text x="430" y="94" class="timing" fill="#d4a04a">1.4 s</text>
+
+  <line x1="60" y1="106" x2="480" y2="106" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="126" class="step-text" fill="#334155">Emit skills XML to context window</text>
+
+  <line x1="60" y1="138" x2="480" y2="138" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="158" class="step-text" fill="#334155">post-boot.sh → boot() from Turso</text>
+  <text x="430" y="158" class="timing" fill="#4a5a8a">4.5 s</text>
+
+  <line x1="60" y1="170" x2="480" y2="170" stroke="#e2e8f0" stroke-width="1"/>
+
+  <text x="60" y="192" class="step-text" fill="#4a7a50" font-weight="bold">= Agent ready with tools, identity, and memory</text>
+
+  <!-- Arrow down -->
+  <line x1="300" y1="210" x2="300" y2="250" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- Session runs -->
+  <rect x="120" y="255" width="360" height="50" rx="25" fill="#f1f5f9" stroke="#94a3b8" stroke-width="1.5" stroke-dasharray="6,3"/>
+  <text x="300" y="285" text-anchor="middle" class="phase-dim" fill="#64748b">Session runs — user interacts with Muninn</text>
+
+  <!-- Arrow down -->
+  <line x1="300" y1="310" x2="300" y2="345" stroke="#64748b" stroke-width="1.5" marker-end="url(#arrow)"/>
+
+  <!-- SessionEnd phase -->
+  <rect x="20" y="350" width="560" height="100" rx="8" fill="#64748b" opacity="0.08" stroke="#64748b" stroke-width="1"/>
+  <text x="40" y="378" class="phase-label" fill="#475569">SessionEnd / Stop</text>
+
+  <text x="60" y="404" class="step-text" fill="#334155">persist-transcript.sh → find .jsonl → archive to GitHub Release</text>
+
+  <text x="60" y="432" class="step-text" fill="#475569" font-weight="bold">= Session preserved for future reference</text>
+</svg>
 
 <p>The stop hook is fire-and-forget — errors are silenced, and missing credentials cause a silent no-op. The transcript is a <code>.jsonl</code> file that Claude Code writes to <code>~/.claude/projects/</code>. The script tars it up and pushes it to a GitHub Release on the container-layers repo, both as a per-session archive (tagged with timestamp and session ID) and as a rolling <code>transcripts-latest</code> bundle.</p>
 
