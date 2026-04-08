@@ -1,5 +1,5 @@
 # blog/
-*Files: 44 | Subdirectories: 1*
+*Files: 45 | Subdirectories: 1*
 
 ## Subdirectories
 
@@ -23,6 +23,7 @@
 - **from-spec-to-ship-how-a-bluesky-post-became-two-tools-before-end-of-breakfast.html**
 - **github-cli-in-claudeai-containers.html** — imports: `bsky-engagement.js`
 - **how-claude-in-chrome-reverse-engineered-claudes-undocumented-new-endpoint.html** — imports: `bsky-engagement.js`
+- **hub-spoke-and-raven.html** — imports: `bsky-engagement.js`
 - **index.html**
 - **managing-context-continuity-in-claude-projects.html**
 - **my-interview-with-the-claude-ai-interviewer.html** — imports: `bsky-engagement.js`
