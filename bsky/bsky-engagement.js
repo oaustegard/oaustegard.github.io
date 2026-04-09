@@ -24,7 +24,7 @@
  *   bsky:error   — detail: { error }
  *
  * @license MIT
- * @version 1.1.0
+ * @version 1.1.1
  */
 
 const BSKY_PUBLIC_API = 'https://public.api.bsky.app/xrpc';
@@ -690,12 +690,12 @@ function aggregateThreadStats(post, chain) {
   return { likes, reposts, replies };
 }
 
-function renderThreadContinuation(chain) {
-  if (!chain || chain.length === 0) return '';
+function renderAnnouncementThread(rootPost, chain) {
+  // Render the full OP thread: root post + continuation posts
+  const allPosts = [rootPost, ...chain.map(n => n.post)];
 
   let html = '<ul class="bsky-thread-continuation">';
-  for (const node of chain) {
-    const post = node.post;
+  for (const post of allPosts) {
     const author = post.author;
     const record = post.record || {};
     const rkey = post.uri?.split('/').pop();
@@ -826,9 +826,9 @@ async function initWidget(container) {
       Join the conversation on Bluesky ${ICONS.external}
     </a>`;
 
-    // OP thread continuation (if multi-post announcement)
+    // OP thread (root post + continuation, if multi-post announcement)
     if (opChain.length > 0) {
-      html += renderThreadContinuation(opChain);
+      html += renderAnnouncementThread(post, opChain);
     }
 
     // Comments (third-party replies only)
