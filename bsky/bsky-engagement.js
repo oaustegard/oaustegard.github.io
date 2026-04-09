@@ -24,7 +24,7 @@
  *   bsky:error   — detail: { error }
  *
  * @license MIT
- * @version 1.0.0
+ * @version 1.1.0
  */
 
 const BSKY_PUBLIC_API = 'https://public.api.bsky.app/xrpc';
@@ -265,6 +265,29 @@ const WIDGET_CSS = `
     margin-left: 0.75rem;
   }
 
+  /* ── OP thread continuation ── */
+  .bsky-thread-continuation {
+    list-style: none;
+    padding: 0;
+    margin: 0 0 0.75rem 0;
+  }
+
+  .bsky-thread-post {
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--bsky-border);
+  }
+
+  .bsky-thread-post:last-child { border-bottom: none; }
+
+  .bsky-thread-label {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--bsky-text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-bottom: 0.5rem;
+  }
+
   /* ── Loading ── */
   .bsky-loading {
     text-align: center;
@@ -454,10 +477,10 @@ async function fetchQuotes(atUri, limit = 25) {
 
 /* ── Rendering ─────────────────────────────────────────────────────── */
 
-function renderStats(post, bskyUrl) {
-  const likes = post.likeCount || 0;
-  const reposts = (post.repostCount || 0) + (post.quoteCount || 0);
-  const replies = post.replyCount || 0;
+function renderStats(stats, bskyUrl) {
+  const likes = stats.likes || stats.likeCount || 0;
+  const reposts = stats.reposts || ((stats.repostCount || 0) + (stats.quoteCount || 0));
+  const replies = stats.replies || stats.replyCount || 0;
 
   return `
     <div class="bsky-stats">
@@ -610,6 +633,99 @@ function sortReplies(replies, mode = 'likes') {
   }
 }
 
+/**
+ * Extract OP's self-reply chain from thread replies.
+ * Returns { chain: [reply nodes], remaining: [non-chain replies] }
+ * The chain follows the linear path where OP replies to themselves.
+ */
+function extractOpChain(replies, rootAuthorDid) {
+  if (!replies || replies.length === 0) return { chain: [], remaining: [] };
+
+  const chain = [];
+  let remaining = [...replies];
+  let currentReplies = remaining;
+
+  while (true) {
+    const opReplyIdx = currentReplies.findIndex(
+      r => r?.post?.author?.did === rootAuthorDid
+    );
+    if (opReplyIdx === -1) break;
+
+    const opReply = currentReplies[opReplyIdx];
+    // Remove from current level's remaining
+    if (currentReplies === remaining) {
+      remaining.splice(opReplyIdx, 1);
+    }
+    chain.push(opReply);
+
+    // Continue down OP's self-reply chain
+    currentReplies = opReply.replies || [];
+  }
+
+  return { chain, remaining };
+}
+
+/**
+ * Aggregate stats across root post and OP thread chain.
+ */
+function aggregateThreadStats(post, chain) {
+  let likes = post.likeCount || 0;
+  let reposts = (post.repostCount || 0) + (post.quoteCount || 0);
+  let replies = post.replyCount || 0;
+
+  for (const node of chain) {
+    const p = node.post;
+    likes += p.likeCount || 0;
+    reposts += (p.repostCount || 0) + (p.quoteCount || 0);
+    // Don't count OP's own chain replies as "replies", but count third-party replies to chain posts
+    const thirdPartyReplies = (node.replies || []).filter(
+      r => r?.post?.author?.did !== post.author.did
+    ).length;
+    replies += thirdPartyReplies;
+  }
+
+  // Subtract chain posts from reply count (they're thread continuation, not replies)
+  replies = Math.max(0, replies - chain.length);
+
+  return { likes, reposts, replies };
+}
+
+function renderThreadContinuation(chain) {
+  if (!chain || chain.length === 0) return '';
+
+  let html = '<ul class="bsky-thread-continuation">';
+  for (const node of chain) {
+    const post = node.post;
+    const author = post.author;
+    const record = post.record || {};
+    const rkey = post.uri?.split('/').pop();
+    const postUrl = makeBskyUrl(author.handle, rkey);
+    const profileUrl = `https://bsky.app/profile/${author.handle}`;
+
+    html += `
+      <li class="bsky-thread-post">
+        <div class="bsky-comment-header">
+          <a href="${profileUrl}" target="_blank" rel="noopener">
+            ${author.avatar
+              ? `<img class="bsky-comment-avatar" src="${author.avatar}" alt="" loading="lazy"/>`
+              : `<span class="bsky-comment-avatar" style="background:var(--bsky-border);display:inline-block"></span>`
+            }
+          </a>
+          <a href="${profileUrl}" target="_blank" rel="noopener" class="bsky-comment-author">
+            ${escapeHtml(author.displayName || author.handle)} <small style="color:var(--bsky-accent)">(OP)</small>
+          </a>
+          <span class="bsky-comment-handle">@${escapeHtml(author.handle)}</span>
+          <a href="${postUrl}" target="_blank" rel="noopener" class="bsky-comment-time" title="${new Date(record.createdAt).toLocaleString()}">
+            ${timeAgo(record.createdAt)}
+          </a>
+        </div>
+        <div class="bsky-comment-body">${renderRichText(record.text || '', record.facets)}</div>
+      </li>`;
+  }
+  html += '</ul>';
+  return html;
+}
+
 /* ── Main Widget ───────────────────────────────────────────────────── */
 
 async function initWidget(container) {
@@ -622,17 +738,21 @@ async function initWidget(container) {
   let theme = container.getAttribute('data-bsky-theme') || 'auto';
 
   // For "auto": detect from actual page background, not prefers-color-scheme.
-  // A page may be always-light regardless of system dark mode preference.
+  // Walk up DOM to find first element with a non-transparent background.
   if (theme === 'auto') {
-    const bg = getComputedStyle(container.parentElement || document.body).backgroundColor;
-    const m = bg.match(/\d+/g);
-    if (m && m.length >= 3) {
-      const lum = (0.299 * +m[0] + 0.587 * +m[1] + 0.114 * +m[2]) / 255;
-      theme = lum < 0.5 ? 'dark' : 'light';
-    } else {
-      // transparent or unresolvable — fall back to media query
-      theme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    let el = container;
+    let lum = -1;
+    while (el) {
+      const bg = getComputedStyle(el).backgroundColor;
+      const m = bg.match(/[\d.]+/g);
+      if (m && m.length >= 4 && +m[3] === 0) { el = el.parentElement; continue; } // transparent
+      if (m && m.length >= 3) {
+        lum = (0.299 * +m[0] + 0.587 * +m[1] + 0.114 * +m[2]) / 255;
+        break;
+      }
+      el = el.parentElement;
     }
+    theme = lum >= 0 ? (lum < 0.5 ? 'dark' : 'light') : 'light'; // default light if unresolvable
   }
 
   container.classList.add('bsky-engagement');
@@ -661,14 +781,34 @@ async function initWidget(container) {
 
     const post = thread.post;
     const rootAuthorDid = post.author.did;
-    const replies = sortReplies(thread.replies || [], sortMode);
+
+    // Extract OP's self-reply thread chain from replies
+    const { chain: opChain, remaining: topLevelReplies } = extractOpChain(
+      thread.replies || [], rootAuthorDid
+    );
+
+    // Collect third-party replies to chain posts and merge with top-level replies
+    const allReplies = [...topLevelReplies];
+    for (const chainNode of opChain) {
+      for (const childReply of (chainNode.replies || [])) {
+        if (childReply?.post?.author?.did !== rootAuthorDid) {
+          allReplies.push(childReply);
+        }
+      }
+    }
+    const replies = sortReplies(allReplies, sortMode);
+
+    // Aggregate stats across thread if OP chain exists
+    const stats = opChain.length > 0
+      ? aggregateThreadStats(post, opChain)
+      : { likes: post.likeCount || 0, reposts: (post.repostCount || 0) + (post.quoteCount || 0), replies: post.replyCount || 0 };
 
     // Build HTML
     let html = '';
 
-    // Stats bar
+    // Stats bar (aggregated across thread)
     if (showMode === 'all' || showMode === 'stats') {
-      html += renderStats(post, bskyUrl);
+      html += renderStats(stats, bskyUrl);
     }
 
     // Liker avatars
@@ -686,7 +826,12 @@ async function initWidget(container) {
       Join the conversation on Bluesky ${ICONS.external}
     </a>`;
 
-    // Comments
+    // OP thread continuation (if multi-post announcement)
+    if (opChain.length > 0) {
+      html += renderThreadContinuation(opChain);
+    }
+
+    // Comments (third-party replies only)
     if (showMode === 'all' || showMode === 'comments') {
       if (replies.length > 0) {
         html += '<ul class="bsky-comments-list">';
@@ -694,7 +839,7 @@ async function initWidget(container) {
           html += renderComment(reply, rootAuthorDid, maxDepth);
         }
         html += '</ul>';
-      } else {
+      } else if (opChain.length === 0) {
         html += '<div class="bsky-empty">No replies yet — be the first to respond on Bluesky.</div>';
       }
     }
