@@ -1,0 +1,751 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="ai-disclosure" content="ai-assisted">
+  <title>EML Calculator — The Sheffer Operator for Continuous Mathematics</title>
+  <meta name="description" content="Interactive calculator demonstrating the EML operator eml(x,y) = exp(x) − ln(y), a single binary operator sufficient for all elementary functions. Based on Odrzywolek (2026).">
+
+  <script type="importmap">
+    {
+      "imports": {
+        "preact": "https://esm.sh/preact@10.25.4",
+        "preact/hooks": "https://esm.sh/preact@10.25.4/hooks",
+        "htm/preact": "https://esm.sh/htm@3.1.1/preact?external=preact"
+      }
+    }
+  </script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap');
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #070b12; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-thumb { background: #2a3548; border-radius: 3px; }
+    ::-webkit-scrollbar-track { background: transparent; }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+
+  <script type="module">
+    import { render } from 'preact';
+    import { useState, useRef, useEffect, useCallback, useMemo } from 'preact/hooks';
+    import { html } from 'htm/preact';
+
+    // ═══════════════════════════════════════════════════════════
+    // Complex Arithmetic (IEEE754-compatible, handles ±Infinity)
+    // ═══════════════════════════════════════════════════════════
+    const C = (re, im = 0) => ({ re, im });
+    const cadd = (a, b) => C(a.re + b.re, a.im + b.im);
+    const csub = (a, b) => C(a.re - b.re, a.im - b.im);
+    const cmul = (a, b) =>
+      C(a.re * b.re - a.im * b.im, a.re * b.im + a.im * b.re);
+    const cexp = (z) => {
+      if (z.re === -Infinity) return C(0, 0);
+      if (z.re === Infinity) return C(Infinity, 0);
+      const ea = Math.exp(z.re);
+      return C(ea * Math.cos(z.im), ea * Math.sin(z.im));
+    };
+    const cln = (z) => {
+      const r = Math.hypot(z.re, z.im);
+      if (r === 0) return C(-Infinity, 0);
+      return C(Math.log(r), Math.atan2(z.im, z.re));
+    };
+
+    const fmtNum = (z) => {
+      if (!z || (!isFinite(z.re) && !isFinite(z.im))) return "∞";
+      const r = z.re, i = z.im;
+      if (Math.abs(i) < 1e-10) {
+        if (Number.isInteger(r)) return String(r);
+        return r.toPrecision(10).replace(/\.?0+$/, "");
+      }
+      if (Math.abs(r) < 1e-10)
+        return `${i.toPrecision(4)}i`;
+      return `${r.toPrecision(6)} ${i >= 0 ? "+" : "−"} ${Math.abs(i).toPrecision(4)}i`;
+    };
+
+    // ═══════════════════════════════════════════════════════════
+    // Tokenizer + Recursive Descent Parser
+    // ═══════════════════════════════════════════════════════════
+    function tokenize(s) {
+      const t = [];
+      let i = 0;
+      while (i < s.length) {
+        if (" \t\n".includes(s[i])) { i++; continue; }
+        if ("()+-*/^,".includes(s[i])) { t.push({ t: s[i] }); i++; continue; }
+        if (/[0-9.]/.test(s[i])) {
+          let n = "";
+          while (i < s.length && /[0-9.]/.test(s[i])) n += s[i++];
+          t.push({ t: "N", v: parseFloat(n) });
+          continue;
+        }
+        if (/[a-zA-Zπ]/.test(s[i])) {
+          let id = "";
+          while (i < s.length && /[a-zA-Z0-9π_]/.test(s[i])) id += s[i++];
+          t.push({ t: "I", v: id });
+          continue;
+        }
+        throw new Error(`Bad char: '${s[i]}'`);
+      }
+      return t;
+    }
+
+    function parse(input) {
+      const tokens = tokenize(input);
+      let p = 0;
+      const peek = () => (p < tokens.length ? tokens[p] : null);
+      const eat = (x) => {
+        const tk = peek();
+        if (!tk || (x && tk.t !== x))
+          throw new Error(`Expected '${x}', got '${tk?.t || "end"}'`);
+        p++;
+        return tk;
+      };
+
+      function expr() {
+        let left = term();
+        while (peek() && (peek().t === "+" || peek().t === "-")) {
+          const op = eat().t;
+          left = { k: "bin", op, l: left, r: term() };
+        }
+        return left;
+      }
+      function term() {
+        let left = factor();
+        while (peek() && (peek().t === "*" || peek().t === "/")) {
+          const op = eat().t;
+          left = { k: "bin", op, l: left, r: factor() };
+        }
+        return left;
+      }
+      function factor() {
+        let base = unary();
+        if (peek()?.t === "^") {
+          eat();
+          base = { k: "bin", op: "^", l: base, r: factor() };
+        }
+        return base;
+      }
+      function unary() {
+        if (peek()?.t === "-") {
+          eat();
+          return { k: "un", op: "neg", a: unary() };
+        }
+        return atom();
+      }
+      function atom() {
+        const tk = peek();
+        if (!tk) throw new Error("Unexpected end");
+        if (tk.t === "N") { eat(); return { k: "num", v: tk.v }; }
+        if (tk.t === "I") {
+          eat();
+          if (peek()?.t === "(") {
+            eat("(");
+            const a = expr();
+            eat(")");
+            return { k: "un", op: tk.v.toLowerCase(), a };
+          }
+          return { k: "cst", name: tk.v };
+        }
+        if (tk.t === "(") { eat("("); const e = expr(); eat(")"); return e; }
+        throw new Error(`Unexpected: '${tk.t}'`);
+      }
+
+      const ast = expr();
+      if (p < tokens.length) throw new Error("Extra tokens");
+      return ast;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // AST → string and direct evaluator
+    // ═══════════════════════════════════════════════════════════
+    function astStr(n) {
+      if (n.k === "num") return String(n.v);
+      if (n.k === "cst") return n.name;
+      if (n.k === "un") return n.op === "neg" ? `(-${astStr(n.a)})` : `${n.op}(${astStr(n.a)})`;
+      return `(${astStr(n.l)} ${n.op} ${astStr(n.r)})`;
+    }
+
+    function evalAST(n) {
+      if (n.k === "num") return C(n.v);
+      if (n.k === "cst") {
+        if (n.name === "e" || n.name === "E") return C(Math.E);
+        if (n.name === "pi" || n.name === "π") return C(Math.PI);
+        throw new Error(`Unknown: ${n.name}`);
+      }
+      if (n.k === "un") {
+        const a = evalAST(n.a);
+        if (n.op === "neg") return C(-a.re, -a.im);
+        if (n.op === "exp") return cexp(a);
+        if (n.op === "ln" || n.op === "log") return cln(a);
+        if (n.op === "sqrt") {
+          const r = Math.hypot(a.re, a.im), t = Math.atan2(a.im, a.re) / 2, m = Math.sqrt(r);
+          return C(m * Math.cos(t), m * Math.sin(t));
+        }
+        if (n.op === "sin") return C(Math.sin(a.re) * Math.cosh(a.im), Math.cos(a.re) * Math.sinh(a.im));
+        if (n.op === "cos") return C(Math.cos(a.re) * Math.cosh(a.im), -Math.sin(a.re) * Math.sinh(a.im));
+        throw new Error(`Unknown fn: ${n.op}`);
+      }
+      const l = evalAST(n.l), r = evalAST(n.r);
+      if (n.op === "+") return cadd(l, r);
+      if (n.op === "-") return csub(l, r);
+      if (n.op === "*") return cmul(l, r);
+      if (n.op === "/") {
+        const d = r.re * r.re + r.im * r.im;
+        return C((l.re * r.re + l.im * r.im) / d, (l.im * r.re - l.re * r.im) / d);
+      }
+      if (n.op === "^") {
+        if (l.re === 0 && l.im === 0) return C(0);
+        return cexp(cmul(r, cln(l)));
+      }
+      throw new Error(`Unknown op: ${n.op}`);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // EML Tree Builder — verified chain from the paper
+    // ═══════════════════════════════════════════════════════════
+    const L = (v, lbl) => ({ t: "L", v, lbl: lbl ?? String(v) });
+    const E = (l, r, tag) => ({ t: "E", l, r, tag: tag || "" });
+
+    const eml_exp = (x) => E(x, L(1, "1"), "eˣ");
+    const eml_ln = (x) => E(L(1, "1"), E(E(L(1, "1"), x, ""), L(1, "1"), ""), "ln");
+    const eml_sub = (a, b) => E(eml_ln(a), eml_exp(b), "−");
+    const eml_neg = (x) => eml_sub(L(0, "0"), x);
+    const eml_add = (a, b) => eml_sub(a, eml_neg(b));
+    const eml_inv = (x) => eml_exp(eml_neg(eml_ln(x)));
+    const eml_mul = (a, b) => eml_exp(eml_add(eml_ln(a), eml_ln(b)));
+    const eml_div = (a, b) => eml_mul(a, eml_inv(b));
+    const eml_pow = (a, b) => eml_exp(eml_mul(b, eml_ln(a)));
+
+    function compile(ast) {
+      if (ast.k === "num") return L(ast.v);
+      if (ast.k === "cst") {
+        if (ast.name === "e" || ast.name === "E") return E(L(1, "1"), L(1, "1"), "e");
+        if (ast.name === "pi" || ast.name === "π") return L(Math.PI, "π");
+        throw new Error(`Unknown: ${ast.name}`);
+      }
+      if (ast.k === "un") {
+        const a = compile(ast.a);
+        if (ast.op === "neg") return eml_neg(a);
+        if (ast.op === "exp") return eml_exp(a);
+        if (ast.op === "ln" || ast.op === "log") return eml_ln(a);
+        if (ast.op === "sqrt") return eml_pow(a, L(0.5, "½"));
+        if (ast.op === "sin" || ast.op === "cos")
+          throw new Error("Trig EML trees are enormous — try exp/ln/arithmetic");
+        throw new Error(`Unsupported: ${ast.op}`);
+      }
+      const l = compile(ast.l), r = compile(ast.r);
+      if (ast.op === "+") return eml_add(l, r);
+      if (ast.op === "-") return eml_sub(l, r);
+      if (ast.op === "*") return eml_mul(l, r);
+      if (ast.op === "/") return eml_div(l, r);
+      if (ast.op === "^") return eml_pow(l, r);
+      throw new Error(`Unsupported: ${ast.op}`);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // EML evaluation + tree utilities
+    // ═══════════════════════════════════════════════════════════
+    function evalEML(n) {
+      if (n.t === "L") return C(n.v);
+      return csub(cexp(evalEML(n.l)), cln(evalEML(n.r)));
+    }
+
+    function treeSize(n) {
+      return n.t === "L" ? 1 : 1 + treeSize(n.l) + treeSize(n.r);
+    }
+    function treeDepth(n) {
+      return n.t === "L" ? 0 : 1 + Math.max(treeDepth(n.l), treeDepth(n.r));
+    }
+    function emlStr(n) {
+      return n.t === "L" ? n.lbl : `eml(${emlStr(n.l)}, ${emlStr(n.r)})`;
+    }
+    function emlRPN(n) {
+      return n.t === "L" ? [n.lbl] : [...emlRPN(n.l), ...emlRPN(n.r), "E"];
+    }
+    function assignIds(n, c = { n: 0 }) {
+      n.id = c.n++;
+      if (n.t === "E") { assignIds(n.l, c); assignIds(n.r, c); }
+    }
+    function annotateVals(n) {
+      if (n.t === "L") { n.val = C(n.v); return; }
+      annotateVals(n.l);
+      annotateVals(n.r);
+      n.val = csub(cexp(n.l.val), cln(n.r.val));
+    }
+    function subtreeIds(n) {
+      if (n.t === "L") return new Set([n.id]);
+      const s = new Set([n.id]);
+      for (const id of subtreeIds(n.l)) s.add(id);
+      for (const id of subtreeIds(n.r)) s.add(id);
+      return s;
+    }
+    function findNode(n, id) {
+      if (n.id === id) return n;
+      if (n.t === "L") return null;
+      return findNode(n.l, id) || findNode(n.r, id);
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Decomposition steps for display
+    // ═══════════════════════════════════════════════════════════
+    function decomposeSteps(ast) {
+      const steps = [];
+      function walk(n) {
+        if (n.k === "num" || n.k === "cst") return;
+        if (n.k === "un") {
+          const m = { neg: "−x → sub(0, x)", exp: "exp(x) → eml(x, 1)",
+            ln: "ln(x) → eml(1, eml(eml(1,x), 1))", log: "ln(x) → eml(1, eml(eml(1,x), 1))",
+            sqrt: "√x → exp(½ · ln(x))" };
+          if (m[n.op]) steps.push(m[n.op]);
+          walk(n.a);
+        }
+        if (n.k === "bin") {
+          const m = { "+": "a + b → sub(a, sub(0, b))", "-": "a − b → eml(ln(a), exp(b))",
+            "*": "a × b → exp(ln(a) + ln(b))", "/": "a ÷ b → a × exp(−ln(b))",
+            "^": "aᵇ → exp(b × ln(a))" };
+          if (m[n.op]) steps.push(m[n.op]);
+          walk(n.l); walk(n.r);
+        }
+      }
+      walk(ast);
+      return [...new Set(steps)];
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Tree Layout — compact recursive positioning
+    // ═══════════════════════════════════════════════════════════
+    const U = 26, LH = 54, GAP = 8;
+
+    function treeW(n) {
+      return n.t === "L" ? U : treeW(n.l) + GAP + treeW(n.r);
+    }
+
+    // SVG tree renderer — returns raw SVG string for innerHTML
+    // (HTM + recursive SVG with event handlers is fragile, so we
+    //  build the static SVG as markup and attach events via delegation)
+    function buildTreeSVG(n, cx, cy, hSet) {
+      const isHi = hSet && hSet.has(n.id);
+      const dim = hSet && !isHi ? 0.18 : 1;
+
+      if (n.t === "L") {
+        const isOne = n.v === 1;
+        const isZero = n.v === 0;
+        const fill = isOne ? "#22c870" : isZero ? "#506878" : "#2098d0";
+        const r = 11;
+        const fontSize = n.lbl.length > 2 ? 7.5 : 9.5;
+        return `<g data-nid="${n.id}" style="opacity:${dim};transition:opacity 0.15s">
+          <circle cx="${cx}" cy="${cy}" r="${r}" fill="${fill}"
+            stroke="${isHi ? '#fff' : fill}" stroke-width="${isHi ? 2 : 0.5}"
+            style="cursor:pointer" data-hover="${n.id}" />
+          <text x="${cx}" y="${cy + 3.8}" text-anchor="middle" fill="#070b12"
+            font-size="${fontSize}" font-weight="700"
+            style="pointer-events:none;font-family:'DM Mono',monospace">${n.lbl}</text>
+        </g>`;
+      }
+
+      const lw = treeW(n.l), rw = treeW(n.r);
+      const tw = lw + GAP + rw;
+      const lx = cx - tw / 2 + lw / 2;
+      const rx = cx + tw / 2 - rw / 2;
+      const ny = cy + LH;
+      const halfGate = 13;
+
+      return `<g data-nid="${n.id}">
+        <path d="M${cx},${cy + halfGate} C${cx},${cy + LH * 0.45} ${lx},${ny - LH * 0.35} ${lx},${ny - halfGate}"
+          fill="none" stroke="${isHi ? '#e0863a' : '#2a3548'}" stroke-width="${isHi ? 1.8 : 1.2}"
+          style="opacity:${dim};transition:opacity 0.15s" />
+        <path d="M${cx},${cy + halfGate} C${cx},${cy + LH * 0.45} ${rx},${ny - LH * 0.35} ${rx},${ny - halfGate}"
+          fill="none" stroke="${isHi ? '#4090c0' : '#2a3548'}" stroke-width="${isHi ? 1.8 : 1.2}"
+          style="opacity:${dim};transition:opacity 0.15s" />
+        <text x="${cx + (lx - cx) * 0.38 - 6}" y="${cy + LH * 0.32}"
+          font-size="7.5" fill="${isHi ? '#e09050' : '#384858'}" font-family="'DM Mono',monospace"
+          style="opacity:${dim}">eˣ</text>
+        <text x="${cx + (rx - cx) * 0.38 + 2}" y="${cy + LH * 0.32}"
+          font-size="7.5" fill="${isHi ? '#5098c8' : '#384858'}" font-family="'DM Mono',monospace"
+          style="opacity:${dim}">ln</text>
+        ${buildTreeSVG(n.l, lx, ny, hSet)}
+        ${buildTreeSVG(n.r, rx, ny, hSet)}
+        <g style="opacity:${dim};transition:opacity 0.15s;cursor:pointer" data-hover="${n.id}">
+          <polygon
+            points="${cx},${cy - halfGate} ${cx + halfGate},${cy} ${cx},${cy + halfGate} ${cx - halfGate},${cy}"
+            fill="${isHi ? '#e8a020' : '#c48818'}" stroke="${isHi ? '#fff' : '#a07014'}"
+            stroke-width="${isHi ? 1.5 : 0.8}" />
+          <text x="${cx}" y="${cy + 3}" text-anchor="middle" fill="#070b12"
+            font-size="7" font-weight="800"
+            style="pointer-events:none;font-family:'DM Mono',monospace">EML</text>
+        </g>
+      </g>`;
+    }
+
+    // ═══════════════════════════════════════════════════════════
+    // Examples
+    // ═══════════════════════════════════════════════════════════
+    const EXAMPLES = [
+      { label: "eml(1,1) = e", expr: "exp(1)" },
+      { label: "ln(2)", expr: "ln(2)" },
+      { label: "3 − 1", expr: "3 - 1" },
+      { label: "2 + 3", expr: "2 + 3" },
+      { label: "2 × 3", expr: "2 * 3" },
+      { label: "2⁸", expr: "2 ^ 8" },
+      { label: "e²", expr: "exp(2)" },
+    ];
+
+    // ═══════════════════════════════════════════════════════════
+    // Main Component
+    // ═══════════════════════════════════════════════════════════
+    function EMLCalculator() {
+      const [input, setInput] = useState("2 + 3");
+      const [result, setResult] = useState(null);
+      const [error, setError] = useState(null);
+      const [hovId, setHovId] = useState(null);
+      const [zoom, setZoom] = useState(1);
+      const svgWrap = useRef(null);
+
+      const doCompute = useCallback((expr) => {
+        try {
+          const ast = parse(expr);
+          const direct = evalAST(ast);
+          const tree = compile(ast);
+          assignIds(tree);
+          annotateVals(tree);
+          const emlVal = evalEML(tree);
+          const size = treeSize(tree);
+          const depth = treeDepth(tree);
+          const rpn = emlRPN(tree);
+          const eStr = emlStr(tree);
+          const steps = decomposeSteps(ast);
+          setResult({ ast, direct, tree, emlVal, size, depth, rpn, eStr, steps, expr: astStr(ast) });
+          setError(null);
+          setZoom(1);
+        } catch (e) {
+          setError(e.message);
+          setResult(null);
+        }
+      }, []);
+
+      useEffect(() => { doCompute(input); }, []);
+
+      const hSet = useMemo(() => {
+        if (hovId == null || !result) return null;
+        const node = findNode(result.tree, hovId);
+        return node ? subtreeIds(node) : null;
+      }, [hovId, result]);
+
+      const hovNode = useMemo(() => {
+        if (hovId == null || !result) return null;
+        return findNode(result.tree, hovId);
+      }, [hovId, result]);
+
+      const svgW = result ? treeW(result.tree) + 60 : 400;
+      const svgH = result ? (treeDepth(result.tree) + 1) * LH + 60 : 300;
+
+      const handleKey = (e) => { if (e.key === "Enter") doCompute(input); };
+
+      // Event delegation for SVG hover
+      const handleSvgMouse = useCallback((e) => {
+        const el = e.target.closest('[data-hover]');
+        if (e.type === 'mouseover' && el) {
+          setHovId(parseInt(el.dataset.hover, 10));
+        } else if (e.type === 'mouseout' && el) {
+          setHovId(null);
+        }
+      }, []);
+
+      // Build SVG content string
+      const svgContent = useMemo(() => {
+        if (!result) return '';
+        return buildTreeSVG(result.tree, 0, 0, hSet);
+      }, [result, hSet]);
+
+      return html`
+        <div style=${{
+          minHeight: "100vh", background: "#070b12", color: "#b8c4d0",
+          fontFamily: "'DM Mono', 'Fira Code', 'JetBrains Mono', monospace",
+          display: "flex", flexDirection: "column",
+        }}>
+
+          <!-- Header -->
+          <div style=${{
+            padding: "16px 24px 12px", borderBottom: "1px solid #1a2030",
+            background: "linear-gradient(180deg, #0c1018 0%, #070b12 100%)",
+          }}>
+            <div style=${{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
+              <span style=${{ fontSize: 18, fontWeight: 700, color: "#e8a020", letterSpacing: 2 }}>EML</span>
+              <span style=${{ fontSize: 13, color: "#607080" }}>
+                exp(x) − ln(y) ${"·"} the Sheffer operator for continuous mathematics
+              </span>
+            </div>
+          </div>
+
+          <!-- Input Bar -->
+          <div style=${{
+            padding: "14px 24px", borderBottom: "1px solid #141c28",
+            background: "#0a0f18",
+          }}>
+            <div style=${{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+              <div style=${{
+                flex: 1, minWidth: 220, display: "flex", alignItems: "center",
+                background: "#111820", border: "1px solid #1e2838", borderRadius: 6,
+                padding: "0 12px",
+              }}>
+                <span style=${{ color: "#e8a020", marginRight: 8, fontSize: 14 }}>▸</span>
+                <input value=${input} onInput=${(e) => setInput(e.target.value)}
+                  onKeyDown=${handleKey} placeholder="Enter expression…"
+                  style=${{
+                    flex: 1, background: "transparent", border: "none", outline: "none",
+                    color: "#d0d8e0", fontSize: 15, padding: "10px 0",
+                    fontFamily: "inherit",
+                  }} />
+              </div>
+              <button onClick=${() => doCompute(input)} style=${{
+                background: "#e8a020", color: "#070b12", border: "none", borderRadius: 6,
+                padding: "10px 20px", fontWeight: 700, fontSize: 13, cursor: "pointer",
+                fontFamily: "inherit", letterSpacing: 1,
+              }}>COMPILE</button>
+            </div>
+
+            <div style=${{ display: "flex", gap: 6, marginTop: 10, flexWrap: "wrap" }}>
+              ${EXAMPLES.map((ex) => html`
+                <button key=${ex.expr} onClick=${() => { setInput(ex.expr); doCompute(ex.expr); }}
+                  style=${{
+                    background: input === ex.expr ? "#1a2538" : "#0e1420",
+                    border: `1px solid ${input === ex.expr ? "#2a4060" : "#182030"}`,
+                    color: input === ex.expr ? "#d0d8e0" : "#506878",
+                    borderRadius: 4, padding: "4px 10px", fontSize: 11, cursor: "pointer",
+                    fontFamily: "inherit", transition: "all 0.15s",
+                  }}>
+                  ${ex.label}
+                </button>
+              `)}
+            </div>
+          </div>
+
+          ${error && html`
+            <div style=${{ padding: "10px 24px", color: "#e05040", fontSize: 13, background: "#120e0e" }}>
+              ${error}
+            </div>
+          `}
+
+          <!-- Main Content -->
+          ${result && html`
+            <div style=${{ flex: 1, display: "flex", minHeight: 0, flexWrap: "wrap" }}>
+
+              <!-- Tree Visualization -->
+              <div style=${{
+                flex: "1 1 500px", minHeight: 300, position: "relative",
+                borderRight: "1px solid #141c28", overflow: "hidden",
+              }}>
+                <!-- Zoom controls -->
+                <div style=${{
+                  position: "absolute", top: 10, right: 10, zIndex: 10,
+                  display: "flex", gap: 4,
+                }}>
+                  ${[0.5, 0.75, 1, 1.25, 1.5].map((z) => html`
+                    <button key=${z} onClick=${() => setZoom(z)} style=${{
+                      width: 28, height: 28, borderRadius: 4, border: "1px solid #1e2838",
+                      background: zoom === z ? "#1a2538" : "#0e1420",
+                      color: zoom === z ? "#e8a020" : "#506878",
+                      fontSize: 10, cursor: "pointer", fontFamily: "inherit",
+                    }}>${z === 1 ? "1×" : z < 1 ? `${z}` : `${z}`}</button>
+                  `)}
+                </div>
+
+                <!-- Hover tooltip -->
+                ${hovNode && html`
+                  <div style=${{
+                    position: "absolute", top: 10, left: 10, zIndex: 10,
+                    background: "#141c28ee", border: "1px solid #2a3a50",
+                    borderRadius: 6, padding: "8px 12px", fontSize: 12,
+                    maxWidth: 280,
+                  }}>
+                    <div style=${{ color: hovNode.t === "E" ? "#e8a020" : "#2098d0", fontWeight: 700, marginBottom: 4 }}>
+                      ${hovNode.t === "E" ? "EML gate" : `Leaf: ${hovNode.lbl}`}
+                    </div>
+                    <div>
+                      <span style=${{ color: "#607080" }}>value: </span>
+                      <span style=${{ color: "#d0d8e0" }}>${fmtNum(hovNode.val)}</span>
+                    </div>
+                    ${hovNode.t === "E" && html`
+                      <div style=${{ color: "#506878", fontSize: 10, marginTop: 4 }}>
+                        = exp(${fmtNum(hovNode.l.val)}) − ln(${fmtNum(hovNode.r.val)})
+                      </div>
+                    `}
+                  </div>
+                `}
+
+                <!-- SVG tree -->
+                <div ref=${svgWrap} style=${{
+                  width: "100%", height: "100%", overflow: "auto",
+                  display: "flex", justifyContent: "center",
+                }}
+                  onMouseOver=${handleSvgMouse}
+                  onMouseOut=${handleSvgMouse}
+                >
+                  <svg width=${svgW * zoom} height=${svgH * zoom}
+                    viewBox=${`0 0 ${svgW} ${svgH}`}
+                    style=${{ minWidth: svgW * zoom, minHeight: svgH * zoom }}
+                    xmlns="http://www.w3.org/2000/svg"
+                    dangerouslySetInnerHTML=${{ __html: `
+                      <defs>
+                        <pattern id="grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                          <path d="M 20 0 L 0 0 0 20" fill="none" stroke="#0e1520" stroke-width="0.5" />
+                        </pattern>
+                      </defs>
+                      <rect width="${svgW}" height="${svgH}" fill="url(#grid)" />
+                      <g transform="translate(${svgW / 2}, 30)">
+                        ${svgContent}
+                      </g>
+                    `}}
+                  />
+                </div>
+              </div>
+
+              <!-- Info Panel -->
+              <div style=${{
+                flex: "0 0 320px", minWidth: 280, padding: "16px 20px",
+                overflow: "auto", background: "#0a0f18",
+                display: "flex", flexDirection: "column", gap: 16,
+                fontSize: 12,
+              }}>
+                <!-- Result -->
+                <div style=${{
+                  background: "#111820", border: "1px solid #1e2838", borderRadius: 8,
+                  padding: 16,
+                }}>
+                  <div style=${{ color: "#607080", marginBottom: 6, fontSize: 10, letterSpacing: 1 }}>RESULT</div>
+                  <div style=${{ fontSize: 26, fontWeight: 700, color: "#22c870" }}>
+                    ${fmtNum(result.direct)}
+                  </div>
+                  <div style=${{ marginTop: 8, color: "#506878", fontSize: 10 }}>
+                    EML eval: ${" "}
+                    <span style=${{ color: Math.abs(result.direct.re - result.emlVal.re) < 1e-8 ? "#22c870" : "#e05040" }}>
+                      ${fmtNum(result.emlVal)}
+                    </span>
+                    ${Math.abs(result.direct.re - result.emlVal.re) < 1e-8 && html`
+                      <span style=${{ color: "#22c870", marginLeft: 6 }}>✓ match</span>
+                    `}
+                  </div>
+                </div>
+
+                <!-- Tree stats -->
+                <div style=${{
+                  background: "#111820", border: "1px solid #1e2838", borderRadius: 8,
+                  padding: 16,
+                }}>
+                  <div style=${{ color: "#607080", marginBottom: 8, fontSize: 10, letterSpacing: 1 }}>EML TREE</div>
+                  <div style=${{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "8px 16px" }}>
+                    <div>
+                      <span style=${{ color: "#506878" }}>nodes</span>
+                      <div style=${{ color: "#d0d8e0", fontSize: 18, fontWeight: 700 }}>${result.size}</div>
+                    </div>
+                    <div>
+                      <span style=${{ color: "#506878" }}>depth</span>
+                      <div style=${{ color: "#d0d8e0", fontSize: 18, fontWeight: 700 }}>${result.depth}</div>
+                    </div>
+                    <div>
+                      <span style=${{ color: "#506878" }}>EML gates</span>
+                      <div style=${{ color: "#e8a020", fontSize: 18, fontWeight: 700 }}>${(result.size - 1) / 2 | 0}</div>
+                    </div>
+                    <div>
+                      <span style=${{ color: "#506878" }}>K (RPN)</span>
+                      <div style=${{ color: "#d0d8e0", fontSize: 18, fontWeight: 700 }}>${result.rpn.length}</div>
+                    </div>
+                  </div>
+                </div>
+
+                <!-- Rewrite rules used -->
+                ${result.steps.length > 0 && html`
+                  <div style=${{
+                    background: "#111820", border: "1px solid #1e2838", borderRadius: 8,
+                    padding: 16,
+                  }}>
+                    <div style=${{ color: "#607080", marginBottom: 8, fontSize: 10, letterSpacing: 1 }}>REWRITE RULES</div>
+                    ${result.steps.map((s, i) => html`
+                      <div key=${i} style=${{
+                        padding: "4px 0", color: "#8090a0", fontSize: 11,
+                        borderTop: i > 0 ? "1px solid #1a2030" : "none",
+                      }}>${s}</div>
+                    `)}
+                  </div>
+                `}
+
+                <!-- RPN -->
+                <div style=${{
+                  background: "#111820", border: "1px solid #1e2838", borderRadius: 8,
+                  padding: 16,
+                }}>
+                  <div style=${{ color: "#607080", marginBottom: 8, fontSize: 10, letterSpacing: 1 }}>RPN PROGRAM</div>
+                  <div style=${{
+                    color: "#8898a8", fontSize: 11, wordBreak: "break-all", lineHeight: 1.6,
+                  }}>
+                    ${result.rpn.map((tok, i) => html`
+                      <span key=${i} style=${{
+                        display: "inline-block", margin: "1px 2px",
+                        padding: "1px 4px", borderRadius: 3,
+                        background: tok === "E" ? "#1a1508" : "#0c1218",
+                        color: tok === "E" ? "#e8a020" : tok === "1" ? "#22c870" : "#2098d0",
+                        border: `1px solid ${tok === "E" ? "#2a1c08" : "#141c28"}`,
+                      }}>${tok === "E" ? "eml" : tok}</span>
+                    `)}
+                  </div>
+                </div>
+
+                <!-- EML expression -->
+                <div style=${{
+                  background: "#111820", border: "1px solid #1e2838", borderRadius: 8,
+                  padding: 16,
+                }}>
+                  <div style=${{ color: "#607080", marginBottom: 8, fontSize: 10, letterSpacing: 1 }}>EML EXPRESSION</div>
+                  <div style=${{
+                    color: "#607080", fontSize: 10, wordBreak: "break-all", lineHeight: 1.5,
+                    maxHeight: 120, overflow: "auto",
+                  }}>${result.eStr}</div>
+                </div>
+
+                <!-- Legend -->
+                <div style=${{
+                  background: "#111820", border: "1px solid #1e2838", borderRadius: 8,
+                  padding: 16,
+                }}>
+                  <div style=${{ color: "#607080", marginBottom: 8, fontSize: 10, letterSpacing: 1 }}>LEGEND</div>
+                  <div style=${{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style=${{ width: 16, height: 16, background: "#c48818", borderRadius: 2, transform: "rotate(45deg)", flexShrink: 0 }} />
+                      <span style=${{ color: "#8898a8", fontSize: 11 }}>EML gate: eml(x,y) = eˣ − ln(y)</span>
+                    </div>
+                    <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style=${{ width: 16, height: 16, background: "#22c870", borderRadius: 8, flexShrink: 0 }} />
+                      <span style=${{ color: "#8898a8", fontSize: 11 }}>Distinguished constant: 1</span>
+                    </div>
+                    <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style=${{ width: 16, height: 16, background: "#2098d0", borderRadius: 8, flexShrink: 0 }} />
+                      <span style=${{ color: "#8898a8", fontSize: 11 }}>Numeric leaf</span>
+                    </div>
+                    <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style=${{ width: 20, height: 2, background: "#e0863a", flexShrink: 0 }} />
+                      <span style=${{ color: "#8898a8", fontSize: 11 }}>Left child (exp argument)</span>
+                    </div>
+                    <div style=${{ display: "flex", alignItems: "center", gap: 8 }}>
+                      <div style=${{ width: 20, height: 2, background: "#4090c0", flexShrink: 0 }} />
+                      <span style=${{ color: "#8898a8", fontSize: 11 }}>Right child (ln argument)</span>
+                    </div>
+                  </div>
+                </div>
+
+                <div style=${{ color: "#2a3548", fontSize: 9, textAlign: "center", padding: "8px 0" }}>
+                  Based on Odrzywolek (2026) · arXiv:2603.21852
+                </div>
+              </div>
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    render(html`<${EMLCalculator} />`, document.getElementById('app'));
+  </script>
+</body>
+</html>
