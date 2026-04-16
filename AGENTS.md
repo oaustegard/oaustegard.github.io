@@ -106,40 +106,30 @@ This is a Jekyll-based static site published to GitHub Pages.
 
 ## Branch Preview Builds
 
-The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches using [Surge.sh](https://surge.sh).
+The repository includes a **Branch Preview** workflow (`.github/workflows/branch-preview.yml`) that automatically deploys preview sites for non-main branches to **Cloudflare Pages**.
 
 ### How It Works
 
-1. **Automatic triggers**: Deploys on pushes to any branch except `main`, and on pull requests
-2. **Unique URLs**: Each branch gets a preview at `https://<branch-name>-austegard-preview.surge.sh`
-3. **PR comments**: For pull requests, a comment is posted with the preview URL
+1. **Automatic triggers**: Deploys on pushes to any branch except `main` (and on manual `workflow_dispatch`).
+2. **Single preview slot**: All previews deploy to one fixed CF Pages branch (`preview` on project `austegard`). Concurrent runs cancel in-progress, so only the most recent non-main push is live — there is no per-branch URL.
+3. **URL**: The deployed URL is emitted by `wrangler` and written to the workflow's job summary (format: `https://*.pages.dev`). No PR comment is posted.
 
 ### One-Time Setup
 
-To enable branch previews, add the `SURGE_TOKEN` secret to the repository:
+Branch previews require two repository secrets:
 
-1. **Get a Surge token** (run locally):
-   ```bash
-   npx surge login    # Create account or login
-   npx surge token    # Copy the token displayed
-   ```
-2. **Add repository secret**: Go to Settings → Secrets and variables → Actions → New repository secret
-   - Name: `SURGE_TOKEN`
-   - Value: paste the token from step 1
+- `CLOUDFLARE_API_TOKEN` — Cloudflare API token with Pages write permission
+- `CLOUDFLARE_ACCOUNT_ID` — Cloudflare account ID hosting the `austegard` Pages project
+
+Add them under Settings → Secrets and variables → Actions.
 
 ### Manual Trigger
 
 You can also manually trigger the workflow from the Actions tab → "Branch Preview" → Run workflow.
 
-### Preview URL Format
-
-Branch names are sanitized for URLs (lowercased, special chars replaced with dashes, truncated to 30 chars):
-- `feature/add-login` → `https://feature-add-login-austegard-preview.surge.sh`
-- `claude/my-feature-ABC123` → `https://claude-my-feature-abc123-austegard-preview.surge.sh`
-
 ### Verifying Preview Deployments
 
-When checking if a preview deployment succeeded, the workflow typically takes 45-90 seconds to complete. If checking the preview URL returns a 404, wait and retry - you may need to poll multiple times until the workflow finishes.
+The workflow typically takes 40–60 seconds. Open the workflow run's job summary (or the "Deploy to Cloudflare Pages" step log) to find the exact `*.pages.dev` URL — there is no predictable branch-to-URL mapping.
 
 ## Code Style
 
@@ -190,8 +180,8 @@ The repository is organized into thematic subdirectories containing standalone w
 
 - The repository does not have a `CONTRIBUTING.md` file with explicit instructions.
 - The CI/CD workflow is configured to run on every push to the `main` branch. For significant changes, it is advisable to work on a separate branch and create a Pull Request.
-- **Preview builds**: When you create a PR, a preview site is automatically deployed (see [Branch Preview Builds](#branch-preview-builds)). The preview URL is posted as a comment on the PR.
-- **Include preview link in PR description**: When creating a PR, include a link to the [Branch Preview workflow runs](https://github.com/oaustegard/oaustegard.github.io/actions/workflows/branch-preview.yml) so the reviewer can find the generated Surge.sh preview URL from the workflow output.
+- **Preview builds**: When you push to a non-main branch, a preview site is automatically deployed to Cloudflare Pages (see [Branch Preview Builds](#branch-preview-builds)). The workflow does not post a comment on the PR — the preview URL lives in the workflow run's job summary.
+- **Include preview link in PR description**: When creating a PR, include a link to the [Branch Preview workflow runs](https://github.com/oaustegard/oaustegard.github.io/actions/workflows/branch-preview.yml) so the reviewer can find the `*.pages.dev` preview URL from the workflow summary.
 
 ## Additional Context
 
