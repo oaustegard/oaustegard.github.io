@@ -1,5 +1,5 @@
 # blog/
-*Files: 45 | Subdirectories: 1*
+*Files: 46 | Subdirectories: 1*
 
 ## Subdirectories
 
@@ -35,6 +35,7 @@
 - **on-contingency.html**
 - **on-happiness.html**
 - **portable-agent-state-with-agentfs-a-proof-of-concept.html** — imports: `bsky-engagement.js`
+- **posttooluse-not-filechanged-fixing-containerfile-rebuilds.html** — imports: `bsky-engagement.js`
 - **programmatically-creating-bluesky-feeds-on-grazesocial-an-undocumented-api-adven.html**
 - **progressive-disclosure-in-mcp-servers-keeping-llm-context-lean.html** — imports: `bsky-engagement.js`
 - **structured-serendipity-building-a-tool-for-artificial-satisfaction.html**
