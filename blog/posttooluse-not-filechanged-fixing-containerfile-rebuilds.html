@@ -1,0 +1,183 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="ai-disclosure" content="ai-assisted">
+
+    <title>PostToolUse, Not FileChanged: Debugging Silent Hooks in Claude Code on the Web</title>
+    <meta name="description" content="Four hooks (SessionEnd, Stop, FileChanged, PostToolUse) and why only one of them fires for the agent's own edits in Claude Code on the Web.">
+    <meta name="article:published_time" content="2026-04-17T00:00:00Z">
+    <meta name="article:author" content="Oskar Austegard">
+
+    <meta property="og:title" content="PostToolUse, Not FileChanged: Debugging Silent Hooks in Claude Code on the Web">
+    <meta property="og:description" content="Four hooks (SessionEnd, Stop, FileChanged, PostToolUse) and why only one of them fires for the agent's own edits in Claude Code on the Web.">
+    <meta property="og:type" content="article">
+
+    <meta name="bsky:uri" content="at://did:plc:.../app.bsky.feed.post/...">
+
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <link rel="stylesheet" href="/styles/blog.css">
+    <link rel="alternate" type="application/atom+xml" title="Oskar Austegard" href="/feed.xml">
+
+    <style>
+        .hook-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1.5em 0;
+            font-size: 0.95em;
+        }
+        .hook-table th,
+        .hook-table td {
+            text-align: left;
+            padding: 0.55em 0.8em;
+            border-bottom: 1px solid var(--rule, #d5cfc3);
+            vertical-align: top;
+        }
+        .hook-table th {
+            font-weight: 600;
+            border-bottom-width: 2px;
+        }
+        .hook-table code { font-size: 0.9em; }
+        @media (prefers-color-scheme: dark) {
+            .hook-table th, .hook-table td { border-color: var(--rule, #333); }
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+
+<h1>PostToolUse, Not FileChanged</h1>
+<p class="post-meta">April 17, 2026 &middot; Oskar Austegard</p>
+
+<p>In <a href="/blog/hub-spoke-and-raven.html">Hub, Spoke, and Raven</a> I drew a diagram showing a <code>SessionEnd</code> hook archiving transcripts to GitHub Releases at the close of every session. The diagram was aspirational. On Claude Code on the Web, that hook never fired.</p>
+
+<p>This post is the debugging trace from four hooks we tried &mdash; <code>SessionEnd</code>, <code>Stop</code>, <code>FileChanged</code>, <code>PostToolUse</code> &mdash; before landing on one that works for its job. Each hook watches a different event stream. Only one of them sees the agent's own behavior.</p>
+
+<h2>The silent SessionEnd</h2>
+
+<p>Original architecture: on session close, <code>SessionEnd</code> parses the transcript jsonl, pushes it to a GitHub Release. I wired it up, verified it on Claude Code desktop, declared victory.</p>
+
+<p>On CCotw, sessions don't end. They go idle. The container gets archived after some unspecified period, but no <code>SessionEnd</code> signal reaches the hooks. The commands in <code>.claude/settings.json</code> just sit there. Confirmed empirically: no archives, no logs, no nothing. The transcript archival I'd written about was running exactly zero percent of the time on the platform I'd written it for.</p>
+
+<p><code>Stop</code> does fire in CCotw &mdash; reliably, after every assistant response. That's too often. Stop-on-every-turn plus a multi-minute cache rebuild would make the session unusable. <code>Stop</code> is the wrong rate of work for anything expensive.</p>
+
+<h2>The promising FileChanged</h2>
+
+<p>By this point the problem had shifted. Transcript archival was a nice-to-have; the real need was cache rebuilds. The <code>Containerfile</code> specifies the container layer &mdash; a tarball of Python deps, system packages, and CLI tools that restores in milliseconds at session start. When the <code>Containerfile</code> changes, the cache has to be rebuilt and re-uploaded, or future sessions boot with stale tools.</p>
+
+<p><code>FileChanged</code> looked perfect. Its matcher is a filename (not regex or glob), case-sensitive, against the basename:</p>
+
+<pre><code>"FileChanged": [{
+  "matcher": "Containerfile",
+  "hooks": [{ "type": "command", "command": "bash ./rebuild-layer.sh || true" }]
+}]</code></pre>
+
+<p>Merged that (<a href="https://github.com/oaustegard/claude-workspace/pull/20">PR #20</a>), then opened a test PR bumping a <code>cache-bust</code> comment in the <code>Containerfile</code> to trigger the hook on the next session. Ran the session. Edited the file. Checked <code>/tmp/.rebuild-layer.log</code>.</p>
+
+<p>Absent.</p>
+
+<p><code>FileChanged</code> only fires for externally-detected filesystem changes. When Claude edits a file via <code>Edit</code> or <code>Write</code>, no <code>FileChanged</code> event is emitted &mdash; those edits go through the tool-call path, not the filesystem watcher. The config was correct. It just was never going to trigger on the agent's own work.</p>
+
+<h2>The one that works</h2>
+
+<p><code>PostToolUse</code> fires synchronously after each matching tool call. Its matcher <em>is</em> a regex, so <code>"Edit|Write"</code> catches both current file-writing tools. (If Anthropic adds others, the regex needs updating.) And because it fires on the tool call itself, it sees exactly what the agent does &mdash; no gap between action and hook.</p>
+
+<p>Input arrives on stdin as JSON, not via <code>$CLAUDE_TOOL_INPUT</code> (which is empty):</p>
+
+<pre><code>{
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Edit",
+  "tool_input": {
+    "file_path": "/home/user/claude-workspace/Containerfile",
+    "old_string": "...",
+    "new_string": "..."
+  },
+  "tool_response": { ... },
+  "session_id": "...",
+  "cwd": "..."
+}</code></pre>
+
+<p>The matcher catches every <code>Edit</code> or <code>Write</code>, but we only care about one file. Filter on the path:</p>
+
+<pre><code>python3 -c "import sys,json; d=json.load(sys.stdin); p=d.get('tool_input',d).get('file_path',''); exit(0 if 'Containerfile' in p else 1)" && bash ./rebuild-layer.sh || true</code></pre>
+
+<p>Edit the <code>Containerfile</code>, filter passes, rebuild runs. Edit any other file, filter exits non-zero, rebuild skipped. (The substring check <code>'Containerfile' in p</code> is deliberately loose; <code>os.path.basename(p) == 'Containerfile'</code> is the tighter form if you have sibling files like <code>Containerfile.bak</code> to worry about.) Works.</p>
+
+<p>Except the rebuild takes minutes.</p>
+
+<h2>Async the long work</h2>
+
+<p><code>PostToolUse</code> blocks Claude until the hook command exits. <code>rebuild-layer.sh</code> does a full container-layer build and pushes the tarball to GitHub Releases &mdash; minutes of wall time, none of which the current session needs. The rebuild is for <em>future</em> sessions; this one already has its cached environment loaded.</p>
+
+<p>Detach it:</p>
+
+<pre><code>... filter ... && { nohup bash ./rebuild-layer.sh &gt;/dev/null 2&gt;&amp;1 &amp; }; true</code></pre>
+
+<p><code>nohup</code> survives the hook process exit. <code>rebuild-layer.sh</code> already does <code>exec &gt; "$LOG" 2&gt;&amp;1</code> on its own, so <code>/tmp/.rebuild-layer.log</code> still captures output for debugging. The <code>; true</code> at the end makes the hook always exit 0, regardless of whether the background launch stuttered.</p>
+
+<p>Claude's next response shows up immediately. The rebuild runs in the background. When the next session boots, the cache is fresh.</p>
+
+<h2>Drift detection for merged changes</h2>
+
+<p>One hole remains. Not every <code>Containerfile</code> change happens inside a session. Sometimes I merge a PR on GitHub that touches it &mdash; from a previous session, from desktop Claude Code, from a review. If the next web session reuses an existing container (marked by <code>/tmp/.container-layer-booted</code>), the full restore is skipped as an optimization, and the merged change goes unnoticed.</p>
+
+<p><code>PostToolUse</code> can't help &mdash; there was no tool use. The change happened outside the session entirely. The fix: on the cached boot path, hash the current <code>Containerfile</code> and compare to the hash stored during the last full build.</p>
+
+<pre><code>_detect_containerfile_drift() {
+    [ -f "$CONTAINERFILE" ] || return 0
+    [ -f "/tmp/.containerfile-hash" ] || return 0
+    local current cached
+    current=$(cd "$skill_dir" && python3 -m scripts.cli hash "$CONTAINERFILE" 2&gt;/dev/null)
+    cached=$(cat /tmp/.containerfile-hash)
+    if [ -n "$current" ] && [ "$current" != "$cached" ]; then
+        echo "  ⚠ Containerfile drift detected — rebuilding layer in background"
+        nohup bash "$PROJECT_DIR/rebuild-layer.sh" &gt;/dev/null 2&gt;&amp;1 &amp;
+    fi
+}</code></pre>
+
+<p>Hash differs, kick off the same async rebuild the <code>PostToolUse</code> hook uses, continue booting. The cache is fresh for the session <em>after</em> this one. (<code>scripts.cli hash</code> is our project's CLI wrapper; <code>sha256sum "$CONTAINERFILE"</code> works too, as long as both sides use the same thing.)</p>
+
+<h2>What each hook actually watches</h2>
+
+<table class="hook-table">
+<thead>
+<tr><th>Hook</th><th>Watches</th><th>Sees agent's own edits</th><th>Use for</th></tr>
+</thead>
+<tbody>
+<tr><td><code>SessionStart</code></td><td>Session lifecycle</td><td>n/a</td><td>Boot setup</td></tr>
+<tr><td><code>SessionEnd</code> / <code>Stop</code></td><td>Session lifecycle</td><td>n/a</td><td>Nothing in CCotw &mdash; <code>SessionEnd</code> never fires; <code>Stop</code> fires too often</td></tr>
+<tr><td><code>FileChanged</code></td><td>Filesystem events</td><td>No</td><td>Externally-changed files, where supported</td></tr>
+<tr><td><code>PostToolUse</code></td><td>Tool calls</td><td>Yes</td><td>Reacting to what the agent just did</td></tr>
+</tbody>
+</table>
+
+<p>The takeaway isn't "use <code>PostToolUse</code>". It's that hook selection is about picking the event stream that carries the thing you need to observe. <code>FileChanged</code> and <code>PostToolUse</code> both look right for "react when the <code>Containerfile</code> changes". They watch different streams. Only one of those streams contains the agent's own edits.</p>
+
+<p>Also: session lifecycle hooks may or may not fire depending on which Claude Code surface you're on. Desktop CC sends <code>SessionEnd</code> reliably. CCotw archives sessions without sending it. Write portable hook config assuming <code>SessionEnd</code> may silently never run, and put anything important somewhere that actually executes.</p>
+
+<p>Current config: <a href="https://github.com/oaustegard/claude-workspace/blob/main/.claude/settings.json"><code>.claude/settings.json</code></a>. Full debugging trace: <a href="https://github.com/oaustegard/claude-workspace/pull/21">PR #21</a>.</p>
+
+    </article>
+
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+    <script>
+    (function() {
+        var m = document.querySelector('meta[name="bsky\\:uri"]');
+        if (m && m.content && !m.content.includes('...'))
+            document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
+    })();
+    </script>
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>
