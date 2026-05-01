@@ -350,7 +350,8 @@
 <script type="module">
 // ── Imports from shared bsky-graph module ─────────────────────────────────
 import {
-  resolveToAtUri, fetchThreadDown, fetchThreadUp, fetchQuoteWeb,
+  resolveToAtUri, fetchThreadDown, fetchThreadUp,
+  fetchAllQuotePosts, fetchPost, getQuotedUri,
   postUrl, timeAgo
 } from './bsky-graph.js';
 
@@ -365,12 +366,18 @@ function getImagesFromPost(post) {
 }
 
 // ── Graph expansion ────────────────────────────────────────────────────────
-// Recursively fetches a post's full conversation graph: thread up + thread
-// down, every quote of every post (the quote web), and reply branches off of
-// quote posts.  This mirrors what the constellation graph reaches with ?ea=1
-// (all-expanded) — modulo per-node caps to keep API calls bounded.
+// True BFS over the conversation graph. Three discovery axes are pursued in
+// each iteration: (a) posts that quote each known post (downstream quotes),
+// (b) replies hanging off each known post, and (c) the post each known post
+// itself quotes (upstream quote-chain). Each axis is bounded; the loop runs
+// until no new posts surface, the API budget is exhausted, or a hard
+// iteration cap kicks in.
 async function expandFully(seedUri, onProgress) {
   const allPosts = new Map();
+  const exploredQuotes  = new Set(); // URIs whose downstream quotes were fetched
+  const exploredReplies = new Set(); // URIs whose reply-tree was fetched
+  const exploredQuoted  = new Set(); // post URIs whose quoted-target was checked
+
   const visit = (node) => {
     if (!node) return;
     if (node.post) allPosts.set(node.post.uri, node.post);
@@ -378,44 +385,89 @@ async function expandFully(seedUri, onProgress) {
     if (node.parent) visit(node.parent);
   };
 
-  // Phase 1: thread down (all replies) + thread up (all parents) of seed
-  onProgress({ phase: 'thread', n: 0 });
+  // Phase 0: seed thread (down + up). Walking through this counts as
+  // "explored replies" for every node we see, since the API gave us their
+  // reply trees in the same response.
+  onProgress({ phase: 'thread', n: 0, calls: 0 });
+  let calls = 2;
   const [down, up] = await Promise.all([
     fetchThreadDown(seedUri, 1000).catch(() => null),
     fetchThreadUp(seedUri).catch(() => null),
   ]);
   visit(down); visit(up);
-  const initialUris = Array.from(allPosts.keys());
+  for (const u of allPosts.keys()) exploredReplies.add(u);
 
-  // Phase 2: quote web seeded with EVERY post in the initial thread.
-  // (Quotes of a reply are still part of the conversation graph.)
-  onProgress({ phase: 'quotes', n: allPosts.size });
-  const web = await fetchQuoteWeb(initialUris, {
-    maxTotal: 1200, maxAPICalls: 200,
-    onProgress: ({ fetched }) => onProgress({ phase: 'quotes', n: allPosts.size + fetched }),
-  });
-  for (const p of (web?.allQuotePosts || [])) {
-    if (!allPosts.has(p.uri)) allPosts.set(p.uri, p);
-  }
+  // Tunables — can be raised if the graph is huge. Public API is generous
+  // but not infinite; these caps keep the initial load under ~30s.
+  const MAX_CALLS        = 600;
+  const MAX_ITERATIONS   = 25;
+  const QUOTES_BATCH     = 8;   // parallel fetchAllQuotePosts per iteration
+  const REPLIES_BATCH    = 8;   // parallel fetchThreadDown per iteration
+  const QUOTED_BATCH     = 12;  // parallel fetchPost per iteration
 
-  // Phase 3: reply branches off of quote posts. Each quote may have its own
-  // reply tree we haven't seen. Skip URIs from the initial thread (their
-  // replies are already in the thread-down result).
-  const inThread = new Set(initialUris);
-  const needReplies = Array.from(allPosts.keys()).filter(u => !inThread.has(u));
-  const REPLY_CAP = 150, REPLY_CONCURRENCY = 6;
-  const toFetch = needReplies.slice(0, REPLY_CAP);
-  for (let i = 0; i < toFetch.length; i += REPLY_CONCURRENCY) {
-    const batch = toFetch.slice(i, i + REPLY_CONCURRENCY);
-    onProgress({ phase: 'replies', n: allPosts.size, done: i, total: toFetch.length });
-    const results = await Promise.allSettled(batch.map(u => fetchThreadDown(u, 3)));
-    for (const r of results) {
-      if (r.status === 'fulfilled') visit(r.value);
+  for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+    const before = allPosts.size;
+    if (calls >= MAX_CALLS) break;
+
+    // (a) Downstream quotes — fetch quotes of each unexplored URI.
+    const qNeed = [...allPosts.keys()].filter(u => !exploredQuotes.has(u));
+    if (qNeed.length && calls < MAX_CALLS) {
+      const batch = qNeed.slice(0, QUOTES_BATCH);
+      for (const u of batch) exploredQuotes.add(u);
+      onProgress({ phase: 'quotes', n: allPosts.size, calls });
+      const results = await Promise.allSettled(batch.map(u => fetchAllQuotePosts(u)));
+      calls += batch.length;
+      for (const r of results) {
+        if (r.status === 'fulfilled') {
+          for (const p of r.value) {
+            if (!allPosts.has(p.uri)) allPosts.set(p.uri, p);
+          }
+        }
+      }
+    }
+
+    // (b) Reply branches — fetch thread-down for unexplored URIs.
+    const rNeed = [...allPosts.keys()].filter(u => !exploredReplies.has(u));
+    if (rNeed.length && calls < MAX_CALLS) {
+      const batch = rNeed.slice(0, REPLIES_BATCH);
+      for (const u of batch) exploredReplies.add(u);
+      onProgress({ phase: 'replies', n: allPosts.size, calls });
+      const results = await Promise.allSettled(batch.map(u => fetchThreadDown(u, 3).catch(() => null)));
+      calls += batch.length;
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value) visit(r.value);
+      }
+    }
+
+    // (c) Upstream quote-chain — for each post that quotes something, fetch
+    // the quoted post if we don't have it. Catches A → B → C chains where
+    // only A was reached via downstream traversal.
+    const cCandidates = [...allPosts.values()].filter(p => !exploredQuoted.has(p.uri));
+    const cBatch = cCandidates.slice(0, QUOTED_BATCH);
+    for (const p of cBatch) exploredQuoted.add(p.uri);
+    const cTargets = cBatch
+      .map(p => getQuotedUri(p))
+      .filter(uri => uri && !allPosts.has(uri));
+    if (cTargets.length && calls < MAX_CALLS) {
+      onProgress({ phase: 'quoted', n: allPosts.size, calls });
+      const results = await Promise.allSettled(cTargets.map(u => fetchPost(u).catch(() => null)));
+      calls += cTargets.length;
+      for (const r of results) {
+        if (r.status === 'fulfilled' && r.value) {
+          allPosts.set(r.value.uri, r.value);
+        }
+      }
+    }
+
+    // Convergence: nothing new this round and nothing left to explore.
+    if (allPosts.size === before
+        && qNeed.length === 0 && rNeed.length === 0 && cTargets.length === 0) {
+      break;
     }
   }
-  onProgress({ phase: 'replies', n: allPosts.size, done: toFetch.length, total: toFetch.length });
 
-  return Array.from(allPosts.values());
+  onProgress({ phase: 'done', n: allPosts.size, calls });
+  return [...allPosts.values()];
 }
 
 // ── Aspect-aware sizing ────────────────────────────────────────────────────
@@ -722,12 +774,18 @@ async function boot(seedUrl) {
     document.getElementById('navModes').classList.remove('hidden');
 
     const allPosts = await expandFully(atUri, (status) => {
+      const n = status.n || 0;
+      const c = status.calls || 0;
       if (status.phase === 'thread') {
         progressEl.textContent = 'fetching thread…';
       } else if (status.phase === 'quotes') {
-        progressEl.textContent = `${status.n} posts · expanding quote web`;
+        progressEl.textContent = `${n} posts · ${c} calls · expanding quotes`;
       } else if (status.phase === 'replies') {
-        progressEl.textContent = `${status.n} posts · ${status.done}/${status.total} reply branches`;
+        progressEl.textContent = `${n} posts · ${c} calls · finding reply branches`;
+      } else if (status.phase === 'quoted') {
+        progressEl.textContent = `${n} posts · ${c} calls · walking quote chains`;
+      } else if (status.phase === 'done') {
+        progressEl.textContent = `${n} posts · ${c} calls · filtering for images`;
       }
     });
 
