@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Bluesky Post Image Show</title>
+<style>
+  :root {
+    --kb-duration: 11s;
+    --fade-duration: 1800ms;
+    --caption-fade: 600ms;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body {
+    width: 100%; height: 100%;
+    background: #000;
+    color: #e8e8ec;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overscroll-behavior: none;
+  }
+  body { touch-action: pan-y; }
+
+  /* Stage holds the slot pair and the parallax wrap */
+  .stage {
+    position: fixed; inset: 0;
+    overflow: hidden;
+    cursor: pointer;
+  }
+  .parallax {
+    position: absolute; inset: 0;
+    will-change: transform;
+  }
+  .slot {
+    position: absolute; inset: -6%;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-color: #000;
+    opacity: 0;
+    transform: scale(1.05) translate(0,0);
+    transition: opacity var(--fade-duration) ease;
+    will-change: opacity, transform;
+  }
+  .slot.active { opacity: 1; }
+  .slot.ken-burns {
+    transition: opacity var(--fade-duration) ease,
+                transform var(--kb-duration) cubic-bezier(.33,0,.67,1);
+  }
+
+  /* Vignette + bottom gradient for caption legibility */
+  .vignette {
+    position: fixed; inset: 0;
+    pointer-events: none;
+    z-index: 2;
+    background:
+      radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.45) 100%),
+      linear-gradient(to bottom, transparent 60%, rgba(0,0,0,0.85) 100%);
+  }
+
+  /* Top-right counter */
+  .counter {
+    position: fixed;
+    top: max(18px, env(safe-area-inset-top));
+    right: max(20px, env(safe-area-inset-right));
+    z-index: 10;
+    font-size: 11px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.6);
+    pointer-events: none;
+    user-select: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Top-left title with seed link */
+  .title {
+    position: fixed;
+    top: max(18px, env(safe-area-inset-top));
+    left: max(20px, env(safe-area-inset-left));
+    z-index: 10;
+    font-size: 11px;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.55);
+    user-select: none;
+    pointer-events: auto;
+  }
+  .title a { color: rgba(255,255,255,0.75); text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.18); }
+  .title a:hover { color: #fff; border-bottom-color: rgba(255,255,255,0.55); }
+
+  /* Caption — clickable, opens post */
+  .caption {
+    position: fixed;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    left: max(20px, env(safe-area-inset-left));
+    right: max(20px, env(safe-area-inset-right));
+    max-width: 720px;
+    z-index: 10;
+    color: #fff;
+    text-decoration: none;
+    display: block;
+    padding: 14px 16px;
+    border-radius: 10px;
+    background: rgba(0,0,0,0.32);
+    backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,0.08);
+    transition: opacity var(--caption-fade) ease, transform var(--caption-fade) ease, background var(--caption-fade) ease;
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  .caption.show { opacity: 1; transform: translateY(0); }
+  .caption:hover { background: rgba(0,0,0,0.45); border-color: rgba(255,255,255,0.18); }
+  .caption .meta {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: rgba(255,255,255,0.65);
+    margin-bottom: 6px;
+  }
+  .caption .meta .handle { color: #fff; font-weight: 500; letter-spacing: 0.05em; text-transform: none; }
+  .caption .meta .sep { opacity: 0.4; }
+  .caption .meta .time { font-variant-numeric: tabular-nums; }
+  .caption .meta .ext { margin-left: auto; opacity: 0.6; font-size: 12px; }
+  .caption:hover .meta .ext { opacity: 1; }
+  .caption .body {
+    font-size: 14px;
+    line-height: 1.45;
+    color: rgba(255,255,255,0.92);
+    max-height: 4.5em;
+    overflow: hidden;
+    -webkit-mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+            mask-image: linear-gradient(to bottom, #000 70%, transparent 100%);
+    word-break: break-word;
+    overflow-wrap: anywhere;
+    white-space: pre-wrap;
+  }
+  .caption .body:empty { display: none; }
+  .avatar {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    background-size: cover; background-position: center;
+    flex-shrink: 0;
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  /* Hint at bottom-right */
+  .hint {
+    position: fixed;
+    bottom: max(28px, calc(env(safe-area-inset-bottom) + 8px));
+    right: max(20px, env(safe-area-inset-right));
+    z-index: 9;
+    font-size: 9px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: rgba(255,255,255,0.32);
+    user-select: none;
+    pointer-events: none;
+  }
+  @media (max-width: 720px) { .hint { display: none; } }
+
+  /* Pause indicator */
+  .paused-badge {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 50;
+    color: rgba(255,255,255,0.7);
+    font-size: 10px;
+    letter-spacing: 0.5em;
+    text-transform: uppercase;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 300ms;
+  }
+  .paused-badge.show { opacity: 1; }
+
+  /* Loading state */
+  .loading {
+    position: fixed; inset: 0;
+    z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #000;
+    color: rgba(255,255,255,0.85);
+    font-size: 12px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    gap: 24px;
+    transition: opacity 600ms ease;
+  }
+  .loading.hide { opacity: 0; pointer-events: none; }
+  .spinner {
+    width: 36px; height: 36px;
+    border: 2px solid rgba(255,255,255,0.15);
+    border-top-color: rgba(255,255,255,0.7);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .loading .progress {
+    font-variant-numeric: tabular-nums;
+    color: rgba(255,255,255,0.55);
+    font-size: 10px;
+  }
+
+  /* Input form (no-url state) */
+  .input-form {
+    position: fixed; inset: 0;
+    z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #000; gap: 18px; padding: 24px;
+  }
+  .input-form h1 {
+    font-size: 13px; letter-spacing: 0.25em; text-transform: uppercase;
+    color: rgba(255,255,255,0.85); font-weight: 400;
+  }
+  .input-form p {
+    font-size: 11px; letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.5); text-align: center; max-width: 480px; line-height: 1.6;
+  }
+  .input-form .row { display: flex; gap: 8px; width: 100%; max-width: 520px; }
+  .input-form input {
+    flex: 1; padding: 12px 14px;
+    background: rgba(255,255,255,0.04); color: #fff;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px; font-size: 13px;
+    font-family: inherit;
+    outline: none;
+  }
+  .input-form input:focus { border-color: rgba(255,255,255,0.4); }
+  .input-form button {
+    padding: 12px 20px; background: rgba(255,255,255,0.9); color: #000;
+    border: none; border-radius: 6px; font-size: 12px; letter-spacing: 0.15em;
+    text-transform: uppercase; font-weight: 500; cursor: pointer;
+    font-family: inherit;
+  }
+  .input-form button:hover { background: #fff; }
+
+  .error {
+    position: fixed; inset: 0;
+    z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+    background: #000; color: #ff8888;
+    font-size: 14px; letter-spacing: 0.05em;
+    text-align: center; padding: 24px;
+    flex-direction: column; gap: 12px;
+  }
+  .error a { color: rgba(255,255,255,0.8); }
+
+  /* iOS orientation permission button */
+  .tilt-prompt {
+    position: fixed;
+    bottom: 80px; left: 50%;
+    transform: translateX(-50%);
+    z-index: 12;
+    background: rgba(255,255,255,0.92); color: #000;
+    padding: 8px 14px; border-radius: 18px;
+    font-size: 11px; letter-spacing: 0.15em; text-transform: uppercase;
+    font-weight: 500; cursor: pointer; border: none;
+    font-family: inherit;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  }
+  .tilt-prompt.hidden { display: none; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .slot.ken-burns { transition: opacity var(--fade-duration) ease; }
+  }
+</style>
+</head>
+<body>
+  <div class="stage" id="stage">
+    <div class="parallax" id="parallax">
+      <div class="slot" data-slot="a"></div>
+      <div class="slot" data-slot="b"></div>
+    </div>
+  </div>
+  <div class="vignette"></div>
+
+  <div class="title" id="title"></div>
+  <div class="counter" id="counter"></div>
+  <a class="caption" id="caption" href="#" target="_blank" rel="noopener">
+    <div class="meta">
+      <div class="avatar" id="avatar"></div>
+      <span class="handle" id="handle"></span>
+      <span class="sep">·</span>
+      <span class="time" id="time"></span>
+      <span class="ext">↗</span>
+    </div>
+    <div class="body" id="body"></div>
+  </a>
+  <div class="hint">← → · space · click</div>
+  <div class="paused-badge" id="paused">paused</div>
+  <button class="tilt-prompt hidden" id="tiltPrompt">Enable tilt</button>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <div>Gathering posts</div>
+    <div class="progress" id="progress">0 fetched · 0 calls</div>
+  </div>
+
+  <div class="input-form" id="inputForm" style="display:none">
+    <h1>Bluesky Post Image Show</h1>
+    <p>Paste a Bluesky post URL to start a slideshow of every image in its expanded conversation graph.</p>
+    <div class="row">
+      <input id="urlInput" type="text" placeholder="https://bsky.app/profile/.../post/..." />
+      <button id="goBtn">Go</button>
+    </div>
+  </div>
+
+<script type="module">
+// ── Imports from shared bsky-graph module ─────────────────────────────────
+import {
+  resolveToAtUri, fetchThreadDown, fetchThreadUp, fetchQuoteWeb,
+  postUrl, timeAgo
+} from './bsky-graph.js';
+
+// ── Image extraction ───────────────────────────────────────────────────────
+function getImagesFromPost(post) {
+  const e = post.embed;
+  if (!e) return [];
+  if (e.$type === 'app.bsky.embed.images#view') return e.images || [];
+  if (e.$type === 'app.bsky.embed.recordWithMedia#view'
+      && e.media?.$type === 'app.bsky.embed.images#view') return e.media.images || [];
+  return [];
+}
+
+function collectAllPosts({ down, up, web }) {
+  const posts = new Map();
+  const visit = (node) => {
+    if (!node) return;
+    if (node.post) posts.set(node.post.uri, node.post);
+    if (Array.isArray(node.replies)) node.replies.forEach(visit);
+    if (node.parent) visit(node.parent);
+  };
+  visit(down);
+  visit(up);
+  for (const p of (web?.allQuotePosts || [])) {
+    if (!posts.has(p.uri)) posts.set(p.uri, p);
+  }
+  return Array.from(posts.values());
+}
+
+// ── App state ──────────────────────────────────────────────────────────────
+const stage = document.getElementById('stage');
+const parallaxEl = document.getElementById('parallax');
+const slotA = document.querySelector('[data-slot="a"]');
+const slotB = document.querySelector('[data-slot="b"]');
+const captionEl = document.getElementById('caption');
+const handleEl = document.getElementById('handle');
+const timeEl = document.getElementById('time');
+const bodyEl = document.getElementById('body');
+const avatarEl = document.getElementById('avatar');
+const counterEl = document.getElementById('counter');
+const titleEl = document.getElementById('title');
+const pausedEl = document.getElementById('paused');
+const tiltBtn = document.getElementById('tiltPrompt');
+const loadingEl = document.getElementById('loading');
+const progressEl = document.getElementById('progress');
+const inputForm = document.getElementById('inputForm');
+
+let slides = [];
+let index = 0;
+let activeSlot = 'b';
+let advanceTimer = null;
+let paused = false;
+let hoveringCaption = false;
+const SLIDE_DURATION = 7500; // ms
+let preloadCache = new Map();
+
+// ── Slide rendering with Ken Burns ─────────────────────────────────────────
+function randTransform(intensity = 1) {
+  const scale = 1.04 + Math.random() * 0.08 * intensity;
+  const tx = (Math.random() - 0.5) * 60 * intensity;
+  const ty = (Math.random() - 0.5) * 60 * intensity;
+  return { scale, tx, ty, str: `scale(${scale.toFixed(3)}) translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px)` };
+}
+
+function preloadImage(url) {
+  if (preloadCache.has(url)) return preloadCache.get(url);
+  const p = new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(true);
+    img.onerror = () => resolve(false);
+    img.src = url;
+  });
+  preloadCache.set(url, p);
+  return p;
+}
+
+async function showSlide(slide, { skipPreload = false } = {}) {
+  if (!slide) return;
+  if (!skipPreload) await preloadImage(slide.image.fullsize);
+
+  const next = activeSlot === 'a' ? 'b' : 'a';
+  const showEl = next === 'a' ? slotA : slotB;
+  const hideEl = next === 'a' ? slotB : slotA;
+
+  const start = randTransform(0.7);
+  const end = randTransform(1.0);
+
+  // Stage with start transform, no transition
+  showEl.classList.remove('ken-burns');
+  showEl.style.backgroundImage = `url("${slide.image.fullsize}")`;
+  showEl.style.transform = start.str;
+  void showEl.offsetWidth;
+
+  // Enable transitions, fade in, animate transform to end
+  showEl.classList.add('ken-burns');
+  showEl.classList.add('active');
+  hideEl.classList.remove('active');
+
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    showEl.style.transform = end.str;
+  }));
+
+  activeSlot = next;
+  setCaption(slide);
+  updateCounter();
+
+  // Preload neighbors
+  const ahead = slides[(index + 1) % slides.length];
+  const back  = slides[(index - 1 + slides.length) % slides.length];
+  if (ahead) preloadImage(ahead.image.fullsize);
+  if (back)  preloadImage(back.image.fullsize);
+}
+
+function setCaption(slide) {
+  const p = slide.post;
+  const url = postUrl(p);
+  captionEl.href = url;
+
+  const handle = '@' + (p.author.handle || 'unknown');
+  const display = p.author.displayName ? p.author.displayName : handle;
+  handleEl.textContent = display;
+  handleEl.title = handle;
+  timeEl.textContent = timeAgo(p.indexedAt || p.record?.createdAt);
+
+  const text = (p.record?.text || '').trim();
+  // Use alt text if post has no text body
+  bodyEl.textContent = text || (slide.image.alt ? slide.image.alt : '');
+
+  if (p.author.avatar) {
+    avatarEl.style.backgroundImage = `url("${p.author.avatar}")`;
+  } else {
+    avatarEl.style.backgroundImage = '';
+    avatarEl.style.background = '#444';
+  }
+
+  captionEl.classList.remove('show');
+  void captionEl.offsetWidth;
+  captionEl.classList.add('show');
+}
+
+function updateCounter() {
+  counterEl.textContent = `${index + 1} / ${slides.length}`;
+}
+
+// ── Navigation ────────────────────────────────────────────────────────────
+function goTo(newIndex) {
+  if (slides.length === 0) return;
+  index = ((newIndex % slides.length) + slides.length) % slides.length;
+  showSlide(slides[index]);
+  resetTimer();
+}
+function next() { goTo(index + 1); }
+function prev() { goTo(index - 1); }
+
+function resetTimer() {
+  if (advanceTimer) clearTimeout(advanceTimer);
+  if (paused || hoveringCaption) return;
+  advanceTimer = setTimeout(() => next(), SLIDE_DURATION);
+}
+
+function togglePause() {
+  paused = !paused;
+  pausedEl.classList.toggle('show', paused);
+  if (paused) {
+    if (advanceTimer) clearTimeout(advanceTimer);
+  } else {
+    resetTimer();
+  }
+}
+
+// ── Input handling ────────────────────────────────────────────────────────
+// Click on stage (not caption): pause/play toggle
+stage.addEventListener('click', (e) => {
+  if (e.target.closest('.caption')) return;
+  togglePause();
+});
+
+// Pause auto-advance while reading the caption
+captionEl.addEventListener('mouseenter', () => {
+  hoveringCaption = true;
+  if (advanceTimer) clearTimeout(advanceTimer);
+});
+captionEl.addEventListener('mouseleave', () => {
+  hoveringCaption = false;
+  resetTimer();
+});
+
+// Keyboard
+document.addEventListener('keydown', (e) => {
+  if (e.target.tagName === 'INPUT') return;
+  if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
+  else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
+  else if (e.key === ' ') { e.preventDefault(); togglePause(); }
+});
+
+// Touch swipe
+let touchStartX = null, touchStartY = null, touchStartT = 0;
+stage.addEventListener('touchstart', (e) => {
+  if (e.touches.length !== 1) return;
+  touchStartX = e.touches[0].clientX;
+  touchStartY = e.touches[0].clientY;
+  touchStartT = Date.now();
+}, { passive: true });
+stage.addEventListener('touchend', (e) => {
+  if (touchStartX == null) return;
+  const dx = (e.changedTouches[0].clientX - touchStartX);
+  const dy = (e.changedTouches[0].clientY - touchStartY);
+  const dt = Date.now() - touchStartT;
+  if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy) * 1.5 && dt < 600) {
+    if (dx < 0) next(); else prev();
+  }
+  touchStartX = touchStartY = null;
+}, { passive: true });
+
+// ── Parallax: mouse on desktop, accelerometer on mobile ────────────────────
+const PARALLAX_MAX = 28; // px
+let mouseX = 0.5, mouseY = 0.5;
+let tiltX = 0, tiltY = 0; // -1..1
+let parallaxX = 0, parallaxY = 0;
+let usingOrientation = false;
+
+window.addEventListener('mousemove', (e) => {
+  mouseX = e.clientX / window.innerWidth;
+  mouseY = e.clientY / window.innerHeight;
+});
+
+let orientCalibrated = false;
+let orientBeta0 = 0, orientGamma0 = 0;
+function onOrient(e) {
+  const g = (e.gamma || 0); const b = (e.beta || 0);
+  if (!orientCalibrated) {
+    // First reading sets the neutral position — whatever way the user is holding the phone
+    orientBeta0 = b;
+    orientGamma0 = g;
+    orientCalibrated = true;
+  }
+  const dg = g - orientGamma0;
+  const db = b - orientBeta0;
+  // Map a comfortable ±20° range to ±1
+  tiltX = Math.max(-1, Math.min(1, dg / 20));
+  tiltY = Math.max(-1, Math.min(1, db / 20));
+  usingOrientation = true;
+}
+
+async function enableOrientation() {
+  if (!window.DeviceOrientationEvent) return false;
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    try {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') return false;
+    } catch { return false; }
+  }
+  window.addEventListener('deviceorientation', onOrient);
+  return true;
+}
+
+// On touch devices: try to set up orientation, prompting for permission on iOS
+function setupTilt() {
+  const isTouch = matchMedia('(pointer: coarse)').matches;
+  if (!isTouch || !window.DeviceOrientationEvent) return;
+  if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+    // iOS — needs explicit user gesture
+    tiltBtn.classList.remove('hidden');
+    tiltBtn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const ok = await enableOrientation();
+      if (ok) tiltBtn.classList.add('hidden');
+    });
+  } else {
+    enableOrientation();
+  }
+}
+
+function tick() {
+  let tx, ty;
+  if (usingOrientation) {
+    tx = tiltX;
+    ty = tiltY;
+  } else {
+    tx = (mouseX - 0.5) * 2;
+    ty = (mouseY - 0.5) * 2;
+  }
+  const targetX = -tx * PARALLAX_MAX;
+  const targetY = -ty * PARALLAX_MAX;
+  parallaxX += (targetX - parallaxX) * 0.06;
+  parallaxY += (targetY - parallaxY) * 0.06;
+  parallaxEl.style.transform = `translate3d(${parallaxX.toFixed(1)}px, ${parallaxY.toFixed(1)}px, 0)`;
+  requestAnimationFrame(tick);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────
+function showError(msg) {
+  loadingEl.classList.add('hide');
+  const div = document.createElement('div');
+  div.className = 'error';
+  div.innerHTML = `<div>${msg}</div><div style="font-size:11px;opacity:0.6;letter-spacing:0.15em;text-transform:uppercase">add ?url=&lt;bsky post url&gt; to retry</div>`;
+  document.body.appendChild(div);
+}
+
+function shuffle(arr) {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+async function boot(seedUrl) {
+  try {
+    progressEl.textContent = 'resolving handle…';
+    const atUri = await resolveToAtUri(seedUrl);
+
+    progressEl.textContent = 'fetching thread…';
+    const [down, up] = await Promise.all([
+      fetchThreadDown(atUri, 1000).catch(() => null),
+      fetchThreadUp(atUri).catch(() => null),
+    ]);
+
+    progressEl.textContent = 'expanding quote web…';
+    const web = await fetchQuoteWeb(atUri, {
+      maxTotal: 600, maxAPICalls: 100,
+      onProgress: ({ fetched, apiCalls }) => {
+        progressEl.textContent = `${fetched} posts · ${apiCalls} calls`;
+      }
+    }).catch(() => ({ allQuotePosts: [] }));
+
+    const allPosts = collectAllPosts({ down, up, web });
+    progressEl.textContent = `${allPosts.length} posts · filtering for images`;
+
+    const seedPost = down?.post || up?.post;
+    const seedHandle = seedPost?.author?.handle;
+    if (seedHandle) {
+      titleEl.innerHTML = `Post Image Show · <a href="${postUrl(seedPost)}" target="_blank" rel="noopener">@${seedHandle}</a>`;
+    } else {
+      titleEl.textContent = 'Post Image Show';
+    }
+
+    // Build slides: one per image, in random order
+    const built = [];
+    for (const post of allPosts) {
+      for (const img of getImagesFromPost(post)) {
+        if (img.fullsize) built.push({ post, image: img });
+      }
+    }
+
+    if (built.length === 0) {
+      showError('No images found in the expanded conversation graph.');
+      return;
+    }
+
+    slides = shuffle(built);
+    index = 0;
+
+    // Hide loading and start
+    setupTilt();
+    loadingEl.classList.add('hide');
+    setTimeout(() => { loadingEl.style.display = 'none'; }, 700);
+
+    await showSlide(slides[0]);
+    resetTimer();
+    tick();
+
+  } catch (err) {
+    console.error(err);
+    showError(err.message || 'Something went wrong');
+  }
+}
+
+// Entry
+const params = new URLSearchParams(location.search);
+const seedUrl = params.get('url');
+
+if (seedUrl) {
+  boot(seedUrl);
+} else {
+  loadingEl.style.display = 'none';
+  inputForm.style.display = 'flex';
+  document.getElementById('goBtn').addEventListener('click', () => {
+    const v = document.getElementById('urlInput').value.trim();
+    if (v) location.search = '?url=' + encodeURIComponent(v);
+  });
+  document.getElementById('urlInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') document.getElementById('goBtn').click();
+  });
+}
+</script>
+</body>
+</html>
