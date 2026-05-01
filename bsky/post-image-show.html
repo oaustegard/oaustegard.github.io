@@ -76,20 +76,7 @@
   }
 
   /* Top-left title with seed link */
-  .title {
-    position: fixed;
-    top: max(18px, env(safe-area-inset-top));
-    left: max(20px, env(safe-area-inset-left));
-    z-index: 10;
-    font-size: 11px;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: rgba(255,255,255,0.55);
-    user-select: none;
-    pointer-events: auto;
-  }
-  .title a { color: rgba(255,255,255,0.75); text-decoration: none; border-bottom: 1px solid rgba(255,255,255,0.18); }
-  .title a:hover { color: #fff; border-bottom-color: rgba(255,255,255,0.55); }
+  /* (title removed — image show isn't about a single user, so no headline) */
 
   /* Inter-page nav icons (constellation / thread) */
   .nav-modes {
@@ -180,7 +167,7 @@
   .hint {
     position: fixed;
     bottom: max(28px, calc(env(safe-area-inset-bottom) + 8px));
-    right: max(20px, env(safe-area-inset-right));
+    right: max(64px, calc(env(safe-area-inset-right) + 44px));
     z-index: 9;
     font-size: 9px;
     letter-spacing: 0.3em;
@@ -188,8 +175,50 @@
     color: rgba(255,255,255,0.32);
     user-select: none;
     pointer-events: none;
+    transition: opacity 200ms;
   }
   @media (max-width: 720px) { .hint { display: none; } }
+
+  /* Chrome toggle — hides/shows all UI overlays for max image view */
+  .chrome-toggle {
+    position: fixed;
+    bottom: max(20px, env(safe-area-inset-bottom));
+    right: max(20px, env(safe-area-inset-right));
+    z-index: 13;
+    width: 30px; height: 30px;
+    border-radius: 999px;
+    background: rgba(0,0,0,0.32);
+    backdrop-filter: blur(10px) saturate(1.2);
+    -webkit-backdrop-filter: blur(10px) saturate(1.2);
+    border: 1px solid rgba(255,255,255,0.10);
+    color: rgba(255,255,255,0.7);
+    font-size: 13px;
+    display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer;
+    font-family: inherit;
+    padding: 0;
+    opacity: 0.65;
+    transition: background 200ms, color 200ms, transform 200ms, opacity 200ms;
+  }
+  .chrome-toggle:hover {
+    background: rgba(255,255,255,0.14);
+    color: #fff;
+    opacity: 1;
+    transform: scale(1.08);
+  }
+
+  /* When .hide-chrome is set on body, fade out all overlay UI except the toggle itself */
+  body.hide-chrome .nav-modes,
+  body.hide-chrome .counter,
+  body.hide-chrome .caption,
+  body.hide-chrome .hint,
+  body.hide-chrome .paused-badge,
+  body.hide-chrome .vignette {
+    opacity: 0 !important;
+    pointer-events: none;
+  }
+  body.hide-chrome .chrome-toggle { opacity: 0.25; }
+  body.hide-chrome .chrome-toggle:hover { opacity: 1; }
 
   /* Pause indicator */
   .paused-badge {
@@ -311,7 +340,6 @@
   </div>
   <div class="vignette"></div>
 
-  <div class="title" id="title"></div>
   <div class="nav-modes hidden" id="navModes">
     <a href="#" id="navConstellation" title="View as constellation graph" aria-label="Constellation graph">🌌</a>
     <a href="#" class="current" title="Image show (current)" aria-label="Image show (current)">🎞️</a>
@@ -328,8 +356,9 @@
     </div>
     <div class="body" id="body"></div>
   </a>
-  <div class="hint">← → · space · click</div>
+  <div class="hint">← → · space · click · h</div>
   <div class="paused-badge" id="paused">paused</div>
+  <button class="chrome-toggle" id="chromeToggle" type="button" title="Hide UI (press h)" aria-label="Toggle UI">⛶</button>
   <button class="tilt-prompt hidden" id="tiltPrompt">Enable tilt</button>
 
   <div class="loading" id="loading">
@@ -494,7 +523,6 @@ const timeEl = document.getElementById('time');
 const bodyEl = document.getElementById('body');
 const avatarEl = document.getElementById('avatar');
 const counterEl = document.getElementById('counter');
-const titleEl = document.getElementById('title');
 const pausedEl = document.getElementById('paused');
 const tiltBtn = document.getElementById('tiltPrompt');
 const loadingEl = document.getElementById('loading');
@@ -626,10 +654,23 @@ function togglePause() {
 }
 
 // ── Input handling ────────────────────────────────────────────────────────
-// Click on stage (not caption): pause/play toggle
+// Click on stage (not caption, not chrome toggle): pause/play toggle
 stage.addEventListener('click', (e) => {
   if (e.target.closest('.caption')) return;
+  if (e.target.closest('.chrome-toggle')) return;
   togglePause();
+});
+
+// Chrome toggle — hides/shows all overlay UI for max image view
+const chromeToggle = document.getElementById('chromeToggle');
+function toggleChrome() {
+  const hidden = document.body.classList.toggle('hide-chrome');
+  chromeToggle.setAttribute('title', hidden ? 'Show UI (press h)' : 'Hide UI (press h)');
+  chromeToggle.setAttribute('aria-label', hidden ? 'Show UI' : 'Hide UI');
+}
+chromeToggle.addEventListener('click', (e) => {
+  e.stopPropagation();
+  toggleChrome();
 });
 
 // Pause auto-advance while reading the caption
@@ -648,6 +689,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') { e.preventDefault(); next(); }
   else if (e.key === 'ArrowLeft') { e.preventDefault(); prev(); }
   else if (e.key === ' ') { e.preventDefault(); togglePause(); }
+  else if (e.key === 'h' || e.key === 'H') { e.preventDefault(); toggleChrome(); }
 });
 
 // Touch swipe
@@ -790,14 +832,6 @@ async function boot(seedUrl) {
     });
 
     progressEl.textContent = `${allPosts.length} posts · filtering for images`;
-
-    const seedPost = allPosts.find(p => p.uri === atUri) || allPosts[0];
-    const seedHandle = seedPost?.author?.handle;
-    if (seedHandle) {
-      titleEl.innerHTML = `Post Image Show · <a href="${postUrl(seedPost)}" target="_blank" rel="noopener">@${seedHandle}</a>`;
-    } else {
-      titleEl.textContent = 'Post Image Show';
-    }
 
     // Build slides: one per image, in random order
     const built = [];
