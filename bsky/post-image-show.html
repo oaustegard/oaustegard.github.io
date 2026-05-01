@@ -164,18 +164,21 @@
   /* Pause indicator */
   .paused-badge {
     position: fixed;
-    top: 50%; left: 50%;
-    transform: translate(-50%, -50%);
-    z-index: 50;
-    color: rgba(255,255,255,0.7);
+    bottom: max(28px, calc(env(safe-area-inset-bottom) + 8px));
+    right: max(20px, env(safe-area-inset-right));
+    z-index: 11;
+    color: rgba(255,255,255,0.85);
     font-size: 10px;
-    letter-spacing: 0.5em;
+    letter-spacing: 0.4em;
     text-transform: uppercase;
     pointer-events: none;
     opacity: 0;
-    transition: opacity 300ms;
+    transition: opacity 200ms;
   }
   .paused-badge.show { opacity: 1; }
+  /* Hide the hint while paused so the badge takes its slot */
+  .paused-badge.show ~ .hint,
+  body:has(.paused-badge.show) .hint { opacity: 0; }
 
   /* Loading state */
   .loading {
@@ -326,20 +329,71 @@ function getImagesFromPost(post) {
   return [];
 }
 
-function collectAllPosts({ down, up, web }) {
-  const posts = new Map();
+// ── Graph expansion ────────────────────────────────────────────────────────
+// Recursively fetches a post's full conversation graph: thread up + thread
+// down, every quote of every post (the quote web), and reply branches off of
+// quote posts.  This mirrors what the constellation graph reaches with ?ea=1
+// (all-expanded) — modulo per-node caps to keep API calls bounded.
+async function expandFully(seedUri, onProgress) {
+  const allPosts = new Map();
   const visit = (node) => {
     if (!node) return;
-    if (node.post) posts.set(node.post.uri, node.post);
+    if (node.post) allPosts.set(node.post.uri, node.post);
     if (Array.isArray(node.replies)) node.replies.forEach(visit);
     if (node.parent) visit(node.parent);
   };
-  visit(down);
-  visit(up);
+
+  // Phase 1: thread down (all replies) + thread up (all parents) of seed
+  onProgress({ phase: 'thread', n: 0 });
+  const [down, up] = await Promise.all([
+    fetchThreadDown(seedUri, 1000).catch(() => null),
+    fetchThreadUp(seedUri).catch(() => null),
+  ]);
+  visit(down); visit(up);
+  const initialUris = Array.from(allPosts.keys());
+
+  // Phase 2: quote web seeded with EVERY post in the initial thread.
+  // (Quotes of a reply are still part of the conversation graph.)
+  onProgress({ phase: 'quotes', n: allPosts.size });
+  const web = await fetchQuoteWeb(initialUris, {
+    maxTotal: 1200, maxAPICalls: 200,
+    onProgress: ({ fetched }) => onProgress({ phase: 'quotes', n: allPosts.size + fetched }),
+  });
   for (const p of (web?.allQuotePosts || [])) {
-    if (!posts.has(p.uri)) posts.set(p.uri, p);
+    if (!allPosts.has(p.uri)) allPosts.set(p.uri, p);
   }
-  return Array.from(posts.values());
+
+  // Phase 3: reply branches off of quote posts. Each quote may have its own
+  // reply tree we haven't seen. Skip URIs from the initial thread (their
+  // replies are already in the thread-down result).
+  const inThread = new Set(initialUris);
+  const needReplies = Array.from(allPosts.keys()).filter(u => !inThread.has(u));
+  const REPLY_CAP = 150, REPLY_CONCURRENCY = 6;
+  const toFetch = needReplies.slice(0, REPLY_CAP);
+  for (let i = 0; i < toFetch.length; i += REPLY_CONCURRENCY) {
+    const batch = toFetch.slice(i, i + REPLY_CONCURRENCY);
+    onProgress({ phase: 'replies', n: allPosts.size, done: i, total: toFetch.length });
+    const results = await Promise.allSettled(batch.map(u => fetchThreadDown(u, 3)));
+    for (const r of results) {
+      if (r.status === 'fulfilled') visit(r.value);
+    }
+  }
+  onProgress({ phase: 'replies', n: allPosts.size, done: toFetch.length, total: toFetch.length });
+
+  return Array.from(allPosts.values());
+}
+
+// ── Aspect-aware sizing ────────────────────────────────────────────────────
+// When image and viewport aspect ratios differ by more than ~1.5×,
+// fall back to 'contain' (with a black letterbox/pillarbox) so portrait
+// images on landscape screens (or vice versa) aren't aggressively cropped.
+function chooseFit(image) {
+  const ar = image?.aspectRatio;
+  if (!ar || !ar.width || !ar.height) return 'cover';
+  const imgAspect = ar.width / ar.height;
+  const viewAspect = window.innerWidth / window.innerHeight;
+  const ratio = Math.max(imgAspect / viewAspect, viewAspect / imgAspect);
+  return ratio > 1.5 ? 'contain' : 'cover';
 }
 
 // ── App state ──────────────────────────────────────────────────────────────
@@ -371,9 +425,9 @@ let preloadCache = new Map();
 
 // ── Slide rendering with Ken Burns ─────────────────────────────────────────
 function randTransform(intensity = 1) {
-  const scale = 1.04 + Math.random() * 0.08 * intensity;
-  const tx = (Math.random() - 0.5) * 60 * intensity;
-  const ty = (Math.random() - 0.5) * 60 * intensity;
+  const scale = 1.05 + Math.random() * 0.13 * intensity;
+  const tx = (Math.random() - 0.5) * 90 * intensity;
+  const ty = (Math.random() - 0.5) * 90 * intensity;
   return { scale, tx, ty, str: `scale(${scale.toFixed(3)}) translate(${tx.toFixed(1)}px, ${ty.toFixed(1)}px)` };
 }
 
@@ -403,6 +457,7 @@ async function showSlide(slide, { skipPreload = false } = {}) {
   // Stage with start transform, no transition
   showEl.classList.remove('ken-burns');
   showEl.style.backgroundImage = `url("${slide.image.fullsize}")`;
+  showEl.style.backgroundSize = chooseFit(slide.image);
   showEl.style.transform = start.str;
   void showEl.offsetWidth;
 
@@ -625,24 +680,19 @@ async function boot(seedUrl) {
     progressEl.textContent = 'resolving handle…';
     const atUri = await resolveToAtUri(seedUrl);
 
-    progressEl.textContent = 'fetching thread…';
-    const [down, up] = await Promise.all([
-      fetchThreadDown(atUri, 1000).catch(() => null),
-      fetchThreadUp(atUri).catch(() => null),
-    ]);
-
-    progressEl.textContent = 'expanding quote web…';
-    const web = await fetchQuoteWeb(atUri, {
-      maxTotal: 600, maxAPICalls: 100,
-      onProgress: ({ fetched, apiCalls }) => {
-        progressEl.textContent = `${fetched} posts · ${apiCalls} calls`;
+    const allPosts = await expandFully(atUri, (status) => {
+      if (status.phase === 'thread') {
+        progressEl.textContent = 'fetching thread…';
+      } else if (status.phase === 'quotes') {
+        progressEl.textContent = `${status.n} posts · expanding quote web`;
+      } else if (status.phase === 'replies') {
+        progressEl.textContent = `${status.n} posts · ${status.done}/${status.total} reply branches`;
       }
-    }).catch(() => ({ allQuotePosts: [] }));
+    });
 
-    const allPosts = collectAllPosts({ down, up, web });
     progressEl.textContent = `${allPosts.length} posts · filtering for images`;
 
-    const seedPost = down?.post || up?.post;
+    const seedPost = allPosts.find(p => p.uri === atUri) || allPosts[0];
     const seedHandle = seedPost?.author?.handle;
     if (seedHandle) {
       titleEl.innerHTML = `Post Image Show · <a href="${postUrl(seedPost)}" target="_blank" rel="noopener">@${seedHandle}</a>`;
