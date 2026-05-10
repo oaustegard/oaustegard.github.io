@@ -1,0 +1,982 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snooker Break Simulator — Traditional vs Murphy's Third-Red</title>
+<style>
+  :root {
+    --bg: #1a1d20;
+    --panel: #25282c;
+    --text: #e8e8e8;
+    --muted: #888;
+    --accent: #ffb000;
+    --cloth: #0a6633;
+    --cushion: #5a3a1a;
+    --line: #d8d8c0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    padding: 16px;
+  }
+  header { margin-bottom: 12px; }
+  h1 { margin: 0 0 4px; font-size: 20px; font-weight: 600; }
+  header p { margin: 0; color: var(--muted); font-size: 13px; }
+  main {
+    display: grid;
+    grid-template-columns: 1fr 320px;
+    gap: 16px;
+    align-items: start;
+  }
+  @media (max-width: 1100px) {
+    main { grid-template-columns: 1fr; }
+  }
+  #table-wrap {
+    background: var(--panel);
+    padding: 12px;
+    border-radius: 8px;
+  }
+  canvas#table {
+    display: block;
+    width: 100%;
+    height: auto;
+    border-radius: 4px;
+    cursor: crosshair;
+  }
+  #controls {
+    background: var(--panel);
+    padding: 16px;
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .group h2 {
+    margin: 0;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+  }
+  button {
+    background: #34373c;
+    color: var(--text);
+    border: 1px solid #44474c;
+    padding: 8px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font: inherit;
+    transition: background 0.1s;
+  }
+  button:hover { background: #404348; }
+  button:active { background: #2a2d32; }
+  button.primary {
+    background: var(--accent);
+    color: #1a1d20;
+    border-color: var(--accent);
+    font-weight: 600;
+  }
+  button.primary:hover { background: #ffc030; }
+  button.preset {
+    text-align: left;
+    line-height: 1.2;
+  }
+  button.preset .label { font-weight: 600; display: block; }
+  button.preset .desc {
+    font-size: 11px;
+    color: var(--muted);
+    display: block;
+    margin-top: 2px;
+  }
+  .row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+  .row label {
+    flex: 0 0 auto;
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .row input[type=range] {
+    flex: 1;
+  }
+  .row .val {
+    flex: 0 0 50px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .spin-pad {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  canvas#spinPad {
+    background: #0a0a0a;
+    border-radius: 50%;
+    cursor: crosshair;
+    flex: 0 0 auto;
+  }
+  .spin-readout {
+    font-size: 12px;
+    color: var(--muted);
+    line-height: 1.5;
+    font-variant-numeric: tabular-nums;
+  }
+  .spin-readout strong { color: var(--text); }
+  #info {
+    font-size: 11px;
+    color: var(--muted);
+    border-top: 1px solid #34373c;
+    padding-top: 12px;
+    line-height: 1.5;
+  }
+  .keyhint {
+    display: inline-block;
+    background: #34373c;
+    border: 1px solid #44474c;
+    border-radius: 3px;
+    padding: 1px 5px;
+    font-family: monospace;
+    font-size: 11px;
+  }
+  .toggle-group {
+    display: flex;
+    background: #1a1d20;
+    border-radius: 4px;
+    padding: 2px;
+  }
+  .toggle-group button {
+    flex: 1;
+    background: transparent;
+    border: none;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+  .toggle-group button.active {
+    background: #44474c;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Snooker Break Simulator</h1>
+  <p>Traditional rearmost-red break (Frank Callan, ~100 years old) vs Shaun Murphy's third-red break (2026 World Championship final). Click table to aim, drag the spin pad to set tip offset, hit <span class="keyhint">space</span> to shoot.</p>
+</header>
+<main>
+  <div id="table-wrap">
+    <canvas id="table" width="1428" height="711"></canvas>
+  </div>
+  <div id="controls">
+    <div class="group">
+      <h2>Demo presets</h2>
+      <button class="preset" id="presetTraditional">
+        <span class="label">Traditional: rearmost red</span>
+        <span class="desc">Aim at the back-row corner on the cue's side. Glancing thin contact with the side of the rack — Frank Callan style safe break.</span>
+      </button>
+      <button class="preset" id="presetMurphy">
+        <span class="label">Murphy: third red</span>
+        <span class="desc">Aim at the third red along the cue-side line ("higher up the rack"). Deeper contact, more energy into the pack — Murphy's 2026 World final innovation.</span>
+      </button>
+    </div>
+
+    <div class="group">
+      <h2>Cue speed</h2>
+      <div class="row">
+        <input type="range" id="speed" min="1" max="9" step="0.1" value="5.5">
+        <span class="val"><span id="speedVal">5.5</span> m/s</span>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Tip offset (spin)</h2>
+      <div class="spin-pad">
+        <canvas id="spinPad" width="120" height="120"></canvas>
+        <div class="spin-readout">
+          <div>Top/back: <strong id="spinTopVal">0.00</strong></div>
+          <div>Side: <strong id="spinSideVal">0.00</strong></div>
+          <div style="margin-top: 6px;">click/drag, max 0.7r</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Action</h2>
+      <button class="primary" id="shoot">SHOOT</button>
+      <div class="row" style="gap: 6px;">
+        <button id="reset" style="flex:1">Reset rack</button>
+        <button id="clearTrails" style="flex:1">Clear trails</button>
+      </div>
+    </div>
+
+    <div class="group">
+      <h2>Display</h2>
+      <div class="toggle-group" id="trailsToggle">
+        <button data-val="off">No trails</button>
+        <button data-val="cue" class="active">Cue trail</button>
+        <button data-val="all">All trails</button>
+      </div>
+    </div>
+
+    <div id="info">
+      Click anywhere on the table to set aim point. Tip-offset pad: up = topspin (drives cue ball forward after impact), down = backspin (draws it back), left/right = sidespin (deflects rebound off cushions). Max realistic offset is about 0.7 ball radii — beyond that real cues miscue.
+    </div>
+  </div>
+</main>
+
+<script>
+'use strict';
+
+// ============================================================
+// CONSTANTS — physical units in mm and seconds
+// ============================================================
+const TABLE_W = 3569;       // playing surface long dimension (mm)
+const TABLE_H = 1778;       // playing surface short dimension (mm)
+const BALL_R = 26.25;       // ball radius (mm), snooker
+const BALL_M = 0.142;       // ball mass (kg)
+const G = 9810;             // gravity (mm/s²)
+
+// Cloth friction
+const MU_SLIDE = 0.20;      // sliding friction coefficient (Marlow/Mathavan)
+const MU_ROLL = 0.010;      // rolling friction coefficient
+// Sidespin around vertical axis decays via contact-patch torque (no slip in idealized model);
+// empirical decay constant fitted to roughly match observed sidespin lifetimes.
+const SIDE_SPIN_DECAY = 1.5; // 1/s
+
+// Ball-ball collision
+const COR_BB = 0.94;        // coefficient of restitution
+const MU_BB = 0.06;         // tangential friction at ball-ball contact (small)
+
+// Cushion
+const COR_CUSHION = 0.70;
+const CUSHION_SPIN_COUPLE = 0.30; // sidespin → tangential rebound velocity
+const CUSHION_SPIN_DECAY = 0.7;   // sidespin scaling on cushion bounce
+
+// Pockets
+const POCKET_R_CORNER = 50;
+const POCKET_R_MIDDLE = 55;
+
+// Spot positions (mm). Long axis x, short axis y.
+// Baulk end is x=0; top cushion is x=TABLE_W.
+const BAULK_X = 737;        // distance of baulk line from baulk cushion
+const D_RADIUS = 292;       // semicircle radius
+const SPOT = {
+  yellow: { x: BAULK_X, y: TABLE_H / 2 - D_RADIUS },
+  green:  { x: BAULK_X, y: TABLE_H / 2 + D_RADIUS },
+  brown:  { x: BAULK_X, y: TABLE_H / 2 },
+  blue:   { x: TABLE_W / 2, y: TABLE_H / 2 },
+  pink:   { x: (TABLE_W / 2 + TABLE_W) / 2, y: TABLE_H / 2 }, // midway blue↔top
+  black:  { x: TABLE_W - 324, y: TABLE_H / 2 },
+};
+
+const POCKETS = [
+  { x: 0, y: 0, r: POCKET_R_CORNER },
+  { x: TABLE_W, y: 0, r: POCKET_R_CORNER },
+  { x: 0, y: TABLE_H, r: POCKET_R_CORNER },
+  { x: TABLE_W, y: TABLE_H, r: POCKET_R_CORNER },
+  { x: TABLE_W / 2, y: 0, r: POCKET_R_MIDDLE },
+  { x: TABLE_W / 2, y: TABLE_H, r: POCKET_R_MIDDLE },
+];
+
+// Cue ball default break position: in the D, on the green-side (this is a common
+// pro position; gives a natural angle into the rack)
+const CUE_START = { x: BAULK_X, y: TABLE_H / 2 + 200 };
+
+// Simulation
+const DT = 0.0005;          // physics step (s) — 0.5ms; at 8m/s = 4mm/step << ball radius
+const STEPS_PER_FRAME = 32; // 32 * 0.5ms = 16ms = 60fps real-time
+const REST_THRESHOLD = 5;   // mm/s — speed below which we consider a ball stopped
+
+// Rendering
+const TRAIL_LEN = 200;
+
+// ============================================================
+// BALL
+// ============================================================
+class Ball {
+  constructor(x, y, color, label, isCue = false) {
+    this.x = x; this.y = y;
+    this.vx = 0; this.vy = 0;
+    // Roll axes: ω_x, ω_y. For pure rolling forward in +x, ω_y = vx/R.
+    this.wx = 0; this.wy = 0;
+    // Sidespin around vertical axis.
+    this.wz = 0;
+    this.color = color;
+    this.label = label;
+    this.isCue = isCue;
+    this.alive = true;
+    this.trail = [];
+  }
+  speed() { return Math.hypot(this.vx, this.vy); }
+  isMoving() {
+    return this.speed() > REST_THRESHOLD ||
+           Math.abs(this.wz) > 1.0 ||
+           Math.hypot(this.wx, this.wy) > 1.0;
+  }
+}
+
+// ============================================================
+// PHYSICS STEP
+// ============================================================
+function physicsStep(balls, dt) {
+  // 1. Cloth friction per ball
+  for (const b of balls) {
+    if (!b.alive) continue;
+
+    // Slip velocity at contact point (bottom of ball, r = (0,0,-R)):
+    // v_contact = v_center + ω × r = (vx − R·wy, vy + R·wx)
+    const slipX = b.vx - BALL_R * b.wy;
+    const slipY = b.vy + BALL_R * b.wx;
+    const slipMag = Math.hypot(slipX, slipY);
+
+    if (slipMag > 1.0) {
+      // Sliding: kinetic friction opposes slip direction.
+      const aMag = MU_SLIDE * G;
+      const dvx = -aMag * (slipX / slipMag) * dt;
+      const dvy = -aMag * (slipY / slipMag) * dt;
+      b.vx += dvx;
+      b.vy += dvy;
+      // Friction torque: τ = r × F where r = (0,0,-R)
+      //   τ_x =  R * F_y  →  Δw_x = (5/(2R)) * dvy  (since I = 2mR²/5)
+      //   τ_y = -R * F_x  →  Δw_y = -(5/(2R)) * dvx
+      b.wx += (5 / (2 * BALL_R)) * dvy;
+      b.wy -= (5 / (2 * BALL_R)) * dvx;
+    } else {
+      // Rolling: small rolling friction; lock spin to velocity
+      const v = b.speed();
+      if (v > 1.0) {
+        const dec = Math.min(MU_ROLL * G * dt, v);
+        b.vx -= (b.vx / v) * dec;
+        b.vy -= (b.vy / v) * dec;
+      } else {
+        b.vx = 0; b.vy = 0;
+      }
+      b.wx = -b.vy / BALL_R;
+      b.wy = b.vx / BALL_R;
+    }
+
+    // Sidespin contact-patch decay
+    b.wz *= Math.exp(-SIDE_SPIN_DECAY * dt);
+  }
+
+  // 2. Position update
+  for (const b of balls) {
+    if (!b.alive) continue;
+    b.x += b.vx * dt;
+    b.y += b.vy * dt;
+  }
+
+  // 3. Ball-ball collisions (pairwise; one resolution per step is fine at dt=0.5ms)
+  for (let i = 0; i < balls.length; i++) {
+    if (!balls[i].alive) continue;
+    for (let j = i + 1; j < balls.length; j++) {
+      if (!balls[j].alive) continue;
+      collideBalls(balls[i], balls[j]);
+    }
+  }
+
+  // 4. Cushion collisions
+  for (const b of balls) {
+    if (!b.alive) continue;
+    if (inPocketJaw(b)) continue; // pockets are gaps in the cushion
+
+    if (b.x < BALL_R) {
+      b.x = BALL_R;
+      b.vx = -b.vx * COR_CUSHION;
+      b.vy += b.wz * BALL_R * CUSHION_SPIN_COUPLE;
+      b.wz *= CUSHION_SPIN_DECAY;
+    } else if (b.x > TABLE_W - BALL_R) {
+      b.x = TABLE_W - BALL_R;
+      b.vx = -b.vx * COR_CUSHION;
+      b.vy -= b.wz * BALL_R * CUSHION_SPIN_COUPLE;
+      b.wz *= CUSHION_SPIN_DECAY;
+    }
+    if (b.y < BALL_R) {
+      b.y = BALL_R;
+      b.vy = -b.vy * COR_CUSHION;
+      b.vx -= b.wz * BALL_R * CUSHION_SPIN_COUPLE;
+      b.wz *= CUSHION_SPIN_DECAY;
+    } else if (b.y > TABLE_H - BALL_R) {
+      b.y = TABLE_H - BALL_R;
+      b.vy = -b.vy * COR_CUSHION;
+      b.vx += b.wz * BALL_R * CUSHION_SPIN_COUPLE;
+      b.wz *= CUSHION_SPIN_DECAY;
+    }
+  }
+
+  // 5. Pocket capture
+  for (const b of balls) {
+    if (!b.alive) continue;
+    for (const p of POCKETS) {
+      if (Math.hypot(b.x - p.x, b.y - p.y) < p.r) {
+        b.alive = false;
+        b.vx = 0; b.vy = 0; b.wx = 0; b.wy = 0; b.wz = 0;
+        break;
+      }
+    }
+  }
+}
+
+function inPocketJaw(b) {
+  for (const p of POCKETS) {
+    if (Math.hypot(b.x - p.x, b.y - p.y) < p.r + BALL_R * 0.8) return true;
+  }
+  return false;
+}
+
+function collideBalls(a, b) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist >= 2 * BALL_R || dist < 1e-6) return;
+
+  // Normal
+  const nx = dx / dist, ny = dy / dist;
+
+  // Separate (split overlap evenly)
+  const overlap = 2 * BALL_R - dist;
+  a.x -= nx * overlap * 0.5;
+  a.y -= ny * overlap * 0.5;
+  b.x += nx * overlap * 0.5;
+  b.y += ny * overlap * 0.5;
+
+  // Relative velocity along normal
+  const rvx = b.vx - a.vx;
+  const rvy = b.vy - a.vy;
+  const v_n = rvx * nx + rvy * ny;
+  if (v_n > 0) return; // already separating
+
+  // Equal masses: J_n = -(1+e) * v_n / 2
+  const j_n = -(1 + COR_BB) * v_n * 0.5;
+  a.vx -= j_n * nx; a.vy -= j_n * ny;
+  b.vx += j_n * nx; b.vy += j_n * ny;
+
+  // Tangential: include sidespin contribution at contact point
+  // Tangent direction t = (-ny, nx)
+  const tx = -ny, ty = nx;
+  const v_t = rvx * tx + rvy * ty;
+  // Sidespin contributes tangential velocity at contact:
+  //   surface velocity of A at contact (along tangent) = wz_a * R   (rotating CCW)
+  //   surface velocity of B at contact (along tangent) = -wz_b * R
+  // Relative spin slip along tangent = -wz_a * R - wz_b * R = -(wz_a + wz_b) * R
+  const spinSlip = -(a.wz + b.wz) * BALL_R;
+  const totalSlip = v_t + spinSlip;
+  // Limited by Coulomb friction
+  const j_t_max = MU_BB * Math.abs(j_n);
+  let j_t = -totalSlip * 0.5;
+  j_t = Math.max(-j_t_max, Math.min(j_t_max, j_t));
+  a.vx -= j_t * tx; a.vy -= j_t * ty;
+  b.vx += j_t * tx; b.vy += j_t * ty;
+  // Spin transfer: torque on each ball from tangential impulse at contact
+  // For ball A: contact at +n*R relative to A's center; impulse on A is (-j_t * tx, -j_t * ty)
+  // τ_z = (n·R) × F  → simplified scalar: dω_z = (R * F_t)/I_z * 1
+  // For sphere I_z = 2mR²/5. Tangential impulse magnitude (-j_t) per unit mass.
+  const dwz = (5 * j_t) / (2 * BALL_R);
+  a.wz += dwz;
+  b.wz += dwz;
+}
+
+// ============================================================
+// RACK BUILDER
+// ============================================================
+function buildRack() {
+  const balls = [];
+  // 15 reds in pyramid; apex touches pink
+  const apexX = SPOT.pink.x + 2 * BALL_R + 0.5; // tiny gap
+  const apexY = SPOT.pink.y;
+  const rowDx = Math.sqrt(3) * BALL_R + 0.3;    // tiny gap between rows
+  const colDy = 2 * BALL_R + 0.3;
+  let id = 1;
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col <= row; col++) {
+      const x = apexX + row * rowDx;
+      const y = apexY + (col - row * 0.5) * colDy;
+      balls.push(new Ball(x, y, '#c41e3a', 'R' + id++));
+    }
+  }
+  // Coloured balls on their spots
+  balls.push(new Ball(SPOT.yellow.x, SPOT.yellow.y, '#ffd700', 'Y'));
+  balls.push(new Ball(SPOT.green.x, SPOT.green.y, '#1e7e3a', 'G'));
+  balls.push(new Ball(SPOT.brown.x, SPOT.brown.y, '#8b4513', 'Br'));
+  balls.push(new Ball(SPOT.blue.x, SPOT.blue.y, '#1e6fd9', 'B'));
+  balls.push(new Ball(SPOT.pink.x, SPOT.pink.y, '#ff7eb6', 'P'));
+  balls.push(new Ball(SPOT.black.x, SPOT.black.y, '#1a1a1a', 'Bk'));
+  // Cue ball
+  const cue = new Ball(CUE_START.x, CUE_START.y, '#fafafa', 'CUE', true);
+  balls.push(cue);
+  return { balls, cue };
+}
+
+function rackBallByGridIndex(row, col) {
+  // index of red ball at (row, col within row)
+  // row=0 → apex (id=1); row=1 → 2 balls (id=2,3); etc.
+  let idx = 0;
+  for (let r = 0; r < row; r++) idx += (r + 1);
+  return idx + col;
+}
+
+// ============================================================
+// CUE STRIKE
+// ============================================================
+// Apply velocity + spin to the cue ball given direction and tip offset.
+//   dir: unit vector (dx, dy)
+//   speed: cue ball speed in mm/s
+//   tipOffsetSide: -1..+1 (side English; positive = right from cue's POV)
+//   tipOffsetTopBack: -1..+1 (vertical tip offset; positive = above center → topspin)
+function strikeCue(cue, dir, speed, tipOffsetSide, tipOffsetTopBack) {
+  cue.vx = dir.x * speed;
+  cue.vy = dir.y * speed;
+  // Vertical offset → roll-axis spin (topspin / backspin)
+  // Topspin means ω about axis perpendicular to motion (in horizontal plane), magnitude > rolling rate
+  // Pure rolling: |ω_perp| = speed / R. Topspin/backspin adds Δω_perp.
+  // Empirical: full top offset (~0.7r) gives ~2x rolling rate (overspin), full back ~0.5x.
+  const baseRoll = speed / BALL_R;
+  const deltaPerp = baseRoll * tipOffsetTopBack * 1.0;
+  const totalPerp = baseRoll + deltaPerp; // signed: + means topspin direction
+  // Decompose onto wx/wy: rolling axis is perpendicular to velocity in horizontal plane.
+  // For velocity (vx, vy), perpendicular (rolling axis) direction = (vy, -vx) / |v|... but we want
+  // ω such that pure rolling: ω_y = vx/R, ω_x = -vy/R.
+  // So ω_roll vector = (-vy/R, vx/R, 0); we scale magnitude by totalPerp/baseRoll.
+  const scale = baseRoll > 0.001 ? totalPerp / baseRoll : 0;
+  cue.wx = -dir.y * speed / BALL_R * scale;
+  cue.wy =  dir.x * speed / BALL_R * scale;
+  // Side offset → vertical-axis spin (ω_z)
+  // Empirical: full side offset gives ~150 rad/s at 7 m/s
+  // ω_z ≈ 0.6 * speed / R * tipOffsetSide
+  cue.wz = 0.6 * speed / BALL_R * tipOffsetSide;
+}
+
+// ============================================================
+// RENDERING
+// ============================================================
+const canvas = document.getElementById('table');
+const ctx = canvas.getContext('2d');
+// Display scale: canvas is 1428×711 pixels, table is 3569×1778 mm
+// Scale = 1428/3569 ≈ 0.4
+const CANVAS_PAD = 60; // pixels of cushion+rail margin on canvas
+const PLAY_W_PX = canvas.width - 2 * CANVAS_PAD;
+const PLAY_H_PX = canvas.height - 2 * CANVAS_PAD;
+const SCALE = Math.min(PLAY_W_PX / TABLE_W, PLAY_H_PX / TABLE_H);
+
+// Convert table mm → canvas px
+function tx(x) { return CANVAS_PAD + x * SCALE; }
+function ty(y) { return CANVAS_PAD + y * SCALE; }
+
+let trailMode = 'cue'; // 'off' | 'cue' | 'all'
+
+function render(state) {
+  const w = canvas.width, h = canvas.height;
+  // Rails / outer
+  ctx.fillStyle = '#3a2a14';
+  ctx.fillRect(0, 0, w, h);
+  // Cushions (slightly inset)
+  ctx.fillStyle = '#5a3a1a';
+  ctx.fillRect(CANVAS_PAD - 12, CANVAS_PAD - 12,
+               PLAY_W_PX + 24, PLAY_H_PX + 24);
+  // Cloth
+  ctx.fillStyle = '#0a6633';
+  ctx.fillRect(CANVAS_PAD, CANVAS_PAD, PLAY_W_PX, PLAY_H_PX);
+
+  // Baulk line
+  ctx.strokeStyle = 'rgba(220, 220, 200, 0.5)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(tx(BAULK_X), ty(0));
+  ctx.lineTo(tx(BAULK_X), ty(TABLE_H));
+  ctx.stroke();
+
+  // D
+  ctx.beginPath();
+  ctx.arc(tx(BAULK_X), ty(TABLE_H / 2), D_RADIUS * SCALE, Math.PI * 0.5, Math.PI * 1.5);
+  ctx.stroke();
+
+  // Spots (small dots)
+  ctx.fillStyle = 'rgba(220, 220, 200, 0.4)';
+  for (const k of ['yellow', 'green', 'brown', 'blue', 'pink', 'black']) {
+    ctx.beginPath();
+    ctx.arc(tx(SPOT[k].x), ty(SPOT[k].y), 2, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Pockets
+  ctx.fillStyle = '#000';
+  for (const p of POCKETS) {
+    ctx.beginPath();
+    ctx.arc(tx(p.x), ty(p.y), p.r * SCALE, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // Trails
+  if (trailMode !== 'off') {
+    for (const b of state.balls) {
+      if (trailMode === 'cue' && !b.isCue) continue;
+      if (b.trail.length < 2) continue;
+      ctx.strokeStyle = b.isCue ? 'rgba(255, 255, 255, 0.6)' : 'rgba(255, 200, 100, 0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(tx(b.trail[0].x), ty(b.trail[0].y));
+      for (let i = 1; i < b.trail.length; i++) {
+        ctx.lineTo(tx(b.trail[i].x), ty(b.trail[i].y));
+      }
+      ctx.stroke();
+    }
+  }
+
+  // Aim line (only when at rest and aim point is set)
+  if (!state.isAnimating && state.aim && state.cue.alive) {
+    const cue = state.cue;
+    const dx = state.aim.x - cue.x;
+    const dy = state.aim.y - cue.y;
+    const len = Math.hypot(dx, dy);
+    if (len > 1) {
+      const ux = dx / len, uy = dy / len;
+      ctx.strokeStyle = 'rgba(255, 176, 0, 0.7)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([6, 4]);
+      ctx.beginPath();
+      ctx.moveTo(tx(cue.x), ty(cue.y));
+      // Extend to first hit (ball or cushion)
+      const hit = raycastFromCue(cue, ux, uy, state.balls);
+      ctx.lineTo(tx(hit.x), ty(hit.y));
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Mark the aim point
+      ctx.fillStyle = 'rgba(255, 176, 0, 0.9)';
+      ctx.beginPath();
+      ctx.arc(tx(state.aim.x), ty(state.aim.y), 3, 0, Math.PI * 2);
+      ctx.fill();
+      // If hit is a ball, draw the contact ghost
+      if (hit.ball) {
+        ctx.strokeStyle = 'rgba(255, 176, 0, 0.5)';
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.arc(tx(hit.cueCenterX), ty(hit.cueCenterY), BALL_R * SCALE, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+  }
+
+  // Balls
+  for (const b of state.balls) {
+    if (!b.alive) continue;
+    ctx.fillStyle = b.color;
+    ctx.beginPath();
+    ctx.arc(tx(b.x), ty(b.y), BALL_R * SCALE, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    // Cue ball: draw spin indicator (small dot showing where the cue would strike)
+    if (b.isCue) {
+      ctx.strokeStyle = 'rgba(0,0,0,0.4)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(tx(b.x), ty(b.y), BALL_R * SCALE * 0.95, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  // Speed readout overlay (top-left of canvas)
+  if (state.isAnimating) {
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
+    ctx.fillRect(8, 8, 140, 24);
+    ctx.fillStyle = '#fff';
+    ctx.font = '12px monospace';
+    ctx.fillText('Cue: ' + (state.cue.alive ? state.cue.speed().toFixed(0) : '—') + ' mm/s', 14, 24);
+  }
+}
+
+function raycastFromCue(cue, ux, uy, balls) {
+  // Find first ball or cushion the cue ball would touch given direction (ux, uy).
+  // Cue ball center moves; we check ball-ball minimum distance and cushion intersections.
+  let minT = Infinity;
+  let hit = { x: cue.x + ux * 5000, y: cue.y + uy * 5000, ball: null };
+  // Cushions
+  if (Math.abs(ux) > 1e-9) {
+    const tLeft = (BALL_R - cue.x) / ux;
+    if (tLeft > 1 && tLeft < minT) { minT = tLeft; }
+    const tRight = (TABLE_W - BALL_R - cue.x) / ux;
+    if (tRight > 1 && tRight < minT) { minT = tRight; }
+  }
+  if (Math.abs(uy) > 1e-9) {
+    const tTop = (BALL_R - cue.y) / uy;
+    if (tTop > 1 && tTop < minT) { minT = tTop; }
+    const tBot = (TABLE_H - BALL_R - cue.y) / uy;
+    if (tBot > 1 && tBot < minT) { minT = tBot; }
+  }
+  // Cushion hit point (as fallback)
+  hit = { x: cue.x + ux * minT, y: cue.y + uy * minT, ball: null };
+
+  // Balls: solve |cue + t*u - b|² = (2R)² → quadratic
+  for (const b of balls) {
+    if (!b.alive || b.isCue) continue;
+    const dx = cue.x - b.x;
+    const dy = cue.y - b.y;
+    const A = ux * ux + uy * uy;       // = 1
+    const B = 2 * (ux * dx + uy * dy);
+    const C = dx * dx + dy * dy - (2 * BALL_R) * (2 * BALL_R);
+    const disc = B * B - 4 * A * C;
+    if (disc < 0) continue;
+    const sq = Math.sqrt(disc);
+    const t = (-B - sq) / (2 * A);
+    if (t > 1 && t < minT) {
+      minT = t;
+      const cx = cue.x + ux * t;
+      const cy = cue.y + uy * t;
+      hit = { x: b.x, y: b.y, ball: b, cueCenterX: cx, cueCenterY: cy };
+    }
+  }
+  return hit;
+}
+
+// ============================================================
+// SPIN PAD (UI for tip offset)
+// ============================================================
+const spinPad = document.getElementById('spinPad');
+const spinCtx = spinPad.getContext('2d');
+let tipOffset = { side: 0, top: 0 }; // -1..+1 each, magnitude bounded to 0.7
+
+function drawSpinPad() {
+  const w = spinPad.width, h = spinPad.height;
+  const cx = w / 2, cy = h / 2;
+  const R_outer = w * 0.45;
+  spinCtx.clearRect(0, 0, w, h);
+  // Outer ball
+  spinCtx.fillStyle = '#fafafa';
+  spinCtx.beginPath();
+  spinCtx.arc(cx, cy, R_outer, 0, Math.PI * 2);
+  spinCtx.fill();
+  // Center cross
+  spinCtx.strokeStyle = 'rgba(0,0,0,0.2)';
+  spinCtx.lineWidth = 1;
+  spinCtx.beginPath();
+  spinCtx.moveTo(cx - R_outer, cy);
+  spinCtx.lineTo(cx + R_outer, cy);
+  spinCtx.moveTo(cx, cy - R_outer);
+  spinCtx.lineTo(cx, cy + R_outer);
+  spinCtx.stroke();
+  // Miscue ring at 0.7r
+  spinCtx.strokeStyle = 'rgba(200, 0, 0, 0.4)';
+  spinCtx.beginPath();
+  spinCtx.arc(cx, cy, R_outer * 0.7, 0, Math.PI * 2);
+  spinCtx.stroke();
+  // Tip
+  const tipX = cx + tipOffset.side * R_outer;
+  const tipY = cy - tipOffset.top * R_outer; // negative because canvas y is down
+  spinCtx.fillStyle = '#3070d0';
+  spinCtx.beginPath();
+  spinCtx.arc(tipX, tipY, 5, 0, Math.PI * 2);
+  spinCtx.fill();
+  spinCtx.strokeStyle = '#fff';
+  spinCtx.lineWidth = 1;
+  spinCtx.stroke();
+}
+
+function setTipFromPad(px, py) {
+  const w = spinPad.width, h = spinPad.height;
+  const cx = w / 2, cy = h / 2;
+  const R_outer = w * 0.45;
+  let dx = (px - cx) / R_outer;
+  let dy = (cy - py) / R_outer; // flip y
+  const mag = Math.hypot(dx, dy);
+  // Clamp at 0.7 (miscue limit)
+  if (mag > 0.7) {
+    dx = dx * 0.7 / mag;
+    dy = dy * 0.7 / mag;
+  }
+  tipOffset.side = dx;
+  tipOffset.top = dy;
+  document.getElementById('spinTopVal').textContent = dy.toFixed(2);
+  document.getElementById('spinSideVal').textContent = dx.toFixed(2);
+  drawSpinPad();
+}
+
+let spinDragging = false;
+spinPad.addEventListener('mousedown', e => {
+  spinDragging = true;
+  const rect = spinPad.getBoundingClientRect();
+  setTipFromPad(e.clientX - rect.left, e.clientY - rect.top);
+});
+window.addEventListener('mousemove', e => {
+  if (!spinDragging) return;
+  const rect = spinPad.getBoundingClientRect();
+  setTipFromPad(e.clientX - rect.left, e.clientY - rect.top);
+});
+window.addEventListener('mouseup', () => { spinDragging = false; });
+
+// ============================================================
+// STATE & GAME LOOP
+// ============================================================
+const state = {
+  balls: [],
+  cue: null,
+  aim: null,         // { x, y } in mm — target point on table
+  isAnimating: false,
+};
+
+function resetRack() {
+  const r = buildRack();
+  state.balls = r.balls;
+  state.cue = r.cue;
+  state.aim = { x: SPOT.pink.x + 2 * BALL_R, y: SPOT.pink.y }; // default: through apex
+  state.isAnimating = false;
+}
+
+function clearTrails() {
+  for (const b of state.balls) b.trail = [];
+}
+
+function shoot() {
+  if (state.isAnimating || !state.aim || !state.cue.alive) return;
+  const dx = state.aim.x - state.cue.x;
+  const dy = state.aim.y - state.cue.y;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return;
+  const speed_mps = parseFloat(document.getElementById('speed').value);
+  const speed = speed_mps * 1000; // mm/s
+  strikeCue(state.cue, { x: dx / len, y: dy / len },
+            speed, tipOffset.side, tipOffset.top);
+  // Clear trails on shoot for clean trace
+  clearTrails();
+  state.isAnimating = true;
+}
+
+function tick() {
+  if (state.isAnimating) {
+    for (let i = 0; i < STEPS_PER_FRAME; i++) {
+      physicsStep(state.balls, DT);
+    }
+    // Update trails (sample less often than physics)
+    for (const b of state.balls) {
+      if (!b.alive) continue;
+      if (b.trail.length === 0 ||
+          Math.hypot(b.x - b.trail[b.trail.length - 1].x,
+                     b.y - b.trail[b.trail.length - 1].y) > 8) {
+        b.trail.push({ x: b.x, y: b.y });
+        if (b.trail.length > TRAIL_LEN) b.trail.shift();
+      }
+    }
+    // Check rest
+    let anyMoving = false;
+    for (const b of state.balls) {
+      if (b.alive && b.isMoving()) { anyMoving = true; break; }
+    }
+    if (!anyMoving) {
+      state.isAnimating = false;
+      // Snap to rest
+      for (const b of state.balls) {
+        if (!b.alive) continue;
+        b.vx = 0; b.vy = 0; b.wx = 0; b.wy = 0; b.wz = 0;
+      }
+    }
+  }
+  render(state);
+  requestAnimationFrame(tick);
+}
+
+// ============================================================
+// EVENT WIRING
+// ============================================================
+function canvasToTable(ev) {
+  const rect = canvas.getBoundingClientRect();
+  const cx = (ev.clientX - rect.left) * (canvas.width / rect.width);
+  const cy = (ev.clientY - rect.top) * (canvas.height / rect.height);
+  return {
+    x: (cx - CANVAS_PAD) / SCALE,
+    y: (cy - CANVAS_PAD) / SCALE,
+  };
+}
+
+canvas.addEventListener('click', ev => {
+  if (state.isAnimating) return;
+  const p = canvasToTable(ev);
+  if (p.x < 0 || p.x > TABLE_W || p.y < 0 || p.y > TABLE_H) return;
+  state.aim = p;
+});
+
+document.getElementById('speed').addEventListener('input', e => {
+  document.getElementById('speedVal').textContent =
+    parseFloat(e.target.value).toFixed(1);
+});
+
+document.getElementById('shoot').addEventListener('click', shoot);
+document.getElementById('reset').addEventListener('click', () => {
+  resetRack();
+});
+document.getElementById('clearTrails').addEventListener('click', clearTrails);
+
+document.getElementById('presetTraditional').addEventListener('click', () => {
+  if (state.isAnimating) return;
+  state.cue.x = CUE_START.x; state.cue.y = CUE_START.y;
+  state.cue.vx = 0; state.cue.vy = 0; state.cue.wx = 0; state.cue.wy = 0; state.cue.wz = 0;
+  // Traditional break: aim at the rearmost red on the cue's side (back-row corner,
+  // green side here). Cue ball travels along the green side of the rack, makes thin
+  // glancing contact in row 4, and rebounds toward baulk. Frank Callan-style.
+  const apexX = SPOT.pink.x + 2 * BALL_R + 0.5;
+  const rowDx = Math.sqrt(3) * BALL_R + 0.3;
+  const colDy = 2 * BALL_R + 0.3;
+  state.aim = { x: apexX + 4 * rowDx, y: SPOT.pink.y + 2 * colDy };
+  // Backspin + right-hand sidespin: holds cue ball back, controls cushion rebound
+  tipOffset = { side: 0.4, top: -0.4 };
+  document.getElementById('spinTopVal').textContent = '-0.40';
+  document.getElementById('spinSideVal').textContent = '0.40';
+  drawSpinPad();
+});
+
+document.getElementById('presetMurphy').addEventListener('click', () => {
+  if (state.isAnimating) return;
+  state.cue.x = CUE_START.x; state.cue.y = CUE_START.y;
+  state.cue.vx = 0; state.cue.vy = 0; state.cue.wx = 0; state.cue.wy = 0; state.cue.wz = 0;
+  // Murphy's third-red strike: counting along the cue-side line of balls
+  //   1 = apex, 2 = row-2 cue side, 3 = row-3 cue side corner, ... 5 = back corner
+  // Murphy aims at #3 — "higher up the rack" (closer to the apex) than traditional.
+  // The cue ball clips row-2 thinly and makes deeper contact with row-3, channeling
+  // energy into the pack rather than glancing off the side.
+  const apexX = SPOT.pink.x + 2 * BALL_R + 0.5;
+  const rowDx = Math.sqrt(3) * BALL_R + 0.3;
+  const colDy = 2 * BALL_R + 0.3;
+  state.aim = { x: apexX + 2 * rowDx, y: SPOT.pink.y + colDy };
+  // Light backspin, no side: the goal is energy transfer, not cue-ball control
+  tipOffset = { side: 0, top: -0.1 };
+  document.getElementById('spinTopVal').textContent = '-0.10';
+  document.getElementById('spinSideVal').textContent = '0.00';
+  drawSpinPad();
+});
+
+// Trails toggle
+const trailsToggle = document.getElementById('trailsToggle');
+trailsToggle.addEventListener('click', e => {
+  if (e.target.tagName !== 'BUTTON') return;
+  for (const btn of trailsToggle.children) btn.classList.remove('active');
+  e.target.classList.add('active');
+  trailMode = e.target.dataset.val;
+});
+
+window.addEventListener('keydown', ev => {
+  if (ev.code === 'Space') {
+    ev.preventDefault();
+    shoot();
+  } else if (ev.code === 'KeyR') {
+    resetRack();
+  } else if (ev.code === 'KeyC') {
+    clearTrails();
+  }
+});
+
+// Initial setup
+resetRack();
+drawSpinPad();
+tick();
+</script>
+</body>
+</html>
