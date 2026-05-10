@@ -561,16 +561,24 @@ function strikeCue(cue, dir, speed, tipOffsetSide, tipOffsetTopBack) {
 // ============================================================
 const canvas = document.getElementById('table');
 const ctx = canvas.getContext('2d');
-// Display scale: canvas is 1428×711 pixels, table is 3569×1778 mm
-// Scale = 1428/3569 ≈ 0.4
-const CANVAS_PAD = 60; // pixels of cushion+rail margin on canvas
-const PLAY_W_PX = canvas.width - 2 * CANVAS_PAD;
-const PLAY_H_PX = canvas.height - 2 * CANVAS_PAD;
-const SCALE = Math.min(PLAY_W_PX / TABLE_W, PLAY_H_PX / TABLE_H);
+// Fit the playing surface in the canvas, preserving aspect ratio.
+// SCALE is set by whichever dimension is tighter; the cloth is then drawn
+// at exactly SCALE * TABLE_W × SCALE * TABLE_H so corner pockets land at
+// the cloth corners — not at a canvas-padded box that may be wider.
+const RAIL_MARGIN_PX = 60;
+const SCALE = Math.min(
+  (canvas.width  - 2 * RAIL_MARGIN_PX) / TABLE_W,
+  (canvas.height - 2 * RAIL_MARGIN_PX) / TABLE_H,
+);
+const PLAY_W_PX = SCALE * TABLE_W;
+const PLAY_H_PX = SCALE * TABLE_H;
+const ORIGIN_X  = (canvas.width  - PLAY_W_PX) / 2;
+const ORIGIN_Y  = (canvas.height - PLAY_H_PX) / 2;
+const CUSHION_PX = 12;
 
 // Convert table mm → canvas px
-function tx(x) { return CANVAS_PAD + x * SCALE; }
-function ty(y) { return CANVAS_PAD + y * SCALE; }
+function tx(x) { return ORIGIN_X + x * SCALE; }
+function ty(y) { return ORIGIN_Y + y * SCALE; }
 
 let trailMode = 'cue'; // 'off' | 'cue' | 'all'
 
@@ -579,13 +587,13 @@ function render(state) {
   // Rails / outer
   ctx.fillStyle = '#3a2a14';
   ctx.fillRect(0, 0, w, h);
-  // Cushions (slightly inset)
+  // Cushions: a strip framing the cloth at the actual play surface size
   ctx.fillStyle = '#5a3a1a';
-  ctx.fillRect(CANVAS_PAD - 12, CANVAS_PAD - 12,
-               PLAY_W_PX + 24, PLAY_H_PX + 24);
+  ctx.fillRect(ORIGIN_X - CUSHION_PX, ORIGIN_Y - CUSHION_PX,
+               PLAY_W_PX + 2 * CUSHION_PX, PLAY_H_PX + 2 * CUSHION_PX);
   // Cloth
   ctx.fillStyle = '#0a6633';
-  ctx.fillRect(CANVAS_PAD, CANVAS_PAD, PLAY_W_PX, PLAY_H_PX);
+  ctx.fillRect(ORIGIN_X, ORIGIN_Y, PLAY_W_PX, PLAY_H_PX);
 
   // Baulk line
   ctx.strokeStyle = 'rgba(220, 220, 200, 0.5)';
@@ -824,11 +832,34 @@ const state = {
   isAnimating: false,
 };
 
+// Aim helpers — keep preset logic in one place so resetRack and the buttons agree
+const APEX_X = () => SPOT.pink.x + 2 * BALL_R + 0.5;
+const ROW_DX = Math.sqrt(3) * BALL_R + 0.3;
+const COL_DY = 2 * BALL_R + 0.3;
+
+function aimTraditional() {
+  // Rearmost red on the cue's side: back-row corner (row=4, green-side col).
+  return { x: APEX_X() + 4 * ROW_DX, y: SPOT.pink.y + 2 * COL_DY };
+}
+function aimMurphy() {
+  // Third red along the cue-side line: row-3 cue-side corner.
+  return { x: APEX_X() + 2 * ROW_DX, y: SPOT.pink.y + COL_DY };
+}
+function setSpin(side, top) {
+  tipOffset = { side, top };
+  document.getElementById('spinTopVal').textContent = top.toFixed(2);
+  document.getElementById('spinSideVal').textContent = side.toFixed(2);
+  drawSpinPad();
+}
+
 function resetRack() {
   const r = buildRack();
   state.balls = r.balls;
   state.cue = r.cue;
-  state.aim = { x: SPOT.pink.x + 2 * BALL_R, y: SPOT.pink.y }; // default: through apex
+  // Page-load default is the traditional break — that's what users expect
+  // a "snooker break simulator" to show on first paint.
+  state.aim = aimTraditional();
+  setSpin(0.4, -0.4);
   state.isAnimating = false;
 }
 
@@ -892,8 +923,8 @@ function canvasToTable(ev) {
   const cx = (ev.clientX - rect.left) * (canvas.width / rect.width);
   const cy = (ev.clientY - rect.top) * (canvas.height / rect.height);
   return {
-    x: (cx - CANVAS_PAD) / SCALE,
-    y: (cy - CANVAS_PAD) / SCALE,
+    x: (cx - ORIGIN_X) / SCALE,
+    y: (cy - ORIGIN_Y) / SCALE,
   };
 }
 
@@ -915,42 +946,24 @@ document.getElementById('reset').addEventListener('click', () => {
 });
 document.getElementById('clearTrails').addEventListener('click', clearTrails);
 
+function placeCueAtStart() {
+  state.cue.x = CUE_START.x; state.cue.y = CUE_START.y;
+  state.cue.vx = 0; state.cue.vy = 0;
+  state.cue.wx = 0; state.cue.wy = 0; state.cue.wz = 0;
+}
+
 document.getElementById('presetTraditional').addEventListener('click', () => {
   if (state.isAnimating) return;
-  state.cue.x = CUE_START.x; state.cue.y = CUE_START.y;
-  state.cue.vx = 0; state.cue.vy = 0; state.cue.wx = 0; state.cue.wy = 0; state.cue.wz = 0;
-  // Traditional break: aim at the rearmost red on the cue's side (back-row corner,
-  // green side here). Cue ball travels along the green side of the rack, makes thin
-  // glancing contact in row 4, and rebounds toward baulk. Frank Callan-style.
-  const apexX = SPOT.pink.x + 2 * BALL_R + 0.5;
-  const rowDx = Math.sqrt(3) * BALL_R + 0.3;
-  const colDy = 2 * BALL_R + 0.3;
-  state.aim = { x: apexX + 4 * rowDx, y: SPOT.pink.y + 2 * colDy };
-  // Backspin + right-hand sidespin: holds cue ball back, controls cushion rebound
-  tipOffset = { side: 0.4, top: -0.4 };
-  document.getElementById('spinTopVal').textContent = '-0.40';
-  document.getElementById('spinSideVal').textContent = '0.40';
-  drawSpinPad();
+  placeCueAtStart();
+  state.aim = aimTraditional();
+  setSpin(0.4, -0.4);
 });
 
 document.getElementById('presetMurphy').addEventListener('click', () => {
   if (state.isAnimating) return;
-  state.cue.x = CUE_START.x; state.cue.y = CUE_START.y;
-  state.cue.vx = 0; state.cue.vy = 0; state.cue.wx = 0; state.cue.wy = 0; state.cue.wz = 0;
-  // Murphy's third-red strike: counting along the cue-side line of balls
-  //   1 = apex, 2 = row-2 cue side, 3 = row-3 cue side corner, ... 5 = back corner
-  // Murphy aims at #3 — "higher up the rack" (closer to the apex) than traditional.
-  // The cue ball clips row-2 thinly and makes deeper contact with row-3, channeling
-  // energy into the pack rather than glancing off the side.
-  const apexX = SPOT.pink.x + 2 * BALL_R + 0.5;
-  const rowDx = Math.sqrt(3) * BALL_R + 0.3;
-  const colDy = 2 * BALL_R + 0.3;
-  state.aim = { x: apexX + 2 * rowDx, y: SPOT.pink.y + colDy };
-  // Light backspin, no side: the goal is energy transfer, not cue-ball control
-  tipOffset = { side: 0, top: -0.1 };
-  document.getElementById('spinTopVal').textContent = '-0.10';
-  document.getElementById('spinSideVal').textContent = '0.00';
-  drawSpinPad();
+  placeCueAtStart();
+  state.aim = aimMurphy();
+  setSpin(0, -0.1);
 });
 
 // Trails toggle
