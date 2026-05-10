@@ -17,7 +17,7 @@
 - **index.html**
 - **poetry-playground.html** — exports: `ParticleCanvas, animate, handleResize, TypographyControls, PoetryDisplay, renderWord, App, regeneratePoem` — imports: `preact, signals, hooks, preact`
 - **shader.html** — exports: `App, resize, handleWheel, animate` — imports: `preact, hooks, preact`
-- **snooker-break.html** — exports (17): `physicsStep, inPocketJaw, collideBalls, buildRack, rackBallByGridIndex, strikeCue, tx, ty`...
+- **snooker-break.html** — exports (22): `physicsStep, inPocketJaw, collideBalls, buildRack, rackBallByGridIndex, strikeCue, tx, ty`...
 - **speedo.html** — exports: `toMph, updateDisplay, handlePosition, handleError, startTracking, requestWakeLock, enableNoSleepAudio, disableNoSleepAudio`
 - **strudel-composer.html**
 - **unicorn-spotter.html** — exports: `initApp`
