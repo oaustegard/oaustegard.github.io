@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="ai-disclosure" content="ai-assisted">
+
+    <title>A jj-Native Hub for Claude Code on the Web</title>
+    <meta name="description" content="claude-jjithub-and-spoke is a CCotw template that gives Claude a jj (Jujutsu) VCS layer over GitHub — sibling of the gh-flavored and Tangled-flavored hubs.">
+    <meta name="article:published_time" content="2026-05-15T00:00:00Z">
+    <meta name="article:author" content="Oskar Austegard">
+
+    <meta property="og:title" content="A jj-Native Hub for Claude Code on the Web">
+    <meta property="og:description" content="claude-jjithub-and-spoke is a CCotw template that gives Claude a jj (Jujutsu) VCS layer over GitHub — sibling of the gh-flavored and Tangled-flavored hubs.">
+    <meta property="og:type" content="article">
+
+    <!-- bsky:uri added after posting to Bluesky -->
+
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="stylesheet" href="/styles/style.css">
+    <link rel="stylesheet" href="/styles/blog.css">
+    <link rel="alternate" type="application/atom+xml" title="Oskar Austegard" href="/feed.xml">
+
+    <style>
+        .template-table { border-collapse: collapse; margin: 1.2em 0; font-size: 0.92em; }
+        .template-table th, .template-table td { padding: 0.5em 0.9em; border-bottom: 1px solid var(--rule, #d5cfc3); vertical-align: top; }
+        .template-table th { text-align: left; font-weight: 600; }
+        .template-table td:first-child { font-family: monospace; font-size: 0.95em; white-space: nowrap; }
+        @media (prefers-color-scheme: dark) {
+            .template-table th, .template-table td { border-color: var(--rule, #333); }
+        }
+    </style>
+</head>
+<body>
+    <a href="/blog/" class="back-link">Blog</a>
+    <article>
+
+<h1>A jj-Native Hub for Claude Code on the Web</h1>
+<p class="post-meta">May 15, 2026 &middot; Oskar Austegard</p>
+
+<p>There's now a third hub template for Claude Code on the Web: <a href="https://github.com/oaustegard/claude-jjithub-and-spoke"><code>claude-jjithub-and-spoke</code></a>. It boots a CCotw session with <a href="https://jj-vcs.github.io/jj/"><code>jj</code> (Jujutsu)</a> installed, an identity seeded from your GitHub PAT, and a git credential helper wired up so that <code>jj git clone</code> and <code>jj git push</code> work against any of your GitHub repos — without the token landing in URLs or in <code>.git/config</code>.</p>
+
+<p>It's a sibling of two earlier templates that follow the same shape from the <a href="/blog/hub-spoke-and-raven.html">hub-and-spoke post</a>:</p>
+
+<ul>
+<li><a href="https://github.com/oaustegard/claude-github-and-spoke"><code>claude-github-and-spoke</code></a> — GitHub forge, plain <code>git</code>, <code>gh</code> CLI, GitHub PRs opened from the command line.</li>
+<li><a href="https://github.com/oaustegard/claude-tangled-spoke"><code>claude-tangled-spoke</code></a> — <a href="https://tangled.org">Tangled</a> forge, plain <code>git</code>, custom <code>tg</code> CLI, patch-based PRs over ATProto.</li>
+<li><strong><code>claude-jjithub-and-spoke</code></strong> — GitHub forge, <code>jj</code> VCS, no PR CLI by design, a small stdlib <code>ghi</code> for the issues surface.</li>
+</ul>
+
+<p>Each template pairs a forge with a VCS and whatever CLI fits the forge's collaboration model. The new one is the <code>jj</code>-shaped variant of the first.</p>
+
+<h2>Why no <code>gh pr create</code></h2>
+
+<p>jj's GitHub story is opinionated. There is no <code>jj pr create</code> verb, and that's deliberate — not a TODO. The model is that <a href="https://jj-vcs.github.io/jj/latest/bookmarks/">bookmarks</a> are the named refs a PR points at, so the prescribed loop is: push a bookmark, open the PR in the GitHub web UI, merge there, then <code>jj git fetch</code> to advance trunk locally. The CLI's job ends at the push.</p>
+
+<p>The agent's loop on a spoke looks like this:</p>
+
+<pre><code>jj git clone https://github.com/owner/repo .spokes/repo
+cd .spokes/repo
+jj new main
+# … edit …
+jj describe -m "fix: handle empty input"
+jj bookmark create feature-x -r @
+jj git push --bookmark feature-x
+echo "Review: https://github.com/owner/repo/compare/main...feature-x"
+</code></pre>
+
+<p>Claude stops at that <code>echo</code>. You click the compare URL, GitHub turns it into a PR draft, you review, you merge. Back on the spoke, <code>jj git fetch</code> advances local <code>main</code> to the merged tip.</p>
+
+<p>An earlier draft of the template's <code>CLAUDE.md</code> called the hub "PR-free." That was wrong, and it got <a href="https://github.com/oaustegard/claude-jjithub-and-spoke/pull/5">corrected</a> the same day: these are still PRs, opened and merged in GitHub like any other. The constraint is that the <em>agent</em> doesn't open the PR, and there's no <code>gh</code> in the container to tempt it. If you want Claude to drive the PR end-to-end, use <code>claude-github-and-spoke</code>. This template trades that for jj's working-copy ergonomics and <code>jj op log</code> — an operation log that makes "undo whatever you just did" a single command, which is the recovery primitive that earns jj its keep in an agent context.</p>
+
+<h2>What's in the template</h2>
+
+<table class="template-table">
+<thead><tr><th>File</th><th>Purpose</th></tr></thead>
+<tbody>
+<tr><td>boot.sh</td><td>Installs <code>jj</code> from the upstream tarball, writes <code>~/.config/jj/config.toml</code>, wires the git credential helper</td></tr>
+<tr><td>.claude/settings.json</td><td>SessionStart hook + denies the built-in GitHub MCP server (it only sees the hub repo and duplicates a <code>jj</code>-shaped workflow anyway)</td></tr>
+<tr><td>bin/ghi</td><td>Stdlib (no external deps) CLI for GitHub Issues — list, view, create, comment, close. The issues surface the no-<code>gh</code> rule otherwise leaves on the floor</td></tr>
+<tr><td>skills/jj/SKILL.md</td><td>jj mental model, command reference, recovery primitives — loaded into the session</td></tr>
+<tr><td>CLAUDE.md</td><td>Agent-facing recipes and the compare-URL hand-off, plus the <code>.spokes/</code> clone-path constraint that keeps the commit-signing helper happy</td></tr>
+</tbody>
+</table>
+
+<p>The naming, since several people have asked: <em>jjithub</em> = <code>jj</code> (the binary name) + <em>jit</em> (audible middle of <em>jiu-jitsu</em>) + <em>hub</em> (the architecture word). Three-layer fold mirroring <em>github = git + hub</em>, with the doubled <em>j</em> as a nod to <code>jj-vcs</code>.</p>
+
+<h2>Quick start</h2>
+
+<p>Click the green <strong>Use this template → Create a new repository</strong> button on the <a href="https://github.com/oaustegard/claude-jjithub-and-spoke">repo page</a>, drop a <code>GH_TOKEN</code> into <code>.env</code> (<code>repo</code> scope is enough), then open your new repo in Claude Code on the Web. The SessionStart hook does the rest.</p>
+
+    </article>
+
+    <!-- Bluesky engagement widget -->
+    <div class="bsky-section">
+        <div id="bsky-engagement"
+             data-bsky-sort="likes"
+             data-bsky-theme="auto">
+        </div>
+        <noscript>
+            <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
+        </noscript>
+    </div>
+    <script>
+    (function() {
+        var m = document.querySelector('meta[name="bsky\\:uri"]');
+        if (m && m.content && !m.content.includes('...'))
+            document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
+    })();
+    </script>
+    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</body>
+</html>
