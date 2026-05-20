@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <meta name="ai-disclosure" content="ai-assisted">
-<title>Bluesky Post Image Show</title>
+<title>Bluesky Image Show</title>
 <style>
   :root {
     --kb-duration: 11s;
@@ -368,10 +368,10 @@
   </div>
 
   <div class="input-form" id="inputForm" style="display:none">
-    <h1>Bluesky Post Image Show</h1>
-    <p>Paste a Bluesky post URL to start a slideshow of every image in its expanded conversation graph.</p>
+    <h1>Bluesky Image Show</h1>
+    <p>Paste any Bluesky source — a post, a profile, a feed, a list, or a search — and watch every image play as a slideshow.</p>
     <div class="row">
-      <input id="urlInput" type="text" placeholder="https://bsky.app/profile/.../post/..." />
+      <input id="urlInput" type="text" placeholder="Bluesky URL, @handle, #hashtag, or search" />
       <button id="goBtn">Go</button>
     </div>
   </div>
@@ -383,6 +383,9 @@ import {
   fetchAllQuotePosts, fetchPost, getQuotedUri,
   postUrl, timeAgo
 } from './bsky-graph.js';
+
+// Public Bluesky AppView — feed / profile / list / search endpoints used directly.
+const API = 'https://public.api.bsky.app/xrpc/';
 
 // ── Image extraction ───────────────────────────────────────────────────────
 function getImagesFromPost(post) {
@@ -499,6 +502,109 @@ async function expandFully(seedUri, onProgress) {
   return [...allPosts.values()];
 }
 
+// ── Source classification ──────────────────────────────────────────────────
+// The image show accepts any Bluesky collection, not just a post thread.
+// classifySource maps a raw URL / handle / query to one of five source kinds:
+//   thread  → a post and its expanded conversation graph (the original mode)
+//   profile → a user's posts (media-only author feed)
+//   feed    → a custom feed generator
+//   list    → a curated list's post feed
+//   search  → a search query or hashtag
+async function resolveHandle(handle) {
+  handle = handle.trim().replace(/^@/, '');
+  if (handle.startsWith('did:')) return handle;
+  const r = await fetch(API + 'com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(handle));
+  if (!r.ok) throw new Error('Could not resolve handle: ' + handle);
+  return (await r.json()).did;
+}
+
+async function classifySource(raw) {
+  raw = (raw || '').trim();
+  if (!raw) throw new Error('Enter a Bluesky URL, handle, or search');
+
+  if (raw.startsWith('at://')) {
+    if (raw.includes('/app.bsky.feed.post/'))      return { kind: 'thread', seed: raw };
+    if (raw.includes('/app.bsky.feed.generator/')) return { kind: 'feed',   uri: raw };
+    if (raw.includes('/app.bsky.graph.list/'))     return { kind: 'list',   uri: raw };
+    throw new Error('Unsupported at:// collection');
+  }
+
+  const m = raw.match(/bsky\.app\/(.+)$/);
+  if (m) {
+    const path = m[1];
+    let g;
+    if (path.match(/^profile\/[^/]+\/post\/[^/?#]+/))
+      return { kind: 'thread', seed: raw };
+    if (g = path.match(/^profile\/([^/]+)\/feed\/([^/?#]+)/))
+      return { kind: 'feed', uri: `at://${await resolveHandle(g[1])}/app.bsky.feed.generator/${g[2]}` };
+    if (g = path.match(/^profile\/([^/]+)\/lists\/([^/?#]+)/))
+      return { kind: 'list', uri: `at://${await resolveHandle(g[1])}/app.bsky.graph.list/${g[2]}` };
+    if (g = path.match(/^search\?.*\bq=([^&]+)/))
+      return { kind: 'search', query: decodeURIComponent(g[1].replace(/\+/g, ' ')) };
+    if (g = path.match(/^hashtag\/([^/?#]+)/))
+      return { kind: 'search', query: '#' + decodeURIComponent(g[1]) };
+    if (g = path.match(/^profile\/([^/?#]+)\/?$/))
+      return { kind: 'profile', actor: decodeURIComponent(g[1]) };
+    throw new Error('Unrecognized bsky.app URL');
+  }
+
+  if (/^#\S+$/.test(raw))           return { kind: 'search', query: raw };
+  if (/^did:[a-z]+:.+/i.test(raw))  return { kind: 'profile', actor: raw };
+  if (/^@?[\w.-]+\.\w+$/.test(raw)) return { kind: 'profile', actor: raw.replace(/^@/, '') };
+  return { kind: 'search', query: raw };  // free text → search
+}
+
+// ── Post streams ────────────────────────────────────────────────────────────
+// A stream exposes async next() → { posts, done }. Feed-style sources fetch one
+// paginated API page per call so images load lazily as the show advances; the
+// thread source runs the whole graph walk once and returns done.
+const STREAM_LABEL = {
+  thread: 'conversation graph', profile: 'profile posts',
+  feed: 'feed', list: 'list', search: 'search results',
+};
+
+function makeFeedStream({ endpoint, params, itemsKey }) {
+  let cursor = null, page = 0, exhausted = false;
+  return async function next() {
+    if (exhausted) return { posts: [], done: true };
+    const qs = new URLSearchParams({ ...params, limit: '100' });
+    if (cursor) qs.set('cursor', cursor);
+    const r = await fetch(API + endpoint + '?' + qs);
+    if (!r.ok) throw new Error(`Fetch failed (${r.status}) — the source may be private or unavailable`);
+    const data = await r.json();
+    // getFeed/getAuthorFeed/getListFeed wrap posts in feedViewPost; searchPosts is flat.
+    const posts = (data[itemsKey] || []).map(it => it.post || it).filter(Boolean);
+    cursor = data.cursor || null;
+    if (++page >= MAX_PAGES || !cursor || posts.length === 0) exhausted = true;
+    return { posts, done: exhausted };
+  };
+}
+
+function makeStream(source) {
+  if (source.kind === 'thread') {
+    let done = false;
+    return {
+      shuffle: true,           // a conversation graph has no natural order
+      crossNav: source.seed,   // post URL — enables the constellation/thread nav
+      async next(onProgress) {
+        if (done) return { posts: [], done: true };
+        done = true;
+        const atUri = await resolveToAtUri(source.seed);
+        const posts = await expandFully(atUri, onProgress || (() => {}));
+        return { posts, done: true };
+      },
+    };
+  }
+  const cfg = {
+    profile: { endpoint: 'app.bsky.feed.getAuthorFeed', params: { actor: source.actor, filter: 'posts_with_media' }, itemsKey: 'feed' },
+    feed:    { endpoint: 'app.bsky.feed.getFeed',       params: { feed: source.uri }, itemsKey: 'feed' },
+    list:    { endpoint: 'app.bsky.feed.getListFeed',   params: { list: source.uri }, itemsKey: 'feed' },
+    search:  { endpoint: 'app.bsky.feed.searchPosts',   params: { q: source.query }, itemsKey: 'posts' },
+  }[source.kind];
+  if (!cfg) throw new Error('Unsupported source: ' + source.kind);
+  return { shuffle: false, crossNav: null, next: makeFeedStream(cfg) };
+}
+
 // ── Aspect-aware sizing ────────────────────────────────────────────────────
 // When image and viewport aspect ratios differ by more than ~1.5×,
 // fall back to 'contain' (with a black letterbox/pillarbox) so portrait
@@ -537,6 +643,17 @@ let paused = false;
 let hoveringCaption = false;
 const SLIDE_DURATION = 7500; // ms
 let preloadCache = new Map();
+
+// ── Lazy-loading stream state ──────────────────────────────────────────────
+const INITIAL_IMAGES = 5;   // images to gather before the show starts
+const PRELOAD_AHEAD  = 5;   // images to preload ahead of the current slide
+const REFILL_AHEAD   = 12;  // refill the stream when within this many of the end
+const MAX_PAGES      = 40;  // hard cap on paginated fetches per source
+
+let stream = null;          // active post stream (see makeStream)
+let streamDone = false;     // true once the source is fully consumed
+let fetching = false;       // guards against overlapping refills
+const seenImages = new Set(); // dedupe by image URL across pages
 
 // ── Slide rendering with Ken Burns ─────────────────────────────────────────
 function randTransform(intensity = 1) {
@@ -589,11 +706,14 @@ async function showSlide(slide, { skipPreload = false } = {}) {
   setCaption(slide);
   updateCounter();
 
-  // Preload neighbors
-  const ahead = slides[(index + 1) % slides.length];
-  const back  = slides[(index - 1 + slides.length) % slides.length];
-  if (ahead) preloadImage(ahead.image.fullsize);
-  if (back)  preloadImage(back.image.fullsize);
+  // Preload a window of upcoming images (and the one behind), so navigation
+  // stays instant even while later pages are still streaming in.
+  for (let k = 1; k <= PRELOAD_AHEAD; k++) {
+    const s = slides[(index + k) % slides.length];
+    if (s) preloadImage(s.image.fullsize);
+  }
+  const back = slides[(index - 1 + slides.length) % slides.length];
+  if (back) preloadImage(back.image.fullsize);
 }
 
 function setCaption(slide) {
@@ -624,7 +744,8 @@ function setCaption(slide) {
 }
 
 function updateCounter() {
-  counterEl.textContent = `${index + 1} / ${slides.length}`;
+  // Trailing "+" while the source is still streaming — total isn't final yet.
+  counterEl.textContent = `${index + 1} / ${slides.length}${streamDone ? '' : '+'}`;
 }
 
 // ── Navigation ────────────────────────────────────────────────────────────
@@ -633,6 +754,8 @@ function goTo(newIndex) {
   index = ((newIndex % slides.length) + slides.length) % slides.length;
   showSlide(slides[index]);
   resetTimer();
+  // Pull more posts when the viewer nears the end of what's loaded.
+  if (!streamDone && slides.length - index <= REFILL_AHEAD) ensureBuffer();
 }
 function next() { goTo(index + 1); }
 function prev() { goTo(index - 1); }
@@ -792,7 +915,7 @@ function showError(msg) {
   loadingEl.classList.add('hide');
   const div = document.createElement('div');
   div.className = 'error';
-  div.innerHTML = `<div>${msg}</div><div style="font-size:11px;opacity:0.6;letter-spacing:0.15em;text-transform:uppercase">add ?url=&lt;bsky post url&gt; to retry</div>`;
+  div.innerHTML = `<div>${msg}</div><div style="font-size:11px;opacity:0.6;letter-spacing:0.15em;text-transform:uppercase">add ?url=&lt;bsky url&gt; to retry</div>`;
   document.body.appendChild(div);
 }
 
@@ -804,49 +927,80 @@ function shuffle(arr) {
   return arr;
 }
 
-async function boot(seedUrl) {
-  try {
-    progressEl.textContent = 'resolving handle…';
-    const atUri = await resolveToAtUri(seedUrl);
-
-    // Wire up the cross-mode nav icons (preserves the original ?url= for sharing)
-    const enc = encodeURIComponent(seedUrl);
-    document.getElementById('navConstellation').href = `post-constellation-graph?url=${enc}`;
-    document.getElementById('navThread').href = `thread-reader?url=${enc}`;
-    document.getElementById('navModes').classList.remove('hidden');
-
-    const allPosts = await expandFully(atUri, (status) => {
-      const n = status.n || 0;
-      const c = status.calls || 0;
-      if (status.phase === 'thread') {
-        progressEl.textContent = 'fetching thread…';
-      } else if (status.phase === 'quotes') {
-        progressEl.textContent = `${n} posts · ${c} calls · expanding quotes`;
-      } else if (status.phase === 'replies') {
-        progressEl.textContent = `${n} posts · ${c} calls · finding reply branches`;
-      } else if (status.phase === 'quoted') {
-        progressEl.textContent = `${n} posts · ${c} calls · walking quote chains`;
-      } else if (status.phase === 'done') {
-        progressEl.textContent = `${n} posts · ${c} calls · filtering for images`;
-      }
-    });
-
-    progressEl.textContent = `${allPosts.length} posts · filtering for images`;
-
-    // Build slides: one per image, in random order
-    const built = [];
-    for (const post of allPosts) {
-      for (const img of getImagesFromPost(post)) {
-        if (img.fullsize) built.push({ post, image: img });
+// ── Lazy stream consumption ─────────────────────────────────────────────────
+// pullPage fetches one page from the active stream and appends a slide for
+// every new image; ensureBuffer keeps a comfortable margin loaded ahead of the
+// current slide so navigation stays instant while later pages stream in.
+async function pullPage(onProgress) {
+  if (streamDone || !stream) return 0;
+  const { posts, done } = await stream.next(onProgress);
+  if (done) streamDone = true;
+  let added = 0;
+  for (const post of posts) {
+    for (const img of getImagesFromPost(post)) {
+      if (img.fullsize && !seenImages.has(img.fullsize)) {
+        seenImages.add(img.fullsize);
+        slides.push({ post, image: img });
+        added++;
       }
     }
+  }
+  if (slides.length) updateCounter();
+  return added;
+}
 
-    if (built.length === 0) {
-      showError('No images found in the expanded conversation graph.');
+async function ensureBuffer() {
+  if (fetching || streamDone) return;
+  fetching = true;
+  try {
+    while (!streamDone && slides.length - index < REFILL_AHEAD * 3) {
+      await pullPage();
+    }
+  } catch (err) {
+    console.error('stream refill failed:', err);
+    streamDone = true;  // stop trying; the viewer keeps whatever loaded
+    updateCounter();
+  } finally {
+    fetching = false;
+  }
+}
+
+async function boot(seedUrl) {
+  try {
+    progressEl.textContent = 'classifying source…';
+    const source = await classifySource(seedUrl);
+    stream = makeStream(source);
+    const label = STREAM_LABEL[source.kind] || 'posts';
+
+    // Cross-mode nav (constellation / thread) only applies to a post thread.
+    if (stream.crossNav) {
+      const enc = encodeURIComponent(stream.crossNav);
+      document.getElementById('navConstellation').href = `post-constellation-graph?url=${enc}`;
+      document.getElementById('navThread').href = `thread-reader?url=${enc}`;
+      document.getElementById('navModes').classList.remove('hidden');
+    }
+
+    // Initial fill — gather a first batch of images before starting the show.
+    progressEl.textContent = `reading ${label}…`;
+    while (slides.length < INITIAL_IMAGES && !streamDone) {
+      await pullPage((status) => {
+        const n = status?.n || 0, c = status?.calls || 0;
+        if (status?.phase === 'thread')       progressEl.textContent = 'fetching thread…';
+        else if (status?.phase === 'quotes')  progressEl.textContent = `${n} posts · ${c} calls · expanding quotes`;
+        else if (status?.phase === 'replies') progressEl.textContent = `${n} posts · ${c} calls · finding reply branches`;
+        else if (status?.phase === 'quoted')  progressEl.textContent = `${n} posts · ${c} calls · walking quote chains`;
+      });
+      if (slides.length) progressEl.textContent = `${slides.length} images · ${label}`;
+    }
+
+    if (slides.length === 0) {
+      showError(`No images found in this ${label}.`);
       return;
     }
 
-    slides = shuffle(built);
+    // A conversation graph has no natural order, so shuffle it; feed-style
+    // sources keep their original (chronological / relevance) order.
+    if (stream.shuffle) shuffle(slides);
     index = 0;
 
     // Hide loading and start
@@ -857,6 +1011,8 @@ async function boot(seedUrl) {
     await showSlide(slides[0]);
     resetTimer();
     tick();
+
+    ensureBuffer();  // keep loading the rest of the source in the background
 
   } catch (err) {
     console.error(err);
