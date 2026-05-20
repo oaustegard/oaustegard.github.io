@@ -1,5 +1,5 @@
 # blog/
-*Files: 46 | Subdirectories: 1*
+*Files: 47 | Subdirectories: 1*
 
 ## Subdirectories
 
@@ -8,6 +8,7 @@
 ## Files
 
 - **_template.html** — imports: `bsky-engagement.js`
+- **a-jj-native-hub-for-claude-code-on-the-web.html** — imports: `bsky-engagement.js`
 - **a-productive-evening-against-a-bleak-backdrop.html**
 - **a-technical-biography-part-i-from-dulles-to-929-memories.html**
 - **anthropic-platform-wishlist.html**
