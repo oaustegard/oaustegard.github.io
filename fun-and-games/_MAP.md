@@ -1,5 +1,5 @@
 # fun-and-games/
-*Files: 19*
+*Files: 20*
 
 ## Files
 
@@ -20,5 +20,6 @@
 - **snooker-break.html** — exports (22): `physicsStep, inPocketJaw, collideBalls, buildRack, rackBallByGridIndex, strikeCue, tx, ty`...
 - **speedo.html** — exports: `toMph, updateDisplay, handlePosition, handleError, startTracking, requestWakeLock, enableNoSleepAudio, disableNoSleepAudio`
 - **strudel-composer.html**
+- **tap-localizer.html** — exports (23): `$, grantMotion, onMotion, extractAndHandle, featurize, euclidean, classify, handleTap`...
 - **unicorn-spotter.html** — exports: `initApp`
 - **yingyang.html** — exports (9): `resize, drawWhiteBase, alphaAt, gradAt, resetBalls, reflect, keepInside, collideYY`...
