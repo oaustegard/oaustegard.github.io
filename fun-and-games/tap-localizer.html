@@ -298,13 +298,53 @@
   }
   .pred-history span.touch { color: var(--accent-2); border-color: var(--accent-2); }
   .pred-history span.acc { color: var(--accent); border-color: var(--accent); }
+
+  /* ===== FEEDBACK / RLHF ===== */
+  .feedback-block {
+    width: 100%; max-width: 340px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .feedback-label {
+    font-size: 10px; letter-spacing: 0.15em;
+    color: var(--text-dim); text-transform: uppercase;
+    text-align: center; min-height: 14px;
+    transition: color 0.2s;
+  }
+  .feedback-block.armed .feedback-label { color: var(--text); }
+  .correction-buttons {
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 1px;
+    background: var(--line); border: 1px solid var(--line);
+    opacity: 0.45; transition: opacity 0.3s;
+  }
+  .feedback-block.armed .correction-buttons { opacity: 1; }
+  .corr-btn {
+    background: var(--panel); border: none; color: var(--text-dim);
+    font: inherit; font-size: 9px; padding: 12px 2px;
+    letter-spacing: 0.05em; text-transform: uppercase;
+    cursor: pointer; transition: background 0.1s, color 0.1s;
+  }
+  .feedback-block.armed .corr-btn { color: var(--text); }
+  .corr-btn:active { background: var(--panel-2); }
+  .corr-btn.predicted {
+    background: var(--panel-2); color: var(--accent);
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+  .corr-btn.predicted.touch { color: var(--accent-2); box-shadow: inset 0 -2px 0 var(--accent-2); }
+  .accuracy-line {
+    font-size: 10px; color: var(--text-dim);
+    text-align: center; font-variant-numeric: tabular-nums;
+    letter-spacing: 0.05em;
+  }
+  .accuracy-line .hits { color: var(--accent); }
+  .accuracy-line .misses { color: var(--warn); }
+  .accuracy-line .pct { color: var(--text); }
   .hidden { display: none !important; }
 </style>
 </head>
 <body>
 
 <header>
-  <div class="brand">tap.localizer <span class="dim">/ v0.2</span></div>
+  <div class="brand">tap.localizer <span class="dim">/ v0.3</span></div>
   <div class="status">
     <span id="rate-display">— Hz</span>
     <span id="status-led" class="led"></span>
@@ -333,6 +373,7 @@
         <li><strong>Screen</strong> uses your touchscreen taps as labels — tap anywhere on the capture surface.</li>
         <li><strong>Back & edges</strong> use accelerometer impulses — physically tap that part of the phone. Hold the phone firmly elsewhere.</li>
         <li><strong>5–10 samples per zone</strong> is enough to start. Inference unlocks at 3+ samples in 2+ zones.</li>
+        <li>In inference, <strong>confirm or correct</strong> each prediction — feedback gets added to training (RLHF).</li>
       </ol>
     </div>
     <div class="scope">
@@ -398,6 +439,11 @@
         <div class="stat"><div class="k">nn dist</div><div class="v" id="pred-dist">—</div></div>
       </div>
       <div class="pred-history" id="pred-history"></div>
+      <div class="feedback-block" id="feedback-block">
+        <div class="feedback-label" id="feedback-label">tap the actual zone — or confirm</div>
+        <div class="correction-buttons" id="correction-buttons"></div>
+        <div class="accuracy-line" id="accuracy-line"><span class="hits">0</span> right / <span class="misses">0</span> wrong &nbsp; <span class="pct">—</span></div>
+      </div>
     </div>
     <div class="controls">
       <button class="ctrl-btn" id="back-to-train">← add training samples</button>
@@ -450,7 +496,7 @@ let TAP_COOLDOWN = 350;
 // ============================================================================
 // STATE
 // ============================================================================
-// Each zone holds an array of {feat:[], x?:number, y?:number}
+// Each zone holds an array of {feat:[], x?:number, y?:number, src?:'train'|'rlhf'}
 const samples = Object.fromEntries(ZONES.map(z => [z.id, []]));
 let captureZone = null;   // when overlay is active
 let mode = 'idle';        // 'idle' | 'capturing' | 'inferring'
@@ -458,13 +504,58 @@ let buffer = [];
 let lastTapTime = 0;
 let pendingTap = null;
 let lastTouchT = 0;
-let lastTouchXY = null;   // {x: 0-1, y: 0-1, clientX, clientY}
+let lastTouchXY = null;
 let rateEMA = 0;
 let lastEventT = 0;
 let sessionCount = 0;
 let predHistory = [];
 
+// RLHF state
+let lastPrediction = null;   // {feat, zone, trig, ts}
+let accuracy = { hits: 0, misses: 0 };
+const FEEDBACK_WINDOW_MS = 6000;
+let feedbackTimer = null;
+
 const $ = (id) => document.getElementById(id);
+
+// ============================================================================
+// PERSISTENCE
+// ============================================================================
+const STORAGE_KEY = 'tap-localizer.v0.3';
+function persist() {
+  try {
+    const data = {
+      samples,
+      accuracy,
+      threshold: TAP_THRESHOLD,
+      cooldown: TAP_COOLDOWN,
+    };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+  } catch (e) { /* quota or disabled — silently skip */ }
+}
+function loadPersisted() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return;
+    const data = JSON.parse(raw);
+    if (data.samples) {
+      for (const z of ZONES) {
+        if (Array.isArray(data.samples[z.id])) samples[z.id] = data.samples[z.id];
+      }
+    }
+    if (data.accuracy) accuracy = data.accuracy;
+    if (typeof data.threshold === 'number') {
+      TAP_THRESHOLD = data.threshold;
+      $('thr-input').value = data.threshold;
+      $('thr-val').textContent = data.threshold.toFixed(1);
+    }
+    if (typeof data.cooldown === 'number') {
+      TAP_COOLDOWN = data.cooldown;
+      $('cd-input').value = data.cooldown;
+      $('cd-val').textContent = data.cooldown;
+    }
+  } catch (e) { /* corrupt — ignore */ }
+}
 
 // ============================================================================
 // DEVICE MOTION
@@ -623,12 +714,14 @@ function handleAccelTap(feat, peakMag) {
         zone: 'front', conf: 1.0, trig: 'touch+accel',
         peakMag, predXY: pred,
         actualXY: lastTouchXY,
+        feat,
       });
     } else {
       const pred = classifyZones(feat, true);
       if (pred) showPrediction({
         zone: pred.zone, conf: pred.conf, trig: 'accel',
         peakMag, nearest: pred.nearest,
+        feat,
       });
     }
   }
@@ -658,14 +751,15 @@ function handleScreenTap(clientX, clientY) {
   // light tap), we miss the prediction, which is acceptable for v0.2.
 }
 
-function addSample(zoneId, feat, xy) {
-  const s = { feat };
+function addSample(zoneId, feat, xy, src) {
+  const s = { feat, src: src || 'train' };
   if (xy) { s.x = xy.x; s.y = xy.y; }
   samples[zoneId].push(s);
   sessionCount++;
   $('capture-count').textContent = sessionCount;
   renderZones();
   $('infer-btn').disabled = !canInfer();
+  persist();
 }
 
 function canInfer() {
@@ -778,6 +872,89 @@ function showPrediction(pred) {
       $('pos-err').textContent = errPct.toFixed(0) + '%';
     }
   }
+
+  // Arm feedback row
+  lastPrediction = {
+    feat: pred.feat,
+    zone: pred.zone,
+    trig: pred.trig,
+    ts: performance.now(),
+  };
+  armFeedback(pred.zone, pred.trig);
+}
+
+// ============================================================================
+// FEEDBACK / RLHF
+// ============================================================================
+function buildCorrectionButtons() {
+  const wrap = $('correction-buttons');
+  wrap.innerHTML = '';
+  for (const z of ZONES) {
+    const btn = document.createElement('button');
+    btn.className = 'corr-btn';
+    btn.dataset.zone = z.id;
+    btn.textContent = z.label.replace(' edge', '').replace('screen', 'scrn');
+    btn.addEventListener('click', () => recordFeedback(z.id));
+    wrap.appendChild(btn);
+  }
+}
+
+function armFeedback(predZone, trig) {
+  const block = $('feedback-block');
+  block.classList.add('armed');
+  // Highlight the predicted button
+  document.querySelectorAll('.corr-btn').forEach(b => {
+    b.classList.remove('predicted', 'touch');
+    if (b.dataset.zone === predZone) {
+      b.classList.add('predicted');
+      if (trig && trig.includes('touch')) b.classList.add('touch');
+    }
+  });
+  $('feedback-label').textContent = 'tap to confirm or correct';
+  if (feedbackTimer) clearTimeout(feedbackTimer);
+  feedbackTimer = setTimeout(() => {
+    block.classList.remove('armed');
+    $('feedback-label').textContent = 'tap the actual zone — or confirm';
+  }, FEEDBACK_WINDOW_MS);
+}
+
+function recordFeedback(actualZone) {
+  if (!lastPrediction) return;
+  // Reject stale (window passed)
+  if ((performance.now() - lastPrediction.ts) > FEEDBACK_WINDOW_MS) {
+    $('feedback-label').textContent = 'no recent prediction';
+    return;
+  }
+  const wasCorrect = (actualZone === lastPrediction.zone);
+  if (wasCorrect) accuracy.hits += 1; else accuracy.misses += 1;
+  // Both confirmation AND correction add the feature to that zone — RLHF
+  addSample(actualZone, lastPrediction.feat, null, 'rlhf');
+  persist();
+  renderAccuracy();
+  flashFeedback(wasCorrect, actualZone);
+  // One feedback per prediction
+  lastPrediction = null;
+  $('feedback-block').classList.remove('armed');
+  if (feedbackTimer) { clearTimeout(feedbackTimer); feedbackTimer = null; }
+}
+
+function flashFeedback(ok, zoneId) {
+  const btn = document.querySelector(`.corr-btn[data-zone="${zoneId}"]`);
+  if (!btn) return;
+  btn.style.background = ok ? 'rgba(74,222,128,0.25)' : 'rgba(248,113,113,0.25)';
+  setTimeout(() => { btn.style.background = ''; }, 600);
+  $('feedback-label').textContent = ok
+    ? '✓ confirmed — added to training'
+    : '↻ corrected — added to ' + (ZONES.find(z => z.id === zoneId)?.label || zoneId);
+}
+
+function renderAccuracy() {
+  const total = accuracy.hits + accuracy.misses;
+  const pct = total > 0 ? Math.round(100 * accuracy.hits / total) + '%' : '—';
+  $('accuracy-line').innerHTML =
+    `<span class="hits">${accuracy.hits}</span> right / ` +
+    `<span class="misses">${accuracy.misses}</span> wrong &nbsp; ` +
+    `<span class="pct">${pct}</span>`;
 }
 
 // ============================================================================
@@ -803,6 +980,9 @@ function enterInfer() {
   $('pred-dist').textContent = '—';
   $('pred-history').innerHTML = '';
   $('pos-err').textContent = '—';
+  $('feedback-block').classList.remove('armed');
+  $('feedback-label').textContent = 'tap the actual zone — or confirm';
+  renderAccuracy();
   showPhase('infer');
   startScope($('scope-canvas-2'), $('scope-peak-2'));
 }
@@ -915,11 +1095,13 @@ $('infer').addEventListener('touchstart', (e) => {
 // ============================================================================
 $('grant-btn').addEventListener('click', grantMotion);
 $('clear-btn').addEventListener('click', () => {
-  if (!confirm('Clear all training samples?')) return;
+  if (!confirm('Clear all training samples and accuracy stats?')) return;
   for (const z of ZONES) samples[z.id] = [];
+  accuracy = { hits: 0, misses: 0 };
   renderZones();
   $('infer-btn').disabled = true;
   $('intro-card').classList.remove('hidden');
+  try { localStorage.removeItem(STORAGE_KEY); } catch (e) {}
 });
 $('infer-btn').addEventListener('click', enterInfer);
 $('back-to-train').addEventListener('click', enterCollect);
@@ -929,14 +1111,24 @@ $('intro-close').addEventListener('click', () => $('intro-card').classList.add('
 $('thr-input').addEventListener('input', (e) => {
   TAP_THRESHOLD = parseFloat(e.target.value);
   $('thr-val').textContent = TAP_THRESHOLD.toFixed(1);
+  persist();
 });
 $('cd-input').addEventListener('input', (e) => {
   TAP_COOLDOWN = parseInt(e.target.value);
   $('cd-val').textContent = TAP_COOLDOWN;
+  persist();
 });
 
 buildZoneButtons();
+buildCorrectionButtons();
+loadPersisted();
 renderZones();
+renderAccuracy();
+$('infer-btn').disabled = !canInfer();
+// Hide intro if user has prior samples (returning visitor)
+if (Object.values(samples).some(arr => arr.length > 0)) {
+  $('intro-card').classList.add('hidden');
+}
 </script>
 </body>
 </html>
