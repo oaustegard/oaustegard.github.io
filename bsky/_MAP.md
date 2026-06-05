@@ -19,10 +19,10 @@
 - **github-search.html** — exports: `sanitizeHTML, get3DaysAgoISO, extractLinksFromFacets, displayPost`
 - **index.html**
 - **list-to-list.html** — exports: `showStatus, showSection, updateProgress, toggleDropdown, parseListUrl, resolveHandle` — imports: `bsky-lib.js`
-- **post-constellation-graph.html** — exports (35): `buildGraphData, addNode, walkReplies, renderEmbed, escHtml, getUrlParam, setUrlParam, isNodeExplorable`... — imports: `bsky-graph.js`
+- **post-constellation-graph.html** — exports (39): `buildGraphData, addNode, walkReplies, renderEmbed, escHtml, byteToCharOffset, anchorHtml, linkifyHtml`... — imports: `bsky-graph.js`
 - **post-constellation.html** — exports (37): `buildGraphData, addNode, walkReplies, renderEmbed, escHtml, getUrlParam, setUrlParam, isNodeExplorable`... — imports: `bsky-graph.js`
 - **post-image-show.html** — exports (28): `getImagesFromPost, expandFully, visit, resolveHandle, classifySource, makeFeedStream, makeStream, chooseFit`... — imports: `bsky-graph.js`
 - **processor.html** — imports (7): `bsky-core.js, bsky-thread.js, bsky-quote.js, bsky-search.js, bsky-core.js`...
 - **report.html** — imports: `BlueReport.js`
 - **starterpack-to-list.html** — exports: `followRedirectUrl, findStarterPackFromUrl, showStatus, showSection, updateProgress, toggleDropdown` — imports: `bsky-lib.js`
-- **thread-reader.html** — exports (40): `avatarHue, parseBskyUrl, resolveToAtUri, fetchThread, timeAgo, postUrl, validReplies, countAll`... — imports: `preact, hooks, preact`
+- **thread-reader.html** — exports (43): `avatarHue, parseBskyUrl, resolveToAtUri, fetchThread, timeAgo, postUrl, validReplies, countAll`... — imports: `preact, hooks, preact`
