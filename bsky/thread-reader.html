@@ -308,6 +308,77 @@
       `;
     }
 
+    // ── Rich-text rendering (facets + fallback linkify) ───────────────────────
+    // Bluesky carries links as AT-Protocol richtext facets (byte-range → URI),
+    // not inline markup. A post can show a link as plain shortened text
+    // ("anthropic.com/…") whose real target lives in record.facets, often with
+    // NO external embed card. Without applying facets that link is dead text, so
+    // we resolve facets here and also linkify bare URLs / markdown [t](u) as a
+    // belt-and-suspenders fallback.
+
+    // UTF-8 byte offset → JS (UTF-16) string index, matching TextEncoder.
+    function byteToCharOffset(str, byteOffset) {
+      let b = 0;
+      for (let i = 0; i < str.length; i++) {
+        if (b >= byteOffset) return i;
+        const code = str.codePointAt(i);
+        if (code > 0xFFFF) { b += 4; i++; }       // surrogate pair (2 UTF-16 units)
+        else if (code >= 0x800) b += 3;
+        else if (code >= 0x80) b += 2;
+        else b += 1;
+      }
+      return str.length;
+    }
+
+    const LINKIFY_RE = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"]|www\.[^\s<]+[^\s<.,;:!?)\]'"])/g;
+
+    // Turn a plain-text segment into an array of strings / <a> vnodes.
+    function linkifySegment(str) {
+      const out = [];
+      let last = 0, m;
+      LINKIFY_RE.lastIndex = 0;
+      while ((m = LINKIFY_RE.exec(str))) {
+        if (m.index > last) out.push(str.slice(last, m.index));
+        if (m[1] !== undefined) {                 // markdown [label](url)
+          out.push(html`<a href=${m[2]} target="_blank" rel="noopener" class="text-sky-600 hover:underline break-words">${m[1]}</a>`);
+        } else {                                  // bare url / www.
+          const raw = m[3];
+          const href = raw.startsWith('www.') ? 'https://' + raw : raw;
+          out.push(html`<a href=${href} target="_blank" rel="noopener" class="text-sky-600 hover:underline break-words">${raw}</a>`);
+        }
+        last = LINKIFY_RE.lastIndex;
+      }
+      if (last < str.length) out.push(str.slice(last));
+      return out;
+    }
+
+    function PostText({ text, facets, cls }) {
+      text = text || '';
+      const linkFacets = (facets || [])
+        .map(f => {
+          const lf = (f.features || []).find(ft => ft['$type'] === 'app.bsky.richtext.facet#link');
+          return lf ? { start: byteToCharOffset(text, f.index.byteStart), end: byteToCharOffset(text, f.index.byteEnd), uri: lf.uri } : null;
+        })
+        .filter(f => f && f.start < f.end)
+        .sort((a, b) => a.start - b.start);
+
+      let children;
+      if (linkFacets.length === 0) {
+        children = linkifySegment(text);
+      } else {
+        children = [];
+        let cursor = 0;
+        for (const f of linkFacets) {
+          if (f.start < cursor) continue;         // skip overlapping facets
+          if (f.start > cursor) children.push(...linkifySegment(text.slice(cursor, f.start)));
+          children.push(html`<a href=${f.uri} target="_blank" rel="noopener" class="text-sky-600 hover:underline break-words">${text.slice(f.start, f.end)}</a>`);
+          cursor = f.end;
+        }
+        if (cursor < text.length) children.push(...linkifySegment(text.slice(cursor)));
+      }
+      return html`<p class=${cls}>${children}</p>`;
+    }
+
     // ── Embed components ──────────────────────────────────────────────────────
 
     function ImageGrid({ images }) {
@@ -383,7 +454,7 @@
               <span class="text-xs text-gray-400 truncate">@${record.author.handle}</span>
               <span class="text-xs text-gray-400 ml-auto flex-shrink-0">${timeAgo(record.indexedAt||record.value?.createdAt||'')}</span>
             </div>
-            <p class="text-xs text-gray-700 post-text leading-relaxed">${record.value?.text||''}</p>
+            <${PostText} cls="text-xs text-gray-700 post-text leading-relaxed" text=${record.value?.text||''} facets=${record.value?.facets} />
           </a>
           <${QuotedPostMedia} embeds=${record.embeds} />
         </div>
@@ -467,7 +538,7 @@
                     ${timeAgo(post.record?.createdAt || post.indexedAt || '')}
                   </a>
                 </div>
-                <p class="text-gray-800 text-sm post-text leading-relaxed">${post.record?.text||''}</p>
+                <${PostText} cls="text-gray-800 text-sm post-text leading-relaxed" text=${post.record?.text||''} facets=${post.record?.facets} />
                 <${StackPostEmbed} embed=${post.embed} />
                 <div class="flex items-center gap-3 mt-2 text-gray-400 text-xs">
                   <span title="Replies">💬 ${post.replyCount||0}</span>
@@ -610,7 +681,7 @@
                     ${timeAgo(p.record.createdAt)}
                   </a>
                 </div>
-                <p class="text-gray-800 text-sm post-text leading-relaxed">${p.record.text}</p>
+                <${PostText} cls="text-gray-800 text-sm post-text leading-relaxed" text=${p.record.text} facets=${p.record?.facets} />
                 ${p.embed && html`<${PostEmbed} embed=${p.embed} />`}
                 <div class="flex items-center gap-3 mt-2 text-gray-400 text-xs">
                   <span>💬 ${p.replyCount||0}</span>

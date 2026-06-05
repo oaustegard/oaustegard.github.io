@@ -398,7 +398,7 @@
         const qUrl = 'https://bsky.app/profile/' + rec.author.did + '/post/' + rec.uri.split('/').pop();
         return `<a href="${escHtml(qUrl)}" target="_blank" rel="noopener" class="embed-quote block" onclick="event.stopPropagation()" style="text-decoration:none;color:inherit">
           <div style="font-weight:600;font-size:10px;margin-bottom:2px">${escHtml(rec.author.displayName || rec.author.handle)}</div>
-          <div style="color:#4b5563" class="line-clamp-2">${escHtml(rec.value?.text || '')}</div>
+          <div style="color:#4b5563" class="line-clamp-2">${renderRichText(rec.value?.text || '', rec.value?.facets)}</div>
         </a>`;
       }
       if (t === 'app.bsky.embed.recordWithMedia#view') {
@@ -410,6 +410,66 @@
     function escHtml(s) {
       if (!s) return '';
       return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    // ── Rich-text rendering (facets + fallback linkify) ───────────────────────
+    // Bluesky links are AT-Protocol richtext facets (byte-range → URI), not
+    // inline markup. A post can show a link as plain shortened text whose real
+    // target lives in record.facets, often with NO external embed card — without
+    // applying facets that link is dead text. Resolve facets and also linkify
+    // bare URLs / markdown [t](u) as a fallback. stopPropagation keeps a link tap
+    // from triggering node selection.
+
+    function byteToCharOffset(str, byteOffset) {
+      let b = 0;
+      for (let i = 0; i < str.length; i++) {
+        if (b >= byteOffset) return i;
+        const code = str.codePointAt(i);
+        if (code > 0xFFFF) { b += 4; i++; }       // surrogate pair (2 UTF-16 units)
+        else if (code >= 0x800) b += 3;
+        else if (code >= 0x80) b += 2;
+        else b += 1;
+      }
+      return str.length;
+    }
+
+    function anchorHtml(href, label) {
+      return `<a href="${escHtml(href)}" target="_blank" rel="noopener" onclick="event.stopPropagation()" style="color:#2563eb;text-decoration:underline">${escHtml(label)}</a>`;
+    }
+
+    function linkifyHtml(str) {
+      const re = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)|(https?:\/\/[^\s<]+[^\s<.,;:!?)\]'"]|www\.[^\s<]+[^\s<.,;:!?)\]'"])/g;
+      let out = '', last = 0, m;
+      while ((m = re.exec(str))) {
+        if (m.index > last) out += escHtml(str.slice(last, m.index));
+        if (m[1] !== undefined) out += anchorHtml(m[2], m[1]);             // markdown [label](url)
+        else { const raw = m[3]; out += anchorHtml(raw.startsWith('www.') ? 'https://' + raw : raw, raw); }
+        last = re.lastIndex;
+      }
+      if (last < str.length) out += escHtml(str.slice(last));
+      return out;
+    }
+
+    // Returns safe HTML: facet links resolved, remaining text linkified + escaped.
+    function renderRichText(text, facets) {
+      text = text || '';
+      const linkFacets = (facets || [])
+        .map(f => {
+          const lf = (f.features || []).find(ft => ft['$type'] === 'app.bsky.richtext.facet#link');
+          return lf ? { start: byteToCharOffset(text, f.index.byteStart), end: byteToCharOffset(text, f.index.byteEnd), uri: lf.uri } : null;
+        })
+        .filter(f => f && f.start < f.end)
+        .sort((a, b) => a.start - b.start);
+      if (linkFacets.length === 0) return linkifyHtml(text);
+      let out = '', cursor = 0;
+      for (const f of linkFacets) {
+        if (f.start < cursor) continue;           // skip overlapping facets
+        if (f.start > cursor) out += linkifyHtml(text.slice(cursor, f.start));
+        out += anchorHtml(f.uri, text.slice(f.start, f.end));
+        cursor = f.end;
+      }
+      if (cursor < text.length) out += linkifyHtml(text.slice(cursor));
+      return out;
     }
 
     // ── URL param helpers ────────────────────────────────────────────────────────
@@ -1277,7 +1337,7 @@
             ${badge}
             <span style="margin-left:auto;font-size:9px;color:#9ca3af;flex-shrink:0">${time}</span>
           </div>
-          <p class="line-clamp-6 post-text" style="color:#4b5563;font-size:10px;margin:0">${escHtml(text)}</p>
+          <p class="line-clamp-6 post-text" style="color:#4b5563;font-size:10px;margin:0">${renderRichText(text, p.record?.facets)}</p>
           <div style="display:flex;align-items:center;gap:6px;margin-top:4px;font-size:9px;color:#9ca3af">
             <span>&#10084;&#65039;${p.likeCount || 0}</span>
             <span>&#128172;${p.replyCount || 0}</span>
@@ -1301,7 +1361,7 @@
           </div>
           ${badge}
         </div>
-        <p class="post-text" style="color:#374151;font-size:11px;margin:0;line-height:1.45">${escHtml(text)}</p>
+        <p class="post-text" style="color:#374151;font-size:11px;margin:0;line-height:1.45">${renderRichText(text, p.record?.facets)}</p>
         ${embedHtml}
         <div style="display:flex;align-items:center;gap:8px;margin-top:8px;font-size:10px;color:#9ca3af">
           <span>&#128172;${p.replyCount || 0}</span>
