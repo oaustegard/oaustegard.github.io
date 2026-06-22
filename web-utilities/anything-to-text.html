@@ -201,6 +201,22 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
         </div>
         <div><label class="field" for="dpi">PDF DPI</label><input id="dpi" type="number" value="200" step="50" min="72" max="400"></div>
         <div><label class="field" for="batch">Batch size</label><input id="batch" type="number" value="10" step="1" min="1" max="50"></div>
+        <div>
+          <label class="field" for="columns">Columns</label>
+          <select id="columns">
+            <option value="auto" selected>Auto-detect</option>
+            <option value="1">1 (single)</option>
+            <option value="2">2</option>
+            <option value="3">3</option>
+          </select>
+        </div>
+        <div>
+          <label class="field" for="textorder">PDF text order</label>
+          <select id="textorder">
+            <option value="geometric" selected>Geometric (column-aware)</option>
+            <option value="pdf">Preserve PDF order</option>
+          </select>
+        </div>
       </div>
       <div class="runbar">
         <button id="run" class="primary" disabled>Run batch</button>
@@ -584,15 +600,15 @@ function batchSize() {
   return Math.min(50, Math.max(1, isNaN(v) ? 10 : v));
 }
 
-/* Impose reading order on flattened boxes: group into lines by vertical proximity,
-   sort lines top-to-bottom and boxes left-to-right. Returns an array of line strings. */
-function readingOrder(items) {
-  const boxed = (items || []).filter(r => r && r.box && typeof r.text === "string" && r.text.length);
-  if (!boxed.length) return (items || []).map(r => (r && r.text) || "").filter(Boolean);
-  const heights = boxed.map(r => r.box.height).filter(h => h > 0).sort((a, b) => a - b);
+/* Group boxes into lines by vertical proximity, then sort top-to-bottom, left-to-right.
+   Returns an array of line strings. This is the single-column primitive that the
+   column-aware orderer composes per column band. */
+function lineify(group) {
+  if (!group.length) return [];
+  const heights = group.map(r => r.box.height).filter(h => h > 0).sort((a, b) => a - b);
   const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
   const tol = Math.max(4, medH * 0.6);
-  const byY = boxed.slice().sort((a, b) => a.box.y - b.box.y);
+  const byY = group.slice().sort((a, b) => a.box.y - b.box.y);
   const lines = [];
   for (const r of byY) {
     let line = null;
@@ -603,6 +619,132 @@ function readingOrder(items) {
   lines.sort((a, b) => a.y - b.y);
   return lines.map(L => L.items.sort((a, b) => a.box.x - b.box.x).map(r => r.text).join(" "));
 }
+
+/* Auto-detect column gutters with a 2-D occupancy projection. A multi-column page has a
+   vertical channel that is empty over most of the page HEIGHT; a height-weighted 1-D
+   histogram is fooled by the handful of full-width elements (title, byline, section
+   headers) that cross that channel at a few y's. So instead we tile the content box into
+   rows and, per x-bin, count how many distinct rows hold any text: a gutter bin occupies
+   far fewer rows than the column bins flanking it. The search is bounded to the content
+   span [minX,maxX] (margins excluded by construction) and a candidate gutter is accepted
+   only if tall columns flank it on BOTH sides (rejecting ragged right edges). Returns []
+   (single column) when sparse or channel-free - the safe default the manual Columns
+   control overrides. */
+function detectColumnCuts(boxed, pageW) {
+  if (boxed.length < 12) return [];
+  const minX = Math.min.apply(null, boxed.map(r => r.box.x));
+  const maxX = Math.max.apply(null, boxed.map(r => r.box.x + r.box.width));
+  const minY = Math.min.apply(null, boxed.map(r => r.box.y));
+  const maxY = Math.max.apply(null, boxed.map(r => r.box.y + r.box.height));
+  const spanX = maxX - minX, spanY = maxY - minY;
+  if (spanX <= 0 || spanY <= 0) return [];
+  const BINS = 120, binW = spanX / BINS;
+  const heights = boxed.map(r => r.box.height).filter(h => h > 0).sort((a, b) => a - b);
+  const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
+  const ROWS = Math.max(8, Math.min(240, Math.round(spanY / Math.max(4, medH))));
+  const rowH = spanY / ROWS;
+  const occ = Array.from({ length: BINS }, () => new Uint8Array(ROWS));
+  for (const r of boxed) {
+    const x0 = Math.max(0, Math.floor((r.box.x - minX) / binW));
+    const x1 = Math.min(BINS - 1, Math.floor((r.box.x + r.box.width - minX) / binW));
+    const y0 = Math.max(0, Math.floor((r.box.y - minY) / rowH));
+    const y1 = Math.min(ROWS - 1, Math.floor((r.box.y + r.box.height - minY) / rowH));
+    for (let b = x0; b <= x1; b++) { const col = occ[b]; for (let rr = y0; rr <= y1; rr++) col[rr] = 1; }
+  }
+  const rowCount = occ.map(col => { let s = 0; for (let i = 0; i < col.length; i++) s += col[i]; return s; });
+  const peak = rowCount.slice().sort((a, b) => b - a)[Math.floor(BINS * 0.1)] || 1;
+  const thresh = Math.max(1, peak * 0.25);    /* gutter bin: <25% of a column's row count
+                                                 (loose enough to survive several full-width
+                                                 headers crossing the channel) */
+  const hi = peak * 0.5;                       /* a real column flank reaches >=50% of peak */
+  const minRun = Math.max(2, Math.round(BINS * 0.015));
+  const runs = [];
+  let run = null;
+  const close = () => { if (run) { runs.push(run); run = null; } };
+  for (let i = 0; i < BINS; i++) { if (rowCount[i] <= thresh) { run ? (run.e = i) : (run = { s: i, e: i }); } else close(); }
+  close();
+  const cuts = [];
+  for (const rn of runs) {
+    if ((rn.e - rn.s + 1) < minRun) continue;
+    if (!rowCount.slice(0, rn.s).some(v => v >= hi)) continue;
+    if (!rowCount.slice(rn.e + 1).some(v => v >= hi)) continue;
+    cuts.push(minX + ((rn.s + rn.e + 1) / 2) * binW);
+  }
+  return cuts.slice(0, 3);   /* up to 4 columns; more than that is almost always noise */
+}
+
+/* Column-aware reading order. With no cuts it is exactly the old single-column behaviour.
+   With cuts, boxes that straddle a gutter (titles, full-width section headers, wide
+   figures) are treated as band breaks: the page is sliced into horizontal stripes at each
+   full-width element, and within every stripe the columns are emitted left-to-right, each
+   line-grouped top-to-bottom. So a paper reads title -> left col -> right col -> next
+   full-width header -> left col ..., instead of zig-zagging across the gutter. */
+function orderByColumns(boxed, cuts) {
+  if (!cuts.length) return lineify(boxed);
+  const cx = r => r.box.x + r.box.width / 2;
+  const cy = r => r.box.y + r.box.height / 2;
+  const spans = r => cuts.some(c => r.box.x < c - 1 && r.box.x + r.box.width > c + 1);
+  const colOf = r => { let i = 0; while (i < cuts.length && cx(r) >= cuts[i]) i++; return i; };
+  const full = boxed.filter(spans).sort((a, b) => cy(a) - cy(b));
+  const colBoxes = boxed.filter(r => !spans(r));
+  const out = [];
+  const emitStripe = (yTop, yBot) => {
+    for (let ci = 0; ci <= cuts.length; ci++) {
+      const g = colBoxes.filter(r => colOf(r) === ci && cy(r) >= yTop && cy(r) < yBot);
+      for (const ln of lineify(g)) out.push(ln);
+    }
+  };
+  let prevY = -Infinity;
+  for (const f of full) {
+    const fy = cy(f);
+    emitStripe(prevY, fy);
+    for (const ln of lineify([f])) out.push(ln);
+    prevY = fy;
+  }
+  emitStripe(prevY, Infinity);
+  return out;
+}
+
+/* Reading order over flattened boxes, honoring the Columns control (auto-detect, or a
+   fixed 1/2/3). Used for OCR output and for geometric text-layer ordering. */
+function readingOrder(items, opts) {
+  opts = opts || {};
+  const boxed = (items || []).filter(r => r && r.box && typeof r.text === "string" && r.text.length);
+  if (!boxed.length) return (items || []).map(r => (r && r.text) || "").filter(Boolean);
+  const pageW = opts.pageW || (boxed.reduce((m, r) => Math.max(m, r.box.x + r.box.width), 0) || 1);
+  const mode = opts.columns || "auto";
+  let cuts;
+  if (mode === "auto") cuts = detectColumnCuts(boxed, pageW);
+  else { const n = Math.max(1, parseInt(mode, 10) || 1); cuts = []; for (let i = 1; i < n; i++) cuts.push((pageW * i) / n); }
+  return orderByColumns(boxed, cuts);
+}
+
+/* Preserve pdf.js's own emission order (content-stream order, which for born-digital
+   documents is usually correct column-by-column reading order), only chunking the run
+   sequence into lines where the baseline shifts. The escape hatch for pages where the
+   geometric reorder does worse than the source's native order. */
+function pdfOrderLines(items) {
+  const seq = (items || []).filter(r => r && typeof r.text === "string" && r.text.length);
+  if (!seq.length) return [];
+  const heights = seq.map(r => (r.box ? r.box.height : 0)).filter(h => h > 0).sort((a, b) => a - b);
+  const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
+  const tol = Math.max(4, medH * 0.6);
+  const lines = [];
+  let cur = null, lastY = null;
+  for (const r of seq) {
+    const y = r.box ? r.box.y : (lastY == null ? 0 : lastY);
+    if (cur && lastY != null && Math.abs(y - lastY) <= tol) cur.push(r.text);
+    else { if (cur) lines.push(cur.join(" ")); cur = [r.text]; }
+    lastY = y;
+  }
+  if (cur) lines.push(cur.join(" "));
+  return lines;
+}
+
+/* current values of the PDF reading controls (absent elements -> safe defaults) */
+function columnMode() { const el = document.getElementById("columns"); return el ? el.value : "auto"; }
+function textOrderMode() { const el = document.getElementById("textorder"); return el ? el.value : "geometric"; }
+
 
 function meanConfidence(res, items) {
   if (res && typeof res.confidence === "number") return res.confidence;
@@ -650,7 +792,11 @@ function hasUsableText(items) {
 function buildResult(pg, items, source, res) {
   const W = pg.pageW || 1, H = pg.pageH || 1;
   pg.source = source;
-  pg.lines = readingOrder(items);
+  /* born-digital text can keep pdf.js's native order when asked; everything else (and
+     geometric text) flows through the column-aware orderer. */
+  pg.lines = (source === "text" && textOrderMode() === "pdf")
+    ? pdfOrderLines(items)
+    : readingOrder(items, { pageW: W, pageH: H, columns: columnMode() });
   pg.text = pg.lines.join("\n");
   pg.segments = items
     .filter(r => r && r.box && typeof r.text === "string" && r.text.length)
