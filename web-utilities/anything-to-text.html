@@ -89,7 +89,8 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 .src { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--a2t-line); color: var(--a2t-dim); }
 .src.ocr { color: var(--a2t-accent); border-color: color-mix(in srgb, var(--a2t-accent) 45%, transparent); }
 .page .cols { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
-.page .preview { width: 240px; flex: 0 0 240px; height: auto; border: 1px solid var(--a2t-line); border-radius: var(--radius); background: #fff; }
+.page .preview { width: 300px; flex: 0 0 300px; height: auto; border: 1px solid var(--a2t-line); border-radius: var(--radius); background: #fff; cursor: zoom-in; }
+.page .preview:target, .page .preview.zoomed { width: 100%; flex-basis: 100%; max-width: 100%; cursor: zoom-out; }
 .page .col-text { flex: 1 1 auto; min-width: 0; }
 .page .col-text .out { margin-top: 0; }
 .out.muted { color: var(--a2t-faint); }
@@ -500,7 +501,7 @@ function addImage(file) {
   pages.push({
     id, image: file.name || ("image-" + (id + 1)), kind: "image",
     status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
-    meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false,
+    meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false, forceText: false,
     render: async () => {
       const bmp = await createImageBitmap(file);
       const cv = document.createElement("canvas");
@@ -524,7 +525,7 @@ async function addPdf(file) {
     pages.push({
       id, image: label + " p." + pageNo, kind: "pdf",
       status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
-      meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false,
+      meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false, forceText: false,
       getPdfPage: () => doc.getPage(pageNo),
       render: async (scale) => {
         const pdfPage = await doc.getPage(pageNo);
@@ -612,7 +613,7 @@ function meanConfidence(res, items) {
 /* Downscaled preview data URL so each card can show the rendered page next to its text
    without holding full-resolution canvases in memory. */
 function makePreview(canvas, maxW) {
-  const cap = maxW || 480;
+  const cap = maxW || 720;
   const scale = Math.min(1, cap / (canvas.width || 1));
   const pv = document.createElement("canvas");
   pv.width = Math.max(1, Math.round(canvas.width * scale));
@@ -666,7 +667,9 @@ async function processPage(pg) {
   const scale = clampDpi() / 72;
 
   /* Hybrid PDF path: prefer pdf.js's embedded text layer - exact, instant, and needs no
-     model - and fall back to OCR only when a page has no usable text or OCR is forced. */
+     model. Auto pages fall back to OCR when no usable text is found; a page the user has
+     explicitly asked back to text (forceText) stops here even if empty, rather than
+     bouncing straight back into the OCR it was trying to escape. */
   if (pg.kind === "pdf" && !pg.forceOcr) {
     const pdfPage = await pg.getPdfPage();
     const viewport = pdfPage.getViewport({ scale });
@@ -681,6 +684,16 @@ async function processPage(pg) {
       console.log("[text]", pg.image, pg.ms + "ms", pg.lines.length + " lines (pdf.js text layer)");
       return;
     }
+    if (pg.forceText) {
+      const canvas = await renderPdfCanvas(pdfPage, viewport);
+      pg.pageW = canvas.width; pg.pageH = canvas.height;
+      pg.preview = makePreview(canvas);
+      buildResult(pg, [], "text", null);
+      pg.ms = Math.round(performance.now() - t0);
+      pg.status = "done";
+      console.log("[text]", pg.image, "no embedded text layer on this page (forced text)");
+      return;
+    }
     console.log("[text]", pg.image, "no usable text layer - falling back to OCR");
   }
 
@@ -690,17 +703,94 @@ async function processPage(pg) {
   const canvas = await pg.render(scale);
   pg.pageW = canvas.width; pg.pageH = canvas.height;
   pg.preview = makePreview(canvas);
-  /* noCache: ppu-paddle-ocr's ImageCache keys on a hash of only the first 1 KB of canvas
-     pixels plus total length (core/image-cache.js). Same-DPI PDF pages share canvas
-     dimensions and a byte-identical top-left corner under a fixed template, so the key
-     collides and every page returns page 1's result. Each page is OCR'd once here, so
-     the cache has no value to us. */
-  const res = await paddle.recognize(canvas, { flatten: true, noCache: true });
-  const items = (res && res.results) || [];
-  buildResult(pg, items, "ocr", res);
+  /* Tile large renders before recognition. PP-OCR's detector resizes its input down to a
+     fixed long side (~960 px), so a full A4/Letter page rendered at 200 DPI (~1700x2200)
+     is shrunk to roughly half resolution before any box is found - which is why dense,
+     small, multi-column body text scores badly. recognizeTiled feeds the model
+     near-native-resolution tiles, offsets each tile's boxes back into page pixels, and
+     dedupes the overlaps. */
+  const { items, meanConf } = await recognizeTiled(canvas, pg.image);
+  buildResult(pg, items, "ocr", { confidence: meanConf });
   pg.ms = Math.round(performance.now() - t0);
   pg.status = "done";
   console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines", (pg.meanConf * 100).toFixed(1) + "%");
+}
+
+/* ---------- tiled recognition ----------
+   Below SINGLE_MAX (long side) a page is small enough that the detector's downscale is
+   harmless, so it goes through in one pass (and keeps the old behaviour exactly). Larger
+   pages are cut into TILE-sized cells overlapping by OVERLAP so a line split by one tile's
+   hard edge is whole inside a neighbour. Each cell is recognized independently; boxes are
+   translated from cell pixels to page pixels, then near-duplicate detections from the
+   overlap seams are removed (highest confidence wins). noCache as in processPage:
+   same-size tiles would otherwise collide on ppu-paddle-ocr's 1 KB-prefix cache key. */
+const TILE = 1024;        /* target tile size in page pixels */
+const OVERLAP = 192;      /* seam overlap; > a few text lines so most lines fall whole in a tile */
+const SINGLE_MAX = 1280;  /* long side at/under which we skip tiling */
+
+function tileGrid(w, h, tile, overlap) {
+  const step = Math.max(1, tile - overlap);
+  const origins = (extent) => {
+    if (extent <= tile) return [0];
+    const out = [];
+    for (let p = 0; ; p += step) {
+      if (p + tile >= extent) { out.push(extent - tile); break; }
+      out.push(p);
+    }
+    return [...new Set(out)];
+  };
+  const xs = origins(w), ys = origins(h);
+  const cells = [];
+  for (const y of ys) for (const x of xs) cells.push({ x, y, w: Math.min(tile, w - x), h: Math.min(tile, h - y) });
+  return cells;
+}
+
+function iou(a, b) {
+  const ix = Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x));
+  const iy = Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+  const inter = ix * iy;
+  const uni = a.width * a.height + b.width * b.height - inter;
+  return uni > 0 ? inter / uni : 0;
+}
+
+/* keep the highest-confidence box from each cluster of overlapping detections */
+function dedupeBoxes(items) {
+  const kept = [];
+  for (const it of items.slice().sort((p, q) => (q.confidence || 0) - (p.confidence || 0))) {
+    if (!it.box) continue;
+    if (kept.some(k => iou(it.box, k.box) > 0.45)) continue;
+    kept.push(it);
+  }
+  return kept;
+}
+
+async function recognizeTiled(canvas, label) {
+  const W = canvas.width, H = canvas.height;
+  if (Math.max(W, H) <= SINGLE_MAX) {
+    const res = await paddle.recognize(canvas, { flatten: true, noCache: true });
+    const items = (res && res.results) || [];
+    return { items, meanConf: meanConfidence(res, items) };
+  }
+  const cells = tileGrid(W, H, TILE, OVERLAP);
+  const all = [];
+  for (let i = 0; i < cells.length; i++) {
+    const c = cells[i];
+    setStatus("OCR " + (label || "page") + " - tile " + (i + 1) + "/" + cells.length + "...");
+    const sub = document.createElement("canvas");
+    sub.width = c.w; sub.height = c.h;
+    sub.getContext("2d").drawImage(canvas, c.x, c.y, c.w, c.h, 0, 0, c.w, c.h);
+    const res = await paddle.recognize(sub, { flatten: true, noCache: true });
+    for (const r of (res && res.results) || []) {
+      if (!r || !r.box) continue;
+      all.push({
+        text: r.text, confidence: r.confidence,
+        box: { x: r.box.x + c.x, y: r.box.y + c.y, width: r.box.width, height: r.box.height },
+      });
+    }
+  }
+  const items = dedupeBoxes(all);
+  console.log("[ocr]", label, cells.length + " tiles ->", all.length, "boxes,", items.length, "after dedupe");
+  return { items, meanConf: meanConfidence(null, items) };
 }
 
 async function runBatch() {
@@ -728,21 +818,26 @@ async function runBatch() {
 
 /* Force a single page through the OCR path - used when the pdf.js text layer was present
    but partial. Re-renders that page only and updates its card in place. */
-async function reprocessPage(id) {
+/* Re-run a single PDF page through the other source. mode "ocr" forces recognition
+   (used when the embedded text layer is present but partial); mode "text" forces the
+   pdf.js text layer (the escape hatch from a bad OCR pass back to exact text). Re-renders
+   that page only and updates its card in place. */
+async function reprocessPage(id, mode) {
   const pg = pages[id];
   if (!pg) return;
-  pg.forceOcr = true;
+  if (mode === "text") { pg.forceOcr = false; pg.forceText = true; }
+  else { pg.forceOcr = true; pg.forceText = false; }
   pg.status = "pending";
   pg.error = null;
   updatePage(pg);
   setBusy(true);
-  setStatus("Re-running OCR on " + pg.image + "...");
+  setStatus((mode === "text" ? "Extracting embedded text on " : "Re-running OCR on ") + pg.image + "...");
   try {
     await processPage(pg);
   } catch (e) {
     pg.status = "error";
     pg.error = (e && e.message) || String(e);
-    console.error("[reocr] page failed", pg.image, e);
+    console.error("[reprocess] page failed", pg.image, e);
   }
   updatePage(pg);
   setBusy(false);
@@ -778,8 +873,13 @@ function pageInner(pg) {
         ? pg.lines.length + ' lines | exact'
         : pg.ms + 'ms | ' + pg.lines.length + ' lines | conf ' + (pg.meanConf * 100).toFixed(1) + '%') + '</span>'
     : (pg.status === "error" ? '<span class="meta">failed</span>' : "");
-  const reocrBtn = (pg.kind === "pdf" && done && pg.source === "text")
-    ? '<button class="ghost reocr" data-pg="' + pg.id + '">Re-run as OCR</button>' : "";
+  /* PDF pages can swap source either way: text->OCR when the layer is partial, and
+     OCR->text to escape a bad recognition back to the exact embedded text. */
+  let convBtn = "";
+  if (pg.kind === "pdf" && done) {
+    if (pg.source === "text") convBtn = '<button class="ghost reocr" data-pg="' + pg.id + '">Re-run as OCR</button>';
+    else if (pg.source === "ocr") convBtn = '<button class="ghost retext" data-pg="' + pg.id + '">Extract text instead</button>';
+  }
   const copyBtn = done ? '<button class="ghost copy-page" data-pg="' + pg.id + '">Copy</button>' : "";
   const preview = pg.preview ? '<img class="preview" src="' + pg.preview + '" alt="page preview">' : "";
   const textOut = pg.status === "error"
@@ -790,7 +890,7 @@ function pageInner(pg) {
   const body = '<div class="cols">' + preview + '<div class="col-text">' + textOut + '</div></div>';
   return '<h2><span class="badge ' + pg.status + '">' + pg.status + '</span> '
     + '<span class="pg-name">' + escapeHtml(pg.image) + '</span> ' + srcBadge + meta
-    + '<span class="hdr-actions">' + reocrBtn + copyBtn + '</span></h2>' + body;
+    + '<span class="hdr-actions">' + convBtn + copyBtn + '</span></h2>' + body;
 }
 
 /* ---------- exports ---------- */
@@ -928,7 +1028,11 @@ showHtmlBtn.onclick = () => {
 
 pagesEl.addEventListener("click", async e => {
   const reBtn = e.target.closest(".reocr");
-  if (reBtn) { await reprocessPage(Number(reBtn.dataset.pg)); return; }
+  if (reBtn) { await reprocessPage(Number(reBtn.dataset.pg), "ocr"); return; }
+  const txBtn = e.target.closest(".retext");
+  if (txBtn) { await reprocessPage(Number(txBtn.dataset.pg), "text"); return; }
+  const prev = e.target.closest(".preview");
+  if (prev) { prev.classList.toggle("zoomed"); return; }
   const btn = e.target.closest(".copy-page");
   if (!btn) return;
   const pg = pages[Number(btn.dataset.pg)];
