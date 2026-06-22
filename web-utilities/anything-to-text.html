@@ -1,0 +1,2161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta name="theme-color" content="#5d6d3b">
+<meta name="description" content="Turn anything into text in your browser - OCR for images and PDFs, speech-to-text for audio and video. Nothing is uploaded; everything runs on your device.">
+<title>Anything to Text - in-browser OCR &amp; transcription</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="stylesheet" href="/styles/style.css">
+<style>
+/* ---- Anything to Text: component styles on the site's Grouch's Workshop tokens ---- */
+:root {
+  --a2t-accent:    var(--grouch);
+  --a2t-strong:    var(--grouch-deep);
+  --a2t-danger:    var(--tongue);
+  --a2t-panel:     var(--code-bg);
+  --a2t-line:      var(--rule);
+  --a2t-surface:   var(--surface);
+  --a2t-dim:       var(--muted);
+  --a2t-faint:     color-mix(in srgb, var(--muted) 70%, var(--bg));
+  --ui:    var(--font-body);
+  --disp:  var(--font-display);
+  --mono:  var(--font-mono);
+}
+/* widen the page: the site default is a 70ch reading column, too narrow for the tool UI */
+html { max-width: 1000px; padding: 1.5em 1em; font-size: 16px; }
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+
+.wrap { position: relative; }
+header { margin-bottom: 24px; }
+.eyebrow { font-size: 11px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--a2t-accent); margin: 0 0 8px; font-family: var(--mono); }
+h1 { margin: 0 0 10px; }
+.sub { color: var(--a2t-dim); margin: 0; max-width: 70ch; }
+.sub b { color: var(--fg); font-weight: 600; }
+
+.panel { border: 1px solid var(--a2t-line); border-radius: var(--radius); background: var(--a2t-panel); padding: 18px; margin-bottom: 16px; }
+section.engine { margin-bottom: 8px; }
+
+/* shared drop zone */
+.dropzone { border: 1.5px dashed var(--a2t-line); border-radius: var(--radius); padding: 34px 20px; text-align: center; cursor: pointer; transition: border-color .2s, background .2s; background: var(--a2t-surface); }
+.dropzone:hover, .dropzone.over, .dropzone.hover { border-color: var(--a2t-accent); background: color-mix(in srgb, var(--a2t-accent) 7%, var(--a2t-surface)); }
+.dropzone .big { font-family: var(--disp); font-size: 18px; font-weight: 700; color: var(--fg); }
+.dropzone .hint { color: var(--a2t-faint); font-size: 12px; margin-top: 6px; }
+.dropzone.has-file { border-style: solid; border-color: var(--a2t-accent); }
+#route-note { color: var(--a2t-dim); font-size: 12px; margin: 12px 2px 0; min-height: 16px; font-family: var(--mono); }
+
+.filemeta { color: var(--a2t-dim); font-size: 12px; margin: 0 0 14px; word-break: break-all; }
+.filemeta b { color: var(--fg); }
+
+/* controls */
+.controls { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 6px; }
+.controls > div { flex: 0 1 auto; }
+label.field { display: block; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--a2t-faint); margin-bottom: 6px; font-family: var(--mono); }
+input[type=number], select { font-family: var(--ui); font-size: 13px; color: var(--fg); background: var(--a2t-surface); border: 1px solid var(--a2t-line); border-radius: var(--radius); padding: 9px 10px; }
+input[type=number] { width: 96px; }
+input[type=number]:focus, select:focus { outline: none; border-color: var(--a2t-accent); }
+.radios { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; min-height: 38px; }
+.radio { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--fg); cursor: pointer; }
+.radio input { accent-color: var(--a2t-accent); cursor: pointer; margin: 0; }
+
+.runbar { display: flex; align-items: center; gap: 12px; margin-top: 18px; flex-wrap: wrap; }
+button.primary { font-family: var(--disp); font-weight: 700; font-size: 14px; letter-spacing: 0.02em; color: #fff; background: var(--a2t-accent); border: 0; border-radius: var(--radius); padding: 11px 22px; cursor: pointer; transition: transform .08s, filter .2s; }
+button.primary:hover:not(:disabled) { filter: brightness(1.1); }
+button.primary:active:not(:disabled) { transform: translateY(1px); }
+button.primary:disabled { opacity: 0.4; cursor: not-allowed; }
+button.ghost { font-family: var(--ui); font-size: 12px; color: var(--fg); background: transparent; border: 1px solid var(--a2t-line); border-radius: var(--radius); padding: 8px 14px; cursor: pointer; transition: color .15s, border-color .15s; }
+button.ghost:hover:not(:disabled) { color: var(--a2t-accent); border-color: var(--a2t-accent); }
+button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); opacity: 0.6; cursor: not-allowed; }
+@media (prefers-color-scheme: dark) { button.primary { color: #15170f; } }
+
+#status, #tr-status { color: var(--a2t-dim); font-size: 12px; min-height: 18px; white-space: pre-wrap; flex: 1 1 200px; }
+#status .err, #tr-status .err { color: var(--a2t-danger); }
+#eta { color: var(--a2t-faint); font-size: 12px; margin: 10px 0 0; min-height: 16px; }
+
+/* exports */
+.result-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.result-actions .label { font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--a2t-faint); margin-right: 4px; font-family: var(--mono); }
+
+/* OCR per-page cards */
+.page { border: 1px solid var(--a2t-line); border-radius: var(--radius); background: var(--a2t-surface); padding: 12px 14px; margin: 12px 0; }
+.page > h2 { font-size: 13px; font-weight: 600; margin: 0; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-family: var(--ui); color: var(--fg); }
+.page .pg-name { color: var(--fg); word-break: break-all; }
+.page .meta { font-size: 11px; color: var(--a2t-faint); font-variant-numeric: tabular-nums; }
+.page .copy-page, .page .reocr { padding: 5px 11px; font-size: 11px; }
+.page .hdr-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
+.src { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--a2t-line); color: var(--a2t-dim); }
+.src.ocr { color: var(--a2t-accent); border-color: color-mix(in srgb, var(--a2t-accent) 45%, transparent); }
+.page .cols { display: flex; gap: 14px; margin-top: 8px; align-items: flex-start; }
+.page .preview { width: 240px; flex: 0 0 240px; height: auto; border: 1px solid var(--a2t-line); border-radius: var(--radius); background: #fff; }
+.page .col-text { flex: 1 1 auto; min-width: 0; }
+.page .col-text .out { margin-top: 0; }
+.out.muted { color: var(--a2t-faint); }
+@media (max-width: 680px) { .page .cols { flex-direction: column; } .page .preview { width: 100%; flex-basis: auto; max-width: 360px; } }
+.badge { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--a2t-line); color: var(--a2t-dim); font-family: var(--mono); }
+.badge.pending { color: var(--a2t-faint); }
+.badge.done { color: #fff; background: var(--a2t-accent); border-color: var(--a2t-accent); }
+.badge.error { color: var(--a2t-danger); border-color: var(--a2t-danger); }
+.out { white-space: pre-wrap; font-family: var(--mono); font-size: 13px; line-height: 1.5; background: var(--a2t-panel); border-radius: var(--radius); padding: 10px; margin-top: 8px; max-height: 280px; overflow: auto; color: var(--fg); }
+.out.err { color: var(--a2t-danger); background: color-mix(in srgb, var(--a2t-danger) 8%, var(--a2t-surface)); }
+
+/* OCR overlay */
+#overlay { position: fixed; inset: 0; z-index: 50; background: rgba(0,0,0,0.55); display: flex; flex-direction: column; }
+#overlay[hidden] { display: none; }
+.ov-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 12px; background: var(--a2t-panel); border-bottom: 1px solid var(--a2t-line); font: 13px var(--ui); color: var(--fg); }
+#ov-title { font-weight: bold; }
+#ov-body { flex: 1; min-height: 0; overflow: auto; background: var(--bg); }
+#ov-body pre { margin: 0; padding: 12px; font: 12px/1.5 var(--mono); white-space: pre-wrap; word-break: break-word; color: var(--fg); }
+#ov-body iframe { display: block; width: 100%; height: 100%; border: 0; background: #fff; }
+
+/* transcription pipeline strip */
+.pipeline { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin: 18px 0; }
+.stage { border: 1px solid var(--a2t-line); border-radius: var(--radius); padding: 12px 14px; background: var(--a2t-panel); transition: border-color .25s, color .25s, box-shadow .25s; }
+.stage .n { color: var(--a2t-faint); font-size: 11px; font-family: var(--mono); }
+.stage .t { color: var(--a2t-dim); font-size: 12px; margin-top: 4px; }
+.stage.active { border-color: var(--a2t-accent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--a2t-accent) 45%, transparent); background: var(--a2t-surface); }
+.stage.active .t, .stage.active .n { color: var(--a2t-accent); }
+.stage.done { border-color: var(--a2t-accent); background: var(--a2t-accent); }
+.stage.done .t, .stage.done .n { color: #fff; }
+@media (prefers-color-scheme: dark) { .stage.done .t, .stage.done .n { color: #15170f; } }
+
+/* transcription progress bar */
+.bar { height: 6px; background: color-mix(in srgb, var(--fg) 8%, transparent); border-radius: 999px; overflow: hidden; margin-top: 10px; display: none; }
+.bar.show { display: block; }
+.bar > i { display: block; height: 100%; width: 0%; background: var(--a2t-accent); transition: width .2s; }
+.bar.indeterminate > i { width: 40%; transition: none; animation: bar-slide 1.1s ease-in-out infinite; }
+@keyframes bar-slide { 0% { transform: translateX(-110%); } 100% { transform: translateX(280%); } }
+
+/* device badge */
+.badge.gpu { color: #fff; background: var(--a2t-accent); border-color: var(--a2t-accent); }
+.badge.cpu { color: var(--a2t-accent); border-color: var(--a2t-accent); }
+@media (prefers-color-scheme: dark) { .badge.gpu { color: #15170f; } }
+
+/* transcription results */
+#results { display: none; }
+#results.show { display: block; }
+.result-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+.result-head h2 { font-family: var(--disp); font-size: 20px; margin: 0; color: var(--fg); }
+#partial { color: var(--a2t-faint); font-style: italic; white-space: pre-wrap; min-height: 0; }
+.plaintext { white-space: pre-wrap; line-height: 1.7; color: var(--fg); }
+.segments { margin-top: 18px; border-top: 1px solid var(--a2t-line); padding-top: 14px; }
+.segments summary { cursor: pointer; color: var(--a2t-dim); font-size: 12px; letter-spacing: 0.1em; text-transform: uppercase; font-family: var(--mono); }
+.seg-row { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 4px 0; border-bottom: 1px solid var(--a2t-line); align-items: start; }
+.seg-row .ts { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; font-family: var(--mono); font-size: 12px; color: var(--a2t-accent); background: transparent; border: 1px solid var(--a2t-line); border-radius: var(--radius); padding: 3px 9px; cursor: pointer; text-align: left; transition: background .15s, border-color .15s, color .15s; }
+.seg-row .ts:hover:not(:disabled) { border-color: var(--a2t-accent); background: color-mix(in srgb, var(--a2t-accent) 8%, transparent); }
+.seg-row .ts:disabled { color: var(--a2t-faint); border-color: transparent; cursor: default; }
+.seg-row .ts.playing { background: var(--a2t-accent); color: #fff; border-color: var(--a2t-accent); }
+.seg-row .ts .glyph { font-size: 9px; line-height: 1; }
+.seg-row .tx { color: var(--fg); padding-top: 4px; }
+.seg-row .tx.editing { background: var(--a2t-surface); border: 1px solid var(--a2t-line); border-radius: var(--radius); padding: 4px 8px; }
+.seg-row .tx.editing:focus { outline: none; border-color: var(--a2t-accent); box-shadow: 0 0 0 1px var(--a2t-accent); }
+
+/* transcription tabs (transcribe / edit existing) */
+.tabs { display: flex; gap: 4px; margin-bottom: 16px; border-bottom: 2px solid var(--a2t-line); }
+.tab { appearance: none; background: none; border: none; cursor: pointer; font-family: var(--disp); font-weight: 700; text-transform: uppercase; letter-spacing: 0.02em; font-size: 13px; color: var(--a2t-dim); padding: 10px 16px; margin-bottom: -2px; border-bottom: 2px solid transparent; }
+.tab:hover { color: var(--fg); }
+.tab[aria-selected="true"] { color: var(--a2t-accent); border-bottom-color: var(--a2t-accent); }
+.edit-help { color: var(--a2t-dim); font-size: 12px; margin: 0 0 14px; }
+.edit-inputs { display: flex; flex-direction: column; gap: 12px; }
+.edit-inputs .dropzone { padding: 24px 20px; }
+.edit-inputs .dropzone .big { font-size: 15px; }
+.meta-line { color: var(--a2t-faint); font-size: 11px; margin-top: 14px; font-family: var(--mono); }
+.tech-note { color: var(--a2t-faint); font-size: 11px; line-height: 1.7; margin-top: 18px; }
+
+@media (max-width: 680px) { .pipeline { grid-template-columns: repeat(2, 1fr); } .controls { flex-direction: column; gap: 12px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <a href="/web-utilities/" class="back-link">Web &amp; File Utilities</a>
+  <header>
+    <p class="eyebrow">In your browser &middot; nothing uploaded</p>
+    <h1>Anything to Text</h1>
+    <p class="sub">Drop an <b>image</b>, a <b>PDF</b>, or an <b>audio/video</b> recording and get text back. Images and PDFs are read with on-device OCR; audio and video are transcribed with a local speech model. <b>Your files never leave your device</b> &mdash; only the models download on first run.</p>
+  </header>
+
+  <!-- shared intake: one drop zone for everything, routed by file type -->
+  <div class="panel">
+    <div id="drop" class="dropzone">
+      <div class="big">Drop anything &mdash; images, a PDF, audio, or video</div>
+      <div class="hint">paste an image, or click to choose files</div>
+    </div>
+    <input id="file" type="file" accept="image/*,application/pdf,audio/*,video/*" multiple hidden>
+    <p id="route-note"></p>
+  </div>
+
+  <!-- ===================== OCR engine (images + PDF) ===================== -->
+  <section id="ocr-section" class="engine" hidden>
+    <div class="panel">
+      <div class="controls">
+        <div>
+          <label class="field" for="tier">OCR model tier</label>
+          <select id="tier">
+            <option value="tiny">Tiny (~3M, fastest)</option>
+            <option value="small">Small (~7M, balanced)</option>
+            <option value="medium" selected>Medium (~35M, best)</option>
+          </select>
+        </div>
+        <div><label class="field" for="dpi">PDF DPI</label><input id="dpi" type="number" value="200" step="50" min="72" max="400"></div>
+        <div><label class="field" for="batch">Batch size</label><input id="batch" type="number" value="10" step="1" min="1" max="50"></div>
+      </div>
+      <div class="runbar">
+        <button id="run" class="primary" disabled>Run batch</button>
+        <button id="continue" class="ghost" disabled>Continue</button>
+        <button id="estimate" class="ghost" disabled>Estimate</button>
+        <button id="clear" class="ghost" disabled>Clear</button>
+        <span id="status">Loading OCR libraries&hellip;</span>
+      </div>
+      <div id="eta"></div>
+    </div>
+
+    <div class="panel">
+      <div class="result-actions">
+        <span class="label">Export</span>
+        <button id="copy" class="ghost" disabled>Copy all text</button>
+        <button id="txt" class="ghost" disabled>Download .txt</button>
+        <button id="json" class="ghost" disabled>Download .json</button>
+        <button id="html" class="ghost" disabled>Download .html</button>
+        <button id="show-json" class="ghost" disabled>Show .json</button>
+        <button id="show-html" class="ghost" disabled>Show .html</button>
+      </div>
+    </div>
+
+    <div id="pages"></div>
+
+    <div id="overlay" hidden>
+      <div class="ov-bar">
+        <span id="ov-title"></span>
+        <button id="ov-close" class="ghost">Close</button>
+      </div>
+      <div id="ov-body"></div>
+    </div>
+  </section>
+
+  <!-- ===================== Transcription engine (audio + video) ===================== -->
+  <section id="tr-section" class="engine" hidden>
+    <div class="tabs" role="tablist" aria-label="Mode">
+      <button class="tab" id="tab-transcribe" type="button" role="tab" aria-selected="true" aria-controls="panel-transcribe">Transcribe</button>
+      <button class="tab" id="tab-edit" type="button" role="tab" aria-selected="false" aria-controls="panel-edit">Edit existing</button>
+    </div>
+
+    <div class="panel" id="panel-transcribe" role="tabpanel" aria-labelledby="tab-transcribe">
+      <div class="filemeta" id="filemeta" hidden></div>
+      <div class="controls">
+        <div>
+          <label class="field" for="model">Model</label>
+          <select id="model"></select>
+        </div>
+        <div>
+          <label class="field" for="lang">Language</label>
+          <select id="lang">
+            <option value="auto">Auto-detect</option>
+            <option value="en">English</option>
+            <option value="es">Spanish</option>
+            <option value="fr">French</option>
+            <option value="de">German</option>
+            <option value="it">Italian</option>
+            <option value="pt">Portuguese</option>
+            <option value="nl">Dutch</option>
+            <option value="ja">Japanese</option>
+            <option value="zh">Chinese</option>
+            <option value="ko">Korean</option>
+            <option value="ru">Russian</option>
+            <option value="ar">Arabic</option>
+            <option value="hi">Hindi</option>
+          </select>
+        </div>
+        <div>
+          <label class="field">Task</label>
+          <div class="radios" id="task">
+            <label class="radio"><input type="radio" name="task" value="transcribe" checked> Transcribe</label>
+            <label class="radio"><input type="radio" name="task" value="translate"> Translate &rarr; EN</label>
+          </div>
+        </div>
+      </div>
+      <div class="runbar">
+        <button class="primary" id="tr-run" disabled>Transcribe</button>
+        <span class="badge" id="device">detecting&hellip;</span>
+        <span id="tr-status"></span>
+      </div>
+      <div class="bar" id="bar"><i></i></div>
+    </div>
+
+    <div class="panel" id="panel-edit" role="tabpanel" aria-labelledby="tab-edit" hidden>
+      <p class="edit-help">Load the original audio/video and its transcript. An .srt keeps timestamps and per-segment playback; a .txt loads as plain lines. Edit the text, play any segment to check it against the audio, then download the corrected file.</p>
+      <div class="edit-inputs">
+        <div class="dropzone" id="edit-audio-zone">
+          <div class="big">Original audio / video</div>
+          <div class="hint">Drop or click to choose &middot; the recording you transcribed</div>
+          <div class="filemeta" id="edit-audio-meta" hidden></div>
+        </div>
+        <input type="file" id="edit-audio" accept="audio/*,video/*" hidden>
+        <div class="dropzone" id="edit-transcript-zone">
+          <div class="big">Transcript</div>
+          <div class="hint">Drop or click to choose &middot; .srt or .txt</div>
+          <div class="filemeta" id="edit-transcript-meta" hidden></div>
+        </div>
+        <input type="file" id="edit-transcript" accept=".srt,.txt,text/plain" hidden>
+      </div>
+      <div class="runbar">
+        <button class="primary" id="edit-load" disabled>Load for editing</button>
+        <span id="edit-status"></span>
+      </div>
+      <div class="bar" id="edit-bar"><i></i></div>
+    </div>
+
+    <div class="pipeline" id="pipeline">
+      <div class="stage" data-stage="decode"><div class="n">01</div><div class="t">Extract audio</div></div>
+      <div class="stage" data-stage="model"><div class="n">02</div><div class="t">Load model</div></div>
+      <div class="stage" data-stage="transcribe"><div class="n">03</div><div class="t">Transcribe</div></div>
+      <div class="stage" data-stage="present"><div class="n">04</div><div class="t">Read result</div></div>
+    </div>
+
+    <div class="panel" id="results">
+      <div class="result-head">
+        <h2>Transcript</h2>
+        <div class="result-actions">
+          <button class="ghost" id="tr-copy">Copy</button>
+          <button class="ghost" id="dl-txt">Download .txt</button>
+          <button class="ghost" id="dl-srt">Download .srt</button>
+        </div>
+      </div>
+      <div id="partial"></div>
+      <div class="plaintext" id="plaintext"></div>
+      <details class="segments" id="segwrap">
+        <summary>Timestamped segments</summary>
+        <div id="segments"></div>
+      </details>
+      <div class="meta-line" id="metaline"></div>
+    </div>
+
+    <div class="tech-note" id="tech-note"></div>
+  </section>
+
+  <footer>
+    <p class="provenance">In-browser OCR (PaddleOCR PP-OCRv6 + pdf.js) and speech-to-text (Whisper via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
+  </footer>
+</div>
+
+<!-- ===================== shared router ===================== -->
+<script type="module">
+  /* One drop zone, two engines. Classify each dropped file by type and fan out
+     to the OCR engine (images / PDF) or the transcription engine (audio / video)
+     via intake events; the engines reveal their own sections on receipt. */
+  const drop = document.getElementById("drop");
+  const fileInput = document.getElementById("file");
+  const note = document.getElementById("route-note");
+  const isOcr = f => f.type.startsWith("image/") || f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
+  const isAv  = f => f.type.startsWith("audio/") || f.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|mp3|wav|m4a|flac|ogg|opus|aac)$/i.test(f.name || "");
+  function route(fileList) {
+    const files = [...fileList];
+    if (!files.length) return;
+    const ocr = files.filter(isOcr);
+    const av  = files.filter(isAv);
+    if (ocr.length) window.dispatchEvent(new CustomEvent("intake:ocr", { detail: ocr }));
+    if (av.length)  window.dispatchEvent(new CustomEvent("intake:transcribe", { detail: av }));
+    const parts = [];
+    if (ocr.length) parts.push(ocr.length + " image/PDF \u2192 OCR");
+    if (av.length)  parts.push((av.length > 1 ? "1 of " + av.length + " " : "") + "audio/video \u2192 transcript");
+    const skipped = files.length - ocr.length - av.length;
+    if (skipped > 0) parts.push(skipped + " unsupported skipped");
+    note.textContent = parts.join("  \u00b7  ");
+  }
+  drop.addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => { if (fileInput.files.length) route(fileInput.files); fileInput.value = ""; });
+  ["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+  drop.addEventListener("dragleave", e => { e.preventDefault(); drop.classList.remove("over"); });
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); if (e.dataTransfer.files.length) route(e.dataTransfer.files); });
+  window.addEventListener("paste", e => {
+    const it = [...((e.clipboardData && e.clipboardData.items) || [])].find(i => i.type.startsWith("image/"));
+    if (it) { const f = it.getAsFile(); if (f) route([f]); }
+  });
+  console.log("[router] ready");
+</script>
+
+<!-- ===================== OCR engine (verbatim from the source app; original branding removed) ===================== -->
+<script type="module">
+
+import { PaddleOcrService } from "https://esm.sh/ppu-paddle-ocr@5.8.3/web";
+import * as pdfjsLib from "https://esm.sh/pdfjs-dist@6.0.227";
+
+/* pdf.js needs an explicit worker URL; module worker is fine over http(s) (SharePoint), not file://. */
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://esm.sh/pdfjs-dist@6.0.227/build/pdf.worker.min.mjs";
+
+
+const $ = s => document.querySelector(s);
+const statusEl = $("#status"), etaEl = $("#eta"), pagesEl = $("#pages");
+const estimateBtn = $("#estimate"), runBtn = $("#run"), continueBtn = $("#continue"), clearBtn = $("#clear");
+const copyBtn = $("#copy"), txtBtn = $("#txt"), jsonBtn = $("#json"), htmlBtn = $("#html");
+const showJsonBtn = $("#show-json"), showHtmlBtn = $("#show-html");
+const overlay = $("#overlay"), ovBody = $("#ov-body"), ovTitle = $("#ov-title"), ovClose = $("#ov-close");
+const setStatus = m => { statusEl.textContent = m; console.log("[status]", m); };
+
+const SECONDS_PER_PAGE = 10;   /* skill estimate: ~10s/page on CPU */
+const LOAD_SECONDS = 6;        /* one-time model load */
+
+let paddle = null;             /* lazy PaddleOcrService */
+let pages = [];                /* { id, image, kind, render, status, text, lines, meanConf, ms, error } */
+let nextIndex = 0;             /* pointer to the next unprocessed page */
+const pdfDocs = [];            /* keep pdf documents alive so lazy page render works */
+
+/* ---------- OCR model selection ----------
+   PP-OCRv6 in three tiers; weights stream from Hugging Face on first run.
+   The 50-language recognition dictionary is fetched from inference.yml at init time
+   because it contains non-ASCII characters that cannot live in this ASCII-only page.
+   Set USE_V6 = false to fall back to the bundled PP-OCRv5 mobile (English only). */
+const USE_V6 = true;
+const HF_BASE = "https://huggingface.co/PaddlePaddle";
+const V6_TIERS = {
+  tiny:   { det: HF_BASE + "/PP-OCRv6_tiny_det_onnx/resolve/main/inference.onnx",
+            rec: HF_BASE + "/PP-OCRv6_tiny_rec_onnx/resolve/main/inference.onnx",
+            yml: HF_BASE + "/PP-OCRv6_tiny_rec_onnx/resolve/main/inference.yml" },
+  small:  { det: HF_BASE + "/PP-OCRv6_small_det_onnx/resolve/main/inference.onnx",
+            rec: HF_BASE + "/PP-OCRv6_small_rec_onnx/resolve/main/inference.onnx",
+            yml: HF_BASE + "/PP-OCRv6_small_rec_onnx/resolve/main/inference.yml" },
+  medium: { det: HF_BASE + "/PP-OCRv6_medium_det_onnx/resolve/main/inference.onnx",
+            rec: HF_BASE + "/PP-OCRv6_medium_rec_onnx/resolve/main/inference.onnx",
+            yml: HF_BASE + "/PP-OCRv6_medium_rec_onnx/resolve/main/inference.yml" },
+};
+
+function unquoteYaml(s) {
+  if (s.length >= 2 && s[0] === "'" && s[s.length - 1] === "'") return s.slice(1, -1).replace(/''/g, "'");
+  if (s.length >= 2 && s[0] === '"' && s[s.length - 1] === '"') return s.slice(1, -1).replace(/\\(.)/g, "$1");
+  return s;
+}
+/* Pull PostProcess.character_dict (a YAML list) out of a PaddleX inference.yml. */
+function parseCharacterDict(yml) {
+  const lines = yml.split(/\r?\n/);
+  let i = lines.findIndex(l => /^\s*character_dict\s*:/.test(l));
+  if (i < 0) throw new Error("character_dict not found in inference.yml");
+  const out = [];
+  for (i = i + 1; i < lines.length; i++) {
+    const m = lines[i].match(/^\s*-\s?(.*)$/);
+    if (!m) break;
+    out.push(unquoteYaml(m[1]));
+  }
+  return out;
+}
+async function loadV6Dict(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("dictionary fetch HTTP " + res.status);
+  const chars = parseCharacterDict(await res.text());
+  if (chars.length < 100) throw new Error("dictionary parse produced only " + chars.length + " entries");
+  /* PaddleOCR's CTC label layout for a use_space_char model (every PP-OCRv6 multilingual
+     rec head is one) is  [blank] + character_dict + [space]  so numClasses === glyphs + 2.
+     The inference.yml character_dict lists ONLY the real glyphs: neither the leading blank
+     nor the trailing space is in it.
+
+     ppu-paddle-ocr's decodeResults (core/recognition/ctc.js) auto-prepends the blank ONLY
+     when (dict.length === numClasses - 1). Handing it the raw glyph list (length
+     numClasses - 2) fails that test, so no blank is prepended and every class index
+     resolves one slot early -> the uniform +1 shift. Appending the space sentinel makes
+     dict.length === numClasses - 1, the decoder prepends the blank, and the layout lines
+     up: index 0 = blank, 1..glyphs = real chars, last index = space (the decoder emits a
+     literal space for its lastDictIndex class regardless of the stored value).
+
+     Dict is returned as UTF-8 bytes because _loadResource treats a STRING as a URL to
+     fetch and only accepts an ArrayBuffer as inline content. */
+  chars.push(" ");
+  console.log("[dict] v6 glyphs:", chars.length - 1, "| passing entries:", chars.length, "| expected model numClasses:", chars.length + 1);
+  return new TextEncoder().encode(chars.join("\n")).buffer;
+}
+
+/* ---------- model ---------- */
+function selectedTier() {
+  const el = document.getElementById("tier");
+  return (el && V6_TIERS[el.value]) ? el.value : "medium";
+}
+
+async function ensurePaddle() {
+  if (paddle) return paddle;
+  try {
+    let opts = {};
+    if (USE_V6) {
+      const tier = selectedTier();
+      const urls = V6_TIERS[tier];
+      setStatus("Loading PP-OCRv6 " + tier + " dictionary...");
+      const dict = await loadV6Dict(urls.yml);
+      setStatus("Loading PP-OCRv6 " + tier + " weights (first run, may take a moment)...");
+      opts = { model: { detection: urls.det, recognition: urls.rec, charactersDictionary: dict } };
+    } else {
+      setStatus("Loading PP-OCRv5 mobile weights (first run, ~10s)...");
+    }
+    paddle = new PaddleOcrService(opts);
+    await paddle.initialize();
+    console.log("[ocr] PaddleOcrService initialized; model:", USE_V6 ? "PP-OCRv6 " + selectedTier() : "PP-OCRv5 mobile");
+  } catch (e) {
+    paddle = null;
+    console.error("[ocr] init failed", e);
+    throw e;
+  }
+  return paddle;
+}
+
+/* ---------- intake ---------- */
+function addImage(file) {
+  const id = pages.length;
+  pages.push({
+    id, image: file.name || ("image-" + (id + 1)), kind: "image",
+    status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
+    meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false,
+    render: async () => {
+      const bmp = await createImageBitmap(file);
+      const cv = document.createElement("canvas");
+      cv.width = bmp.width; cv.height = bmp.height;
+      cv.getContext("2d").drawImage(bmp, 0, 0);
+      bmp.close && bmp.close();
+      return cv;
+    },
+  });
+}
+
+async function addPdf(file) {
+  const buf = await file.arrayBuffer();
+  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  pdfDocs.push(doc);
+  const label = file.name || "document.pdf";
+  console.log("[pdf]", label, "pages:", doc.numPages);
+  for (let p = 1; p <= doc.numPages; p++) {
+    const id = pages.length;
+    const pageNo = p;
+    pages.push({
+      id, image: label + " p." + pageNo, kind: "pdf",
+      status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
+      meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false,
+      getPdfPage: () => doc.getPage(pageNo),
+      render: async (scale) => {
+        const pdfPage = await doc.getPage(pageNo);
+        const viewport = pdfPage.getViewport({ scale });
+        return renderPdfCanvas(pdfPage, viewport);
+      },
+    });
+  }
+}
+
+function renderPdfCanvas(pdfPage, viewport) {
+  const cv = document.createElement("canvas");
+  cv.width = Math.round(viewport.width); cv.height = Math.round(viewport.height);
+  return pdfPage.render({ canvasContext: cv.getContext("2d"), viewport }).promise.then(() => cv);
+}
+
+async function accept(fileList) {
+  const files = [...fileList];
+  if (!files.length) return;
+  setStatus("Reading input...");
+  for (const f of files) {
+    try {
+      if (f.type === "application/pdf" || /\.pdf$/i.test(f.name || "")) await addPdf(f);
+      else if (f.type.startsWith("image/")) addImage(f);
+      else console.warn("[skip] unsupported type", f.name, f.type);
+    } catch (e) {
+      console.error("[intake] failed for", f.name, e);
+      setStatus("Could not read " + (f.name || "a file") + ": " + (e && e.message || e));
+    }
+  }
+  renderPages();
+  refreshControls();
+  estimate();
+}
+
+/* ---------- estimate (skill step 1) ---------- */
+function estimate() {
+  const remaining = pages.length - nextIndex;
+  if (!pages.length) { etaEl.textContent = ""; return; }
+  const secs = remaining * SECONDS_PER_PAGE + (paddle ? 0 : LOAD_SECONDS);
+  const mins = secs / 60;
+  const eta = mins >= 1 ? (mins.toFixed(1) + " min") : (secs + " s");
+  let msg = pages.length + " page(s); " + remaining + " pending; about " + eta + " of processing.";
+  if (remaining > 10) msg += " Larger than 10 pages - process in batches: press Run, then Continue.";
+  etaEl.textContent = msg;
+  console.log("[estimate]", msg);
+}
+
+/* ---------- OCR ---------- */
+function clampDpi() {
+  const v = parseInt($("#dpi").value, 10);
+  return Math.min(400, Math.max(72, isNaN(v) ? 200 : v));
+}
+function batchSize() {
+  const v = parseInt($("#batch").value, 10);
+  return Math.min(50, Math.max(1, isNaN(v) ? 10 : v));
+}
+
+/* Impose reading order on flattened boxes: group into lines by vertical proximity,
+   sort lines top-to-bottom and boxes left-to-right. Returns an array of line strings. */
+function readingOrder(items) {
+  const boxed = (items || []).filter(r => r && r.box && typeof r.text === "string" && r.text.length);
+  if (!boxed.length) return (items || []).map(r => (r && r.text) || "").filter(Boolean);
+  const heights = boxed.map(r => r.box.height).filter(h => h > 0).sort((a, b) => a - b);
+  const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
+  const tol = Math.max(4, medH * 0.6);
+  const byY = boxed.slice().sort((a, b) => a.box.y - b.box.y);
+  const lines = [];
+  for (const r of byY) {
+    let line = null;
+    for (const L of lines) { if (Math.abs(L.y - r.box.y) <= tol) { line = L; break; } }
+    if (!line) { line = { y: r.box.y, items: [] }; lines.push(line); }
+    line.items.push(r);
+  }
+  lines.sort((a, b) => a.y - b.y);
+  return lines.map(L => L.items.sort((a, b) => a.box.x - b.box.x).map(r => r.text).join(" "));
+}
+
+function meanConfidence(res, items) {
+  if (res && typeof res.confidence === "number") return res.confidence;
+  if (!items || !items.length) return 0;
+  return items.reduce((a, r) => a + (r.confidence || 0), 0) / items.length;
+}
+
+/* Downscaled preview data URL so each card can show the rendered page next to its text
+   without holding full-resolution canvases in memory. */
+function makePreview(canvas, maxW) {
+  const cap = maxW || 480;
+  const scale = Math.min(1, cap / (canvas.width || 1));
+  const pv = document.createElement("canvas");
+  pv.width = Math.max(1, Math.round(canvas.width * scale));
+  pv.height = Math.max(1, Math.round(canvas.height * scale));
+  pv.getContext("2d").drawImage(canvas, 0, 0, pv.width, pv.height);
+  return pv.toDataURL("image/jpeg", 0.85);
+}
+
+/* Extract pdf.js text-layer runs as uniform {text, box, confidence} items in canvas
+   pixels for the given viewport, using pdf.js's own TextLayer geometry (build/pdf.mjs):
+   tx = viewport.transform composed with the run transform; glyph height = hypot(tx[2],
+   tx[3]); width = run width * scale; box top = baseline tx[5] minus height. Rotated and
+   vertical runs are uncommon in documents and are placed at their origin without
+   rotation. Whitespace-only runs are dropped. confidence is 1 - the text is exact. */
+async function extractPdfText(pdfPage, viewport) {
+  const tc = await pdfPage.getTextContent();
+  const scale = viewport.scale;
+  const items = [];
+  for (const it of (tc.items || [])) {
+    if (typeof it.str !== "string" || !it.str.trim()) continue;
+    const tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
+    const h = Math.hypot(tx[2], tx[3]) || (it.height * scale) || 1;
+    const w = (it.width * scale) || (it.str.length * h * 0.5);
+    items.push({ text: it.str, confidence: 1, box: { x: tx[4], y: tx[5] - h, width: w, height: h } });
+  }
+  return items;
+}
+function hasUsableText(items) {
+  return items.some(r => r.text && r.text.trim().length);
+}
+
+/* Shared assembly for both sources: reading-order lines, normalized segments stamped
+   with their source, and mean confidence (exact text is 1). */
+function buildResult(pg, items, source, res) {
+  const W = pg.pageW || 1, H = pg.pageH || 1;
+  pg.source = source;
+  pg.lines = readingOrder(items);
+  pg.text = pg.lines.join("\n");
+  pg.segments = items
+    .filter(r => r && r.box && typeof r.text === "string" && r.text.length)
+    .map(r => ({
+      text: r.text, source,
+      conf: typeof r.confidence === "number" ? r.confidence : 0,
+      x: r.box.x / W, y: r.box.y / H, w: r.box.width / W, h: r.box.height / H,
+    }));
+  pg.meanConf = source === "text" ? 1 : meanConfidence(res, items);
+}
+
+async function processPage(pg) {
+  const t0 = performance.now();
+  const scale = clampDpi() / 72;
+
+  /* Hybrid PDF path: prefer pdf.js's embedded text layer - exact, instant, and needs no
+     model - and fall back to OCR only when a page has no usable text or OCR is forced. */
+  if (pg.kind === "pdf" && !pg.forceOcr) {
+    const pdfPage = await pg.getPdfPage();
+    const viewport = pdfPage.getViewport({ scale });
+    const items = await extractPdfText(pdfPage, viewport);
+    if (hasUsableText(items)) {
+      const canvas = await renderPdfCanvas(pdfPage, viewport);
+      pg.pageW = canvas.width; pg.pageH = canvas.height;
+      pg.preview = makePreview(canvas);
+      buildResult(pg, items, "text", null);
+      pg.ms = Math.round(performance.now() - t0);
+      pg.status = "done";
+      console.log("[text]", pg.image, pg.ms + "ms", pg.lines.length + " lines (pdf.js text layer)");
+      return;
+    }
+    console.log("[text]", pg.image, "no usable text layer - falling back to OCR");
+  }
+
+  /* OCR path: images, forced-OCR PDF pages, and text-less PDF pages. The model loads
+     lazily here, so a PDF that is entirely born-digital never touches the weights. */
+  await ensurePaddle();
+  const canvas = await pg.render(scale);
+  pg.pageW = canvas.width; pg.pageH = canvas.height;
+  pg.preview = makePreview(canvas);
+  /* noCache: ppu-paddle-ocr's ImageCache keys on a hash of only the first 1 KB of canvas
+     pixels plus total length (core/image-cache.js). Same-DPI PDF pages share canvas
+     dimensions and a byte-identical top-left corner under a fixed template, so the key
+     collides and every page returns page 1's result. Each page is OCR'd once here, so
+     the cache has no value to us. */
+  const res = await paddle.recognize(canvas, { flatten: true, noCache: true });
+  const items = (res && res.results) || [];
+  buildResult(pg, items, "ocr", res);
+  pg.ms = Math.round(performance.now() - t0);
+  pg.status = "done";
+  console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines", (pg.meanConf * 100).toFixed(1) + "%");
+}
+
+async function runBatch() {
+  if (nextIndex >= pages.length) return;
+  setBusy(true);
+  const end = Math.min(pages.length, nextIndex + batchSize());
+  setStatus("Processing pages " + (nextIndex + 1) + "-" + end + " of " + pages.length + "...");
+  for (; nextIndex < end; nextIndex++) {
+    const pg = pages[nextIndex];
+    try {
+      await processPage(pg);
+    } catch (e) {
+      /* one bad page records its error and we keep going - never abort the batch */
+      pg.status = "error";
+      pg.error = (e && e.message) || String(e);
+      console.error("[process] page failed", pg.image, e);
+    }
+    updatePage(pg);
+  }
+  const remaining = pages.length - nextIndex;
+  setStatus(remaining > 0 ? ("Batch done. " + remaining + " page(s) remaining - press Continue.") : "Done.");
+  setBusy(false);
+  estimate();
+}
+
+/* Force a single page through the OCR path - used when the pdf.js text layer was present
+   but partial. Re-renders that page only and updates its card in place. */
+async function reprocessPage(id) {
+  const pg = pages[id];
+  if (!pg) return;
+  pg.forceOcr = true;
+  pg.status = "pending";
+  pg.error = null;
+  updatePage(pg);
+  setBusy(true);
+  setStatus("Re-running OCR on " + pg.image + "...");
+  try {
+    await processPage(pg);
+  } catch (e) {
+    pg.status = "error";
+    pg.error = (e && e.message) || String(e);
+    console.error("[reocr] page failed", pg.image, e);
+  }
+  updatePage(pg);
+  setBusy(false);
+  setStatus("Done.");
+  refreshControls();
+}
+
+/* ---------- rendering (additive: each page block updates in place) ---------- */
+function renderPages() {
+  pagesEl.innerHTML = "";
+  for (const pg of pages) {
+    const div = document.createElement("div");
+    div.className = "page";
+    div.id = "pg-" + pg.id;
+    div.innerHTML = pageInner(pg);
+    pagesEl.appendChild(div);
+  }
+}
+function updatePage(pg) {
+  const div = $("#pg-" + pg.id);
+  if (div) div.innerHTML = pageInner(pg);
+}
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+function pageInner(pg) {
+  const done = pg.status === "done";
+  const srcBadge = done
+    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : "OCR") + '</span>'
+    : "";
+  const meta = done
+    ? '<span class="meta">' + (pg.source === "text"
+        ? pg.lines.length + ' lines | exact'
+        : pg.ms + 'ms | ' + pg.lines.length + ' lines | conf ' + (pg.meanConf * 100).toFixed(1) + '%') + '</span>'
+    : (pg.status === "error" ? '<span class="meta">failed</span>' : "");
+  const reocrBtn = (pg.kind === "pdf" && done && pg.source === "text")
+    ? '<button class="ghost reocr" data-pg="' + pg.id + '">Re-run as OCR</button>' : "";
+  const copyBtn = done ? '<button class="ghost copy-page" data-pg="' + pg.id + '">Copy</button>' : "";
+  const preview = pg.preview ? '<img class="preview" src="' + pg.preview + '" alt="page preview">' : "";
+  const textOut = pg.status === "error"
+    ? '<div class="out err">' + escapeHtml(pg.error || "error") + '</div>'
+    : (done
+        ? '<div class="out">' + (escapeHtml(pg.text) || "(no text)") + '</div>'
+        : '<div class="out muted">working&#x2026;</div>');
+  const body = '<div class="cols">' + preview + '<div class="col-text">' + textOut + '</div></div>';
+  return '<h2><span class="badge ' + pg.status + '">' + pg.status + '</span> '
+    + '<span class="pg-name">' + escapeHtml(pg.image) + '</span> ' + srcBadge + meta
+    + '<span class="hdr-actions">' + reocrBtn + copyBtn + '</span></h2>' + body;
+}
+
+/* ---------- exports ---------- */
+function allText() {
+  return pages.filter(p => p.status === "done").map(p => "=== " + p.image + " ===\n" + (p.text || "(no text)")).join("\n\n");
+}
+function asJson() {
+  return JSON.stringify(pages.map((p, i) => ({
+    page: i + 1, image: p.image, source: p.source, text: p.text, lines: p.lines,
+    mean_conf: p.meanConf,
+    page_px: { w: p.pageW || 0, h: p.pageH || 0 },
+    /* bbox is [x, y, w, h] normalized 0..1 against page_px; conf and source are per-segment. */
+    segments: (p.segments || []).map(s => ({
+      text: s.text, conf: s.conf, source: s.source,
+      bbox: [+s.x.toFixed(5), +s.y.toFixed(5), +s.w.toFixed(5), +s.h.toFixed(5)],
+    })),
+    error: p.error,
+  })), null, 2);
+}
+/* Absolutely-positioned text layer: one container per page, one div per detected
+   segment placed by percentage so the markup carries the original geometry. A reader,
+   the browser, and a downstream model all recover columns and tables from position
+   alone - no layout heuristic. Font size tracks box height via container-query height
+   units; segments below 60% confidence get a faint tint for triage. */
+function asHtml() {
+  const done = pages.filter(p => p.status === "done" && p.segments && p.segments.length);
+  const head =
+    '<!doctype html>\n<html>\n<head>\n<meta charset="utf-8">\n' +
+    '<title>OCR layout export</title>\n<style>\n' +
+    'body{margin:0;background:#525659;font-family:Arial,Helvetica,sans-serif;}\n' +
+    'h2{color:#e8e8e8;font:13px Arial;font-weight:normal;margin:16px auto 6px;max-width:900px;}\n' +
+    '.page{position:relative;width:100%;max-width:900px;margin:0 auto 24px;background:#fff;\n' +
+    '  border:1px solid #222;box-shadow:0 1px 6px rgba(0,0,0,0.4);container-type:size;}\n' +
+    '.seg{position:absolute;white-space:nowrap;overflow:visible;line-height:1;color:#111;}\n' +
+    '.seg.low{background:rgba(214,40,40,0.13);}\n' +
+    '</style>\n</head>\n<body>\n';
+  const body = done.map(p => {
+    const ar = (p.pageW && p.pageH) ? (p.pageW + " / " + p.pageH) : "1 / 1.4142";
+    const segs = p.segments.map(s => {
+      const left = (s.x * 100).toFixed(3), top = (s.y * 100).toFixed(3);
+      const w = (s.w * 100).toFixed(3), h = (s.h * 100).toFixed(3);
+      const fs = (s.h * 100 * 0.78).toFixed(3);
+      const cls = (s.conf > 0 && s.conf < 0.6) ? "seg low" : "seg";
+      const title = "conf " + (s.conf * 100).toFixed(0) + "%";
+      return '<div class="' + cls + '" title="' + title + '" style="left:' + left +
+        '%;top:' + top + '%;width:' + w + '%;height:' + h + '%;font-size:' + fs +
+        'cqh;">' + escapeHtml(s.text) + '</div>';
+    }).join("\n");
+    return '<h2>' + escapeHtml(p.image) + (p.source ? ' (' + p.source + ')' : '') +
+      '</h2>\n<div class="page" style="aspect-ratio:' + ar + ';">\n' + segs + '\n</div>';
+  }).join("\n");
+  return head + body + '\n</body>\n</html>\n';
+}
+function download(name, text, type) {
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+/* ---------- control state ---------- */
+function setBusy(b) {
+  estimateBtn.disabled = b || !pages.length;
+  runBtn.disabled = b || nextIndex >= pages.length;
+  continueBtn.disabled = b || nextIndex >= pages.length || nextIndex === 0;
+  clearBtn.disabled = b;
+}
+function refreshControls() {
+  const has = pages.length > 0;
+  const more = nextIndex < pages.length;
+  const someDone = pages.some(p => p.status === "done");
+  estimateBtn.disabled = !has;
+  runBtn.disabled = !more;
+  continueBtn.disabled = !more || nextIndex === 0;
+  clearBtn.disabled = !has;
+  copyBtn.disabled = !someDone;
+  txtBtn.disabled = !someDone;
+  jsonBtn.disabled = !someDone;
+  htmlBtn.disabled = !someDone;
+  showJsonBtn.disabled = !someDone;
+  showHtmlBtn.disabled = !someDone;
+}
+
+function clearAll() {
+  pages = []; nextIndex = 0; pdfDocs.length = 0;
+  pagesEl.innerHTML = ""; etaEl.textContent = "";
+  refreshControls();
+  setStatus("Cleared. Choose images or a PDF.");
+}
+
+/* ---------- intake: files arrive from the shared router ---------- */
+const ocrSection = document.getElementById("ocr-section");
+window.addEventListener("intake:ocr", e => { ocrSection.hidden = false; accept(e.detail); });
+
+estimateBtn.onclick = estimate;
+document.getElementById("tier").onchange = () => {
+  if (paddle) { paddle = null; setStatus("Model tier changed - will reload on next run."); }
+};
+runBtn.onclick = () => runBatch().then(refreshControls);
+continueBtn.onclick = () => runBatch().then(refreshControls);
+clearBtn.onclick = clearAll;
+copyBtn.onclick = async () => {
+  try { await navigator.clipboard.writeText(allText()); setStatus("Copied all text to clipboard."); }
+  catch (e) { console.error("[copy] failed", e); setStatus("Copy failed: " + (e && e.message || e)); }
+};
+txtBtn.onclick = () => download("ocr.txt", allText(), "text/plain");
+jsonBtn.onclick = () => download("ocr.json", asJson(), "application/json");
+htmlBtn.onclick = () => download("ocr.html", asHtml(), "text/html;charset=utf-8");
+
+/* In-page preview overlay: JSON as text, HTML rendered in an iframe so the positioned
+   layout is shown as-is. srcdoc is set via property to avoid attribute escaping, and
+   the iframe is sandboxed (no allow-* tokens) since the export is static markup only. */
+function showOverlay(title, node) {
+  ovTitle.textContent = title;
+  ovBody.innerHTML = "";
+  ovBody.appendChild(node);
+  overlay.hidden = false;
+}
+function hideOverlay() { overlay.hidden = true; ovBody.innerHTML = ""; }
+ovClose.onclick = hideOverlay;
+overlay.addEventListener("click", e => { if (e.target === overlay) hideOverlay(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape" && !overlay.hidden) hideOverlay(); });
+showJsonBtn.onclick = () => {
+  const pre = document.createElement("pre");
+  pre.textContent = asJson();
+  showOverlay("ocr.json", pre);
+};
+showHtmlBtn.onclick = () => {
+  const iframe = document.createElement("iframe");
+  iframe.setAttribute("sandbox", "");
+  iframe.srcdoc = asHtml();
+  showOverlay("ocr.html", iframe);
+};
+
+pagesEl.addEventListener("click", async e => {
+  const reBtn = e.target.closest(".reocr");
+  if (reBtn) { await reprocessPage(Number(reBtn.dataset.pg)); return; }
+  const btn = e.target.closest(".copy-page");
+  if (!btn) return;
+  const pg = pages[Number(btn.dataset.pg)];
+  if (!pg) return;
+  try {
+    await navigator.clipboard.writeText(pg.text || "");
+    const prev = btn.textContent; btn.textContent = "Copied";
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  } catch (err) { console.error("[copy-page] failed", err); setStatus("Copy failed: " + (err && err.message || err)); }
+});
+
+
+setStatus("Ready - choose images or a PDF.");
+estimateBtn.disabled = true; runBtn.disabled = true; continueBtn.disabled = true; clearBtn.disabled = true;
+
+</script>
+
+<!-- ===================== Transcription engine (verbatim from the source app; original branding removed) ===================== -->
+<script type="module">
+
+/* =========================================================================
+   Local Transcriber
+   - Decode/extract audio to 16 kHz mono Float32 on the main thread
+       * native Web Audio for audio files (fast, free)
+       * lazy ffmpeg.wasm only for video / when native decode fails
+   - Run Whisper inference inside a Web Worker (keeps the UI responsive)
+       * WebGPU when available, WASM fallback otherwise
+   ========================================================================= */
+
+/* ---- version pins (bump here if a CDN pairing breaks) ---- */
+const TRANSFORMERS_VER = "4.2.0";
+const FFMPEG_VER = "0.12.15";
+const FFMPEG_UTIL_VER = "0.12.2";
+const FFMPEG_CORE_VER = "0.12.10"; /* single-thread core: no SharedArrayBuffer needed */
+
+/* ---- capability detection ---- */
+const HAS_WEBGPU = (typeof navigator !== "undefined") && ("gpu" in navigator);
+const DEVICE = HAS_WEBGPU ? "webgpu" : "wasm";
+/* Per-model dtype, grounded in which ONNX variants actually build a session and in
+   their download size:
+   - large-v3-turbo: q4. Its fp32 encoder overflows the max single ArrayBuffer, so it
+     must be quantized; its q4 weights are intact (~800 MB).
+   - tiny/base/small: fp32 encoder + fp16 decoder. The encoder is the module Whisper is
+     sensitive to, so it stays full precision; the decoder (the bulk of the download)
+     runs at fp16 — which has no quantization scales, so it avoids the broken NBits
+     embed_tokens that fails on q4/q8, is ~half the fp32 size, and is typically faster
+     on WebGPU. Fixes the case where fp32 "small" (~950 MB) downloaded LARGER than q4
+     turbo. The fp16 merged decoders are present and maintainer-validated. */
+function resolveDtype(modelId) {
+  if (/large/i.test(modelId)) return { encoder_model: "q4", decoder_model_merged: "q4" };
+  return { encoder_model: "fp32", decoder_model_merged: "fp16" };
+}
+
+/* ---- model menu (all multilingual so language/translate work) ---- */
+const MODELS = [
+  { id: "onnx-community/whisper-tiny",           name: "tiny",           note: "fastest, lowest quality", size: "~80 MB" },
+  { id: "onnx-community/whisper-base",           name: "base",           note: "fast",                    size: "~190 MB" },
+  { id: "onnx-community/whisper-small",          name: "small",          note: "balanced",                size: "~650 MB" },
+  { id: "onnx-community/whisper-large-v3-turbo", name: "large-v3-turbo", note: "best quality",            size: "~800 MB" }
+];
+/* turbo is great on GPU but heavy on CPU; pick a sane default per device */
+const DEFAULT_MODEL = HAS_WEBGPU ? "onnx-community/whisper-large-v3-turbo" : "onnx-community/whisper-base";
+
+/* ---- DOM ---- */
+const el = (id) => document.getElementById(id);
+const dom = {
+  drop: el("drop"), file: el("file"), filemeta: el("filemeta"),
+  model: el("model"), lang: el("lang"), task: el("task"),
+  run: el("tr-run"), device: el("device"), status: el("tr-status"),
+  bar: el("bar"), barFill: el("bar").firstElementChild,
+  results: el("results"), partial: el("partial"),
+  plaintext: el("plaintext"), segments: el("segments"),
+  segwrap: el("segwrap"), metaline: el("metaline"),
+  copy: el("tr-copy"), dlTxt: el("dl-txt"), dlSrt: el("dl-srt"),
+  pipeline: el("pipeline"), techNote: el("tech-note"),
+  editAudio: el("edit-audio"), editTranscript: el("edit-transcript"), editLoad: el("edit-load"),
+  editAudioZone: el("edit-audio-zone"), editTranscriptZone: el("edit-transcript-zone"),
+  editAudioMeta: el("edit-audio-meta"), editTranscriptMeta: el("edit-transcript-meta"),
+  editStatus: el("edit-status"), editBar: el("edit-bar"),
+  tabTranscribe: el("tab-transcribe"), tabEdit: el("tab-edit"),
+  panelTranscribe: el("panel-transcribe"), panelEdit: el("panel-edit")
+};
+
+/* ---- app state ---- */
+const state = {
+  file: null,
+  task: "transcribe",
+  loadedModel: null, /* which model the worker currently holds */
+  busy: false,
+  result: null,      /* { text, chunks, elapsed } */
+  audio: null,       /* decoded 16kHz mono Float32Array, kept for per-segment playback */
+  editAudio: null,       /* edit tab: chosen original media File (drop or click) */
+  editTranscript: null   /* edit tab: chosen .srt/.txt File (drop or click) */
+};
+
+
+(function initUI() {
+  dom.device.textContent = HAS_WEBGPU ? "WebGPU \u00b7 GPU" : "WASM \u00b7 CPU";
+  dom.device.classList.add(HAS_WEBGPU ? "gpu" : "cpu");
+
+  for (const m of MODELS) {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = m.name + " \u2014 " + m.note + " (" + m.size + ")";
+    if (m.id === DEFAULT_MODEL) opt.selected = true;
+    dom.model.appendChild(opt);
+  }
+  updateTechNote();
+  console.log("[init] device=%s defaultModel=%s dtype=%o", DEVICE, DEFAULT_MODEL, resolveDtype(DEFAULT_MODEL));
+})();
+
+/* Footer note: name the selected model + its download size, and make the local-only
+   nature explicit. Deliberately avoids naming libraries / the model host, which read
+   as if the audio were sent somewhere. */
+function updateTechNote() {
+  if (!dom.techNote) return;
+  const m = MODELS.find((x) => x.id === dom.model.value) || MODELS[0];
+  const backend = HAS_WEBGPU ? "your GPU (WebGPU)" : "your CPU";
+  dom.techNote.textContent =
+    "Whisper " + m.name + " (" + m.size + " model) runs entirely in this page on " + backend +
+    ". Your audio is transcribed on your device and is never uploaded.";
+}
+
+/* =========================================================================
+   Worker: Transformers.js ASR pipeline (embedded as a module blob)
+   ========================================================================= */
+const WORKER_SOURCE = [
+  'import { pipeline, WhisperTextStreamer } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@' + TRANSFORMERS_VER + '";',
+  'let transcriber = null;',
+  'let loadedKey = null;',
+  '',
+  '/* ---- sequential path: live per-token streaming via WhisperTextStreamer ---- */',
+  'async function transcribeStreaming(audio, language, task, chunkLengthS) {',
+  '  const CHUNK_S = 30, STRIDE_S = 5, SR = 16000;',
+  '  /* bundle mode (chunkLengthS<=0): the caller pre-segmented to <=30s, so this is one',
+  '     full-context window with no internal chunking. chunked mode is the legacy path. */',
+  '  const chunked = chunkLengthS && chunkLengthS > 0;',
+  '  let totalWindows = 1;',
+  '  if (chunked) {',
+  '    const w = SR * CHUNK_S, s = SR * STRIDE_S, jump = w - 2 * s;',
+  '    if (audio.length <= w) { totalWindows = 1; }',
+  '    else { totalWindows = 0; let off = 0; while (true) { totalWindows++; if (off + w >= audio.length) break; off += jump; } }',
+  '  }',
+  /* no_repeat_ngram_size: TJS 4.2.0 ships no temperature-fallback recovery, so a chunk whose
+     greedy decode enters a repetition loop is emitted verbatim. Banning any repeated 3-gram caps
+     runaway repetition ("you you you", "thanks for watching x2") at the logits stage. n=3 is the
+     lowest value that still leaves normal speech intact; the next lever (if loops persist) is a
+     different axis -- repetition_penalty (~1.15) or a larger model -- not re-tuning this number. */
+  '  const options = { return_timestamps: true, no_repeat_ngram_size: 3 };',
+  '  if (chunked) { options.chunk_length_s = chunkLengthS; options.stride_length_s = STRIDE_S; }',
+  '  if (language && language !== "auto") options.language = language;',
+  '  options.task = task === "translate" ? "translate" : "transcribe";',
+  '  let windowsDone = 0, live = "";',
+  '  const sendProgress = (frac) => self.postMessage({ type: "progress", frac: frac, windowsDone: windowsDone, totalWindows: totalWindows });',
+  '  try {',
+  '    options.streamer = new WhisperTextStreamer(transcriber.tokenizer, {',
+  '      skip_prompt: true,',
+  '      callback_function: (t) => { live += t; self.postMessage({ type: "partial", text: live }); },',
+  '      on_chunk_start: (t) => {',
+  '        if (!chunked) return;',
+  '        const onLastOfMany = totalWindows > 1 && windowsDone >= totalWindows - 1;',
+  '        const nudge = onLastOfMany ? 0 : Math.min(t / CHUNK_S, 0.9);',
+  '        sendProgress((windowsDone + nudge) / totalWindows);',
+  '      },',
+  '      on_finalize: () => { windowsDone++; live = ""; if (chunked) sendProgress(windowsDone / totalWindows); }',
+  '    });',
+  '  } catch (e) { self.postMessage({ type: "log", message: "streamer off: " + e.message }); }',
+  '  const out = await transcriber(audio, options);',
+  '  return { text: (out && out.text) || "", chunks: (out && out.chunks) || [] };',
+  '}',
+  '',
+  'self.onmessage = async (event) => {',
+  '  const msg = event.data;',
+  '  try {',
+  '    if (msg.type === "load") {',
+  '      const key = msg.model + "|" + msg.device + "|" + JSON.stringify(msg.dtype);',
+  '      if (transcriber && loadedKey === key) {',
+  '        self.postMessage({ type: "ready", model: msg.model, cached: true });',
+  '        return;',
+  '      }',
+  '      if (transcriber) {',
+  '        try { await transcriber.dispose(); } catch (e) {}',
+  '        transcriber = null; loadedKey = null;',
+  '      }',
+  '      transcriber = await pipeline("automatic-speech-recognition", msg.model, {',
+  '        device: msg.device,',
+  '        dtype: msg.dtype,',
+  '        progress_callback: (p) => self.postMessage({ type: "download", payload: p })',
+  '      });',
+  '      loadedKey = key;',
+  '      self.postMessage({ type: "ready", model: msg.model, cached: false });',
+  '      return;',
+  '    }',
+  '',
+  '    if (msg.type === "transcribe") {',
+  '      if (!transcriber) { self.postMessage({ type: "error", message: "Model not loaded" }); return; }',
+  '      const t0 = performance.now();',
+  '      const result = await transcribeStreaming(msg.audio, msg.language, msg.task, msg.chunkLengthS || 0);',
+  '      const elapsed = (performance.now() - t0) / 1000;',
+  '      self.postMessage({ type: "complete", text: (result.text || "").trim(), chunks: result.chunks || [], elapsed: elapsed });',
+  '      return;',
+  '    }',
+  '  } catch (err) {',
+  '    self.postMessage({ type: "error", message: (err && err.message) ? err.message : String(err) });',
+  '  }',
+  '};'
+].join("\n");
+
+let worker = null;
+const pending = { load: null, transcribe: null };
+const download = { files: {}, };
+
+function ensureWorker() {
+  if (worker) return worker;
+  const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
+  worker = new Worker(URL.createObjectURL(blob), { type: "module" });
+  worker.onmessage = onWorkerMessage;
+  worker.onerror = (e) => {
+    console.error("[worker:error]", e);
+    const msg = e.message || "Worker failed (module workers require http(s), not file://)";
+    if (pending.load) { pending.load.reject(new Error(msg)); pending.load = null; }
+    if (pending.transcribe) { pending.transcribe.reject(new Error(msg)); pending.transcribe = null; }
+  };
+  console.log("[worker] created");
+  return worker;
+}
+
+function onWorkerMessage(event) {
+  const m = event.data;
+  switch (m.type) {
+    case "download": {
+      const p = m.payload || {};
+      if (p.status === "progress" && p.file) {
+        download.files[p.file] = { loaded: p.loaded || 0, total: p.total || 0 };
+        renderDownloadProgress();
+      } else if (p.status === "initiate" && p.file) {
+        download.files[p.file] = download.files[p.file] || { loaded: 0, total: 0 };
+      }
+      break;
+    }
+    case "ready":
+      console.log("[worker] model ready (cached=%s)", m.cached);
+      hideBar();
+      if (pending.load) { pending.load.resolve(m); pending.load = null; }
+      break;
+    case "partial":
+      /* running text for the current window; the clean merged text arrives in "complete" */
+      dom.partial.textContent = (m.text || "");
+      break;
+    case "progress":
+      /* chunks-done / total-chunks fraction; kept monotonic as a flicker guard */
+      transcribeProgress.frac = Math.max(transcribeProgress.frac, m.frac || 0);
+      transcribeProgress.windowsDone = m.windowsDone != null ? m.windowsDone : transcribeProgress.windowsDone;
+      transcribeProgress.totalWindows = m.totalWindows || transcribeProgress.totalWindows;
+      break;
+    case "complete":
+      console.log("[worker] complete in %ss", m.elapsed.toFixed(1));
+      transcribeProgress.done = true;
+      if (pending.transcribe) { pending.transcribe.resolve(m); pending.transcribe = null; }
+      break;
+    case "log":
+      console.log("[worker:log]", m.message);
+      break;
+    case "error":
+      console.error("[worker:error]", m.message);
+      if (pending.load) { pending.load.reject(new Error(m.message)); pending.load = null; }
+      if (pending.transcribe) { pending.transcribe.reject(new Error(m.message)); pending.transcribe = null; }
+      break;
+    default:
+      break;
+  }
+}
+
+function loadModel(model) {
+  return new Promise((resolve, reject) => {
+    pending.load = { resolve, reject };
+    download.files = {};
+    const dtype = resolveDtype(model);
+    console.log("[load] model=%s device=%s dtype=%o", model, DEVICE, dtype);
+    ensureWorker().postMessage({ type: "load", model, device: DEVICE, dtype });
+  });
+}
+
+function transcribe(audio, language, task, chunkLengthS) {
+  return new Promise((resolve, reject) => {
+    pending.transcribe = { resolve, reject };
+    /* NOTE: intentionally NOT transferring audio.buffer \u2014 we keep the decoded
+       samples on the main thread for per-segment playback. The worker receives a
+       structured-clone copy. The clone (~4 bytes/sample) is negligible vs inference. */
+    ensureWorker().postMessage({ type: "transcribe", audio, language, task, chunkLengthS: chunkLengthS || 0 });
+  });
+}
+
+/* =========================================================================
+   Audio extraction -> 16 kHz mono Float32Array
+   ========================================================================= */
+const TARGET_RATE = 16000;
+
+async function fileToMono16k(file, onStage) {
+  const isVideo = (file.type || "").startsWith("video/");
+  if (!isVideo) {
+    try {
+      return await decodeNative(file);
+    } catch (err) {
+      console.warn("[decode] native decode failed, falling back to ffmpeg:", err.message);
+    }
+  }
+  onStage && onStage("Extracting audio with ffmpeg\u2026");
+  return await decodeWithFFmpeg(file);
+}
+
+async function decodeNative(file) {
+  const buf = await file.arrayBuffer();
+  const AC = window.AudioContext || window.webkitAudioContext;
+  const ctx = new AC();
+  let decoded;
+  try {
+    /* slice(0): decodeAudioData detaches the input buffer */
+    decoded = await ctx.decodeAudioData(buf.slice(0));
+  } finally {
+    try { ctx.close(); } catch (e) {}
+  }
+  return resampleToMono16k(decoded);
+}
+
+async function resampleToMono16k(audioBuffer) {
+  const frames = Math.max(1, Math.ceil(audioBuffer.duration * TARGET_RATE));
+  /* 1-channel destination -> Web Audio downmixes to mono automatically */
+  const offline = new OfflineAudioContext(1, frames, TARGET_RATE);
+  const src = offline.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offline.destination);
+  src.start(0);
+  const rendered = await offline.startRendering();
+  return rendered.getChannelData(0);
+}
+
+let ffmpeg = null;
+let ffmpegUtil = null;
+let ffmpegLoading = null;
+
+async function ensureFFmpeg() {
+  if (ffmpeg) return;
+  /* Coalesce concurrent callers onto one load. Crucially, only PUBLISH the
+     instance to `ffmpeg` after load() succeeds \u2014 otherwise a failed load left a
+     non-null-but-unloaded instance, and the guard above made the next attempt
+     skip loading and call exec() on it, yielding the misleading
+     "ffmpeg is not loaded" error instead of the real (network/CSP) failure. */
+  if (!ffmpegLoading) {
+    ffmpegLoading = (async () => {
+      console.log("[ffmpeg] loading core %s", FFMPEG_CORE_VER);
+      const ffMod = await import("https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@" + FFMPEG_VER + "/dist/esm/index.js");
+      const util = await import("https://cdn.jsdelivr.net/npm/@ffmpeg/util@" + FFMPEG_UTIL_VER + "/dist/esm/index.js");
+      const inst = new ffMod.FFmpeg();
+      inst.on("log", (e) => console.log("[ffmpeg]", e.message));
+      const base = "https://cdn.jsdelivr.net/npm/@ffmpeg/core@" + FFMPEG_CORE_VER + "/dist/esm";
+      const ffEsm = "https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@" + FFMPEG_VER + "/dist/esm";
+      try {
+        /* @ffmpeg/ffmpeg spawns its own worker via new Worker(new URL("./worker.js",
+           import.meta.url)). Loaded from a CDN that URL is cross-origin to the page,
+           and new Worker() forbids cross-origin scripts ("Script at ... cannot be
+           accessed from origin ..."). The fix is a SAME-ORIGIN blob worker that just
+           imports the absolute worker.js: cross-origin module imports ARE allowed
+           (unlike new Worker), and worker.js resolves its own ./const.js / ./errors.js
+           against its absolute URL, not the blob. */
+        const classWorkerURL = URL.createObjectURL(new Blob(
+          ['import "' + ffEsm + '/worker.js";'],
+          { type: "text/javascript" }
+        ));
+        const coreURL = await util.toBlobURL(base + "/ffmpeg-core.js", "text/javascript");
+        const wasmURL = await util.toBlobURL(base + "/ffmpeg-core.wasm", "application/wasm");
+        await inst.load({ classWorkerURL: classWorkerURL, coreURL: coreURL, wasmURL: wasmURL });
+      } catch (e) {
+        console.error("[ffmpeg] load failed:", e);
+        throw new Error("could not load the ffmpeg audio extractor (" +
+          ((e && e.message) ? e.message : String(e)) +
+          ") \u2014 likely the page CSP or network is blocking the CDN core/worker/wasm");
+      }
+      ffmpegUtil = util;   /* publish both only on success */
+      ffmpeg = inst;
+      console.log("[ffmpeg] ready");
+    })();
+  }
+  try {
+    await ffmpegLoading;
+  } finally {
+    ffmpegLoading = null;   /* clear so a later attempt can retry whether this one passed or failed */
+  }
+}
+
+async function decodeWithFFmpeg(file) {
+  await ensureFFmpeg();
+  const inName = "input_" + Date.now();
+  await ffmpeg.writeFile(inName, await ffmpegUtil.fetchFile(file));
+  /* extract: no video, mono, 16 kHz, raw 32-bit float little-endian */
+  await ffmpeg.exec(["-i", inName, "-vn", "-ac", "1", "-ar", String(TARGET_RATE), "-f", "f32le", "out.raw"]);
+  const data = await ffmpeg.readFile("out.raw"); /* Uint8Array */
+  try { await ffmpeg.deleteFile(inName); await ffmpeg.deleteFile("out.raw"); } catch (e) {}
+  /* copy into a tightly-aligned buffer before viewing as Float32 */
+  const aligned = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength);
+  const f32 = new Float32Array(aligned);
+  if (!f32.length) throw new Error("ffmpeg produced no audio (no decodable audio track?)");
+  return f32;
+}
+
+/* =========================================================================
+   Orchestration
+   ========================================================================= */
+function setStage(name, mode) {
+  const node = dom.pipeline.querySelector('[data-stage="' + name + '"]');
+  if (!node) return;
+  node.classList.remove("active", "done");
+  if (mode) node.classList.add(mode);
+}
+function resetStages() { ["decode", "model", "transcribe", "present"].forEach((s) => setStage(s, null)); }
+
+function setStatusOn(node, text, isErr) {
+  node.innerHTML = isErr ? '<span class="err">' + text + "</span>" : text;
+}
+function setStatus(text, isErr) { setStatusOn(dom.status, text, isErr); }
+function setEditStatus(text, isErr) { setStatusOn(dom.editStatus, text, isErr); }
+function showBar() { dom.bar.classList.add("show"); }
+function hideBar() { dom.bar.classList.remove("show"); dom.barFill.style.width = "0%"; }
+
+function renderDownloadProgress() {
+  let loaded = 0, total = 0;
+  for (const k in download.files) { loaded += download.files[k].loaded; total += download.files[k].total; }
+  if (total > 0) {
+    const pct = Math.min(100, (loaded / total) * 100);
+    showBar();
+    dom.barFill.style.width = pct.toFixed(1) + "%";
+    setStatus("Downloading model \u00b7 " + fmtBytes(loaded) + " / " + fmtBytes(total) + " (" + pct.toFixed(0) + "%)");
+  }
+}
+
+/* Transcription progress: honest chunks-done / total-chunks, plus a ticking
+   elapsed clock so a slow chunk still reads as active work. The interval is the
+   single writer of #status while running. A slow final chunk now shows e.g.
+   "97% (36/37 chunks)" truthfully instead of a frozen "12:13 / 12:13 (99%)". */
+const transcribeProgress = { frac: 0, windowsDone: 0, totalWindows: 0, done: false };
+let transcribeTimer = null;
+function startTranscribeUI() {
+  transcribeProgress.frac = 0;
+  transcribeProgress.windowsDone = 0;
+  transcribeProgress.totalWindows = 0;
+  transcribeProgress.done = false;
+  const t0 = performance.now();
+  showBar();
+  const tick = () => {
+    const wd = transcribeProgress.windowsDone || 0;
+    const tw = transcribeProgress.totalWindows || 0;
+    /* hold below 100% until the "complete" message: the final chunk's on_finalize
+       can read 100% a beat before merge finishes, and 100%-while-running is the lie. */
+    const pct = transcribeProgress.done ? 100 : Math.min(99, (transcribeProgress.frac || 0) * 100);
+    const elapsed = (performance.now() - t0) / 1000;
+    dom.barFill.style.width = pct.toFixed(1) + "%";
+    let label;
+    if (tw && wd >= tw) {
+      /* every chunk streamed; the pipeline is merging/decoding the final result */
+      label = "Finalizing transcript\u2026 \u00b7 " + elapsed.toFixed(0) + "s elapsed";
+    } else {
+      label = "Transcribing \u00b7 " + pct.toFixed(0) + "%"
+            + (tw ? " (" + wd + "/" + tw + " chunks)" : "")
+            + " \u00b7 " + elapsed.toFixed(0) + "s elapsed";
+    }
+    setStatus(label);
+  };
+  tick();
+  transcribeTimer = setInterval(tick, 250);
+}
+function stopTranscribeUI() {
+  if (transcribeTimer) { clearInterval(transcribeTimer); transcribeTimer = null; }
+}
+
+/* =========================================================================
+   VAD chunking: detect speech regions, then pack them into <=30s bundles so
+   each transcribe call is one full-context window (silence dropped, no stride
+   overlap). Replaces fixed-window chunking on the fresh path. Validated against
+   real meeting audio: ~35% less compute and cleaner boundaries (no overlap
+   re-stitching) vs the old fixed-window path. Pure functions (packBundles,
+   materializeBundle, mapBundleTime) are node-validated.
+   ========================================================================= */
+const VAD_PARAMS = { threshold: 0.015, minSilenceMs: 1200, minSpeechMs: 800, padMs: 250, maxRegionS: 28, bundleTargetS: 30, seamS: 0.16 };
+
+/* energy VAD -> [ [startSec, endSec], ... ], each region <= maxRegionS */
+function detectSpeech(audio, sr, p) {
+  const frame = Math.max(1, Math.round(sr * 0.030)); /* 30 ms frames */
+  const n = audio.length;
+  const flags = [];
+  for (let i = 0; i < n; i += frame) {
+    const end = Math.min(n, i + frame);
+    let sum = 0;
+    for (let j = i; j < end; j++) sum += audio[j] * audio[j];
+    flags.push(Math.sqrt(sum / (end - i)) >= p.threshold);
+  }
+  const frameMs = 30;
+  const minSil = Math.max(1, Math.round(p.minSilenceMs / frameMs));
+  const minSp = Math.max(1, Math.round(p.minSpeechMs / frameMs));
+  const pad = Math.round(p.padMs / frameMs);
+  const runs = [];
+  let i = 0;
+  while (i < flags.length) {
+    if (!flags[i]) { i++; continue; }
+    let j = i + 1;
+    while (j < flags.length) {
+      if (flags[j]) { j++; continue; }
+      let k = j; while (k < flags.length && !flags[k]) k++;
+      if ((k - j) < minSil) { j = k; } else break; /* bridge short pauses */
+    }
+    runs.push([i, j]); i = j;
+  }
+  const out = [];
+  for (const run of runs) {
+    const a = run[0], b = run[1];
+    if ((b - a) < minSp) continue; /* drop blips */
+    let startS = Math.max(0, (a - pad)) * frame / sr;
+    let endS = Math.min(n, (b + pad) * frame) / sr;
+    while (endS - startS > p.maxRegionS + 0.01) {
+      out.push([startS, startS + p.maxRegionS]);
+      startS += p.maxRegionS;
+    }
+    out.push([startS, endS]);
+  }
+  return out;
+}
+
+/* greedy first-fit pack of regions into bundles <= targetS (with seams between) */
+function packBundles(regions, sr, targetS, seamS) {
+  const targetSamples = Math.round(targetS * sr);
+  const seamSamples = Math.max(0, Math.round(seamS * sr));
+  const bundles = [];
+  let cur = null;
+  for (const reg of regions) {
+    const a = Math.round(reg[0] * sr), b = Math.round(reg[1] * sr);
+    const rs = b - a;
+    const add = (cur && cur.regs.length ? seamSamples : 0) + rs;
+    if (cur && cur.regs.length && (cur.samples + add) > targetSamples) { bundles.push(cur); cur = null; }
+    if (!cur) cur = { regs: [], samples: 0 };
+    cur.samples += (cur.regs.length ? seamSamples : 0) + rs;
+    cur.regs.push([a, b, reg[0]]);
+  }
+  if (cur && cur.regs.length) bundles.push(cur);
+  return bundles;
+}
+
+/* concat a bundle's regions into one buffer + a sample-exact time map (segs).
+   each seg = { b0, b1 (bundle-relative secs), o0 (original start sec) }. */
+function materializeBundle(bundle, audio, sr, seamSamples) {
+  let samples = 0;
+  for (let i = 0; i < bundle.regs.length; i++) {
+    samples += (bundle.regs[i][1] - bundle.regs[i][0]);
+    if (i) samples += seamSamples;
+  }
+  const buffer = new Float32Array(samples);
+  const segs = [];
+  let cursor = 0;
+  for (let i = 0; i < bundle.regs.length; i++) {
+    const a = bundle.regs[i][0], b = bundle.regs[i][1], o0 = bundle.regs[i][2];
+    if (i) cursor += seamSamples; /* leave the seam silent */
+    buffer.set(audio.subarray(a, b), cursor);
+    const rs = b - a;
+    segs.push({ b0: cursor / sr, b1: (cursor + rs) / sr, o0 });
+    cursor += rs;
+  }
+  return { buffer, segs };
+}
+
+/* map a bundle-relative timestamp back to original-audio seconds. single-region
+   bundle reduces to o0 + bt; a timestamp in a seam snaps to the next region. */
+function mapBundleTime(bt, segs) {
+  if (bt == null) return null;
+  if (bt <= segs[0].b0) return segs[0].o0;
+  for (let k = 0; k < segs.length; k++) {
+    const s = segs[k];
+    if (bt <= s.b1) return s.o0 + (bt - s.b0);
+    const next = segs[k + 1];
+    if (next && bt < next.b0) return next.o0;
+  }
+  const last = segs[segs.length - 1];
+  return last.o0 + (last.b1 - last.b0);
+}
+
+async function run() {
+  if (state.busy || !state.file) return;
+  state.busy = true;
+  dom.run.disabled = true;
+  maybeRequestNotify(); acquireWakeLock();
+  dom.results.classList.remove("show");
+  dom.partial.textContent = "";
+  dom.plaintext.textContent = "";
+  dom.segments.innerHTML = "";
+  dom.metaline.textContent = "";
+  stopSpan();
+  teardownElementPlayback();      /* a fresh run uses the buffer backend; release any edit-mode element/URL */
+  audioPlayback.mode = "buffer";
+  audioPlayback.buffer = null;    /* new run -> rebuild from the new audio on first play */
+  state.audio = null;
+  resetStages();
+
+  const model = dom.model.value;
+  const language = dom.lang.value;
+  const task = state.task;
+
+  try {
+    /* stages 1 + 2 overlap: decode audio while the model downloads */
+    setStage("decode", "active");
+    setStage("model", "active");
+    setStatus("Preparing model and extracting audio\u2026");
+
+    const decodePromise = fileToMono16k(state.file, (s) => setStatus(s))
+      .then((audio) => { setStage("decode", "done"); return audio; });
+
+    const loadPromise = (state.loadedModel === model)
+      ? Promise.resolve()
+      : loadModel(model).then(() => { state.loadedModel = model; });
+
+    const [audio] = await Promise.all([decodePromise, loadPromise]);
+    setStage("model", "done");
+    hideBar();
+
+    const seconds = audio.length / TARGET_RATE;
+    state.audio = audio;   /* retained for per-segment playback */
+    console.log("[run] audio ready: %d samples (%ss)", audio.length, seconds.toFixed(1));
+
+    /* stage 3: detect speech -> pack into <=30s bundles -> transcribe each bundle
+       as one full-context window, rendering segments as each bundle lands. The
+       growing, editable transcript doubles as the progress indicator. */
+    setStage("transcribe", "active");
+    dom.results.classList.add("show");
+    setStatus("Detecting speech\u2026");
+    const regions = detectSpeech(audio, TARGET_RATE, VAD_PARAMS);
+    const bundles = packBundles(regions, TARGET_RATE, VAD_PARAMS.bundleTargetS, VAD_PARAMS.seamS);
+    const speechS = regions.reduce((acc, r) => acc + (r[1] - r[0]), 0);
+    const seamSamples = Math.round(VAD_PARAMS.seamS * TARGET_RATE);
+    console.log("[vad] %d regions -> %d bundles, %ss speech / %ss total",
+      regions.length, bundles.length, speechS.toFixed(0), seconds.toFixed(0));
+
+    /* editable, growing surface (mirrors renderResult's fresh setup, but additive) */
+    dom.plaintext.style.display = "none";
+    dom.segments.innerHTML = "";
+    dom.segwrap.style.display = "";
+    dom.segwrap.open = true;
+    const head = document.querySelector(".result-head h2");
+    if (head) head.textContent = "Transcript";
+
+    startTranscribeUI();
+    transcribeProgress.totalWindows = bundles.length || 1;
+
+    state.result = { text: "", chunks: [], elapsed: 0 };
+    let elapsed = 0;
+    for (let r = 0; r < bundles.length; r++) {
+      dom.partial.textContent = "";
+      const built = materializeBundle(bundles[r], audio, TARGET_RATE, seamSamples);
+      const spanS = built.buffer.length / TARGET_RATE;
+      const out = await transcribe(built.buffer, language, task, spanS > 30 ? 30 : 0);
+      elapsed += out.elapsed;
+
+      const from = state.result.chunks.length;
+      let lastStart = built.segs[0].o0;
+      for (const c of (out.chunks || [])) {
+        const ts = c.timestamp || [null, null];
+        const st = ts[0] != null ? mapBundleTime(ts[0], built.segs) : lastStart;
+        const en = ts[1] != null ? mapBundleTime(ts[1], built.segs) : null;
+        lastStart = st;
+        state.result.chunks.push({ timestamp: [st, en], text: c.text });
+      }
+      appendSegments(state.result.chunks, from, seconds, true);
+      syncEditedText();
+
+      transcribeProgress.windowsDone = r + 1;
+      transcribeProgress.frac = (r + 1) / (bundles.length || 1);
+    }
+    transcribeProgress.done = true;
+    state.result.elapsed = elapsed;
+    dom.partial.textContent = "";
+    stopTranscribeUI();
+    hideBar();
+    setStage("transcribe", "done");
+
+    /* stage 4 */
+    setStage("present", "done");
+    if (!state.result.chunks.length) {
+      dom.plaintext.style.display = "";
+      dom.plaintext.textContent = "(no speech detected)";
+      dom.segwrap.style.display = "none";
+    }
+    setResultMeta(state.result, seconds, true);
+    setStatus("Done in " + elapsed.toFixed(1) + "s \u00b7 " + bundles.length + " bundles, " + state.result.chunks.length + " segments.");
+    notify("Transcription complete", fmtClock(seconds) + " transcribed in " + elapsed.toFixed(1) + "s", false);
+  } catch (err) {
+    console.error("[run] failed:", err);
+    stopTranscribeUI();
+    hideBar();
+    setStage("transcribe", null);
+    setStatus(friendlyError(err), true);
+    notify("Transcription failed", friendlyError(err), true);
+  } finally {
+    stopTranscribeUI();
+    releaseWakeLock();
+    state.busy = false;
+    dom.run.disabled = !state.file;
+  }
+}
+
+function friendlyError(err) {
+  const m = (err && err.message) || String(err);
+  if (/file:\/\/|module worker|importScripts/i.test(m)) return "This page must be served over http(s) \u2014 open it from a local/static server, not the filesystem.";
+  if (/webgpu|gpu adapter/i.test(m)) return "WebGPU initialization failed: " + m + ". Try a smaller model or a Chromium browser.";
+  if (/out of memory|allocation|oom|array buffer/i.test(m)) return "Not enough memory to load this model \u2014 switch to a smaller model (small / base / tiny) and try again.";
+  if (/ffmpeg/i.test(m)) return "Audio extraction failed: " + m;
+  return "Error: " + m;
+}
+
+/* ---- result rendering ---- */
+/* =========================================================================
+   Per-segment audio playback. Plays the decoded 16 kHz mono input (exactly what
+   the model heard) for a given [start,end] span, so a questionable segment can be
+   checked against the audio. Robust for both audio and video inputs and guaranteed
+   to share the transcript's timeline. Low-fi by design (it's the model's input).
+   ========================================================================= */
+/* Two playback backends behind playSpan/stopSpan:
+   - "buffer": fresh transcription slices the already-decoded 16kHz mono state.audio
+     (sample-accurate, and free since the buffer is a transcription byproduct).
+   - "element": the edit tab seeks the ORIGINAL file in an <audio> element, so loading
+     skips the full decode/resample entirely and playback is full-fidelity.
+   Mode is set by run() (buffer) and loadForEditing (element); the displayed result always
+   matches the active mode because each path rewrites the results panel as it sets the mode. */
+const audioPlayback = { ctx: null, buffer: null, source: null, button: null, mode: "buffer", el: null, url: null, onTime: null };
+
+function playbackReady() {
+  return audioPlayback.mode === "element" ? !!audioPlayback.el : !!(state.audio && state.audio.length);
+}
+
+function setupElementPlayback(file) {
+  teardownElementPlayback();
+  audioPlayback.buffer = null;   /* release any prior buffer backend */
+  state.audio = null;
+  const url = URL.createObjectURL(file);
+  const el = new Audio();
+  el.preload = "metadata";
+  el.src = url;
+  audioPlayback.mode = "element";
+  audioPlayback.el = el;
+  audioPlayback.url = url;
+  return el;
+}
+
+function teardownElementPlayback() {
+  if (audioPlayback.el) { try { audioPlayback.el.pause(); } catch (e) {} }
+  if (audioPlayback.url) { try { URL.revokeObjectURL(audioPlayback.url); } catch (e) {} }
+  audioPlayback.el = null;
+  audioPlayback.url = null;
+  audioPlayback.onTime = null;
+}
+
+function ensurePlayBuffer() {
+  if (audioPlayback.buffer) return audioPlayback.buffer;
+  if (!state.audio || !state.audio.length) return null;
+  if (!audioPlayback.ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    audioPlayback.ctx = new AC();
+  }
+  const buf = audioPlayback.ctx.createBuffer(1, state.audio.length, TARGET_RATE);
+  buf.copyToChannel(state.audio, 0);
+  audioPlayback.buffer = buf;
+  return buf;
+}
+
+function setPlayButtonState(btn, playing) {
+  if (!btn) return;
+  btn.classList.toggle("playing", playing);
+  const glyph = btn.querySelector(".glyph");
+  if (glyph) glyph.textContent = playing ? "\u25A0" : "\u25B6"; /* stop square / play triangle */
+}
+
+function stopSpan() {
+  if (audioPlayback.source) {   /* buffer backend */
+    try { audioPlayback.source.onended = null; audioPlayback.source.stop(); } catch (e) {}
+    audioPlayback.source = null;
+  }
+  if (audioPlayback.el) {       /* element backend */
+    try { audioPlayback.el.pause(); } catch (e) {}
+    if (audioPlayback.onTime) { audioPlayback.el.removeEventListener("timeupdate", audioPlayback.onTime); audioPlayback.onTime = null; }
+    audioPlayback.el.onended = null;
+  }
+  if (audioPlayback.button) { setPlayButtonState(audioPlayback.button, false); audioPlayback.button = null; }
+}
+
+function playSpan(start, end, btn) {
+  /* clicking the row that is already playing stops it (button is the active indicator for both backends) */
+  if (audioPlayback.button === btn) { stopSpan(); return; }
+  stopSpan();
+  if (audioPlayback.mode === "element") playSpanElement(start, end, btn);
+  else playSpanBuffer(start, end, btn);
+}
+
+function playSpanBuffer(start, end, btn) {
+  const buf = ensurePlayBuffer();
+  if (!buf) { console.warn("[play] no decoded audio available"); return; }
+  const ctx = audioPlayback.ctx;
+  if (ctx.state === "suspended") { ctx.resume().catch((e) => console.warn("[play] resume failed", e)); }
+  const s = Math.max(0, start || 0);
+  const e = (end != null && end > s) ? end : buf.duration;
+  const dur = Math.min(buf.duration - s, e - s);
+  if (dur <= 0) { console.warn("[play] empty span"); return; }
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.connect(ctx.destination);
+  src.onended = () => { if (audioPlayback.source === src) stopSpan(); };
+  try { src.start(0, s, dur); } catch (e) { console.error("[play] start failed", e); return; }
+  audioPlayback.source = src;
+  audioPlayback.button = btn;
+  setPlayButtonState(btn, true);
+  console.log("[play:buffer] %ss .. %ss (%ss)", s.toFixed(2), (s + dur).toFixed(2), dur.toFixed(2));
+}
+
+function playSpanElement(start, end, btn) {
+  const el = audioPlayback.el;
+  if (!el) { console.warn("[play] no audio element"); return; }
+  const s = Math.max(0, start || 0);
+  const e = (end != null && end > s) ? end : (isFinite(el.duration) ? el.duration : Infinity);
+  /* timeupdate fires ~4x/s, so the span end is honored within ~250ms -- fine for spot-checking */
+  const onTime = () => { if (el.currentTime >= e) stopSpan(); };
+  audioPlayback.onTime = onTime;
+  el.addEventListener("timeupdate", onTime);
+  el.onended = () => { if (audioPlayback.button === btn) stopSpan(); };
+  audioPlayback.button = btn;
+  setPlayButtonState(btn, true);
+  try { el.currentTime = s; } catch (err) { console.warn("[play] seek failed", err); }
+  el.play().catch((err) => { console.error("[play:element] play failed", err); stopSpan(); });
+  console.log("[play:element] %ss .. %ss", s.toFixed(2), (e === Infinity ? "end" : e.toFixed(2)));
+}
+
+/* Whisper segment END times are unreliable (often truncated, with the spoken audio
+   spilling into the gap before the next segment). The effective end of a segment is the
+   NEXT segment's start; the last runs to the end of the decoded audio. Start times are the
+   trustworthy anchors. Returns null when neither a later start nor an audio length is known
+   (caller decides the fallback). Single source for display, playback, and SRT export. */
+function effectiveEnd(chunks, i, audioSeconds) {
+  const ts = chunks[i] && chunks[i].timestamp;
+  if (!ts || ts[0] == null) return null;
+  const nxt = chunks[i + 1];
+  const nextStart = (nxt && nxt.timestamp && nxt.timestamp.length) ? nxt.timestamp[0] : null;
+  if (nextStart != null && nextStart > ts[0]) return nextStart;
+  if (audioSeconds && audioSeconds > ts[0]) return audioSeconds;
+  return null;
+}
+
+/* build one segment row. play-end is recomputed live from the chunks array so it
+   stays correct as later bundles refine the boundary. */
+function makeSegRow(chunks, ci, audioSeconds, editable) {
+  const c = chunks[ci];
+  const ts = (c.timestamp && c.timestamp.length) ? c.timestamp : [null, null];
+  const row = document.createElement("div");
+  row.className = "seg-row";
+
+  const btn = document.createElement("button");
+  btn.className = "ts";
+  btn.type = "button";
+  const glyph = document.createElement("span");
+  glyph.className = "glyph";
+  glyph.textContent = "\u25B6";
+  const label = document.createElement("span");
+  const refresh = function () {
+    const pe = effectiveEnd(chunks, ci, audioSeconds);
+    label.textContent = fmtClock(ts[0]) + (pe != null ? " \u2192 " + fmtClock(pe) : "");
+  };
+  refresh();
+  btn.appendChild(glyph);
+  btn.appendChild(label);
+  if (ts[0] == null || !playbackReady()) {
+    btn.disabled = true;
+    btn.title = "No audio available for playback";
+  } else {
+    btn.title = "Play this span";
+    btn.addEventListener("click", () => playSpan(ts[0], effectiveEnd(chunks, ci, audioSeconds), btn));
+  }
+
+  const x = document.createElement("div");
+  x.className = "tx";
+  x.textContent = (c.text || "").trim();
+  if (editable) {
+    x.contentEditable = "true";
+    x.spellcheck = true;
+    x.classList.add("editing");
+    x.addEventListener("input", function () { c.text = x.textContent; syncEditedText(); });
+  }
+
+  row.appendChild(btn);
+  row.appendChild(x);
+  row._refreshLabel = refresh;   /* used to refine the boundary end when a successor arrives */
+  return row;
+}
+
+/* append rows for chunks[fromIndex..end). purely additive: existing rows (and any
+   in-progress edits) are never rebuilt; only the prior boundary row's end label is
+   refreshed now that it has a successor. */
+function appendSegments(chunks, fromIndex, audioSeconds, editable) {
+  if (fromIndex > 0) {
+    const prev = dom.segments.children[fromIndex - 1];
+    if (prev && prev._refreshLabel) prev._refreshLabel();
+  }
+  for (let ci = fromIndex; ci < chunks.length; ci++) {
+    dom.segments.appendChild(makeSegRow(chunks, ci, audioSeconds, editable));
+  }
+  if (chunks.length) dom.segwrap.style.display = "";
+}
+
+/* heading + meta line, shared by the fresh (stats) and loaded-for-editing paths */
+function setResultMeta(out, audioSeconds, editable) {
+  const h2 = document.querySelector(".result-head h2");
+  const hasStats = (out.elapsed != null);   /* fresh runs carry compute stats; loaded-for-editing do not */
+  if (h2) h2.textContent = hasStats ? "Transcript" : "Edit transcript";
+
+  if (!hasStats) {
+    dom.metaline.textContent = (out.chunks ? out.chunks.length : 0) + " segments - " + fmtClock(audioSeconds) + " audio - editing (downloads reflect your edits)";
+    return;
+  }
+
+  const rt = audioSeconds > 0 ? (audioSeconds / out.elapsed).toFixed(1) + "\u00d7 real-time" : "";
+  dom.metaline.textContent = [
+    dom.model.value.split("/").pop(),
+    DEVICE.toUpperCase(),
+    fmtClock(audioSeconds) + " audio",
+    out.elapsed.toFixed(1) + "s compute",
+    rt,
+    editable ? "editable (downloads reflect your edits)" : ""
+  ].filter(Boolean).join("  \u00b7  ");
+}
+
+function renderResult(out, audioSeconds, editable) {
+  dom.partial.textContent = "";
+  if (editable) {
+    dom.plaintext.style.display = "none";
+  } else {
+    dom.plaintext.style.display = "";
+    dom.plaintext.textContent = out.text || "(no speech detected)";
+  }
+
+  dom.segments.innerHTML = "";
+  if (out.chunks && out.chunks.length) {
+    appendSegments(out.chunks, 0, audioSeconds, editable);
+  } else {
+    dom.segwrap.style.display = "none";
+  }
+
+  if (editable) dom.segwrap.open = true;
+  setResultMeta(out, audioSeconds, editable);
+}
+
+/* ---- helpers ---- */
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B", "KB", "MB", "GB"]; let i = 0; let v = n;
+  while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+  return v.toFixed(i ? 1 : 0) + " " + u[i];
+}
+function fmtClock(sec) {
+  if (sec == null || isNaN(sec)) return "--:--";
+  sec = Math.max(0, sec);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const pad = (x) => String(x).padStart(2, "0");
+  return (h ? pad(h) + ":" : "") + pad(m) + ":" + pad(s);
+}
+function fmtSrtTime(sec) {
+  sec = Math.max(0, sec || 0);
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = Math.floor(sec % 60);
+  const ms = Math.floor((sec - Math.floor(sec)) * 1000);
+  const pad = (x, n) => String(x).padStart(n || 2, "0");
+  return pad(h) + ":" + pad(m) + ":" + pad(s) + "," + pad(ms, 3);
+}
+function toSrt(chunks, audioSeconds, normalize) {
+  if (!chunks || !chunks.length) return "";
+  return chunks.map((c, i) => {
+    const ts = c.timestamp || [0, 0];
+    /* fresh transcripts: rewrite the end to the displayed effective span (next-start / audio end).
+       loaded .srt (normalize=false): keep the authored end untouched. */
+    const eff = normalize ? effectiveEnd(chunks, i, audioSeconds) : null;
+    const end = eff != null ? eff : (ts[1] != null ? ts[1] : ts[0]);
+    return (i + 1) + "\n" + fmtSrtTime(ts[0]) + " --> " + fmtSrtTime(end) + "\n" + (c.text || "").trim() + "\n";
+  }).join("\n");
+}
+function downloadBlob(filename, text, mime) {
+  const blob = new Blob([text], { type: mime || "text/plain" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function baseName() {
+  const n = (state.file && state.file.name) || "transcript";
+  return n.replace(/\.[^.]+$/, "") || "transcript";
+}
+
+/* =========================================================================
+   Wake Lock + system notifications (best-effort)
+   Long jobs let the user look away; keep the screen awake while the tab is
+   visible, and ping them on finish if the tab is in the background.
+   ========================================================================= */
+let wakeLock = null;
+async function acquireWakeLock() {
+  try {
+    if (navigator.wakeLock && navigator.wakeLock.request && !document.hidden) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      console.log("[wakelock] acquired");
+    }
+  } catch (e) { console.log("[wakelock] unavailable:", e && e.message); }
+}
+async function releaseWakeLock() {
+  try { if (wakeLock) { await wakeLock.release(); console.log("[wakelock] released"); } }
+  catch (e) {} finally { wakeLock = null; }
+}
+function maybeRequestNotify() {
+  try {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission().catch(function () {});
+    }
+  } catch (e) {}
+}
+function notify(title, body, isError) {
+  try {
+    if (!("Notification" in window) || Notification.permission !== "granted") return;
+    if (!document.hidden) return;   /* tab is in view -> the in-page status already says it */
+    const n = new Notification(title, { body: body, icon: "/favicon.ico", tag: "a2t-transcriber" });
+    n.onclick = function () { try { window.focus(); } catch (e) {} n.close(); };
+  } catch (e) { console.log("[notify] failed:", e && e.message); }
+}
+
+/* =========================================================================
+   Edit an existing transcript: load a prior audio/video file plus its
+   transcript (.srt keeps timestamps + per-segment playback; .txt loads as
+   plain lines), edit the segment text in place, then re-download. Reuses the
+   results view, per-segment playback, and the .txt/.srt/.wav exporters.
+   ========================================================================= */
+function parseSrt(text) {
+  const blocks = text.replace(/\r/g, "").split(/\n\n+/);
+  const chunks = [];
+  const toSec = function (h, m, sec, ms) { return (+h) * 3600 + (+m) * 60 + (+sec) + (+ms) / 1000; };
+  for (const b of blocks) {
+    const lines = b.split("\n").filter(function (l) { return l.trim() !== ""; });
+    if (!lines.length) continue;
+    let i = 0;
+    if (/^\d+$/.test(lines[0].trim())) i = 1;   /* skip the optional index line */
+    const tline = lines[i] || "";
+    const m = tline.match(/(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*(\d{2}):(\d{2}):(\d{2})[,.](\d{3})/);
+    if (!m) { chunks.push({ timestamp: [null, null], text: lines.slice(i).join(" ") }); continue; }
+    chunks.push({ timestamp: [toSec(m[1], m[2], m[3], m[4]), toSec(m[5], m[6], m[7], m[8])], text: lines.slice(i + 1).join(" ").trim() });
+  }
+  return chunks;
+}
+function parseTxtToChunks(text) {
+  const lines = text.replace(/\r/g, "").split("\n").map(function (l) { return l.trim(); }).filter(Boolean);
+  if (!lines.length) return [{ timestamp: [null, null], text: text.trim() }];
+  return lines.map(function (l) { return { timestamp: [null, null], text: l }; });
+}
+/* =========================================================================
+   Edit-mode text sync: recompose the flowing transcript from the per-segment
+   chunks after any segment edit (or after loading an external .srt/.txt).
+   ========================================================================= */
+function syncEditedText() {
+  if (!state.result || !state.result.chunks) return;
+  state.result.text = state.result.chunks.map(function (c) { return (c.text || "").trim(); }).filter(Boolean).join(" ");
+}
+async function loadForEditing() {
+  const af = state.editAudio;
+  const tf = state.editTranscript;
+  if (!af || !tf) return;
+  dom.editLoad.disabled = true;
+  dom.editBar.classList.add("show", "indeterminate");
+  try {
+    stopSpan();
+    setEditStatus("Reading media\u2026");
+    /* Edit mode plays the original file directly (no Whisper here), so seek an <audio>
+       element instead of decoding/resampling. Only metadata is read -> near-instant. */
+    const el = setupElementPlayback(af);
+    const playable = await new Promise((res) => {
+      if (el.readyState >= 1 && isFinite(el.duration)) return res(true);
+      el.addEventListener("loadedmetadata", () => res(true), { once: true });
+      el.addEventListener("error", () => res(false), { once: true });
+    });
+    let audioSeconds;
+    if (playable) {
+      audioSeconds = isFinite(el.duration) ? el.duration : 0;
+    } else {
+      /* the element can't play this container/codec (e.g. mkv): fall back to the decode
+         path so playback still works, at the cost of the resample wait. */
+      console.warn("[edit] element playback unsupported for this file, decoding for playback");
+      teardownElementPlayback();
+      audioPlayback.mode = "buffer";
+      audioPlayback.buffer = null;
+      setEditStatus("Decoding audio\u2026 long recordings can take a moment.");
+      const audio = await fileToMono16k(af, function (st) { setEditStatus(st); });
+      state.audio = audio;
+      audioSeconds = audio.length / TARGET_RATE;
+    }
+    acceptFile(af);   /* register as the working file (re-download naming, optional re-transcribe) */
+    setEditStatus("Reading transcript\u2026");
+    const text = await tf.text();
+    const isSrt = /\.srt$/i.test(tf.name) || /-->/.test(text);
+    const chunks = isSrt ? parseSrt(text) : parseTxtToChunks(text);
+    state.result = { text: "", chunks: chunks, elapsed: null };
+    syncEditedText();
+    dom.results.classList.add("show");
+    renderResult(state.result, audioSeconds, true);
+    setEditStatus("Loaded " + chunks.length + " segment(s). Edit text, play any segment to check it, then download.");
+    dom.results.scrollIntoView({ behavior: "smooth", block: "start" });
+  } catch (err) {
+    console.error("[edit] load failed:", err);
+    setEditStatus(friendlyError(err), true);
+  } finally {
+    dom.editBar.classList.remove("show", "indeterminate");
+    dom.editLoad.disabled = !(state.editAudio && state.editTranscript);
+  }
+}
+
+/* =========================================================================
+   Wiring
+   ========================================================================= */
+function acceptFile(file) {
+  if (!file) return;
+  state.file = file;
+  dom.drop.classList.add("has-file");
+  dom.filemeta.hidden = false;
+  dom.filemeta.innerHTML = "<b>" + file.name + "</b> \u00b7 " + fmtBytes(file.size) + (file.type ? " \u00b7 " + file.type : "");
+  dom.run.disabled = state.busy;
+  setStatus("Ready.");
+  console.log("[file] %s (%s, %d bytes)", file.name, file.type, file.size);
+}
+
+/* Reusable drag-drop / click-to-pick zone: wires a zone element to its hidden file input
+   and invokes onFile(file) on a drop or a pick. One definition shared by the transcribe
+   picker and both edit pickers, so all three behave identically. */
+function makeDropZone(zone, input, onFile) {
+  zone.addEventListener("click", () => input.click());
+  input.addEventListener("change", (e) => onFile(e.target.files && e.target.files[0]));
+  ["dragenter", "dragover"].forEach((ev) => zone.addEventListener(ev, (e) => { e.preventDefault(); zone.classList.add("hover"); }));
+  zone.addEventListener("dragleave", (e) => { e.preventDefault(); zone.classList.remove("hover"); });
+  zone.addEventListener("drop", (e) => {
+    e.preventDefault();
+    zone.classList.remove("hover");
+    const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+    if (f) onFile(f);
+  });
+}
+
+/* edit tab: the File is the source of truth (drop and click feed the same slot), so the
+   zone shows the chosen name and loadForEditing reads state, not the input element. */
+function acceptEditFile(slot, file) {
+  if (!file) return;
+  const zone = slot === "editAudio" ? dom.editAudioZone : dom.editTranscriptZone;
+  const meta = slot === "editAudio" ? dom.editAudioMeta : dom.editTranscriptMeta;
+  state[slot] = file;
+  zone.classList.add("has-file");
+  meta.hidden = false;
+  meta.innerHTML = "<b>" + file.name + "</b> \u00b7 " + fmtBytes(file.size);
+  console.log("[edit-file] %s = %s (%d bytes)", slot, file.name, file.size);
+  updateEditLoadState();
+}
+
+/* main media file arrives from the shared router; edit-mode zones stay local */
+const trSection = document.getElementById("tr-section");
+window.addEventListener("intake:transcribe", e => { trSection.hidden = false; acceptFile(e.detail[0]); });
+makeDropZone(dom.editAudioZone, dom.editAudio, (f) => acceptEditFile("editAudio", f));
+makeDropZone(dom.editTranscriptZone, dom.editTranscript, (f) => acceptEditFile("editTranscript", f));
+dom.model.addEventListener("change", updateTechNote);
+
+dom.task.addEventListener("change", () => {
+  const r = dom.task.querySelector('input[name="task"]:checked');
+  if (r) state.task = r.value;
+});
+
+dom.run.addEventListener("click", run);
+
+dom.copy.addEventListener("click", async () => {
+  const text = (state.result && state.result.text) || "";
+  try { await navigator.clipboard.writeText(text); dom.copy.textContent = "Copied"; }
+  catch (e) {
+    /* clipboard API can throw if document is not focused; fall back to execCommand */
+    const ta = document.createElement("textarea");
+    ta.value = text; document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); dom.copy.textContent = "Copied"; }
+    catch (e2) { dom.copy.textContent = "Copy failed"; }
+    ta.remove();
+  }
+  setTimeout(() => (dom.copy.textContent = "Copy"), 1400);
+});
+dom.dlTxt.addEventListener("click", () => {
+  if (state.result) downloadBlob(baseName() + ".txt", state.result.text || "", "text/plain");
+});
+dom.dlSrt.addEventListener("click", () => {
+  if (!state.result) return;
+  const audioSeconds = state.audio ? state.audio.length / TARGET_RATE : 0;
+  /* normalize only for fresh transcripts (elapsed != null); a loaded .srt keeps its authored ends */
+  const normalize = state.result.elapsed != null;
+  downloadBlob(baseName() + ".srt", toSrt(state.result.chunks, audioSeconds, normalize), "text/plain");
+});
+
+function updateEditLoadState() {
+  dom.editLoad.disabled = !(state.editAudio && state.editTranscript);
+}
+dom.editLoad.addEventListener("click", loadForEditing);
+
+/* mode tabs: swap the visible input panel. The 01-04 pipeline is transcribe-only,
+   so hide it on the edit tab; the edit panel carries its own progress feedback. */
+function selectTab(mode) {
+  const isEdit = mode === "edit";
+  dom.tabTranscribe.setAttribute("aria-selected", String(!isEdit));
+  dom.tabEdit.setAttribute("aria-selected", String(isEdit));
+  dom.panelTranscribe.hidden = isEdit;
+  dom.panelEdit.hidden = !isEdit;
+  dom.pipeline.hidden = isEdit;
+  console.log("[tab] mode =", mode);
+}
+dom.tabTranscribe.addEventListener("click", () => selectTab("transcribe"));
+dom.tabEdit.addEventListener("click", () => selectTab("edit"));
+
+document.addEventListener("visibilitychange", function () {
+  if (!document.hidden && state.busy && !wakeLock) acquireWakeLock();
+});
+
+console.log("[ready] Local Transcriber initialized");
+
+</script>
+</body>
+</html>
