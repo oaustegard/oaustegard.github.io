@@ -1,8 +1,9 @@
 # web-utilities/
-*Files: 12*
+*Files: 13*
 
 ## Files
 
+- **anything-to-text.html** — exports (104): `isOcr, isAv, route, $, setStatus, unquoteYaml, parseCharacterDict, loadV6Dict`... — imports: `web, pdfjs-dist@6.0.227`
 - **aws-ping.html** — exports: `initializeMap, addDatacenters, selectRegion, clearSelection, showTooltip, updateRegionList, updateStats`
 - **bookmarklet-installer.html** — exports (26): `extractMetadata, hasMetadata, validateMetadata, insertMetadataTemplate, fetchBookmarklets, renderMetadataInfo, populateDropdown, populateDomainFilter`...
 - **csv-to-xslx.html** — exports: `handleCSVData, readFile, handlePaste, convertCSVToExcel, showDropOverlay, hideDropOverlay`
