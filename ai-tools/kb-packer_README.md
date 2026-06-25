@@ -21,8 +21,11 @@ runs wherever the consuming agent has Node **or** Python.
 
 ## Features
 
-- **Fully client-side** — files never leave your machine; works offline.
-- **Drag & drop** files or a whole folder; `.txt .md .html` by default.
+- **Fully client-side** — files never leave your machine; works offline (text formats).
+- **Drag & drop** files or a whole folder. Defaults: `.txt .md .html .htm .rst .org .csv`
+  and **`.pdf`** (extracted in-browser via pdf.js — the PDF never leaves your machine;
+  the pdf.js library loads from a CDN on first use). Add any other text extension to
+  the field to ingest it. Other binaries (DOCX, RTF) — convert to text first.
 - **Whole-document chunking by default** — lexical BM25 tolerates large chunks;
   the searcher returns a query-focused passage per hit, so reasoning context
   stays tight.
