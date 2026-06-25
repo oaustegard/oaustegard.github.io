@@ -46,14 +46,18 @@
 
   <div id="drop">
     <strong>Drop files or a folder here</strong><br>
-    or click to choose · <code>.txt .md .html</code> by default
+    or click to choose · text formats + PDF
     <input id="picker" type="file" multiple hidden>
   </div>
+  <p class="note" style="color:#64748b;font-size:13px;margin:8px 2px 0">
+    Text formats (<code>.txt .md .html .rst .csv</code> …) and <code>.pdf</code> (parsed locally;
+    pdf.js loads from a CDN on first PDF). Other binaries (DOCX, RTF) — convert to text first.
+    Add extensions below to ingest more.</p>
   <ul class="files" id="filelist"></ul>
 
   <div class="row">
     <div class="field"><label>KB name (becomes the skill name)</label><input id="name" type="text" value="my-kb"></div>
-    <div class="field"><label>Extensions</label><input id="ext" type="text" value="txt,md,html,htm"></div>
+    <div class="field"><label>Extensions</label><input id="ext" type="text" value="txt,md,html,htm,pdf,rst,org,csv"></div>
     <div class="field"><label>Chunk chars (0 = whole doc)</label><input id="target" type="number" value="0" min="0"></div>
   </div>
   <div class="row"><div class="field" style="flex:1 1 100%"><label>Source description (optional)</label>
@@ -1174,11 +1178,56 @@ function mergeFiles(next) {
   for (const f of next) byName.set(f.name, f);
   files = [...byName.values()];
   renderFiles();
-  setStatus(`${files.length} file(s) staged.`);
+  setStatus(`${files.length} file(s) staged.` + (failed ? ` (${failed} skipped — unreadable / PDF parse failed)` : ""),
+            failed ? "warn" : "");
 }
+// pdf.js loaded lazily (only when a PDF is dropped) so text-only use stays offline.
+let pdfReady = null;
+function loadPdfJs() {
+  if (pdfReady) return pdfReady;
+  const base = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174";
+  pdfReady = new Promise((res, rej) => {
+    const s = document.createElement("script");
+    s.src = base + "/pdf.min.js";
+    s.onload = () => { window.pdfjsLib.GlobalWorkerOptions.workerSrc = base + "/pdf.worker.min.js"; res(window.pdfjsLib); };
+    s.onerror = () => rej(new Error("could not load pdf.js (network needed for PDF parsing)"));
+    document.head.appendChild(s);
+  });
+  return pdfReady;
+}
+async function pdfToText(file) {
+  const lib = await loadPdfJs();
+  const pdf = await lib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const pages = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const tc = await (await pdf.getPage(i)).getTextContent();
+    let pageText = "", lastY = null;
+    tc.items.forEach((item, idx) => {
+      const t = item.str;
+      if (!t.trim()) return;
+      if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) pageText += "\n";
+      pageText += t;
+      const nx = tc.items[idx + 1];
+      if (nx && Math.abs(nx.transform[5] - item.transform[5]) < 5 &&
+          !t.endsWith(" ") && !t.endsWith("-") && nx.str && !nx.str.startsWith(" ")) pageText += " ";
+      lastY = item.transform[5];
+    });
+    pages.push(pageText.trim());
+  }
+  return pages.join("\n\n");
+}
+
+let failed = 0;
 async function readFileObjs(objs) {
   const out = [];
-  for (const f of objs) out.push({ name: f.webkitRelativePath || f._rel || f.name, text: await f.text() });
+  failed = 0;
+  for (const f of objs) {
+    const name = f.webkitRelativePath || f._rel || f.name;
+    try {
+      const text = /\.pdf$/i.test(name) ? await pdfToText(f) : await f.text();
+      out.push({ name, text });
+    } catch (e) { failed++; console.warn("skip", name, e.message); }
+  }
   return out;
 }
 
