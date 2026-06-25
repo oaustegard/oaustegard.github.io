@@ -1,0 +1,1225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>KB Packer — build a portable knowledgebase skill</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui,-apple-system,sans-serif; line-height:1.6; margin:0; padding:24px;
+         background:#fafafa; color:#333; }
+  .container { max-width:800px; margin:0 auto; background:#fff; padding:30px; border-radius:8px;
+               box-shadow:0 2px 10px rgba(0,0,0,.1); }
+  a.back { color:#2563eb; text-decoration:none; font-size:14px; }
+  h1 { margin:.2em 0 .1em; font-size:24px; }
+  .sub { color:#666; margin:0 0 22px; }
+  #drop { border:2px dashed #cbd5e1; border-radius:10px; padding:36px 20px; text-align:center; color:#64748b;
+          transition:.15s; cursor:pointer; }
+  #drop.hot { border-color:#2563eb; background:#eff6ff; color:#1e3a8a; }
+  #drop strong { color:#111; }
+  .row { display:flex; gap:14px; flex-wrap:wrap; margin-top:16px; }
+  .field { flex:1 1 150px; }
+  label { display:block; font-size:12px; color:#666; margin-bottom:4px; }
+  input { width:100%; padding:8px 10px; border:1px solid #d1d5db; border-radius:7px; font:inherit; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:11px 20px;
+           font:600 15px/1 inherit; cursor:pointer; margin-top:18px; }
+  button:disabled { opacity:.5; cursor:default; }
+  ul.files { max-height:140px; overflow:auto; margin:12px 0 0; padding:0; list-style:none;
+             font:12px ui-monospace,monospace; color:#64748b; }
+  #status { margin-top:14px; font-size:14px; white-space:pre-wrap; }
+  .ok { color:#15803d; } .warn { color:#b45309; }
+  a.dl { display:inline-block; margin-top:16px; background:#15803d; color:#fff; text-decoration:none;
+         padding:11px 20px; border-radius:8px; font-weight:600; }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:13px; }
+  details { margin-top:22px; color:#555; font-size:14px; }
+  summary { cursor:pointer; color:#2563eb; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="/ai-tools/">&larr; ai-tools</a>
+  <h1>KB Packer</h1>
+  <p class="sub">Turn files into a portable, embedding-free <code>.skill</code> knowledgebase. Everything
+  runs in your browser — no upload, no model, no network. Drop files, download the skill, install it in any
+  agent that supports skills.</p>
+
+  <div id="drop">
+    <strong>Drop files or a folder here</strong><br>
+    or click to choose · <code>.txt .md .html</code> by default
+    <input id="picker" type="file" multiple hidden>
+  </div>
+  <ul class="files" id="filelist"></ul>
+
+  <div class="row">
+    <div class="field"><label>KB name (becomes the skill name)</label><input id="name" type="text" value="my-kb"></div>
+    <div class="field"><label>Extensions</label><input id="ext" type="text" value="txt,md,html,htm"></div>
+    <div class="field"><label>Chunk chars (0 = whole doc)</label><input id="target" type="number" value="0" min="0"></div>
+  </div>
+  <div class="row"><div class="field" style="flex:1 1 100%"><label>Source description (optional)</label>
+    <input id="source" type="text" placeholder="what this corpus is"></div></div>
+
+  <button id="build" disabled>Build .skill</button>
+  <div id="status"></div>
+  <div id="dl"></div>
+
+  <details>
+    <summary>How it works</summary>
+    <p>The packer chunks your files, builds a BM25 inverted index, and zips it with a query protocol and two
+    searchers (<code>search.js</code> / <code>search.py</code>) into a <code>&lt;name&gt;.skill</code>. There is no
+    embedding model: the agent you install the skill into supplies the semantic layer by expanding each query into
+    search terms. Install the downloaded skill, then ask the agent questions about your corpus.</p>
+  </details>
+</div>
+
+<script type="text/plain" id="rt-search-js">#!/usr/bin/env node
+/**
+ * Lexical KB searcher — pure-Node BM25 over a portable, embedding-free index.
+ *
+ * Ships *inside* a `.skill` bundle alongside index.json + chunks.jsonl. Zero
+ * dependencies (Node stdlib only): any agent that can run `node` can query the
+ * KB with no install, no model download, no network.
+ *
+ * The semantic layer lives in the calling agent, not here. There is no embedding
+ * model to bridge the query<->document vocabulary gap; the agent does that by
+ * expanding the query into --core (essential terms) and --expand (synonyms,
+ * morphological variants, acronym expansions, adjacent concepts). When no
+ * expansion is supplied, --rm3 runs corpus-driven pseudo-relevance feedback as a
+ * weaker, model-free fallback.
+ *
+ * The tokenizer here is the single source of truth: build_lexkb.js imports it so
+ * the index and the query tokenize identically.
+ *
+ * Usage:
+ *   node search.js --query "..." --core term --expand syn --k 5
+ *   node search.js --query "..." --rm3 --k 5
+ *   node search.js --core x --filter "section=blog" --filter "date>=2025"
+ */
+"use strict";
+
+const fs = require("fs");
+const path = require("path");
+
+// --------------------------------------------------------------------------- //
+// Tokenizer — single source of truth (builder imports this).
+// Matches search.py: lowercase, Unicode \w+ runs.
+// --------------------------------------------------------------------------- //
+
+const TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+
+function tokenize(text) {
+  const out = [];
+  for (const m of String(text).toLowerCase().matchAll(TOKEN_RE)) out.push(m[0]);
+  return out;
+}
+
+// --------------------------------------------------------------------------- //
+// Index
+// --------------------------------------------------------------------------- //
+
+class Index {
+  constructor(dir) {
+    this.dir = dir;
+    const idx = JSON.parse(fs.readFileSync(path.join(dir, "index.json"), "utf8"));
+    this.k1 = Number(idx.params.k1);
+    this.b = Number(idx.params.b);
+    this.N = Number(idx.N);
+    this.avgdl = Number(idx.avgdl);
+    this.doclen = idx.doclen;
+    this.df = idx.df;
+    this.postings = idx.postings;
+    this._idf = new Map();
+    this._chunks = null;
+  }
+
+  get chunks() {
+    if (this._chunks === null) {
+      const raw = fs.readFileSync(path.join(this.dir, "chunks.jsonl"), "utf8");
+      this._chunks = raw.split("\n").filter((l) => l.trim()).map((l) => JSON.parse(l));
+    }
+    return this._chunks;
+  }
+
+  idf(term) {
+    let v = this._idf.get(term);
+    if (v === undefined) {
+      const df = this.df[term] || 0;
+      v = Math.log(1.0 + (this.N - df + 0.5) / (df + 0.5));
+      this._idf.set(term, v);
+    }
+    return v;
+  }
+
+  termDocScore(term, docIdx, tf) {
+    const dl = this.doclen[docIdx];
+    const denom = tf + this.k1 * (1.0 - this.b + (this.b * dl) / this.avgdl);
+    return (this.idf(term) * (tf * (this.k1 + 1.0))) / denom;
+  }
+
+  // weightedTerms: Map<term, weight> -> Map<docIdx, score>
+  score(weightedTerms) {
+    const scores = new Map();
+    for (const [term, weight] of weightedTerms) {
+      const plist = this.postings[term];
+      if (!plist) continue;
+      for (const [docIdx, tf] of plist) {
+        scores.set(docIdx, (scores.get(docIdx) || 0) + weight * this.termDocScore(term, docIdx, tf));
+      }
+    }
+    return scores;
+  }
+}
+
+// --------------------------------------------------------------------------- //
+// Query construction — expansion is strictly additive over the raw query.
+// --------------------------------------------------------------------------- //
+
+function buildQuery(core, expand, wCore, wExpand, backstop, wBackstop) {
+  const q = new Map();
+  const groups = [
+    [expand || [], wExpand],
+    [backstop || [], wBackstop],
+    [core || [], wCore],
+  ];
+  for (const [group, w] of groups) {
+    for (const phrase of group) {
+      for (const tok of tokenize(phrase)) {
+        q.set(tok, Math.max(q.get(tok) || 0, w));
+      }
+    }
+  }
+  return q;
+}
+
+// --------------------------------------------------------------------------- //
+// RM3 pseudo-relevance feedback (model-free fallback expansion)
+// --------------------------------------------------------------------------- //
+
+function rm3Expand(index, seed, { nDocs = 10, nTerms = 15, alpha = 0.5 } = {}) {
+  const first = index.score(seed);
+  if (first.size === 0) return seed;
+  const top = [...first.entries()].sort((a, b) => b[1] - a[1]).slice(0, nDocs);
+  const total = top.reduce((s, [, v]) => s + v, 0) || 1.0;
+
+  const fb = new Map();
+  for (const [docIdx, docScore] of top) {
+    const toks = tokenize(index.chunks[docIdx].text);
+    if (toks.length === 0) continue;
+    const w = docScore / total;
+    const tfLocal = new Map();
+    for (const t of toks) tfLocal.set(t, (tfLocal.get(t) || 0) + 1);
+    const invLen = 1.0 / toks.length;
+    for (const [t, c] of tfLocal) fb.set(t, (fb.get(t) || 0) + w * c * invLen);
+  }
+
+  const ranked = [...fb.entries()]
+    .filter(([t]) => !seed.has(t))
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, nTerms);
+  const fbTotal = ranked.reduce((s, [, m]) => s + m, 0) || 1.0;
+
+  const merged = new Map();
+  for (const [t, w] of seed) merged.set(t, alpha * w);
+  for (const [t, m] of ranked) merged.set(t, (merged.get(t) || 0) + (1.0 - alpha) * (m / fbTotal));
+  return merged;
+}
+
+// --------------------------------------------------------------------------- //
+// Metadata filtering
+// --------------------------------------------------------------------------- //
+
+function parseFilter(expr) {
+  for (const op of ["!=", ">=", "<=", "~", "=", ">", "<"]) {
+    const i = expr.indexOf(op);
+    if (i !== -1) return [expr.slice(0, i).trim(), op, expr.slice(i + op.length).trim()];
+  }
+  throw new Error(`unparseable filter: ${expr}`);
+}
+
+function matchFilter(meta, key, op, val) {
+  const actual = meta[key];
+  if (actual === undefined || actual === null) return false;
+  const a = String(actual);
+  if (op === "=") return a === val;
+  if (op === "!=") return a !== val;
+  if (op === "~") return a.toLowerCase().includes(val.toLowerCase());
+  const af = Number(a), vf = Number(val);
+  const numeric = a.trim() !== "" && val.trim() !== "" && !Number.isNaN(af) && !Number.isNaN(vf);
+  const x = numeric ? af : a;
+  const y = numeric ? vf : val;
+  if (op === ">") return x > y;
+  if (op === ">=") return x >= y;
+  if (op === "<") return x < y;
+  if (op === "<=") return x <= y;
+  return false;
+}
+
+function passesFilters(index, docIdx, filters) {
+  if (!filters.length) return true;
+  const meta = index.chunks[docIdx].meta || {};
+  return filters.every(([k, op, v]) => matchFilter(meta, k, op, v));
+}
+
+// --------------------------------------------------------------------------- //
+// Search
+// --------------------------------------------------------------------------- //
+
+// Sentence splitter shared with search.py (same regex) so snippet selection is
+// byte-identical across runtimes.
+const SENT_SPLIT = /(?<=[.!?])\s+|\n+/;
+
+function spanChars(sents, idxs) {
+  // Char cost of the merged passage; same formula as search.py _span_chars so
+  // both runtimes make identical budget decisions.
+  if (!idxs.length) return 0;
+  const s = [...idxs].sort((a, b) => a - b);
+  let runs = 1;
+  for (let i = 1; i < s.length; i++) if (s[i] !== s[i - 1] + 1) runs++;
+  let total = s.reduce((acc, i) => acc + sents[i].length, 0);
+  total += s.length - runs;     // spaces joining sentences within a run
+  total += (runs - 1) * 3;      // ' … ' between runs
+  return total;
+}
+
+function makeSnippet(index, text, query, budget, context = 1) {
+  // Decouple the reasoning payload from the retrieval unit: rank a doc whole
+  // (recall), return only its query-densest sentences (signal) — each expanded
+  // by `context` neighbour sentences so a match keeps its referent/setup, with
+  // adjacent/overlapping matches merged into contiguous passages. Scores are
+  // rounded so JS and Python select identically.
+  if (budget <= 0 || text.length <= budget) return [text, false];
+  const sents = text.split(SENT_SPLIT).map((s) => s.trim()).filter(Boolean);
+  if (!sents.length) return [text.slice(0, budget) + "…", true];
+  const n = sents.length;
+  const scored = sents.map((s, i) => {
+    let sc = 0;
+    for (const t of new Set(tokenize(s))) if (query.has(t)) sc += query.get(t) * index.idf(t);
+    return [Math.round(sc * 1e6) / 1e6, i];
+  });
+  scored.sort((a, b) => (b[0] - a[0]) || (a[1] - b[1]));
+  const seeds = scored.filter(([sc]) => sc > 0).map(([, i]) => i);
+  if (!seeds.length) return [text.slice(0, budget) + "…", true];
+
+  let selected = new Set();
+  for (const seed of seeds) {
+    const cand = new Set(selected);
+    for (let j = Math.max(0, seed - context); j < Math.min(n, seed + context + 1); j++) cand.add(j);
+    if (selected.size && spanChars(sents, [...cand]) > budget) break;
+    selected = cand;
+    if (spanChars(sents, [...selected]) >= budget) break;
+  }
+  if (!selected.size) {
+    const seed = seeds[0];
+    for (let j = Math.max(0, seed - context); j < Math.min(n, seed + context + 1); j++) selected.add(j);
+  }
+
+  const idxs = [...selected].sort((a, b) => a - b);
+  const runs = [[idxs[0]]];
+  for (const i of idxs.slice(1)) {
+    if (i === runs[runs.length - 1][runs[runs.length - 1].length - 1] + 1) runs[runs.length - 1].push(i);
+    else runs.push([i]);
+  }
+  let body = runs.map((run) => run.map((i) => sents[i]).join(" ")).join(" … ");
+  if (idxs[0] > 0) body = "… " + body;
+  if (idxs[idxs.length - 1] < n - 1) body = body + " …";
+  return [body, true];
+}
+
+function search(index, query, { k = 5, filters = [], useRm3 = false, rm3 = {}, snippetChars = 0, snippetContext = 1 } = {}) {
+  if (useRm3) query = rm3Expand(index, query, rm3);
+  const scores = index.score(query);
+  const ranked = [...scores.entries()].sort((a, b) => b[1] - a[1]);
+  const out = [];
+  for (const [docIdx, sc] of ranked) {
+    if (!passesFilters(index, docIdx, filters)) continue;
+    const chunk = index.chunks[docIdx];
+    const [text, truncated] = makeSnippet(index, chunk.text, query, snippetChars, snippetContext);
+    const hit = { id: chunk.id, score: Math.round(sc * 1e6) / 1e6, text, meta: chunk.meta || {} };
+    if (truncated) hit.full_chars = chunk.text.length;
+    out.push(hit);
+    if (out.length >= k) break;
+  }
+  return out;
+}
+
+// --------------------------------------------------------------------------- //
+// CLI
+// --------------------------------------------------------------------------- //
+
+function parseArgs(argv) {
+  const a = { index: __dirname, query: "", core: [], expand: [], filter: [],
+    wCore: 1.0, wExpand: 0.4, wQuery: 0.25, k: 5, rm3: false,
+    rm3Docs: 10, rm3Terms: 15, rm3Alpha: 0.5, snippet: 1200, context: 1 };
+  const multi = { "--core": "core", "--expand": "expand", "--filter": "filter" };
+  for (let i = 0; i < argv.length; i++) {
+    const t = argv[i];
+    if (t === "--rm3") { a.rm3 = true; continue; }
+    const val = argv[++i];
+    if (multi[t]) a[multi[t]].push(val);
+    else if (t === "--index") a.index = val;
+    else if (t === "--query") a.query = val;
+    else if (t === "--w-core") a.wCore = Number(val);
+    else if (t === "--w-expand") a.wExpand = Number(val);
+    else if (t === "--w-query") a.wQuery = Number(val);
+    else if (t === "--k") a.k = Number(val);
+    else if (t === "--rm3-docs") a.rm3Docs = Number(val);
+    else if (t === "--rm3-terms") a.rm3Terms = Number(val);
+    else if (t === "--rm3-alpha") a.rm3Alpha = Number(val);
+    else if (t === "--snippet") a.snippet = Number(val);
+    else if (t === "--context") a.context = Number(val);
+    else { i--; } // unknown flag without value; skip
+  }
+  return a;
+}
+
+function main(argv) {
+  const a = parseArgs(argv);
+  const index = new Index(a.index);
+
+  let core = [...a.core];
+  let backstop = [];
+  if (a.query) {
+    if (!core.length && !a.expand.length) core = [a.query];
+    else backstop = [a.query];
+  }
+  const query = buildQuery(core, a.expand, a.wCore, a.wExpand, backstop, a.wQuery);
+  if (query.size === 0) {
+    console.log(JSON.stringify({ error: "empty query: pass --core/--expand or --query" }));
+    return 2;
+  }
+
+  const hits = search(index, query, {
+    k: a.k,
+    filters: a.filter.map(parseFilter),
+    useRm3: a.rm3,
+    rm3: { nDocs: a.rm3Docs, nTerms: a.rm3Terms, alpha: a.rm3Alpha },
+    snippetChars: a.snippet, snippetContext: a.context,
+  });
+  console.log(JSON.stringify({ hits }, null, 2));
+  return 0;
+}
+
+module.exports = { tokenize, Index, buildQuery, rm3Expand, parseFilter, search };
+
+if (require.main === module) {
+  process.exit(main(process.argv.slice(2)));
+}
+</script>
+<script type="text/plain" id="rt-search-py">#!/usr/bin/env python3
+"""Lexical KB searcher — pure stdlib BM25 over a portable, embedding-free index.
+
+This is the runtime half of a `.skill` lexical knowledgebase bundle. It ships
+*inside* the bundle alongside `index.json` and `chunks.jsonl`, so it has zero
+third-party dependencies: any agent that can run `python3` can query the KB
+with no `pip install`, no model download, no network.
+
+The semantic layer lives in the calling agent, not here. There is no embedding
+model to bridge the query<->document vocabulary gap; the agent does that by
+expanding the query into `--core` (essential terms) and `--expand` (synonyms,
+morphological variants, acronym expansions, adjacent concepts) before calling.
+When no expansion is supplied, `--rm3` runs corpus-driven pseudo-relevance
+feedback as a weaker, model-free fallback.
+
+Index format (see build_lexkb.py for the writer):
+  index.json   {params:{k1,b}, N, avgdl, doclen:[...], df:{term:df},
+                postings:{term:[[doc_idx, tf], ...]}}
+  chunks.jsonl one JSON object per line: {id, text, meta}; line number == doc_idx
+
+The tokenizer defined here is the single source of truth: build_lexkb.py imports
+it so the index and the query are tokenized identically.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import re
+import sys
+from collections import defaultdict
+from pathlib import Path
+
+# --------------------------------------------------------------------------- #
+# Tokenizer — single source of truth (builder imports this).
+# --------------------------------------------------------------------------- #
+
+_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+
+
+def tokenize(text: str) -> list[str]:
+    """Lowercase, split on Unicode word boundaries. No stemming, no stopwords —
+    the agent supplies morphological variants in --expand."""
+    return _TOKEN_RE.findall(text.lower())
+
+
+# --------------------------------------------------------------------------- #
+# Index loading
+# --------------------------------------------------------------------------- #
+
+
+class Index:
+    def __init__(self, index_dir: Path):
+        self.dir = index_dir
+        with (index_dir / "index.json").open(encoding="utf-8") as fh:
+            idx = json.load(fh)
+        self.k1 = float(idx["params"]["k1"])
+        self.b = float(idx["params"]["b"])
+        self.N = int(idx["N"])
+        self.avgdl = float(idx["avgdl"])
+        self.doclen = idx["doclen"]
+        self.df = idx["df"]
+        self.postings = idx["postings"]
+        self._idf_cache: dict[str, float] = {}
+        # chunks.jsonl loaded lazily on demand
+        self._chunks: list[dict] | None = None
+
+    @property
+    def chunks(self) -> list[dict]:
+        if self._chunks is None:
+            self._chunks = []
+            with (self.dir / "chunks.jsonl").open(encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if line:
+                        self._chunks.append(json.loads(line))
+        return self._chunks
+
+    def idf(self, term: str) -> float:
+        """Robust BM25 idf (always positive — Lucene/bm25+ variant)."""
+        if term not in self._idf_cache:
+            df = self.df.get(term, 0)
+            self._idf_cache[term] = math.log(1.0 + (self.N - df + 0.5) / (df + 0.5))
+        return self._idf_cache[term]
+
+    def _term_doc_score(self, term: str, doc_idx: int, tf: int) -> float:
+        dl = self.doclen[doc_idx]
+        denom = tf + self.k1 * (1.0 - self.b + self.b * dl / self.avgdl)
+        return self.idf(term) * (tf * (self.k1 + 1.0)) / denom
+
+    def score(self, weighted_terms: dict[str, float]) -> dict[int, float]:
+        """Score every candidate doc against {term: weight}. Returns {doc_idx: score}."""
+        scores: dict[int, float] = defaultdict(float)
+        for term, weight in weighted_terms.items():
+            plist = self.postings.get(term)
+            if not plist:
+                continue
+            for doc_idx, tf in plist:
+                scores[doc_idx] += weight * self._term_doc_score(term, doc_idx, tf)
+        return scores
+
+
+# --------------------------------------------------------------------------- #
+# RM3 pseudo-relevance feedback (model-free fallback expansion)
+# --------------------------------------------------------------------------- #
+
+
+def rm3_expand(
+    index: Index,
+    seed_terms: dict[str, float],
+    *,
+    n_docs: int = 10,
+    n_terms: int = 15,
+    alpha: float = 0.5,
+) -> dict[str, float]:
+    """Two-pass RM3. First pass ranks with seed_terms; harvest characteristic
+    terms from the top n_docs; interpolate back with the original query.
+
+    Returns a new weighted-term dict (original terms weighted alpha, feedback
+    terms weighted (1-alpha)*normalized). Weaker than agent expansion and prone
+    to drift when the first pass is off-topic — strictly a no-agent fallback."""
+    first = index.score(seed_terms)
+    if not first:
+        return seed_terms
+    top = sorted(first.items(), key=lambda kv: kv[1], reverse=True)[:n_docs]
+    total = sum(s for _, s in top) or 1.0
+
+    # Feedback term mass: relevance-weighted term frequency over the top docs.
+    fb: dict[str, float] = defaultdict(float)
+    for doc_idx, doc_score in top:
+        toks = tokenize(index.chunks[doc_idx]["text"])
+        if not toks:
+            continue
+        w = doc_score / total
+        tf_local: dict[str, int] = defaultdict(int)
+        for t in toks:
+            tf_local[t] += 1
+        inv_len = 1.0 / len(toks)
+        for t, c in tf_local.items():
+            fb[t] += w * c * inv_len
+
+    # Keep the most characteristic feedback terms, drop ones already in the seed.
+    ranked = sorted(
+        ((t, m) for t, m in fb.items() if t not in seed_terms),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )[:n_terms]
+    fb_total = sum(m for _, m in ranked) or 1.0
+
+    merged: dict[str, float] = {t: alpha * w for t, w in seed_terms.items()}
+    for t, m in ranked:
+        merged[t] = merged.get(t, 0.0) + (1.0 - alpha) * (m / fb_total)
+    return merged
+
+
+# --------------------------------------------------------------------------- #
+# Metadata filtering
+# --------------------------------------------------------------------------- #
+
+
+def _parse_filter(expr: str) -> tuple[str, str, str]:
+    """`key=value`, `key!=value`, `key>value`, `key<value`, `key~substr`."""
+    for op in ("!=", ">=", "<=", "~", "=", ">", "<"):
+        if op in expr:
+            key, val = expr.split(op, 1)
+            return key.strip(), op, val.strip()
+    raise ValueError(f"unparseable filter: {expr!r}")
+
+
+def _match(meta: dict, key: str, op: str, val: str) -> bool:
+    actual = meta.get(key)
+    if actual is None:
+        return False
+    a = str(actual)
+    if op == "=":
+        return a == val
+    if op == "!=":
+        return a != val
+    if op == "~":
+        return val.lower() in a.lower()
+    # ordered comparisons: numeric if both parse, else lexicographic (ISO dates work)
+    try:
+        af, vf = float(a), float(val)
+        if op in (">", ">="):
+            return af > vf if op == ">" else af >= vf
+        return af < vf if op == "<" else af <= vf
+    except ValueError:
+        if op in (">", ">="):
+            return a > val if op == ">" else a >= val
+        return a < val if op == "<" else a <= val
+
+
+def apply_filters(index: Index, doc_idx: int, filters: list[tuple[str, str, str]]) -> bool:
+    if not filters:
+        return True
+    meta = index.chunks[doc_idx].get("meta", {})
+    return all(_match(meta, k, op, v) for k, op, v in filters)
+
+
+# --------------------------------------------------------------------------- #
+# Search
+# --------------------------------------------------------------------------- #
+
+
+def build_query(
+    core: list[str],
+    expand: list[str],
+    w_core: float,
+    w_expand: float,
+    backstop: list[str] | None = None,
+    w_backstop: float = 0.25,
+) -> dict[str, float]:
+    """Tokenize term groups into one weighted-term dict; a term's weight is the
+    max across the groups it appears in.
+
+    `backstop` carries the user's *original* query terms at a low floor weight so
+    expansion is strictly additive — curated synonyms can lift a result but can
+    never drop a doc the literal question would have matched. (Diagnosed on the
+    tiny corpus: substitutive expansion sent a gold doc to score 0.)"""
+    q: dict[str, float] = {}
+    groups = [(expand, w_expand), (backstop or [], w_backstop), (core, w_core)]
+    for group, w in groups:
+        for phrase in group:
+            for tok in tokenize(phrase):
+                q[tok] = max(q.get(tok, 0.0), w)
+    return q
+
+
+# Sentence splitter shared with search.js (same regex, lookbehind supported in
+# both runtimes) so snippet selection is byte-identical across languages.
+_SENT_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
+
+
+def _span_chars(sents: list[str], idxs: list[int]) -> int:
+    """Char cost of the merged passage for a set of selected sentence indices:
+    sentence lengths + 1 per intra-run join + 3 per ' … ' between runs. Identical
+    formula in search.js so both runtimes make the same budget decisions."""
+    if not idxs:
+        return 0
+    s = sorted(idxs)
+    runs = 1
+    for a, b in zip(s, s[1:]):
+        if b != a + 1:
+            runs += 1
+    total = sum(len(sents[i]) for i in s)
+    total += (len(s) - runs)            # spaces joining sentences within a run
+    total += (runs - 1) * 3             # ' … ' between runs
+    return total
+
+
+def make_snippet(index: Index, text: str, query: dict[str, float], budget: int,
+                 context: int = 1) -> tuple[str, bool]:
+    """Return (passage, truncated). Decouples the reasoning payload from the
+    retrieval unit: rank a doc whole (recall), but return only the query-densest
+    sentences (signal) — each expanded by `context` neighbour sentences on either
+    side so a matched sentence keeps its referent/setup, and overlapping or
+    adjacent matches merge into contiguous passages.
+
+    Sentences are scored by sum of query-term weight*idf for the distinct query
+    terms they contain; the highest are seeded in until ~`budget` chars (counting
+    the context windows), then emitted in document order. Runs are joined by ' … '
+    with leading/trailing ' …' marking elided head/tail. Scores rounded so JS and
+    Python select identically."""
+    if budget <= 0 or len(text) <= budget:
+        return text, False
+    sents = [s.strip() for s in _SENT_SPLIT.split(text) if s.strip()]
+    if not sents:
+        return text[:budget] + "…", True
+    n = len(sents)
+    scored = []
+    for i, s in enumerate(sents):
+        toks = set(tokenize(s))
+        sc = round(sum(query[t] * index.idf(t) for t in toks if t in query), 6)
+        scored.append((sc, i))
+    seeds = [i for sc, i in sorted(scored, key=lambda x: (-x[0], x[1])) if sc > 0]
+    if not seeds:
+        return text[:budget] + "…", True
+
+    selected: set[int] = set()
+    for seed in seeds:
+        window = set(range(max(0, seed - context), min(n, seed + context + 1)))
+        cand = selected | window
+        if selected and _span_chars(sents, list(cand)) > budget:
+            break
+        selected = cand
+        if _span_chars(sents, list(selected)) >= budget:
+            break
+    if not selected:  # first seed's window even if it alone exceeds budget
+        seed = seeds[0]
+        selected = set(range(max(0, seed - context), min(n, seed + context + 1)))
+
+    idxs = sorted(selected)
+    runs: list[list[int]] = [[idxs[0]]]
+    for i in idxs[1:]:
+        (runs[-1].append(i) if i == runs[-1][-1] + 1 else runs.append([i]))
+    body = " … ".join(" ".join(sents[i] for i in run) for run in runs)
+    if idxs[0] > 0:
+        body = "… " + body
+    if idxs[-1] < n - 1:
+        body = body + " …"
+    return body, True
+
+
+def search(
+    index: Index,
+    query: dict[str, float],
+    *,
+    k: int = 5,
+    filters: list[tuple[str, str, str]] | None = None,
+    use_rm3: bool = False,
+    rm3_docs: int = 10,
+    rm3_terms: int = 15,
+    rm3_alpha: float = 0.5,
+    snippet_chars: int = 0,
+    snippet_context: int = 1,
+) -> list[dict]:
+    if use_rm3:
+        query = rm3_expand(
+            index, query, n_docs=rm3_docs, n_terms=rm3_terms, alpha=rm3_alpha
+        )
+    scores = index.score(query)
+    ranked = sorted(scores.items(), key=lambda kv: kv[1], reverse=True)
+    out: list[dict] = []
+    for doc_idx, sc in ranked:
+        if not apply_filters(index, doc_idx, filters or []):
+            continue
+        chunk = index.chunks[doc_idx]
+        full = chunk["text"]
+        text, truncated = make_snippet(index, full, query, snippet_chars, snippet_context)
+        hit = {
+            "id": chunk.get("id"),
+            "score": round(sc, 6),
+            "text": text,
+            "meta": chunk.get("meta", {}),
+        }
+        if truncated:
+            hit["full_chars"] = len(full)  # signal more is available via --snippet 0
+        out.append(hit)
+        if len(out) >= k:
+            break
+    return out
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--index", default=str(Path(__file__).resolve().parent),
+                    help="bundle dir holding index.json + chunks.jsonl (default: script dir)")
+    ap.add_argument("--query", default="", help="raw query text (fallback / RM3 seed)")
+    ap.add_argument("--core", action="append", default=[], help="essential term/phrase (repeatable)")
+    ap.add_argument("--expand", action="append", default=[], help="expansion term/phrase (repeatable)")
+    ap.add_argument("--w-core", type=float, default=1.0)
+    ap.add_argument("--w-expand", type=float, default=0.4)
+    ap.add_argument("--w-query", type=float, default=0.25, help="floor weight for --query terms when expanding")
+    ap.add_argument("--k", type=int, default=5)
+    ap.add_argument("--filter", action="append", default=[], help="meta filter, e.g. section=blog or date>=2025 (repeatable)")
+    ap.add_argument("--rm3", action="store_true", help="run pseudo-relevance feedback (no-agent fallback)")
+    ap.add_argument("--rm3-docs", type=int, default=10)
+    ap.add_argument("--rm3-terms", type=int, default=15)
+    ap.add_argument("--rm3-alpha", type=float, default=0.5)
+    ap.add_argument("--snippet", type=int, default=1200,
+                    help="return only the query-densest passage, ~N chars, instead of the full "
+                         "chunk (focuses reasoning context; 0 = full text)")
+    ap.add_argument("--context", type=int, default=1,
+                    help="neighbour sentences kept on each side of a match for coherence "
+                         "(0 = bare matched sentences)")
+    args = ap.parse_args(argv)
+
+    index = Index(Path(args.index))
+
+    core = list(args.core)
+    backstop: list[str] = []
+    if args.query:
+        if not core and not args.expand:
+            core = [args.query]  # raw-only: the query IS the core
+        else:
+            backstop = [args.query]  # additive floor under core+expand
+
+    query = build_query(core, args.expand, args.w_core, args.w_expand,
+                        backstop, args.w_query)
+    if not query:
+        print(json.dumps({"error": "empty query: pass --core/--expand or --query"}))
+        return 2
+
+    hits = search(
+        index, query, k=args.k,
+        filters=[_parse_filter(f) for f in args.filter],
+        use_rm3=args.rm3, rm3_docs=args.rm3_docs,
+        rm3_terms=args.rm3_terms, rm3_alpha=args.rm3_alpha,
+        snippet_chars=args.snippet, snippet_context=args.context,
+    )
+    print(json.dumps({"hits": hits}, ensure_ascii=False, indent=2))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+</script>
+<script type="text/plain" id="rt-bundle-skill">---
+name: lexical-kb
+description: Query a portable, embedding-free lexical knowledgebase bundled as a `.skill`. Use when the user references this KB or asks a question whose answer is in its corpus ({{SOURCE}}). Retrieval is BM25 over a precomputed inverted index — there is no embedding model, so YOU expand the query into search terms before searching. Bundle holds index.json + chunks.jsonl + search.js + search.py; pure stdlib, no install, no network.
+---
+
+# lexical-kb — query an embedding-free knowledgebase
+
+This KB has **no semantic search and no embedding model**. Retrieval is pure
+lexical BM25 over a precomputed inverted index. That design moves one job onto
+you: bridging the gap between how the user phrases a question and how the corpus
+phrases the answer. An embedding model would do this with a vector; here **you
+are the semantic layer** — you expand the query into terms before searching.
+
+Corpus: {{SOURCE}} ({{CHUNK_COUNT}} chunks).
+
+## The retrieval protocol — follow every step
+
+A raw user question fed straight to BM25 underperforms: it matches only the
+exact words the user happened to use. The expansion step is what makes lexical
+retrieval competitive with embeddings. Do not skip it.
+
+1. **Read the question. Extract `core` terms** — the essential nouns, proper
+   nouns, and identifiers the answer MUST contain. These carry full weight.
+
+2. **Generate `expand` terms** — synonyms, morphological variants (plural/verb
+   forms), acronym expansions and contractions, and adjacent concepts. These
+   carry lower weight. This is the work the missing embedding model would have
+   done. Be generous: 5–15 expansion terms is normal.
+
+3. **Run the searcher.** It ships in this bundle in two equivalent runtimes —
+   `node search.js` or `python3 search.py`, identical flags and identical
+   results. Use whichever your environment has. Pass the user's original
+   question via `--query` AND your term groups — expansion is **additive**, it
+   never replaces the user's words:
+
+   ```bash
+   node search.js \
+     --query "how does centered simhash differ from random projection?" \
+     --core "simhash" --core "centered" \
+     --expand "random projection" --expand "hyperplane" --expand "LSH" \
+     --expand "binary quantization" --expand "hamming distance" \
+     --k 5
+   ```
+
+   `--core`/`--expand` are repeatable; pass phrases, the searcher tokenizes
+   them. The `--query` terms contribute at a low floor weight so a curated
+   synonym can lift a result but can never drop a doc the literal question would
+   have matched. Defaults: core 1.0, expand 0.4, query-floor 0.25, top-k 5.
+   Keep expansion targeted — terms too generic ("system", "process") leak into
+   unrelated chunks and blur the ranking.
+
+4. **Read the returned chunks. Answer from them, and cite chunk ids inline.**
+   The chunks are the source of truth the user installed. When a chunk
+   contradicts your prior knowledge, the chunk wins — say so. When the chunks
+   do not contain the answer, say that plainly rather than filling the gap from
+   memory.
+
+## When you cannot expand — RM3 fallback
+
+If the query is outside any domain you can expand confidently, pass it raw with
+pseudo-relevance feedback. The searcher harvests expansion terms from the
+corpus's own top hits — model-free, weaker than your expansion, and prone to
+drift when the first pass is off-topic, so prefer real expansion when you can:
+
+```bash
+node search.js --query "the user's raw question" --rm3 --k 5
+```
+
+## Metadata filtering
+
+Each chunk carries structured `meta` (e.g. `title`, `source_path`, `section`).
+Filter on it with `--filter` (repeatable). Filtering narrows by attribute; it
+does not rank — combine it with term search.
+
+```bash
+node search.js --core "factions" --filter "section=blog" --filter "date>=2025" --k 5
+```
+
+Operators: `=`, `!=`, `~` (substring), `>`, `>=`, `<`, `<=` (numeric when both
+sides parse, else lexicographic — ISO dates sort correctly).
+
+## Passage vs. full document
+
+Ranking uses the whole chunk (best recall), but each hit's `text` is by default
+the **query-densest passage** of that chunk (~1200 chars), not the entire chunk —
+so your reasoning context is signal, not the surrounding noise of a long document.
+Each matched sentence keeps its neighbours (`--context`, default 1 each side) so
+it reads in context rather than as an orphaned fragment, and nearby matches merge
+into contiguous passages; ' … ' marks elisions between them. When a hit is a
+passage, the result carries `full_chars` (the chunk's full length). If you need
+the complete document for a hit — broader context, a quote in a section the
+passage elided — re-run with `--snippet 0`:
+
+```bash
+node search.js --query "…" --core "…" --snippet 0 --k 3
+```
+
+Tune with `--snippet 2000`/`600` (budget) and `--context 2`/`0` (neighbours).
+
+## Output
+
+The searcher prints JSON: `{"hits": [{id, score, text, meta, full_chars?}, ...]}`,
+sorted by descending BM25 score. `text` is the focused passage (or the full chunk
+if it was already short / `--snippet 0`); `full_chars` appears only when `text`
+is a passage. Surface the top hits to the user with their ids, then answer using
+them as authoritative context.
+
+## Mechanics
+
+- Pure stdlib — Node or Python. No `npm install` / `pip install`, no model
+  download, no network.
+- The bundle is self-contained: `search.js` + `search.py` (pick one),
+  `index.json`, `chunks.jsonl`. Run the searcher from inside the bundle
+  directory (it defaults `--index` to its own location) or pass
+  `--index /path/to/bundle`.
+</script>
+
+<script type="module">
+// --- build core (vendored from oaustegard/claude-skills creating-kb, lexkb-web.mjs) ---
+/**
+ * lexkb-web.mjs — browser build core for the creating-kb packer SPA.
+ *
+ * A faithful ES-module port of the pure build logic in `build_lexkb.js` +
+ * `zipstore.js` (chunk -> BM25 index -> STORED zip), with no Node/`fs`
+ * dependency so it runs in the browser. The Node CLI stays canonical; this is
+ * the second implementation, pinned byte-identical by `test_web_parity.mjs`
+ * (same pattern as the search.js/search.py parity pin). The tokenizer is copied
+ * verbatim from search.js so the index matches what the shipped searchers read.
+ *
+ * The SPA fetches the canonical search.js / search.py / bundle_SKILL.md at
+ * runtime and passes them to bundleFiles(), so the shipped runtime is never
+ * duplicated here.
+ */
+
+const TOKEN_RE = /[\p{L}\p{N}_]+/gu;
+
+function tokenize(text) {
+  const out = [];
+  for (const m of String(text).toLowerCase().matchAll(TOKEN_RE)) out.push(m[0]);
+  return out;
+}
+
+// --- text extraction + structural chunking (string in, no fs) --------------- //
+
+function extractText(name, raw) {
+  const dot = name.lastIndexOf(".");
+  const ext = dot >= 0 ? name.slice(dot).toLowerCase() : "";
+  const stem = dot >= 0 ? name.slice(0, dot) : name;
+  let title, body;
+  if (ext === ".html" || ext === ".htm") {
+    const m = raw.match(/<title>([\s\S]*?)<\/title>/i);
+    title = m ? m[1].trim() : stem;
+    body = raw.replace(/<(script|style)[^>]*>[\s\S]*?<\/\1>/gi, " ")
+      .replace(/<[^>]+>/g, "\n")
+      .replace(/&[a-zA-Z#0-9]+;/g, " ");
+  } else {
+    title = stem;
+    body = raw;
+    for (const line of raw.split("\n")) {
+      if (line.trim()) {
+        const t = line.trim().replace(/^#+\s*/, "").trim();
+        title = t.length > 80 ? t.slice(0, 80) + "…" : t;
+        break;
+      }
+    }
+  }
+  const lines = body.split("\n").map((ln) => ln.replace(/[ \t]+/g, " ").replace(/\s+$/, ""));
+  return { title, text: lines.join("\n") };
+}
+
+function chunkText(text, targetChars) {
+  text = text.trim();
+  if (!text) return [];
+  if (targetChars <= 0) return [text];
+  const paras = text.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+  const chunks = [];
+  let buf = "";
+  for (const p of paras) {
+    if (!buf) buf = p;
+    else if (buf.length + 2 + p.length <= targetChars) buf += "\n\n" + p;
+    else { chunks.push(buf); buf = p; }
+  }
+  if (buf) chunks.push(buf);
+  return chunks;
+}
+
+/** files: [{name, text}] (relative name with forward slashes). */
+function collectChunks(files, exts, targetChars, minChars) {
+  const sorted = [...files].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  const chunks = [];
+  for (const f of sorted) {
+    const dot = f.name.lastIndexOf(".");
+    const ext = dot >= 0 ? f.name.slice(dot + 1).toLowerCase() : "";
+    if (!exts.has(ext)) continue;
+    const rel = f.name;
+    const { title, text } = extractText(f.name, f.text);
+    chunkText(text, targetChars).forEach((piece, j) => {
+      if (piece.length < minChars) return;
+      chunks.push({
+        id: `${rel}#chunk-${j}`,
+        text: piece,
+        meta: { title, source_path: rel, section: rel.includes("/") ? rel.split("/")[0] : "" },
+      });
+    });
+  }
+  return chunks;
+}
+
+// --- BM25 inverted index ---------------------------------------------------- //
+
+function buildIndex(chunks, k1, b) {
+  const postings = new Map();
+  const doclen = [];
+  chunks.forEach((ch, i) => {
+    const toks = tokenize(ch.text);
+    doclen.push(toks.length);
+    const tf = new Map();
+    for (const t of toks) tf.set(t, (tf.get(t) || 0) + 1);
+    for (const [term, c] of tf) {
+      if (!postings.has(term)) postings.set(term, []);
+      postings.get(term).push([i, c]);
+    }
+  });
+  const N = chunks.length;
+  const avgdl = N ? doclen.reduce((s, x) => s + x, 0) / N : 0;
+  const df = {};
+  const postingsObj = {};
+  for (const [t, pl] of postings) { df[t] = pl.length; postingsObj[t] = pl; }
+  return { params: { k1, b }, N, avgdl, doclen, df, postings: postingsObj };
+}
+
+// --- bundle assembly -------------------------------------------------------- //
+
+/** runtime = {searchJs, searchPy, bundleSkillMd} fetched by the caller. */
+function bundleFiles(chunks, index, sourceDesc, runtime) {
+  const chunksJsonl = chunks.map((ch) => JSON.stringify(ch)).join("\n") + "\n";
+  const skillMd = runtime.bundleSkillMd
+    .split("{{SOURCE}}").join(sourceDesc)
+    .split("{{CHUNK_COUNT}}").join(String(chunks.length));
+  return {
+    "chunks.jsonl": chunksJsonl,
+    "index.json": JSON.stringify(index),
+    "search.js": runtime.searchJs,
+    "search.py": runtime.searchPy,
+    "SKILL.md": skillMd,
+  };
+}
+
+// --- STORED zip writer (ported verbatim from zipstore.js) ------------------- //
+
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+
+function crc32(buf) {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_TABLE[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+function toBytes(data) {
+  if (typeof data === "string") return new TextEncoder().encode(data);
+  return data instanceof Uint8Array ? data : new Uint8Array(data);
+}
+
+const DOS_TIME = 0;
+const DOS_DATE = 0x0021; // 1980-01-01
+
+function zipStore(files) {
+  const entries = files.map((f) => {
+    const nameBytes = new TextEncoder().encode(f.name);
+    const data = toBytes(f.data);
+    return { nameBytes, data, crc: crc32(data) };
+  });
+  const chunks = [];
+  let offset = 0;
+  const central = [];
+  for (const e of entries) {
+    const local = new ArrayBuffer(30 + e.nameBytes.length);
+    const dv = new DataView(local);
+    dv.setUint32(0, 0x04034b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 0, true);
+    dv.setUint16(8, 0, true);
+    dv.setUint16(10, DOS_TIME, true);
+    dv.setUint16(12, DOS_DATE, true);
+    dv.setUint32(14, e.crc, true);
+    dv.setUint32(18, e.data.length, true);
+    dv.setUint32(22, e.data.length, true);
+    dv.setUint16(26, e.nameBytes.length, true);
+    dv.setUint16(28, 0, true);
+    const lh = new Uint8Array(local);
+    lh.set(e.nameBytes, 30);
+    chunks.push(lh, e.data);
+    e.offset = offset;
+    offset += lh.length + e.data.length;
+  }
+  for (const e of entries) {
+    const cd = new ArrayBuffer(46 + e.nameBytes.length);
+    const dv = new DataView(cd);
+    dv.setUint32(0, 0x02014b50, true);
+    dv.setUint16(4, 20, true);
+    dv.setUint16(6, 20, true);
+    dv.setUint16(8, 0, true);
+    dv.setUint16(10, 0, true);
+    dv.setUint16(12, DOS_TIME, true);
+    dv.setUint16(14, DOS_DATE, true);
+    dv.setUint32(16, e.crc, true);
+    dv.setUint32(20, e.data.length, true);
+    dv.setUint32(24, e.data.length, true);
+    dv.setUint16(28, e.nameBytes.length, true);
+    dv.setUint16(30, 0, true);
+    dv.setUint16(32, 0, true);
+    dv.setUint16(34, 0, true);
+    dv.setUint16(36, 0, true);
+    dv.setUint32(38, 0, true);
+    dv.setUint32(42, e.offset, true);
+    const c = new Uint8Array(cd);
+    c.set(e.nameBytes, 46);
+    central.push(c);
+  }
+  const centralSize = central.reduce((s, c) => s + c.length, 0);
+  const centralOffset = offset;
+  const eocd = new ArrayBuffer(22);
+  const dv = new DataView(eocd);
+  dv.setUint32(0, 0x06054b50, true);
+  dv.setUint16(8, entries.length, true);
+  dv.setUint16(10, entries.length, true);
+  dv.setUint32(12, centralSize, true);
+  dv.setUint32(16, centralOffset, true);
+  const all = [...chunks, ...central, new Uint8Array(eocd)];
+  const totalLen = all.reduce((s, c) => s + c.length, 0);
+  const result = new Uint8Array(totalLen);
+  let p = 0;
+  for (const c of all) { result.set(c, p); p += c.length; }
+  return result;
+}
+
+/** Assemble a .skill zip; entries placed under a top-level <root>/ folder. */
+function zipSkill(files, root) {
+  const entries = Object.entries(files).sort(([a], [b]) => (a < b ? -1 : 1))
+    .map(([name, content]) => ({ name: `${root}/${name}`, data: content }));
+  return zipStore(entries);
+}
+
+
+// --- UI ---
+const $ = (id) => document.getElementById(id);
+const drop = $("drop"), status = $("status"), dlBox = $("dl");
+let files = [];
+const runtime = {
+  searchJs: $("rt-search-js").textContent,
+  searchPy: $("rt-search-py").textContent,
+  bundleSkillMd: $("rt-bundle-skill").textContent,
+};
+
+function setStatus(m, c) { status.className = c || ""; status.textContent = m; }
+function renderFiles() {
+  $("filelist").innerHTML = files.map((f) => `<li>${f.name} · ${f.text.length}c</li>`).join("");
+  $("build").disabled = files.length === 0;
+}
+function mergeFiles(next) {
+  const byName = new Map(files.map((f) => [f.name, f]));
+  for (const f of next) byName.set(f.name, f);
+  files = [...byName.values()];
+  renderFiles();
+  setStatus(`${files.length} file(s) staged.`);
+}
+async function readFileObjs(objs) {
+  const out = [];
+  for (const f of objs) out.push({ name: f.webkitRelativePath || f._rel || f.name, text: await f.text() });
+  return out;
+}
+
+drop.addEventListener("click", () => $("picker").click());
+$("picker").addEventListener("change", async (e) => mergeFiles(await readFileObjs(e.target.files)));
+["dragenter", "dragover"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.add("hot"); }));
+["dragleave", "drop"].forEach((ev) => drop.addEventListener(ev, (e) => { e.preventDefault(); drop.classList.remove("hot"); }));
+
+async function walkEntry(entry, prefix, out) {
+  if (entry.isFile) await new Promise((res) => entry.file((f) => { f._rel = prefix + f.name; out.push(f); res(); }));
+  else if (entry.isDirectory) {
+    const r = entry.createReader();
+    const ents = await new Promise((res) => r.readEntries(res));
+    for (const e of ents) await walkEntry(e, prefix + entry.name + "/", out);
+  }
+}
+drop.addEventListener("drop", async (e) => {
+  const items = [...(e.dataTransfer.items || [])].map((it) => it.webkitGetAsEntry && it.webkitGetAsEntry()).filter(Boolean);
+  if (items.length) {
+    const collected = [];
+    for (const it of items) await walkEntry(it, "", collected);
+    mergeFiles(await readFileObjs(collected));
+  } else mergeFiles(await readFileObjs(e.dataTransfer.files));
+});
+
+$("build").addEventListener("click", () => {
+  try {
+    const exts = new Set($("ext").value.split(",").map((s) => s.trim().replace(/^\./, "").toLowerCase()).filter(Boolean));
+    const target = Number($("target").value) || 0;
+    const name = ($("name").value.trim() || "my-kb").replace(/[^a-zA-Z0-9._-]/g, "-");
+    const chunks = collectChunks(files, exts, target, 40);
+    if (!chunks.length) { setStatus("No chunks produced — check your extensions filter.", "warn"); return; }
+    const index = buildIndex(chunks, 1.5, 0.75);
+    const bundle = bundleFiles(chunks, index, $("source").value.trim() || `${name} corpus`, runtime);
+    const bytes = zipSkill(bundle, name);
+    const nFiles = new Set(chunks.map((c) => c.meta.source_path)).size;
+    setStatus(`Built ${chunks.length} chunks from ${nFiles} file(s) · vocab ${Object.keys(index.df).length} · ${(bytes.length / 1024).toFixed(1)} KB`, "ok");
+    const url = URL.createObjectURL(new Blob([bytes], { type: "application/zip" }));
+    dlBox.innerHTML = `<a class="dl" download="${name}.skill" href="${url}">Download ${name}.skill</a>`;
+  } catch (err) { setStatus("Error: " + err.message, "warn"); }
+});
+</script>
+</body>
+</html>
