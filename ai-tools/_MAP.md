@@ -1,5 +1,5 @@
 # ai-tools/
-*Files: 10*
+*Files: 11*
 
 ## Files
 
@@ -11,5 +11,6 @@
 - **claude-pruner.html** — exports (30): `logger, log, info, warn, error, estimateTokens, formatTimestamp, processMessageContent`...
 - **claude-skill-releases.html** — exports: `parseRelease, App, handlePopState, fetchReleases, TableOfContents, ReleaseCard` — imports: `preact, signals, hooks, preact`
 - **index.html**
+- **kb-packer.html** — exports (26): `tokenize, buildQuery, rm3Expand, parseFilter, matchFilter, passesFilters, spanChars, makeSnippet`...
 - **llms.html** — exports (13): `getElement, getParamsFromUrl, updateUrl, formatCost, renderFeatureBadge, isWithinRange, evaluateSearchExpression, filterAndSortModels`...
 - **token-salary-calculator.html** — exports (12): `blend, fmt, inf, infFmt, mdl, Slider, readQSP, writeQSP`... — imports: `preact, hooks, preact`
