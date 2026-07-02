@@ -1,7 +1,7 @@
 # ATProto FileDrop
 
 Browser-to-browser file transfer with ATProto as the signaling channel.
-Live at [austegard.com/bsky/](https://austegard.com/bsky/).
+Live at [austegard.com/bsky/filedrop.html](https://austegard.com/bsky/filedrop.html).
 
 File bytes never touch a server: they travel over a DTLS-encrypted WebRTC
 data channel directly between the two browsers. ATProto carries only the
