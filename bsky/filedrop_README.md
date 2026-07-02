@@ -32,7 +32,13 @@ instead:
    `connected`, both sides delete their signal records. Stale records are
    also swept at every sign-in and ignored past a 5-minute TTL.
 5. Files stream over the data channel in 64 KB chunks with backpressure,
-   after an explicit accept from the receiver.
+   after an explicit accept from the receiver. The channel is one ordered
+   byte stream with no per-chunk framing, so transfers are strictly
+   serialized per peer per direction: additional sends queue and start
+   when the current one completes, and the receiver declines any offer
+   that arrives mid-receive. Every offer carries the file's SHA-256; the
+   receiver hashes the assembled bytes and discards the file on mismatch,
+   so corruption can't land silently.
 
 Handle resolution goes through the public Bluesky AppView; the PDS
 endpoint comes from the DID document (`plc.directory` for `did:plc`,

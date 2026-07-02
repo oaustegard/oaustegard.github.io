@@ -163,7 +163,10 @@
     <h4>Peer-to-peer transfer</h4>
     <p>Files stream over a WebRTC data channel established directly between the
     two browsers, encrypted end-to-end with DTLS and sent in 64&nbsp;KB chunks
-    with backpressure. No relay, no upload &mdash; if the two machines can't
+    with backpressure. The channel carries one transfer at a time per
+    direction &mdash; additional sends queue automatically &mdash; and every
+    file is SHA-256 hashed before sending and verified on arrival; a
+    mismatch is discarded, not saved. No relay, no upload &mdash; if the two machines can't
     reach each other (rare symmetric-NAT pairs), the transfer fails rather than
     fall back to a server.</p>
     <h4>ATProto as the signaling channel</h4>
@@ -578,13 +581,47 @@ async function handleAnswer(did, sdp) {
 let pendingSend = null;   /* { did, file } awaiting FILE_ACCEPT */
 let pendingOffer = null;  /* { did, meta } shown in toast */
 
-function offerFile(did, file) {
+/* Transfers are SERIALIZED per peer per direction. The data channel is one
+   ordered byte stream with no per-chunk framing, so two concurrent sends
+   would interleave chunks the receiver cannot demux (diagnosed 2026-07-02:
+   two files sent back-to-back arrived as one corrupt, ballooned second
+   file). Extra sends queue and start when the current transfer finishes. */
+async function fileSha256(file) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function offerFile(did, file) {
   const p = peers.get(did);
   if (!p || !p.dc || p.dc.readyState !== 'open') { showErr('Not connected to ' + (p ? p.handle : did)); return; }
-  if (pendingSend) { showErr('Already waiting on an accept for ' + pendingSend.file.name); return; }
-  pendingSend = { did: did, file: file };
-  p.dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type }));
+  p.sendQueue = p.sendQueue || [];
+  if (pendingSend || p.sending) {
+    p.sendQueue.push(file);
+    setStatus('Queued ' + file.name + ' for ' + p.handle);
+    return;
+  }
+  pendingSend = { did: did, file: file };   /* reserve BEFORE the hash await so a
+                                               second rapid pick queues, not races */
+  setStatus('Hashing ' + file.name + '\u2026');
+  let sha256;
+  try {
+    sha256 = await fileSha256(file);
+  } catch (e) {
+    pendingSend = null;
+    showErr('Could not hash ' + file.name + ': ' + e.message);
+    sendNext(did);
+    return;
+  }
+  if (!p.dc || p.dc.readyState !== 'open') { pendingSend = null; showErr('Channel closed'); return; }
+  p.dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type, sha256: sha256 }));
   setStatus('Waiting for ' + p.handle + ' to accept ' + file.name + '\u2026');
+}
+
+function sendNext(did) {
+  const p = peers.get(did);
+  if (!p || !p.sendQueue || !p.sendQueue.length) return;
+  const f = p.sendQueue.shift();
+  offerFile(did, f);
 }
 
 function pickAndSend(did) {
@@ -615,6 +652,7 @@ function streamFile(did, file) {
   const p = peers.get(did);
   const dc = p && p.dc;
   if (!dc || dc.readyState !== 'open') { showErr('Channel closed before send'); return; }
+  p.sending = true;
   let offset = 0;
   const reader = new FileReader();
   const readNext = () => reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK_SIZE));
@@ -628,9 +666,11 @@ function streamFile(did, file) {
       dc.send(JSON.stringify({ type: 'FILE_DONE' }));
       setStatus('Sent ' + file.name);
       clearProgress(p);
+      p.sending = false;
+      sendNext(did);
     }
   };
-  reader.onerror = () => showErr('Read failed: ' + reader.error);
+  reader.onerror = () => { p.sending = false; showErr('Read failed: ' + reader.error); };
   readNext();
 }
 
@@ -645,9 +685,11 @@ function handleChannelMessage(did, data) {
     }
     if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'FILE_OFFER') {
-      if (pendingOffer) {
-        /* one incoming offer at a time: auto-decline the newcomer so its
-           sender isn't left hanging while the first toast is undecided */
+      if (pendingOffer || p.recv) {
+        /* one incoming offer at a time, and NEVER while a receive from this
+           peer is streaming — accepting would overwrite p.recv and splice
+           two undemuxable byte streams. Auto-decline; the sender's queue
+           (or user) retries after the current transfer. */
         p.dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
         return;
       }
@@ -664,6 +706,7 @@ function handleChannelMessage(did, data) {
       if (pendingSend && pendingSend.did === did) {
         setStatus(p.handle + ' declined ' + pendingSend.file.name);
         pendingSend = null;
+        sendNext(did);
       }
     } else if (msg.type === 'FILE_DONE') {
       if (p.recv) finishDownload(did);
@@ -676,16 +719,32 @@ function handleChannelMessage(did, data) {
   }
 }
 
-function finishDownload(did) {
+async function finishDownload(did) {
   const p = peers.get(did);
   const r = p.recv;
   p.recv = null;
   const blob = new Blob(r.chunks, { type: r.meta.mime || 'application/octet-stream' });
+  let verified = '';
+  if (typeof r.meta.sha256 === 'string' && r.meta.sha256.length === 64) {
+    setStatus('Verifying ' + r.meta.name + '\u2026');
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+      const got = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (got !== r.meta.sha256) {
+        showErr('Integrity check FAILED for ' + r.meta.name + ' \u2014 received bytes do not match the sender\u2019s SHA-256. File discarded. (expected ' + r.meta.sha256.slice(0, 12) + '\u2026, got ' + got.slice(0, 12) + '\u2026)');
+        clearProgress(p);
+        return;
+      }
+      verified = ' \u2014 SHA-256 verified';
+    } catch (e) {
+      verified = ' \u2014 verification unavailable (' + e.message + ')';
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = r.meta.name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  setStatus('Received ' + r.meta.name);
+  setStatus('Received ' + r.meta.name + verified);
   clearProgress(p);
 }
 
