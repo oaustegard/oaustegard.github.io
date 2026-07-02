@@ -61,17 +61,26 @@
   .peer.hover { border-color: var(--accent); border-style: dashed; background: var(--accent-soft); }
   .drop-hint { font-size: 11px; color: var(--muted); }
   .empty { color: var(--muted); font-size: 14px; padding: 20px 0; text-align: center; }
-  .bar-wrap {
-    flex-basis: 100%; height: 6px; background: var(--accent-soft);
-    border-radius: 3px; overflow: hidden; display: none;
+  .files { flex-basis: 100%; display: flex; flex-direction: column; gap: 6px; }
+  .file-row {
+    border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px;
+    display: flex; flex-direction: column; gap: 4px;
   }
-  .bar-wrap.on { display: block; }
-  .bar { height: 100%; width: 0%; background: var(--accent); transition: width .15s; }
-  .bar-label {
-    flex-basis: 100%; font-size: 12px; color: var(--muted);
-    font-variant-numeric: tabular-nums; display: none; margin-top: 4px;
+  .file-row .f-line {
+    display: flex; gap: 10px; align-items: baseline; font-size: 12px;
   }
-  .bar-label.on { display: block; }
+  .file-row .f-name { font-weight: 600; color: var(--text); word-break: break-all; }
+  .file-row .f-status {
+    color: var(--muted); margin-left: auto; text-align: right;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .file-row .f-status.ok { color: var(--ok); }
+  .file-row .f-status.bad { color: #a11a1a; white-space: normal; }
+  .file-row .bar-wrap {
+    height: 5px; background: var(--accent-soft); border-radius: 3px; overflow: hidden;
+  }
+  .file-row .bar { height: 100%; width: 0%; background: var(--accent); transition: width .15s; }
+  .file-row.done .bar { background: var(--ok); }
   #toast {
     position: fixed; bottom: 24px; right: 24px; background: var(--panel);
     border: 1px solid var(--border); border-left: 4px solid var(--accent);
@@ -394,8 +403,7 @@ function upsertPeerRow(did, handle, pds, trusted) {
                  '<button class="send" disabled>Send file</button>' +
                  '<button class="acc" style="display:none;margin-left:auto">Accept</button>' +
                  '<button class="ign ghost" style="display:none">Ignore</button>' +
-                 '<div class="bar-wrap"><div class="bar"></div></div>' +
-                 '<div class="bar-label"></div>';
+                 '<div class="files"></div>';
   el.querySelector('button.send').addEventListener('click', () => pickAndSend(did));
   el.querySelector('button.acc').addEventListener('click', () => {
     const pp = peers.get(did);
@@ -591,37 +599,38 @@ async function fileSha256(file) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
-async function offerFile(did, file) {
+async function offerFile(did, file, row) {
   const p = peers.get(did);
   if (!p || !p.dc || p.dc.readyState !== 'open') { showErr('Not connected to ' + (p ? p.handle : did)); return; }
+  if (!row) row = newFileRow(p, file.name, file.size);
   p.sendQueue = p.sendQueue || [];
   if (pendingSend || p.sending) {
-    p.sendQueue.push(file);
-    setStatus('Queued ' + file.name + ' for ' + p.handle);
+    row.set('Queued');
+    p.sendQueue.push({ file: file, row: row });
     return;
   }
-  pendingSend = { did: did, file: file };   /* reserve BEFORE the hash await so a
-                                               second rapid pick queues, not races */
-  setStatus('Hashing ' + file.name + '\u2026');
+  pendingSend = { did: did, file: file, row: row };   /* reserve BEFORE the hash await
+                                               so a second rapid pick queues, not races */
+  row.set('Hashing\u2026');
   let sha256;
   try {
     sha256 = await fileSha256(file);
   } catch (e) {
     pendingSend = null;
-    showErr('Could not hash ' + file.name + ': ' + e.message);
+    row.set('Failed: could not hash (' + e.message + ')', 'bad');
     sendNext(did);
     return;
   }
-  if (!p.dc || p.dc.readyState !== 'open') { pendingSend = null; showErr('Channel closed'); return; }
+  if (!p.dc || p.dc.readyState !== 'open') { pendingSend = null; row.set('Failed: channel closed', 'bad'); return; }
   p.dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type, sha256: sha256 }));
-  setStatus('Waiting for ' + p.handle + ' to accept ' + file.name + '\u2026');
+  row.set('Waiting for accept\u2026');
 }
 
 function sendNext(did) {
   const p = peers.get(did);
   if (!p || !p.sendQueue || !p.sendQueue.length) return;
-  const f = p.sendQueue.shift();
-  offerFile(did, f);
+  const q = p.sendQueue.shift();
+  offerFile(did, q.file, q.row);
 }
 
 function pickAndSend(did) {
@@ -631,27 +640,37 @@ function pickAndSend(did) {
   inp.click();
 }
 
-function showProgress(p, done, total, verb) {
-  const pct = Math.round(done / total * 100);
-  p.el.querySelector('.bar-wrap').classList.add('on');
-  p.el.querySelector('.bar').style.width = pct + '%';
-  const label = p.el.querySelector('.bar-label');
-  label.classList.add('on');
-  label.textContent = verb + ' ' + formatBytes(done) + ' / ' + formatBytes(total) + ' \u00B7 ' + pct + '%';
+/* One row per transfer, sender and receiver alike: name, live status, own bar. */
+function newFileRow(p, name, size) {
+  const el = document.createElement('div');
+  el.className = 'file-row';
+  el.innerHTML = '<div class="f-line"><span class="f-name"></span>' +
+                 '<span class="f-size"></span><span class="f-status"></span></div>' +
+                 '<div class="bar-wrap"><div class="bar"></div></div>';
+  el.querySelector('.f-name').textContent = name;
+  el.querySelector('.f-size').textContent = formatBytes(size);
+  p.el.querySelector('.files').appendChild(el);
+  const bar = el.querySelector('.bar');
+  const status = el.querySelector('.f-status');
+  return {
+    set(text, cls) {
+      status.textContent = text;
+      status.className = 'f-status' + (cls ? ' ' + cls : '');
+      if (cls === 'ok') { el.classList.add('done'); bar.style.width = '100%'; }
+      if (cls === 'bad') bar.style.width = '0%';
+    },
+    progress(done, total, verb) {
+      const pct = Math.round(done / total * 100);
+      bar.style.width = pct + '%';
+      status.textContent = verb + ' ' + formatBytes(done) + ' / ' + formatBytes(total) + ' \u00B7 ' + pct + '%';
+    }
+  };
 }
 
-function clearProgress(p) {
-  setTimeout(() => {
-    p.el.querySelector('.bar-wrap').classList.remove('on');
-    p.el.querySelector('.bar').style.width = '0%';
-    p.el.querySelector('.bar-label').classList.remove('on');
-  }, 1500);
-}
-
-function streamFile(did, file) {
+function streamFile(did, file, row) {
   const p = peers.get(did);
   const dc = p && p.dc;
-  if (!dc || dc.readyState !== 'open') { showErr('Channel closed before send'); return; }
+  if (!dc || dc.readyState !== 'open') { row.set('Failed: channel closed', 'bad'); return; }
   p.sending = true;
   let offset = 0;
   const reader = new FileReader();
@@ -659,18 +678,17 @@ function streamFile(did, file) {
   reader.onload = (e) => {
     dc.send(e.target.result);
     offset += e.target.result.byteLength;
-    showProgress(p, offset, file.size, 'Sending');
+    row.progress(offset, file.size, 'Sending');
     if (offset < file.size) {
       if (dc.bufferedAmount > BUF_HIGH) setTimeout(readNext, 50); else readNext();
     } else {
       dc.send(JSON.stringify({ type: 'FILE_DONE' }));
-      setStatus('Sent ' + file.name);
-      clearProgress(p);
+      row.set('Sent \u2713', 'ok');
       p.sending = false;
       sendNext(did);
     }
   };
-  reader.onerror = () => { p.sending = false; showErr('Read failed: ' + reader.error); };
+  reader.onerror = () => { p.sending = false; row.set('Failed: read error', 'bad'); sendNext(did); };
   readNext();
 }
 
@@ -699,12 +717,12 @@ function handleChannelMessage(did, data) {
       $('toast').classList.add('on');
     } else if (msg.type === 'FILE_ACCEPT') {
       if (pendingSend && pendingSend.did === did) {
-        const f = pendingSend.file; pendingSend = null;
-        streamFile(did, f);
+        const { file, row } = pendingSend; pendingSend = null;
+        streamFile(did, file, row);
       }
     } else if (msg.type === 'FILE_DECLINE') {
       if (pendingSend && pendingSend.did === did) {
-        setStatus(p.handle + ' declined ' + pendingSend.file.name);
+        pendingSend.row.set('Declined by ' + p.handle, 'bad');
         pendingSend = null;
         sendNext(did);
       }
@@ -715,7 +733,7 @@ function handleChannelMessage(did, data) {
     if (!p.recv) return; /* chunks only arrive post-accept by protocol */
     p.recv.chunks.push(data);
     p.recv.received += data.byteLength;
-    showProgress(p, p.recv.received, p.recv.meta.size, 'Receiving');
+    p.recv.row.progress(p.recv.received, p.recv.meta.size, 'Receiving');
   }
 }
 
@@ -726,26 +744,24 @@ async function finishDownload(did) {
   const blob = new Blob(r.chunks, { type: r.meta.mime || 'application/octet-stream' });
   let verified = '';
   if (typeof r.meta.sha256 === 'string' && r.meta.sha256.length === 64) {
-    setStatus('Verifying ' + r.meta.name + '\u2026');
+    r.row.set('Verifying\u2026');
     try {
       const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
       const got = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
       if (got !== r.meta.sha256) {
-        showErr('Integrity check FAILED for ' + r.meta.name + ' \u2014 received bytes do not match the sender\u2019s SHA-256. File discarded. (expected ' + r.meta.sha256.slice(0, 12) + '\u2026, got ' + got.slice(0, 12) + '\u2026)');
-        clearProgress(p);
+        r.row.set('Integrity check FAILED \u2014 file discarded (expected ' + r.meta.sha256.slice(0, 12) + '\u2026, got ' + got.slice(0, 12) + '\u2026)', 'bad');
         return;
       }
-      verified = ' \u2014 SHA-256 verified';
+      verified = ', SHA-256 verified';
     } catch (e) {
-      verified = ' \u2014 verification unavailable (' + e.message + ')';
+      verified = ', verification unavailable';
     }
   }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = r.meta.name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  setStatus('Received ' + r.meta.name + verified);
-  clearProgress(p);
+  r.row.set('Received' + verified + ' \u2713 \u2014 saved to your Downloads folder', 'ok');
 }
 
 $('accept-btn').addEventListener('click', () => {
@@ -755,7 +771,9 @@ $('accept-btn').addEventListener('click', () => {
   pendingOffer = null;
   const p = peers.get(did);
   if (!p || !p.dc || p.dc.readyState !== 'open') { showErr('Sender disconnected'); return; }
-  p.recv = { meta: meta, chunks: [], received: 0 };
+  const row = newFileRow(p, meta.name, meta.size);
+  row.set('Receiving\u2026');
+  p.recv = { meta: meta, chunks: [], received: 0, row: row };
   p.dc.send(JSON.stringify({ type: 'FILE_ACCEPT' }));
 });
 
