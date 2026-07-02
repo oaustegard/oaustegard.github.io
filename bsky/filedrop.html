@@ -354,20 +354,26 @@ async function listPeerRecords(peer) {
 }
 
 async function sweepOwnSignals() {
-  /* leftover signal records from prior sessions are garbage — remove all */
+  /* remove only records past the TTL: another tab signed into the SAME
+     account may have live handshakes in flight — deleting everything
+     would sever them. Fresh garbage ages out and is swept next time. */
   try {
     const recs = await listMyRecords();
+    let n = 0;
     for (const rec of recs) {
-      const rkey = rec.uri.split('/').pop();
-      await deleteOwnRecord(rkey);
+      const age = Date.now() - Date.parse(String((rec.value || {}).createdAt || ''));
+      if (isNaN(age) || age > SIGNAL_TTL_S * 1000) {
+        await deleteOwnRecord(rec.uri.split('/').pop());
+        n++;
+      }
     }
-    if (recs.length) console.log('[sweep] removed', recs.length, 'stale signal records');
+    if (n) console.log('[sweep] removed', n, 'stale signal records');
   } catch (e) { console.log('[sweep] failed:', e.message); }
 }
 
 /* ---------- peers state ---------- */
 const peers = new Map();   /* did -> { did, handle, pds, trusted, pc, dc, el, recv, offerRkey, answerRkey, knockRkey } */
-const seenUris = new Set();
+const seenUris = new Map();      /* uri -> first-seen ms; pruned past TTL */
 const ignoredDids = new Set();   /* session-scoped: dismissed connection requests */
 
 function upsertPeerRow(did, handle, pds, trusted) {
@@ -519,11 +525,18 @@ async function offerTo(did) {
   const dc = pc.createDataChannel('filedrop', { ordered: true });
   p.dc = dc;
   bindDataChannel(dc, did);
-  await pc.setLocalDescription(await pc.createOffer());
-  await waitIceComplete(pc);
-  summarizeCandidates('local offer to ' + p.handle, pc.localDescription.sdp);
-  const res = await sendSignal(did, 'offer', pc.localDescription.sdp);
-  p.offerRkey = res.uri.split('/').pop();
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIceComplete(pc);
+    summarizeCandidates('local offer to ' + p.handle, pc.localDescription.sdp);
+    const res = await sendSignal(did, 'offer', pc.localDescription.sdp);
+    p.offerRkey = res.uri.split('/').pop();
+  } catch (e) {
+    /* failed to publish the offer — reset so the next poll tick retries cleanly */
+    try { pc.close(); } catch (e2) {}
+    p.pc = null; p.dc = null;
+    throw e;
+  }
   renderPeer(p, did);
 }
 
@@ -536,13 +549,20 @@ async function handleOffer(did, sdp) {
   const pc = makePC(did);
   p.pc = pc;
   pc.ondatachannel = (ev) => { p.dc = ev.channel; bindDataChannel(ev.channel, did); };
-  summarizeCandidates('remote offer from ' + p.handle, sdp);
-  await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
-  await pc.setLocalDescription(await pc.createAnswer());
-  await waitIceComplete(pc);
-  summarizeCandidates('local answer to ' + p.handle, pc.localDescription.sdp);
-  const res = await sendSignal(did, 'answer', pc.localDescription.sdp);
-  p.answerRkey = res.uri.split('/').pop();
+  try {
+    summarizeCandidates('remote offer from ' + p.handle, sdp);
+    await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitIceComplete(pc);
+    summarizeCandidates('local answer to ' + p.handle, pc.localDescription.sdp);
+    const res = await sendSignal(did, 'answer', pc.localDescription.sdp);
+    p.answerRkey = res.uri.split('/').pop();
+  } catch (e) {
+    /* failed mid-answer — reset; caller unmarks the offer record for retry */
+    try { pc.close(); } catch (e2) {}
+    p.pc = null; p.dc = null;
+    throw e;
+  }
   renderPeer(p, did);
 }
 
@@ -618,8 +638,19 @@ function handleChannelMessage(did, data) {
   const p = peers.get(did);
   if (!p) return;
   if (typeof data === 'string') {
-    const msg = JSON.parse(data);
+    let msg;
+    try { msg = JSON.parse(data); } catch (e) {
+      console.log('[dc] malformed message from', p.handle, '- ignored');
+      return;
+    }
+    if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'FILE_OFFER') {
+      if (pendingOffer) {
+        /* one incoming offer at a time: auto-decline the newcomer so its
+           sender isn't left hanging while the first toast is undecided */
+        p.dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+        return;
+      }
       pendingOffer = { did: did, meta: msg };
       $('toast-title').textContent = 'Incoming from ' + p.handle;
       $('toast-file').textContent = msg.name + ' \u00B7 ' + formatBytes(msg.size);
@@ -692,22 +723,32 @@ async function pollPeer(did) {
   if (!p) return;
   const recs = await listPeerRecords(p);
   /* oldest-first so offer/answer arrive in order */
-  recs.sort((a, b) => (a.value.createdAt || '').localeCompare(b.value.createdAt || ''));
+  recs.sort((a, b) => String((a.value || {}).createdAt || '').localeCompare(String((b.value || {}).createdAt || '')));
   for (const rec of recs) {
     if (seenUris.has(rec.uri)) continue;
     const v = rec.value || {};
     if (v.to !== me.did) continue;
-    const age = Date.now() - Date.parse(v.createdAt || 0);
-    if (isNaN(age) || age > SIGNAL_TTL_S * 1000) { seenUris.add(rec.uri); continue; }
-    seenUris.add(rec.uri);
-    if (v.msgType === 'offer')  await handleOffer(did, v.payload);
-    if (v.msgType === 'answer') await handleAnswer(did, v.payload);
+    const age = Date.now() - Date.parse(String(v.createdAt || ''));
+    if (isNaN(age) || age > SIGNAL_TTL_S * 1000) { seenUris.set(rec.uri, Date.now()); continue; }
+    seenUris.set(rec.uri, Date.now());
+    try {
+      if (v.msgType === 'offer')  await handleOffer(did, String(v.payload || ''));
+      if (v.msgType === 'answer') await handleAnswer(did, String(v.payload || ''));
+    } catch (e) {
+      /* transient failure (e.g. answer write) — unmark so the record is retried */
+      seenUris.delete(rec.uri);
+      throw e;
+    }
   }
 }
 
 async function poll() {
-  try {
-    for (const did of peers.keys()) {
+  /* prune tracking state so hostile record churn can't grow memory unboundedly */
+  const cutoff = Date.now() - SIGNAL_TTL_S * 1000;
+  for (const [uri, ts] of seenUris) if (ts < cutoff) seenUris.delete(uri);
+  if (discoverChecked.size > 5000) discoverChecked.clear();  /* re-verification is cheap and gated */
+  for (const did of peers.keys()) {
+    try {
       const p = peers.get(did);
       if (!p.trusted) continue;   /* consent gate: no polling, offering, or knocking until accepted */
       const connected = p.dc && p.dc.readyState === 'open';
@@ -721,12 +762,12 @@ async function poll() {
         p.knockRkey = res.uri.split('/').pop();
         console.log('[knock] sent to', p.handle);
       }
+    } catch (e) {
+      /* isolate: one peer's bad records or network hiccup must not halt polling of others */
+      console.log('[poll]', did, 'error:', e.message);
     }
-  } catch (e) {
-    console.log('[poll] error:', e.message);
-  } finally {
-    setTimeout(poll, POLL_MS);
   }
+  setTimeout(poll, POLL_MS);
 }
 
 /* ---------- peer discovery via Constellation backlink index ----------
@@ -755,7 +796,7 @@ async function discoverPeers() {
         const pds = await resolvePds(did);
         const live = (await listPeerRecords({ did, pds, handle: did })).some(x => {
           const v = x.value || {};
-          const age = Date.now() - Date.parse(v.createdAt || 0);
+          const age = Date.now() - Date.parse(String(v.createdAt || ''));
           return v.to === me.did && !isNaN(age) && age <= SIGNAL_TTL_S * 1000;
         });
         if (!live) continue;             /* stale index entry — ignore */
