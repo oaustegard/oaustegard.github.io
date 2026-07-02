@@ -92,6 +92,27 @@
     border-radius: 8px; padding: 10px 14px; font-size: 13px; width: calc(100% - 44px);
   }
   #err.on { display: block; }
+  #tagline {
+    font-size: 13.5px; line-height: 1.55; color: var(--muted);
+    margin: 0 0 18px; padding: 0 2px;
+  }
+  #tagline b { color: var(--text); }
+  #tagline a { color: var(--accent); text-decoration: none; }
+  footer {
+    max-width: 780px; width: 100%; margin: 0 auto; padding: 10px 22px 30px;
+    font-size: 13px; color: var(--muted); line-height: 1.6;
+  }
+  footer details summary {
+    cursor: pointer; font-weight: 600; color: var(--text); font-size: 13px;
+    padding: 8px 0;
+  }
+  footer h4 { margin: 14px 0 4px; color: var(--text); font-size: 13px; }
+  footer p { margin: 4px 0 10px; }
+  footer code { background: var(--accent-soft); padding: 0 4px; border-radius: 4px; font-size: 12px; }
+  footer a { color: var(--accent); }
+  .peer button.ghost {
+    background: var(--panel); color: var(--text); border: 1px solid var(--border);
+  }
 </style>
 </head>
 <body>
@@ -102,6 +123,14 @@
 </header>
 <div id="err"></div>
 <main>
+  <p id="tagline">
+    Send files <b>directly between browsers</b> &mdash; peer-to-peer over an
+    encrypted WebRTC channel. Nothing is uploaded to any server: this page is
+    static, file bytes never leave the two machines, and your ATProto account
+    is used only to pass the few&nbsp;KB of connection-setup data. Your app
+    password goes to your own PDS and nowhere else.
+    <a href="#how">How it works&nbsp;&darr;</a>
+  </p>
   <div class="card" id="login-card">
     <h2>Sign in with your ATProto account</h2>
     <div class="row">
@@ -118,11 +147,59 @@
       <input type="text" id="peer-handle" placeholder="peer handle (e.g. bob.bsky.social)">
       <button class="primary" id="pair-btn">Add peer</button>
     </div>
-    <p class="hint">Both of you must open this page, sign in, and enter <em>each other's</em> handle.</p>
+    <p class="hint">Only one side needs to do this &mdash; the other side is discovered automatically. Or skip typing entirely:</p>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="share-link" readonly style="font-size:12px;color:var(--muted)">
+      <button class="primary" id="share-btn">Copy my address link</button>
+    </div>
+    <p class="hint">Send that link to your peer; when they open it and sign in, you're paired.</p>
   </div>
 
   <div id="peers"></div>
 </main>
+<footer>
+  <details id="how">
+    <summary>How it works</summary>
+    <h4>Peer-to-peer transfer</h4>
+    <p>Files stream over a WebRTC data channel established directly between the
+    two browsers, encrypted end-to-end with DTLS and sent in 64&nbsp;KB chunks
+    with backpressure. No relay, no upload &mdash; if the two machines can't
+    reach each other (rare symmetric-NAT pairs), the transfer fails rather than
+    fall back to a server.</p>
+    <h4>ATProto as the signaling channel</h4>
+    <p>WebRTC needs a way to exchange a few kilobytes of session-setup text
+    (SDP) before the direct connection exists. Instead of a signaling server,
+    each side writes a short-lived <code>com.austegard.filedrop.signal</code>
+    record into its <em>own</em> ATProto repo, addressed to the other's DID, and
+    reads the peer's repo directly from their PDS. Records are deleted the
+    moment the connection is up, swept at every sign-in, and ignored after
+    5&nbsp;minutes regardless.</p>
+    <h4>Discovery and consent</h4>
+    <p>Because signals live in the sender's repo, the receiving side learns whom
+    to poll via <a href="https://constellation.microcosm.blue" target="_blank"
+    rel="noopener">Constellation</a>, a public index of ATProto backlinks. Peers
+    you add yourself (typed, or via a shared address link) pair automatically;
+    anyone <em>else</em> who signals you appears as a request you must accept
+    before any connection is attempted. A record's authorship is
+    cryptographically bound to its author's account, so an offer from
+    <code>alice.example</code> cannot be forged by anyone but Alice's PDS
+    &mdash; and the DTLS fingerprint inside it means the encrypted channel is
+    authenticated to that same identity.</p>
+    <h4>What is public</h4>
+    <p>ATProto repos are public. While a handshake is in flight (seconds,
+    bounded by the TTL), the signal records reveal that your account is
+    connecting to the peer's, and the SDP inside them includes your public IP
+    address. File names and file bytes never touch ATProto. Sign-in uses an
+    <a href="https://bsky.app/settings/app-passwords" target="_blank"
+    rel="noopener">app password</a>, sent only to your own PDS and held only in
+    this tab's memory.</p>
+    <p>Concept credit:
+    <a href="https://github.com/osama2kabdullah/FileDrop" target="_blank"
+    rel="noopener">osama2kabdullah/FileDrop</a> &middot;
+    <a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/bsky/filedrop_README.md"
+    target="_blank" rel="noopener">full README</a></p>
+  </details>
+</footer>
 <div id="toast">
   <div class="t-title" id="toast-title"></div>
   <div class="t-file" id="toast-file"></div>
@@ -277,34 +354,55 @@ async function listPeerRecords(peer) {
 }
 
 async function sweepOwnSignals() {
-  /* leftover signal records from prior sessions are garbage — remove all */
+  /* remove only records past the TTL: another tab signed into the SAME
+     account may have live handshakes in flight — deleting everything
+     would sever them. Fresh garbage ages out and is swept next time. */
   try {
     const recs = await listMyRecords();
+    let n = 0;
     for (const rec of recs) {
-      const rkey = rec.uri.split('/').pop();
-      await deleteOwnRecord(rkey);
+      const age = Date.now() - Date.parse(String((rec.value || {}).createdAt || ''));
+      if (isNaN(age) || age > SIGNAL_TTL_S * 1000) {
+        await deleteOwnRecord(rec.uri.split('/').pop());
+        n++;
+      }
     }
-    if (recs.length) console.log('[sweep] removed', recs.length, 'stale signal records');
+    if (n) console.log('[sweep] removed', n, 'stale signal records');
   } catch (e) { console.log('[sweep] failed:', e.message); }
 }
 
 /* ---------- peers state ---------- */
-const peers = new Map();   /* did -> { handle, pds, pc, dc, el, recv, offerRkey, answerRkey, seen:Set } */
-const seenUris = new Set();
+const peers = new Map();   /* did -> { did, handle, pds, trusted, pc, dc, el, recv, offerRkey, answerRkey, knockRkey } */
+const seenUris = new Map();      /* uri -> first-seen ms; pruned past TTL */
+const ignoredDids = new Set();   /* session-scoped: dismissed connection requests */
 
-function upsertPeerRow(did, handle, pds) {
+function upsertPeerRow(did, handle, pds, trusted) {
   let p = peers.get(did);
-  if (p) return p;
-  p = { did, handle, pds, pc: null, dc: null, el: null, recv: null, offerRkey: null, answerRkey: null };
+  if (p) {
+    if (trusted && !p.trusted) { p.trusted = true; renderPeer(p, did); }
+    return p;
+  }
+  p = { did, handle, pds, trusted: !!trusted, pc: null, dc: null, el: null, recv: null, offerRkey: null, answerRkey: null, knockRkey: null };
   peers.set(did, p);
   const el = document.createElement('div');
   el.className = 'peer';
   el.innerHTML = '<div><div class="pname"></div><div class="pstate">waiting for peer</div></div>' +
                  '<span class="drop-hint"></span>' +
-                 '<button disabled>Send file</button>' +
+                 '<button class="send" disabled>Send file</button>' +
+                 '<button class="acc" style="display:none;margin-left:auto">Accept</button>' +
+                 '<button class="ign ghost" style="display:none">Ignore</button>' +
                  '<div class="bar-wrap"><div class="bar"></div></div>' +
                  '<div class="bar-label"></div>';
-  el.querySelector('button').addEventListener('click', () => pickAndSend(did));
+  el.querySelector('button.send').addEventListener('click', () => pickAndSend(did));
+  el.querySelector('button.acc').addEventListener('click', () => {
+    const pp = peers.get(did);
+    if (pp) { pp.trusted = true; renderPeer(pp, did); setStatus('Connecting to ' + pp.handle + '\u2026'); }
+  });
+  el.querySelector('button.ign').addEventListener('click', () => {
+    ignoredDids.add(did);
+    const pp = peers.get(did);
+    if (pp) { if (pp.pc) try { pp.pc.close(); } catch (e) {} pp.el.remove(); peers.delete(did); }
+  });
   /* the peer card itself is a drop target */
   ['dragenter', 'dragover'].forEach((ev) => el.addEventListener(ev, (e) => {
     e.preventDefault();
@@ -328,9 +426,13 @@ function renderPeer(p, did) {
   p.el.querySelector('.pname').textContent = p.handle;
   const st = p.el.querySelector('.pstate');
   const connected = p.dc && p.dc.readyState === 'open';
-  st.textContent = connected ? 'connected' : (p.pc ? 'connecting\u2026' : 'waiting for peer');
+  st.textContent = !p.trusted ? 'wants to connect'
+    : connected ? 'connected' : (p.pc ? 'connecting\u2026' : 'waiting for peer');
   st.classList.toggle('connected', connected);
-  p.el.querySelector('button').disabled = !connected;
+  p.el.querySelector('button.send').disabled = !connected;
+  p.el.querySelector('button.send').style.display = p.trusted ? '' : 'none';
+  p.el.querySelector('button.acc').style.display = p.trusted ? 'none' : '';
+  p.el.querySelector('button.ign').style.display = p.trusted ? 'none' : '';
   p.el.classList.toggle('droppable', connected);
   p.el.querySelector('.drop-hint').textContent = connected ? 'drop a file here or' : '';
 }
@@ -391,6 +493,7 @@ function makePC(did) {
       /* signaling done — remove our offer/answer records */
       if (p.offerRkey)  { deleteOwnRecord(p.offerRkey);  p.offerRkey = null; }
       if (p.answerRkey) { deleteOwnRecord(p.answerRkey); p.answerRkey = null; }
+      if (p.knockRkey)  { deleteOwnRecord(p.knockRkey);  p.knockRkey = null; }
     }
     if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
       p.pc = null; p.dc = null; renderPeer(p, did);
@@ -422,11 +525,18 @@ async function offerTo(did) {
   const dc = pc.createDataChannel('filedrop', { ordered: true });
   p.dc = dc;
   bindDataChannel(dc, did);
-  await pc.setLocalDescription(await pc.createOffer());
-  await waitIceComplete(pc);
-  summarizeCandidates('local offer to ' + p.handle, pc.localDescription.sdp);
-  const res = await sendSignal(did, 'offer', pc.localDescription.sdp);
-  p.offerRkey = res.uri.split('/').pop();
+  try {
+    await pc.setLocalDescription(await pc.createOffer());
+    await waitIceComplete(pc);
+    summarizeCandidates('local offer to ' + p.handle, pc.localDescription.sdp);
+    const res = await sendSignal(did, 'offer', pc.localDescription.sdp);
+    p.offerRkey = res.uri.split('/').pop();
+  } catch (e) {
+    /* failed to publish the offer — reset so the next poll tick retries cleanly */
+    try { pc.close(); } catch (e2) {}
+    p.pc = null; p.dc = null;
+    throw e;
+  }
   renderPeer(p, did);
 }
 
@@ -439,13 +549,20 @@ async function handleOffer(did, sdp) {
   const pc = makePC(did);
   p.pc = pc;
   pc.ondatachannel = (ev) => { p.dc = ev.channel; bindDataChannel(ev.channel, did); };
-  summarizeCandidates('remote offer from ' + p.handle, sdp);
-  await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
-  await pc.setLocalDescription(await pc.createAnswer());
-  await waitIceComplete(pc);
-  summarizeCandidates('local answer to ' + p.handle, pc.localDescription.sdp);
-  const res = await sendSignal(did, 'answer', pc.localDescription.sdp);
-  p.answerRkey = res.uri.split('/').pop();
+  try {
+    summarizeCandidates('remote offer from ' + p.handle, sdp);
+    await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await waitIceComplete(pc);
+    summarizeCandidates('local answer to ' + p.handle, pc.localDescription.sdp);
+    const res = await sendSignal(did, 'answer', pc.localDescription.sdp);
+    p.answerRkey = res.uri.split('/').pop();
+  } catch (e) {
+    /* failed mid-answer — reset; caller unmarks the offer record for retry */
+    try { pc.close(); } catch (e2) {}
+    p.pc = null; p.dc = null;
+    throw e;
+  }
   renderPeer(p, did);
 }
 
@@ -521,8 +638,19 @@ function handleChannelMessage(did, data) {
   const p = peers.get(did);
   if (!p) return;
   if (typeof data === 'string') {
-    const msg = JSON.parse(data);
+    let msg;
+    try { msg = JSON.parse(data); } catch (e) {
+      console.log('[dc] malformed message from', p.handle, '- ignored');
+      return;
+    }
+    if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'FILE_OFFER') {
+      if (pendingOffer) {
+        /* one incoming offer at a time: auto-decline the newcomer so its
+           sender isn't left hanging while the first toast is undecided */
+        p.dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+        return;
+      }
       pendingOffer = { did: did, meta: msg };
       $('toast-title').textContent = 'Incoming from ' + p.handle;
       $('toast-file').textContent = msg.name + ' \u00B7 ' + formatBytes(msg.size);
@@ -595,53 +723,126 @@ async function pollPeer(did) {
   if (!p) return;
   const recs = await listPeerRecords(p);
   /* oldest-first so offer/answer arrive in order */
-  recs.sort((a, b) => (a.value.createdAt || '').localeCompare(b.value.createdAt || ''));
+  recs.sort((a, b) => String((a.value || {}).createdAt || '').localeCompare(String((b.value || {}).createdAt || '')));
   for (const rec of recs) {
     if (seenUris.has(rec.uri)) continue;
     const v = rec.value || {};
     if (v.to !== me.did) continue;
-    const age = Date.now() - Date.parse(v.createdAt || 0);
-    if (isNaN(age) || age > SIGNAL_TTL_S * 1000) { seenUris.add(rec.uri); continue; }
-    seenUris.add(rec.uri);
-    if (v.msgType === 'offer')  await handleOffer(did, v.payload);
-    if (v.msgType === 'answer') await handleAnswer(did, v.payload);
+    const age = Date.now() - Date.parse(String(v.createdAt || ''));
+    if (isNaN(age) || age > SIGNAL_TTL_S * 1000) { seenUris.set(rec.uri, Date.now()); continue; }
+    seenUris.set(rec.uri, Date.now());
+    try {
+      if (v.msgType === 'offer')  await handleOffer(did, String(v.payload || ''));
+      if (v.msgType === 'answer') await handleAnswer(did, String(v.payload || ''));
+    } catch (e) {
+      /* transient failure (e.g. answer write) — unmark so the record is retried */
+      seenUris.delete(rec.uri);
+      throw e;
+    }
   }
 }
 
 async function poll() {
-  try {
-    for (const did of peers.keys()) {
+  /* prune tracking state so hostile record churn can't grow memory unboundedly */
+  const cutoff = Date.now() - SIGNAL_TTL_S * 1000;
+  for (const [uri, ts] of seenUris) if (ts < cutoff) seenUris.delete(uri);
+  if (discoverChecked.size > 5000) discoverChecked.clear();  /* re-verification is cheap and gated */
+  for (const did of peers.keys()) {
+    try {
       const p = peers.get(did);
+      if (!p.trusted) continue;   /* consent gate: no polling, offering, or knocking until accepted */
       const connected = p.dc && p.dc.readyState === 'open';
       if (!connected) await pollPeer(did);
-      /* glare avoidance: lexicographically smaller DID initiates */
+      /* glare avoidance: lexicographically smaller DID initiates.
+         The larger DID instead writes a one-time 'knock' so the peer
+         can discover us via the backlink index without typing anything. */
       if (!p.pc && me.did < did) await offerTo(did);
+      else if (!p.pc && !p.knockRkey && me.did > did) {
+        const res = await sendSignal(did, 'knock', '');
+        p.knockRkey = res.uri.split('/').pop();
+        console.log('[knock] sent to', p.handle);
+      }
+    } catch (e) {
+      /* isolate: one peer's bad records or network hiccup must not halt polling of others */
+      console.log('[poll]', did, 'error:', e.message);
+    }
+  }
+  setTimeout(poll, POLL_MS);
+}
+
+/* ---------- peer discovery via Constellation backlink index ----------
+   constellation.microcosm.blue indexes firehose records by link target
+   (~seconds of latency, verified). Any signal record addressed to our
+   DID — offer or knock — shows up as a backlink, letting us discover a
+   peer we never typed. Each hit is only a HINT (the index may retain
+   deleted records), so we confirm a live, TTL-valid record in the
+   peer's repo before adding them. */
+const DISCOVER_MS = 6000;
+const discoverChecked = new Set();
+
+async function discoverPeers() {
+  try {
+    const q = 'https://constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?' +
+      new URLSearchParams({ subject: me.did, source: COLLECTION + ':to', limit: '50' });
+    const r = await fetch(q);
+    if (!r.ok) throw new Error('getBacklinks -> ' + r.status);
+    const j = await r.json();
+    for (const rec of (j.records || [])) {
+      const did = rec.did;
+      const key = did + '/' + rec.rkey;  /* per-record: a fresh knock re-triggers verification */
+      if (did === me.did || peers.has(did) || ignoredDids.has(did) || discoverChecked.has(key)) continue;
+      discoverChecked.add(key);
+      try {
+        const pds = await resolvePds(did);
+        const live = (await listPeerRecords({ did, pds, handle: did })).some(x => {
+          const v = x.value || {};
+          const age = Date.now() - Date.parse(String(v.createdAt || ''));
+          return v.to === me.did && !isNaN(age) && age <= SIGNAL_TTL_S * 1000;
+        });
+        if (!live) continue;             /* stale index entry — ignore */
+        const dr = await fetch(pds + '/xrpc/com.atproto.repo.describeRepo?repo=' + encodeURIComponent(did));
+        const handle = dr.ok ? (await dr.json()).handle : did;
+        console.log('[discover] live signal from', handle);
+        upsertPeerRow(did, handle, pds, false);   /* untrusted: renders as a connection request */
+        setStatus(handle + ' wants to connect');
+      } catch (e) { console.log('[discover]', did, '->', e.message); }
     }
   } catch (e) {
-    console.log('[poll] error:', e.message);
+    console.log('[discover] error:', e.message);
   } finally {
-    setTimeout(poll, POLL_MS);
+    setTimeout(discoverPeers, DISCOVER_MS);
   }
 }
 
 /* ---------- pairing ---------- */
+async function addPeer(handle) {
+  const did = await resolveHandle(handle);
+  if (did === me.did) throw new Error("That's you.");
+  const pds = await resolvePds(did);
+  upsertPeerRow(did, handle, pds, true);   /* user-initiated = trusted */
+  setStatus('Connecting to ' + handle + '\u2026');
+}
+
 $('pair-btn').addEventListener('click', async () => {
   clearErr();
   const handle = $('peer-handle').value.trim().replace(/^@/, '');
   if (!handle) return;
   $('pair-btn').disabled = true;
   try {
-    const did = await resolveHandle(handle);
-    if (did === me.did) throw new Error("That's you.");
-    const pds = await resolvePds(did);
-    upsertPeerRow(did, handle, pds);
+    await addPeer(handle);
     $('peer-handle').value = '';
-    setStatus('Waiting for ' + handle + ' to add you back\u2026');
   } catch (e) {
     showErr(e.message);
   } finally {
     $('pair-btn').disabled = false;
   }
+});
+
+$('share-btn').addEventListener('click', async () => {
+  const link = $('share-link').value;
+  try { await navigator.clipboard.writeText(link); $('share-btn').textContent = 'Copied!'; }
+  catch (e) { $('share-link').select(); document.execCommand('copy'); $('share-btn').textContent = 'Copied!'; }
+  setTimeout(() => { $('share-btn').textContent = 'Copy my address link'; }, 1500);
 });
 $('peer-handle').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pair-btn').click(); });
 
@@ -664,9 +865,20 @@ $('login-btn').addEventListener('click', async () => {
     $('pair-card').style.display = '';
     $('me-wrap').style.display = '';
     $('my-id').textContent = me.handle;
-    setStatus('Signed in \u2014 add a peer');
+    setStatus('Signed in \u2014 add a peer or share your link');
+    $('share-link').value = location.origin + location.pathname + '?peer=' + encodeURIComponent(me.handle);
     await sweepOwnSignals();
+    /* pre-specified recipients: ?peer=a.example,b.example or repeated ?peer= */
+    /* ?peer=a.example (repeatable, comma-separable) or a naked ?a.example */
+    const qs = new URLSearchParams(location.search);
+    const preset = qs.getAll('peer')
+      .concat([...qs.keys()].filter(k => k !== 'peer' && qs.get(k) === '' && k.includes('.')))
+      .flatMap(v => v.split(',')).map(h => h.trim().replace(/^@/, '')).filter(Boolean);
+    for (const h of preset) {
+      try { await addPeer(h); } catch (e) { showErr(e.message); }
+    }
     poll();
+    discoverPeers();
     console.log('[filedrop] ready as', me.handle, me.did, 'pds:', me.pds);
   } catch (e) {
     showErr(e.message);
