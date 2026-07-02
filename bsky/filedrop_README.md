@@ -36,7 +36,9 @@ instead:
    byte stream with no per-chunk framing, so transfers are strictly
    serialized per peer per direction: additional sends queue and start
    when the current one completes, and the receiver declines any offer
-   that arrives mid-receive.
+   that arrives mid-receive. Every offer carries the file's SHA-256; the
+   receiver hashes the assembled bytes and discards the file on mismatch,
+   so corruption can't land silently.
 
 Handle resolution goes through the public Bluesky AppView; the PDS
 endpoint comes from the DID document (`plc.directory` for `did:plc`,
