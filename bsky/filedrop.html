@@ -118,7 +118,12 @@
       <input type="text" id="peer-handle" placeholder="peer handle (e.g. bob.bsky.social)">
       <button class="primary" id="pair-btn">Add peer</button>
     </div>
-    <p class="hint">Both of you must open this page, sign in, and enter <em>each other's</em> handle.</p>
+    <p class="hint">Only one side needs to do this &mdash; the other side is discovered automatically. Or skip typing entirely:</p>
+    <div class="row" style="margin-top:10px">
+      <input type="text" id="share-link" readonly style="font-size:12px;color:var(--muted)">
+      <button class="primary" id="share-btn">Copy my address link</button>
+    </div>
+    <p class="hint">Send that link to your peer; when they open it and sign in, you're paired.</p>
   </div>
 
   <div id="peers"></div>
@@ -295,7 +300,7 @@ const seenUris = new Set();
 function upsertPeerRow(did, handle, pds) {
   let p = peers.get(did);
   if (p) return p;
-  p = { did, handle, pds, pc: null, dc: null, el: null, recv: null, offerRkey: null, answerRkey: null };
+  p = { did, handle, pds, pc: null, dc: null, el: null, recv: null, offerRkey: null, answerRkey: null, knockRkey: null };
   peers.set(did, p);
   const el = document.createElement('div');
   el.className = 'peer';
@@ -391,6 +396,7 @@ function makePC(did) {
       /* signaling done — remove our offer/answer records */
       if (p.offerRkey)  { deleteOwnRecord(p.offerRkey);  p.offerRkey = null; }
       if (p.answerRkey) { deleteOwnRecord(p.answerRkey); p.answerRkey = null; }
+      if (p.knockRkey)  { deleteOwnRecord(p.knockRkey);  p.knockRkey = null; }
     }
     if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
       p.pc = null; p.dc = null; renderPeer(p, did);
@@ -614,8 +620,15 @@ async function poll() {
       const p = peers.get(did);
       const connected = p.dc && p.dc.readyState === 'open';
       if (!connected) await pollPeer(did);
-      /* glare avoidance: lexicographically smaller DID initiates */
+      /* glare avoidance: lexicographically smaller DID initiates.
+         The larger DID instead writes a one-time 'knock' so the peer
+         can discover us via the backlink index without typing anything. */
       if (!p.pc && me.did < did) await offerTo(did);
+      else if (!p.pc && !p.knockRkey && me.did > did) {
+        const res = await sendSignal(did, 'knock', '');
+        p.knockRkey = res.uri.split('/').pop();
+        console.log('[knock] sent to', p.handle);
+      }
     }
   } catch (e) {
     console.log('[poll] error:', e.message);
@@ -624,24 +637,79 @@ async function poll() {
   }
 }
 
+/* ---------- peer discovery via Constellation backlink index ----------
+   constellation.microcosm.blue indexes firehose records by link target
+   (~seconds of latency, verified). Any signal record addressed to our
+   DID — offer or knock — shows up as a backlink, letting us discover a
+   peer we never typed. Each hit is only a HINT (the index may retain
+   deleted records), so we confirm a live, TTL-valid record in the
+   peer's repo before adding them. */
+const DISCOVER_MS = 6000;
+const discoverChecked = new Set();
+
+async function discoverPeers() {
+  try {
+    const q = 'https://constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?' +
+      new URLSearchParams({ subject: me.did, source: COLLECTION + ':to', limit: '50' });
+    const r = await fetch(q);
+    if (!r.ok) throw new Error('getBacklinks -> ' + r.status);
+    const j = await r.json();
+    for (const rec of (j.records || [])) {
+      const did = rec.did;
+      const key = did + '/' + rec.rkey;  /* per-record: a fresh knock re-triggers verification */
+      if (did === me.did || peers.has(did) || discoverChecked.has(key)) continue;
+      discoverChecked.add(key);
+      try {
+        const pds = await resolvePds(did);
+        const live = (await listPeerRecords({ did, pds, handle: did })).some(x => {
+          const v = x.value || {};
+          const age = Date.now() - Date.parse(v.createdAt || 0);
+          return v.to === me.did && !isNaN(age) && age <= SIGNAL_TTL_S * 1000;
+        });
+        if (!live) continue;             /* stale index entry — ignore */
+        const dr = await fetch(pds + '/xrpc/com.atproto.repo.describeRepo?repo=' + encodeURIComponent(did));
+        const handle = dr.ok ? (await dr.json()).handle : did;
+        console.log('[discover] live signal from', handle);
+        upsertPeerRow(did, handle, pds);
+        setStatus('Discovered ' + handle);
+      } catch (e) { console.log('[discover]', did, '->', e.message); }
+    }
+  } catch (e) {
+    console.log('[discover] error:', e.message);
+  } finally {
+    setTimeout(discoverPeers, DISCOVER_MS);
+  }
+}
+
 /* ---------- pairing ---------- */
+async function addPeer(handle) {
+  const did = await resolveHandle(handle);
+  if (did === me.did) throw new Error("That's you.");
+  const pds = await resolvePds(did);
+  upsertPeerRow(did, handle, pds);
+  setStatus('Connecting to ' + handle + '\u2026');
+}
+
 $('pair-btn').addEventListener('click', async () => {
   clearErr();
   const handle = $('peer-handle').value.trim().replace(/^@/, '');
   if (!handle) return;
   $('pair-btn').disabled = true;
   try {
-    const did = await resolveHandle(handle);
-    if (did === me.did) throw new Error("That's you.");
-    const pds = await resolvePds(did);
-    upsertPeerRow(did, handle, pds);
+    await addPeer(handle);
     $('peer-handle').value = '';
-    setStatus('Waiting for ' + handle + ' to add you back\u2026');
   } catch (e) {
     showErr(e.message);
   } finally {
     $('pair-btn').disabled = false;
   }
+});
+
+$('share-btn').addEventListener('click', async () => {
+  const link = $('share-link').value;
+  try { await navigator.clipboard.writeText(link); $('share-btn').textContent = 'Copied!'; }
+  catch (e) { $('share-link').select(); document.execCommand('copy'); $('share-btn').textContent = 'Copied!'; }
+  setTimeout(() => { $('share-btn').textContent = 'Copy my address link'; }, 1500);
 });
 $('peer-handle').addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pair-btn').click(); });
 
@@ -664,9 +732,17 @@ $('login-btn').addEventListener('click', async () => {
     $('pair-card').style.display = '';
     $('me-wrap').style.display = '';
     $('my-id').textContent = me.handle;
-    setStatus('Signed in \u2014 add a peer');
+    setStatus('Signed in \u2014 add a peer or share your link');
+    $('share-link').value = location.origin + location.pathname + '?peer=' + encodeURIComponent(me.handle);
     await sweepOwnSignals();
+    /* pre-specified recipients: ?peer=a.example,b.example or repeated ?peer= */
+    const preset = new URLSearchParams(location.search).getAll('peer')
+      .flatMap(v => v.split(',')).map(h => h.trim().replace(/^@/, '')).filter(Boolean);
+    for (const h of preset) {
+      try { await addPeer(h); } catch (e) { showErr(e.message); }
+    }
     poll();
+    discoverPeers();
     console.log('[filedrop] ready as', me.handle, me.did, 'pds:', me.pds);
   } catch (e) {
     showErr(e.message);
