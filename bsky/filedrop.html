@@ -164,7 +164,9 @@
     <p>Files stream over a WebRTC data channel established directly between the
     two browsers, encrypted end-to-end with DTLS and sent in 64&nbsp;KB chunks
     with backpressure. The channel carries one transfer at a time per
-    direction &mdash; additional sends queue automatically. No relay, no upload &mdash; if the two machines can't
+    direction &mdash; additional sends queue automatically &mdash; and every
+    file is SHA-256 hashed before sending and verified on arrival; a
+    mismatch is discarded, not saved. No relay, no upload &mdash; if the two machines can't
     reach each other (rare symmetric-NAT pairs), the transfer fails rather than
     fall back to a server.</p>
     <h4>ATProto as the signaling channel</h4>
@@ -584,7 +586,12 @@ let pendingOffer = null;  /* { did, meta } shown in toast */
    would interleave chunks the receiver cannot demux (diagnosed 2026-07-02:
    two files sent back-to-back arrived as one corrupt, ballooned second
    file). Extra sends queue and start when the current transfer finishes. */
-function offerFile(did, file) {
+async function fileSha256(file) {
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function offerFile(did, file) {
   const p = peers.get(did);
   if (!p || !p.dc || p.dc.readyState !== 'open') { showErr('Not connected to ' + (p ? p.handle : did)); return; }
   p.sendQueue = p.sendQueue || [];
@@ -593,8 +600,20 @@ function offerFile(did, file) {
     setStatus('Queued ' + file.name + ' for ' + p.handle);
     return;
   }
-  pendingSend = { did: did, file: file };
-  p.dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type }));
+  pendingSend = { did: did, file: file };   /* reserve BEFORE the hash await so a
+                                               second rapid pick queues, not races */
+  setStatus('Hashing ' + file.name + '\u2026');
+  let sha256;
+  try {
+    sha256 = await fileSha256(file);
+  } catch (e) {
+    pendingSend = null;
+    showErr('Could not hash ' + file.name + ': ' + e.message);
+    sendNext(did);
+    return;
+  }
+  if (!p.dc || p.dc.readyState !== 'open') { pendingSend = null; showErr('Channel closed'); return; }
+  p.dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type, sha256: sha256 }));
   setStatus('Waiting for ' + p.handle + ' to accept ' + file.name + '\u2026');
 }
 
@@ -700,16 +719,32 @@ function handleChannelMessage(did, data) {
   }
 }
 
-function finishDownload(did) {
+async function finishDownload(did) {
   const p = peers.get(did);
   const r = p.recv;
   p.recv = null;
   const blob = new Blob(r.chunks, { type: r.meta.mime || 'application/octet-stream' });
+  let verified = '';
+  if (typeof r.meta.sha256 === 'string' && r.meta.sha256.length === 64) {
+    setStatus('Verifying ' + r.meta.name + '\u2026');
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+      const got = [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
+      if (got !== r.meta.sha256) {
+        showErr('Integrity check FAILED for ' + r.meta.name + ' \u2014 received bytes do not match the sender\u2019s SHA-256. File discarded. (expected ' + r.meta.sha256.slice(0, 12) + '\u2026, got ' + got.slice(0, 12) + '\u2026)');
+        clearProgress(p);
+        return;
+      }
+      verified = ' \u2014 SHA-256 verified';
+    } catch (e) {
+      verified = ' \u2014 verification unavailable (' + e.message + ')';
+    }
+  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url; a.download = r.meta.name; a.click();
   setTimeout(() => URL.revokeObjectURL(url), 5000);
-  setStatus('Received ' + r.meta.name);
+  setStatus('Received ' + r.meta.name + verified);
   clearProgress(p);
 }
 
