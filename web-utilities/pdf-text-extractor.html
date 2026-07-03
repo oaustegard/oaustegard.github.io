@@ -487,6 +487,9 @@
         PDF files and URLs supported &mdash; paste with Ctrl+V / ⌘V
       </div>
       <div style="font-size: 0.8rem; color: #9ca3af; margin-top: 0.25rem;">
+        Extensionless or renamed PDFs are fine &mdash; the file type is checked by content, not name
+      </div>
+      <div style="font-size: 0.8rem; color: #9ca3af; margin-top: 0.25rem;">
         All processing happens in your browser &mdash; no data leaves your device
       </div>
     </div>
@@ -536,6 +539,18 @@
         <label for="page-range" style="font-weight: 600; color: var(--accent); display: block; margin-bottom: 0.5rem;">Page Range <span style="font-weight: normal; color: #6b7280; font-size: 0.85rem;">(optional)</span></label>
         <input type="text" id="page-range" placeholder="e.g. 1-3, 5, 8-12 (leave empty for all pages)" style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem; background: white;">
         <div id="page-range-info" style="font-size: 0.8rem; color: #6b7280; margin-top: 0.25rem;">Leave empty to extract all pages</div>
+      </div>
+
+      <div id="reading-order-group" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+        <label for="reading-order" style="font-weight: 600; color: var(--accent); display: block; margin-bottom: 0.5rem;">Reading Order <span style="font-weight: normal; color: #6b7280; font-size: 0.85rem;">(for multi-column PDFs)</span></label>
+        <select id="reading-order" style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem; background: white;">
+          <option value="auto" selected>Column-aware (auto-detect)</option>
+          <option value="1">Force single column</option>
+          <option value="2">Force two columns</option>
+          <option value="3">Force three columns</option>
+          <option value="pdf">Preserve raw PDF order</option>
+        </select>
+        <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.25rem;">Auto-detect suits most papers &mdash; switch to a fixed count or raw order if columns come out interleaved.</div>
       </div>
 
       <button id="extract-btn" disabled>Extract Text</button>
@@ -623,8 +638,9 @@
 
       const format = params.get('format') || 'markdown';
       const pages = params.get('pages') || '';
+      const order = params.get('order') || '';
 
-      return { pdfUrl, format, pages };
+      return { pdfUrl, format, pages, order };
     }
 
     // Fetch PDF from URL
@@ -655,7 +671,7 @@
 
     // Initialize from URL parameters
     async function initializeFromUrl() {
-      const { pdfUrl, format, pages } = parseUrlParams();
+      const { pdfUrl, format, pages, order } = parseUrlParams();
 
       if (!pdfUrl) {
         return; // No URL provided, use normal UI
@@ -675,6 +691,12 @@
       // Set page range if specified
       if (pages) {
         pageRangeInput.value = pages;
+      }
+
+      // Set reading order if specified (auto | 1 | 2 | 3 | pdf)
+      if (order && ['auto', '1', '2', '3', 'pdf'].includes(order)) {
+        const orderSel = document.getElementById('reading-order');
+        if (orderSel) orderSel.value = order;
       }
 
       try {
@@ -842,6 +864,177 @@
       }
     }
 
+    /* ---------- reading order (ported from anything-to-text.html) ----------
+       pdf.js emits text runs in content-stream order, which for a two-column paper (e.g. an
+       arXiv PDF) interleaves the columns and merges left/right text onto one visual line.
+       These helpers rebuild geometric reading order: group runs into lines, auto-detect the
+       column gutters, and emit column-by-column so a paper reads title -> left column ->
+       right column instead of zig-zagging across the gutter. */
+
+    // Join a line's runs left-to-right, matching pdf.js's inline spacing (no extra space
+    // after a trailing space or hyphen, or before a leading space).
+    function joinLine(items) {
+      let s = '';
+      for (let i = 0; i < items.length; i++) {
+        const t = items[i].text;
+        s += t;
+        const next = items[i + 1];
+        if (next && !t.endsWith(' ') && !t.endsWith('-') && next.text && !next.text.startsWith(' ')) s += ' ';
+      }
+      return s;
+    }
+
+    // Group boxes into lines by vertical proximity, sorted top-to-bottom, left-to-right.
+    function lineify(group) {
+      if (!group.length) return [];
+      const heights = group.map(r => r.box.height).filter(h => h > 0).sort((a, b) => a - b);
+      const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
+      const tol = Math.max(4, medH * 0.6);
+      const byY = group.slice().sort((a, b) => a.box.y - b.box.y);
+      const lines = [];
+      for (const r of byY) {
+        let line = null;
+        for (const L of lines) { if (Math.abs(L.y - r.box.y) <= tol) { line = L; break; } }
+        if (!line) { line = { y: r.box.y, items: [] }; lines.push(line); }
+        line.items.push(r);
+      }
+      lines.sort((a, b) => a.y - b.y);
+      return lines.map(L => joinLine(L.items.sort((a, b) => a.box.x - b.box.x)));
+    }
+
+    // Auto-detect column gutters with a 2-D occupancy projection: tile the content box into
+    // rows and, per x-bin, count how many rows hold text; a gutter bin occupies far fewer
+    // rows than the column bins flanking it. Returns [] (single column) when sparse or
+    // channel-free. (See anything-to-text.html for the full rationale.)
+    function detectColumnCuts(boxed) {
+      if (boxed.length < 12) return [];
+      const minX = Math.min.apply(null, boxed.map(r => r.box.x));
+      const maxX = Math.max.apply(null, boxed.map(r => r.box.x + r.box.width));
+      const minY = Math.min.apply(null, boxed.map(r => r.box.y));
+      const maxY = Math.max.apply(null, boxed.map(r => r.box.y + r.box.height));
+      const spanX = maxX - minX, spanY = maxY - minY;
+      if (spanX <= 0 || spanY <= 0) return [];
+      const BINS = 120, binW = spanX / BINS;
+      const heights = boxed.map(r => r.box.height).filter(h => h > 0).sort((a, b) => a - b);
+      const medH = heights.length ? heights[Math.floor(heights.length / 2)] : 12;
+      const ROWS = Math.max(8, Math.min(240, Math.round(spanY / Math.max(4, medH))));
+      const rowH = spanY / ROWS;
+      const occ = Array.from({ length: BINS }, () => new Uint8Array(ROWS));
+      for (const r of boxed) {
+        const x0 = Math.max(0, Math.floor((r.box.x - minX) / binW));
+        const x1 = Math.min(BINS - 1, Math.floor((r.box.x + r.box.width - minX) / binW));
+        const y0 = Math.max(0, Math.floor((r.box.y - minY) / rowH));
+        const y1 = Math.min(ROWS - 1, Math.floor((r.box.y + r.box.height - minY) / rowH));
+        for (let b = x0; b <= x1; b++) { const col = occ[b]; for (let rr = y0; rr <= y1; rr++) col[rr] = 1; }
+      }
+      const rowCount = occ.map(col => { let s = 0; for (let i = 0; i < col.length; i++) s += col[i]; return s; });
+      const peak = rowCount.slice().sort((a, b) => b - a)[Math.floor(BINS * 0.1)] || 1;
+      const thresh = Math.max(1, peak * 0.25);   // gutter bin: <25% of a column's row count
+      const hi = peak * 0.5;                      // a real column flank reaches >=50% of peak
+      const minRun = Math.max(2, Math.round(BINS * 0.015));
+      const runs = [];
+      let run = null;
+      const close = () => { if (run) { runs.push(run); run = null; } };
+      for (let i = 0; i < BINS; i++) { if (rowCount[i] <= thresh) { run ? (run.e = i) : (run = { s: i, e: i }); } else close(); }
+      close();
+      const cuts = [];
+      for (const rn of runs) {
+        if ((rn.e - rn.s + 1) < minRun) continue;
+        if (!rowCount.slice(0, rn.s).some(v => v >= hi)) continue;
+        if (!rowCount.slice(rn.e + 1).some(v => v >= hi)) continue;
+        cuts.push(minX + ((rn.s + rn.e + 1) / 2) * binW);
+      }
+      return cuts.slice(0, 3);   // up to 4 columns; more is almost always noise
+    }
+
+    // Column-aware reading order. No cuts -> single-column lineify. With cuts, full-width
+    // runs (titles, section headers) become band breaks and each stripe emits its columns
+    // left-to-right, so text reads title -> left col -> right col -> next header -> ...
+    function orderByColumns(boxed, cuts) {
+      if (!cuts.length) return lineify(boxed);
+      const cx = r => r.box.x + r.box.width / 2;
+      const cy = r => r.box.y + r.box.height / 2;
+      const spans = r => cuts.some(c => r.box.x < c - 1 && r.box.x + r.box.width > c + 1);
+      const colOf = r => { let i = 0; while (i < cuts.length && cx(r) >= cuts[i]) i++; return i; };
+      const full = boxed.filter(spans).sort((a, b) => cy(a) - cy(b));
+      const colBoxes = boxed.filter(r => !spans(r));
+      const out = [];
+      const emitStripe = (yTop, yBot) => {
+        for (let ci = 0; ci <= cuts.length; ci++) {
+          const g = colBoxes.filter(r => colOf(r) === ci && cy(r) >= yTop && cy(r) < yBot);
+          for (const ln of lineify(g)) out.push(ln);
+        }
+      };
+      let prevY = -Infinity;
+      for (const f of full) {
+        const fy = cy(f);
+        emitStripe(prevY, fy);
+        for (const ln of lineify([f])) out.push(ln);
+        prevY = fy;
+      }
+      emitStripe(prevY, Infinity);
+      return out;
+    }
+
+    // Reading order honoring the layout control: 'auto' (detect), or a fixed '1'/'2'/'3'.
+    function readingOrder(items, mode) {
+      const boxed = (items || []).filter(r => r && r.box && typeof r.text === 'string' && r.text.length);
+      if (!boxed.length) return [];
+      const pageW = boxed.reduce((m, r) => Math.max(m, r.box.x + r.box.width), 0) || 1;
+      let cuts;
+      if (mode === 'auto' || !mode) cuts = detectColumnCuts(boxed);
+      else { const n = Math.max(1, parseInt(mode, 10) || 1); cuts = []; for (let i = 1; i < n; i++) cuts.push((pageW * i) / n); }
+      return orderByColumns(boxed, cuts);
+    }
+
+    // Build geometry-boxed runs in device (top-left, y-down) space for reading-order analysis,
+    // using pdf.js's own viewport transform so glyph height/width and baseline match layout.
+    function boxedRuns(page, textContent) {
+      const viewport = page.getViewport({ scale: 1 });
+      const boxed = [];
+      for (const it of textContent.items) {
+        if (typeof it.str !== 'string' || !it.str.trim()) continue;
+        const tx = pdfjsLib.Util.transform(viewport.transform, it.transform);
+        const h = Math.hypot(tx[2], tx[3]) || it.height || 1;
+        const w = it.width || (it.str.length * h * 0.5);
+        boxed.push({ text: it.str, box: { x: tx[4], y: tx[5] - h, width: w, height: h } });
+      }
+      return boxed;
+    }
+
+    // Legacy per-run reconstruction (pdf.js emission order) - the "Preserve raw PDF order"
+    // escape hatch and the original behaviour of this tool.
+    function naiveLines(textContent) {
+      let pageText = '';
+      let lastY = null;
+      textContent.items.forEach((item, index) => {
+        const text = item.str;
+        if (!text.trim()) return;
+        if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) pageText += '\n';
+        pageText += text;
+        const nextItem = textContent.items[index + 1];
+        if (nextItem && Math.abs(nextItem.transform[5] - item.transform[5]) < 5) {
+          if (!text.endsWith(' ') && !text.endsWith('-') && nextItem.str && !nextItem.str.startsWith(' ')) pageText += ' ';
+        }
+        lastY = item.transform[5];
+      });
+      return pageText;
+    }
+
+    // Content sniff: a file is a PDF if "%PDF" appears in the first 1 KB (pdf.js scans the
+    // same window for the header). Lets us accept extensionless / renamed PDFs - e.g. an
+    // arXiv PDF a phone saved as "2606.30840" with no suffix - and reject non-PDFs with a
+    // clear message instead of a cryptic parser error. Validation happens here on process,
+    // not at the file picker (which accepts anything).
+    function looksLikePdf(buf) {
+      const n = Math.min(1024, buf.byteLength);
+      const bytes = new Uint8Array(buf, 0, n);
+      for (let i = 0; i + 3 < n; i++) {
+        if (bytes[i] === 0x25 && bytes[i + 1] === 0x50 && bytes[i + 2] === 0x44 && bytes[i + 3] === 0x46) return true;
+      }
+      return false;
+    }
+
     function handleFile(file) {
       if (!file) return;
 
@@ -862,6 +1055,15 @@
 
       try {
         const arrayBuffer = await currentFile.arrayBuffer();
+
+        // Validate by content, not by name/extension: accept extensionless or renamed PDFs,
+        // reject anything without a %PDF marker with a clear message.
+        if (!looksLikePdf(arrayBuffer)) {
+          progress.innerHTML = `<span class="warning">⚠ This file doesn't look like a PDF (no <code>%PDF</code> marker in the first 1&nbsp;KB). If it really is a PDF, it may be corrupt.</span>`;
+          return;
+        }
+
+        const readingMode = (document.getElementById('reading-order') || {}).value || 'auto';
         const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
 
         const metadata = {
@@ -905,32 +1107,10 @@
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
 
-          // Reconstruct text with better spacing
-          let pageText = '';
-          let lastY = null;
-
-          textContent.items.forEach((item, index) => {
-            const text = item.str;
-            if (!text.trim()) return;
-
-            // Add line breaks based on vertical position changes
-            if (lastY !== null && Math.abs(item.transform[5] - lastY) > 5) {
-              pageText += '\n';
-            }
-
-            pageText += text;
-
-            // Add space if next item is on same line
-            const nextItem = textContent.items[index + 1];
-            if (nextItem && Math.abs(nextItem.transform[5] - item.transform[5]) < 5) {
-              // Check if we need a space (not already ending/starting with space or punctuation)
-              if (!text.endsWith(' ') && !text.endsWith('-') && nextItem.str && !nextItem.str.startsWith(' ')) {
-                pageText += ' ';
-              }
-            }
-
-            lastY = item.transform[5];
-          });
+          // Column-aware geometric reading order by default; raw pdf.js order on request.
+          const pageText = (readingMode === 'pdf')
+            ? naiveLines(textContent)
+            : readingOrder(boxedRuns(page, textContent), readingMode).join('\n');
 
           pages.push({
             pageNumber: i,
