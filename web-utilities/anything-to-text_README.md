@@ -16,6 +16,13 @@ file by type:
 Drop several files at once and the relevant sections light up independently —
 e.g. a folder of scans plus one screen recording.
 
+Routing validates by **file content, not name or the picker's type filter**. A
+file whose declared type/extension doesn't identify it — e.g. an arXiv PDF a phone
+saved as `2401.12345` with no `.pdf` suffix and a generic MIME type — is sniffed by
+its magic bytes after selection and, if recognized (PDF or a supported image
+format), re-tagged and routed to OCR. The file picker imposes no `accept` filter,
+so these extensionless files are selectable in the first place.
+
 ## Images & PDFs (OCR)
 
 - **PP-OCRv6** in three tiers (tiny ~3M / small ~7M / medium ~35M). Weights stream
