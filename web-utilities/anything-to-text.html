@@ -183,7 +183,10 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
       <div class="big">Drop anything &mdash; images, a PDF, audio, or video</div>
       <div class="hint">paste an image, or click to choose files</div>
     </div>
-    <input id="file" type="file" accept="image/*,application/pdf,audio/*,video/*" multiple hidden>
+    <!-- No accept filter: mobile file pickers hide extensionless files (e.g. an arXiv PDF
+         saved as "12345" with no .pdf suffix), so we take anything and validate by content
+         after selection rather than at the picker. -->
+    <input id="file" type="file" multiple hidden>
     <p id="route-note"></p>
   </div>
 
@@ -366,8 +369,52 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
   const note = document.getElementById("route-note");
   const isOcr = f => f.type.startsWith("image/") || f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
   const isAv  = f => f.type.startsWith("audio/") || f.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|mp3|wav|m4a|flac|ogg|opus|aac)$/i.test(f.name || "");
-  function route(fileList) {
-    const files = [...fileList];
+
+  /* Content sniffing. A file's declared type/name is not always trustworthy: phones save a
+     downloaded arXiv PDF as e.g. "2401.12345" (the ".12345" reads like an extension) with an
+     empty or "application/octet-stream" MIME, so isOcr/isAv miss it. We read the first bytes
+     and match the file's magic number instead. Only formats the OCR engine can actually
+     handle are listed (PDF + the image types createImageBitmap decodes). */
+  const MAGIC = [
+    { mime: "application/pdf", ext: "pdf",  test: b => b[0]===0x25 && b[1]===0x50 && b[2]===0x44 && b[3]===0x46 },                                             // %PDF
+    { mime: "image/png",       ext: "png",  test: b => b[0]===0x89 && b[1]===0x50 && b[2]===0x4E && b[3]===0x47 },                                             // \x89PNG
+    { mime: "image/jpeg",      ext: "jpg",  test: b => b[0]===0xFF && b[1]===0xD8 && b[2]===0xFF },                                                            // JPEG SOI
+    { mime: "image/gif",       ext: "gif",  test: b => b[0]===0x47 && b[1]===0x49 && b[2]===0x46 && b[3]===0x38 },                                             // GIF8
+    { mime: "image/webp",      ext: "webp", test: b => b[0]===0x52 && b[1]===0x49 && b[2]===0x46 && b[3]===0x46 && b[8]===0x57 && b[9]===0x45 && b[10]===0x42 && b[11]===0x50 }, // RIFF....WEBP
+    { mime: "image/bmp",       ext: "bmp",  test: b => b[0]===0x42 && b[1]===0x4D },                                                                           // BM
+    { mime: "image/tiff",      ext: "tiff", test: b => (b[0]===0x49 && b[1]===0x49 && b[2]===0x2A && b[3]===0x00) || (b[0]===0x4D && b[1]===0x4D && b[2]===0x00 && b[3]===0x2A) }, // II*. / MM.*
+  ];
+  async function sniff(file) {
+    try {
+      const buf = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+      return MAGIC.find(m => m.test(buf)) || null;
+    } catch (e) { console.warn("[sniff] failed for", file && file.name, e); return null; }
+  }
+  const ensureExt = (name, ext) => {
+    const base = (name && name.trim()) ? name : "file";
+    return new RegExp("\\." + ext + "$", "i").test(base) ? base : base + "." + ext;
+  };
+  /* Re-tag files the quick check couldn't classify. A matched file is re-wrapped as a proper
+     File with the right MIME and extension so the downstream OCR/transcribe engines accept it
+     unchanged; unmatched files pass through untouched (and get counted as "unsupported"). */
+  async function classify(fileList) {
+    const out = [];
+    for (const f of fileList) {
+      if (isOcr(f) || isAv(f)) { out.push(f); continue; }
+      const m = await sniff(f);
+      if (m) {
+        const tagged = new File([f], ensureExt(f.name, m.ext), { type: m.mime });
+        console.log("[sniff]", (f.name || "(unnamed)"), (f.type || "no-type"), "->", m.mime, "as", tagged.name);
+        out.push(tagged);
+      } else {
+        out.push(f);
+      }
+    }
+    return out;
+  }
+
+  async function route(fileList) {
+    const files = await classify([...fileList]);
     if (!files.length) return;
     const ocr = files.filter(isOcr);
     const av  = files.filter(isAv);
