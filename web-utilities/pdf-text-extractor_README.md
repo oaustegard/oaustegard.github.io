@@ -44,6 +44,16 @@ https://austegard.com/web-utilities/pdf-text-extractor?url=https://arxiv.org/pdf
 
 Available formats: `markdown` (default), `json`, `text`
 
+### Specify Reading Order (multi-column PDFs)
+
+Add the `order` parameter to control how columns are linearized:
+
+```
+https://austegard.com/web-utilities/pdf-text-extractor?url=https://arxiv.org/pdf/2406.11706&order=2
+```
+
+Available values: `auto` (default, auto-detect columns), `1`, `2`, `3` (force that column count), `pdf` (preserve raw pdf.js order). See [Column-Aware Reading Order](#column-aware-reading-order) below.
+
 ### Hash Format (Avoids Page Reload)
 
 Using hash (#) instead of query string (?):
@@ -168,6 +178,30 @@ The pdf.js extraction logic:
 - Adds appropriate spacing between text items
 - Handles hyphenation gracefully
 - Produces readable paragraphs
+
+## Column-Aware Reading Order
+
+pdf.js emits text runs in content-stream order. For a **two-column paper** (most arXiv PDFs) that order interleaves the columns and merges left- and right-column text onto the same visual line, producing scrambled output. This tool rebuilds geometric reading order by default:
+
+1. Each text run is placed by its on-page bounding box (via pdf.js's viewport transform).
+2. Runs are grouped into lines by vertical proximity, sorted top-to-bottom, left-to-right.
+3. Column gutters are auto-detected with a 2-D occupancy projection; full-width elements (titles, section headers) act as band breaks.
+4. Each horizontal band emits its columns left-to-right, so a paper reads *title → left column → right column → next header → …* instead of zig-zagging across the gutter.
+
+The **Reading Order** control (and the `order` URL parameter) selects the strategy:
+
+- **Column-aware (auto-detect)** — default; handles most single- and multi-column layouts.
+- **Force single / two / three columns** — when auto-detect guesses wrong (e.g. a mixed title-page + two-column abstract).
+- **Preserve raw PDF order** — the original per-run reconstruction, as an escape hatch.
+
+This is the same reading-order engine used by [`anything-to-text.html`](./anything-to-text.html).
+
+## File Input & Type Validation
+
+The file picker accepts **any** file (no extension filter), and the file type is validated **by content after selection**, not by name. This means:
+
+- A PDF that a phone saved **without a `.pdf` extension** — e.g. an arXiv download named `2606.30840` — is accepted and processed normally.
+- Anything without a `%PDF` marker in its first kilobyte is rejected up front with a clear message, instead of a cryptic pdf.js parser error.
 
 ## Usage Scenarios
 
