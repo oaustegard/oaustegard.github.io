@@ -17,7 +17,7 @@
  *   <script src=".../tangled-string-embed.js" defer></script>
  *   <div data-tangled-string="aesth.lol/3mprqkpefan22"></div>
  *
- * Syntax highlighting via highlight.js from cdnjs, lazy-loaded once and only
+ * Syntax highlighting via a vendored highlight.js build, lazy-loaded once and only
  * if an embed is present; falls back to plain <pre> if the CDN fails.
  *
  * @license MIT
@@ -30,7 +30,7 @@
   const BSKY_API = 'https://public.api.bsky.app/xrpc';
   const PLC_DIRECTORY = 'https://plc.directory';
   const COLLECTION = 'sh.tangled.string';
-  const HLJS_BASE = 'https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0';
+  const HLJS_BASE = 'https://austegard.com/bsky';  /* vendored — no third-party CDN in the XSS surface */
 
   // filename extension → highlight.js language id
   const EXT_LANG = {
@@ -113,14 +113,14 @@
     hljsPromise = new Promise((resolve) => {
       const link = document.createElement('link');
       link.rel = 'stylesheet';
-      link.href = `${HLJS_BASE}/styles/github.min.css`;
+      link.href = `${HLJS_BASE}/hljs-github.min.css`;
       link.media = '(prefers-color-scheme: light)';
       const dark = document.createElement('link');
       dark.rel = 'stylesheet';
-      dark.href = `${HLJS_BASE}/styles/github-dark.min.css`;
+      dark.href = `${HLJS_BASE}/hljs-github-dark.min.css`;
       dark.media = '(prefers-color-scheme: dark)';
       const script = document.createElement('script');
-      script.src = `${HLJS_BASE}/highlight.min.js`;
+      script.src = `${HLJS_BASE}/hljs.vendor.js`;
       script.onload = () => resolve(window.hljs || null);
       script.onerror = () => resolve(null); // graceful: plain <pre>
       document.head.append(link, dark, script);
