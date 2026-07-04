@@ -28,7 +28,7 @@
  * this library does not interpret or transport them.
  *
  * @license MIT
- * @version 1.0.0
+ * @version 1.1.0
  *
  * @example
  *   import { AtprotoRTC } from '/bsky/atproto-rtc.js';
@@ -346,10 +346,18 @@ export class AtprotoRTC extends Emitter {
         if (p.answerRkey) { this._deleteOwnRecord(p.answerRkey); p.answerRkey = null; }
         if (p.knockRkey)  { this._deleteOwnRecord(p.knockRkey);  p.knockRkey = null; }
       }
-      if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
+      if (pc.connectionState === 'disconnected') {
+        /* transient ICE state — frequently self-recovers (mobile tab suspension,
+           network blip). Nudge ICE rather than tearing down; 'failed' follows
+           if it truly cannot recover. */
+        try { pc.restartIce(); } catch (e) { /* older engines: no-op */ }
+      }
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
         p.pc = null; p.dc = null;
         if (p.conn) p.conn.emit('close');
         p.conn = null;
+        /* peer remains trusted: if polling is running, the poll loop re-offers
+           or re-knocks on its next tick — reconnection is automatic. */
       }
       this.emit('statechange', did, p);
       if (p.conn) p.conn.emit('statechange', pc.connectionState);
@@ -568,6 +576,17 @@ export class AtprotoRTC extends Emitter {
       if (this._running) this._discoverTimer = setTimeout(loop, this.discoverMs);
     };
     loop();
+    /* Fast resume: after tab suspension (mobile especially), don't wait out
+       the remaining poll interval — re-signal the moment we're visible again. */
+    if (typeof document !== 'undefined' && !this._visHandler) {
+      this._visHandler = () => {
+        if (document.visibilityState === 'visible' && this._running) {
+          if (this._pollTimer) clearTimeout(this._pollTimer);
+          this._poll();
+        }
+      };
+      document.addEventListener('visibilitychange', this._visHandler);
+    }
   }
 
   /**
@@ -579,6 +598,10 @@ export class AtprotoRTC extends Emitter {
     if (this._discoverTimer) clearTimeout(this._discoverTimer);
     this._pollTimer = null;
     this._discoverTimer = null;
+    if (this._visHandler && typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', this._visHandler);
+      this._visHandler = null;
+    }
   }
 
   /**
