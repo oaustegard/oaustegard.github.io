@@ -28,7 +28,7 @@
  * this library does not interpret or transport them.
  *
  * @license MIT
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @example
  *   import { AtprotoRTC } from '/bsky/atproto-rtc.js';
