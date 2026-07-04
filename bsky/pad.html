@@ -474,13 +474,41 @@ rtc.on('message', (did, data) => {
       const msg = JSON.parse(new TextDecoder().decode(bytes.slice(1)));
       console.debug('[pad] control frame from', did, msg);
     } catch (e) { /* ignore malformed control frame */ }
+  } else if (tag === 0x03) {
+    /* peer sent its state vector: reply with exactly the updates it's missing.
+       This is the self-healing path — incremental frames dropped while a tab
+       was suspended (iOS backgrounds one browser whenever another is front-
+       most) are reconstructed from the CRDT state, idempotently. */
+    const peer = rtc.peers.get(did);
+    if (peer && peer.dc && peer.dc.readyState === 'open') {
+      try {
+        const diff = Y.encodeStateAsUpdate(ydoc, bytes.slice(1));
+        peer.dc.send(frame(0x01, diff));
+      } catch (e) { console.debug('[pad] sync reply failed', e); }
+    }
   }
+});
+
+/* Ask every open peer for whatever we're missing (they answer with a 0x01
+   diff against our state vector). Cheap: a state vector is a few bytes/client. */
+function requestSync() {
+  const sv = frame(0x03, Y.encodeStateVector(ydoc));
+  for (const peer of rtc.peers.values()) {
+    if (peer.dc && peer.dc.readyState === 'open') {
+      try { peer.dc.send(sv); } catch (e) { console.debug('[pad] sync req failed', e); }
+    }
+  }
+}
+setInterval(requestSync, 10000);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') { requestSync(); updateStatusUI(); }
 });
 
 rtc.on('statechange', (did, peer) => {
   if (peer.dc && peer.dc.readyState === 'open' && !initedDCs.has(peer.dc)) {
     initedDCs.add(peer.dc);
     sendFullState(peer.dc); // full state + informational hello on every new open channel
+    requestSync();          // and pull whatever THEY have that we don't
   }
   updateStatusUI();
 });
