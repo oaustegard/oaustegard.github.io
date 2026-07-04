@@ -1,0 +1,824 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pad</title>
+<!--
+  PRIVACY MODEL (read before you touch this file):
+  - Document content lives ONLY in this browser's IndexedDB (per docId).
+    Nothing about the text ever touches a server, including the ATProto PDS.
+  - Peers exchange content ONLY over a direct WebRTC RTCDataChannel,
+    encrypted end-to-end by DTLS. This page never proxies or stores it.
+  - ATProto is used ONLY for ephemeral SDP signaling (see atproto-rtc.js):
+    tiny offer/answer/knock records written to your own repo, addressed
+    to a peer, deleted once the connection is up, and TTL-bounded even
+    if deletion fails. Anyone watching the network/firehose can learn
+    that "a session happened" between two identities and roughly when -
+    the same caveat as e.g. FileDrop-style tools - but not what was said.
+  - The ONLY action in this whole app that makes content public is
+    "Publish as Tangled string", which explicitly warns you before it
+    writes a public record to YOUR OWN repo.
+-->
+<style>
+  :root {
+    --bg: #ffffff;
+    --fg: #24292f;
+    --border: #d0d7de;
+    --muted: #57606a;
+    --accent: #0969da;
+    --btn-bg: #f6f8fa;
+    --btn-hover: #eef1f4;
+    --danger: #cf222e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117;
+      --fg: #c9d1d9;
+      --border: #30363d;
+      --muted: #8b949e;
+      --accent: #58a6ff;
+      --btn-bg: #21262d;
+      --btn-hover: #2b3138;
+      --danger: #f85149;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  body {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+  #titleInput {
+    flex: 1;
+    min-width: 120px;
+    font-size: 15px;
+    font-weight: 600;
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 5px 8px;
+  }
+  #titleInput:hover, #titleInput:focus {
+    border-color: var(--border);
+    outline: none;
+  }
+  .status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--muted);
+    display: inline-block;
+  }
+  .dot.on { background: #2da44e; }
+  main {
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+  #editor {
+    flex: 1;
+    width: 100%;
+    border: none;
+    resize: none;
+    padding: 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 14px;
+    line-height: 1.5;
+    background: var(--bg);
+    color: var(--fg);
+    outline: none;
+  }
+  footer {
+    border-top: 1px solid var(--border);
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  button {
+    font-size: 12px;
+    padding: 5px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--btn-bg);
+    color: var(--fg);
+    cursor: pointer;
+  }
+  button:hover { background: var(--btn-hover); }
+  button:disabled { opacity: 0.5; cursor: default; }
+  input[type=text], input[type=password], textarea.small {
+    font-size: 12px;
+    padding: 5px 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--fg);
+  }
+  #shareLinkInput { width: 320px; max-width: 50vw; }
+  .warn {
+    font-size: 11px;
+    color: var(--muted);
+    margin: 0;
+  }
+  dialog {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--bg);
+    color: var(--fg);
+    padding: 16px;
+    max-width: 420px;
+  }
+  dialog::backdrop { background: rgba(0,0,0,0.4); }
+  dialog h3 { margin-top: 0; font-size: 14px; }
+  dialog label { font-size: 12px; display: block; margin: 8px 0 4px; }
+  dialog form { display: flex; flex-direction: column; }
+  .err { color: var(--danger); font-size: 12px; min-height: 14px; }
+  .dialog-actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 10px; }
+  ul#padListEl { list-style: none; padding: 0; margin: 0; max-height: 40vh; overflow: auto; }
+  ul#padListEl li {
+    display: flex; align-items: center; gap: 8px;
+    padding: 6px 0; border-bottom: 1px solid var(--border);
+  }
+  ul#padListEl li span { flex: 1; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  a { color: var(--accent); }
+  code { font-size: 11px; word-break: break-all; }
+</style>
+</head>
+<body>
+
+<header>
+  <input id="titleInput" type="text" placeholder="Untitled pad" autocomplete="off">
+  <div class="status">
+    <span class="dot" id="peerDot"></span>
+    <span id="statusText">Local only · 0 peers</span>
+  </div>
+</header>
+
+<main>
+  <textarea id="editor" spellcheck="false" placeholder="Start typing…"></textarea>
+</main>
+
+<footer>
+  <div class="row" id="shareRow">
+    <button id="shareBtn">Share</button>
+    <button id="joinBtn" hidden>Join</button>
+    <input id="shareLinkInput" type="text" readonly hidden>
+    <button id="copyLinkBtn" hidden>Copy link</button>
+  </div>
+  <div class="row">
+    <button id="importBtn">Import string…</button>
+    <button id="publishBtn">Publish as string…</button>
+    <button id="padListBtn">Pads…</button>
+  </div>
+  <p class="warn">Content is stored only in this browser and shared only peer-to-peer, until you explicitly Publish.</p>
+</footer>
+
+<dialog id="loginDialog">
+  <h3>Sign in with your ATProto identity</h3>
+  <form id="loginForm">
+    <label for="loginHandle">Handle or DID</label>
+    <input id="loginHandle" type="text" placeholder="alice.bsky.social" autocomplete="username" required>
+    <label for="loginPassword">App password</label>
+    <input id="loginPassword" type="password" autocomplete="current-password" required>
+    <p class="warn">Please <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener">use an app password</a>, not your main password. It is sent only to your own PDS.</p>
+    <div class="err" id="loginError"></div>
+    <div class="dialog-actions">
+      <button type="button" id="loginCancelBtn">Cancel</button>
+      <button type="submit" id="loginSubmitBtn">Sign in</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="importDialog">
+  <h3>Import a Tangled string</h3>
+  <form id="importForm">
+    <label for="importInput">Handle/rkey, at:// URI, or tangled.org URL</label>
+    <input id="importInput" type="text" placeholder="alice.bsky.social/3ab...  or  at://did:.../sh.tangled.string/3ab..." required>
+    <div class="err" id="importError"></div>
+    <div class="dialog-actions">
+      <button type="button" id="importCancelBtn">Cancel</button>
+      <button type="submit" id="importSubmitBtn">Import (replaces pad)</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="publishResultDialog">
+  <h3>Published</h3>
+  <p>Your pad is now a <strong>public</strong> Tangled string.</p>
+  <p><code id="publishResultAt"></code></p>
+  <p><a id="publishResultLink" href="#" target="_blank" rel="noopener"></a></p>
+  <div class="dialog-actions">
+    <button type="button" id="publishResultCloseBtn">Close</button>
+  </div>
+</dialog>
+
+<dialog id="padListDialog">
+  <h3>Pads on this device</h3>
+  <ul id="padListEl"></ul>
+  <div class="dialog-actions">
+    <button type="button" id="padListCloseBtn">Close</button>
+  </div>
+</dialog>
+
+<script type="module">
+/* ==========================================================================
+ * PRIVACY MODEL (see also the HTML comment above):
+ *  - Document text: Yjs CRDT, persisted ONLY in this browser's IndexedDB.
+ *  - Transport: raw RTCDataChannel bytes over a DTLS-encrypted WebRTC
+ *    connection negotiated directly between the two browsers.
+ *  - ATProto involvement: identity (login to YOUR OWN PDS) + ephemeral
+ *    SDP signaling records (handled entirely inside atproto-rtc.js).
+ *    Those records reveal that a session occurred between two DIDs
+ *    around a given time - nothing about pad content.
+ *  - The only public-network action anywhere in this file is
+ *    "Publish as Tangled string", clearly warned before it runs.
+ * ========================================================================== */
+
+import * as Y from 'https://esm.sh/yjs@13.6.8';
+import { IndexeddbPersistence } from 'https://esm.sh/y-indexeddb@9.0.12?deps=yjs@13.6.8';
+import { AtprotoRTC } from '/bsky/atproto-rtc.js';
+
+/* ---------------- doc id / URL handling ---------------- */
+
+function newDocId() {
+  const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
+  const bytes = crypto.getRandomValues(new Uint8Array(20));
+  let s = '';
+  for (let i = 0; i < bytes.length; i++) s += alphabet[bytes[i] % alphabet.length];
+  return s;
+}
+
+const url = new URL(location.href);
+let docId = url.searchParams.get('d');
+const peerDid = url.searchParams.get('peer');
+if (!docId) {
+  docId = newDocId();
+  url.searchParams.set('d', docId);
+  history.replaceState(null, '', url.pathname + '?' + url.searchParams.toString());
+}
+
+/* ---------------- pad index (localStorage) ---------------- */
+
+function loadPadIndex() {
+  try { return JSON.parse(localStorage.getItem('pad-index') || '[]'); }
+  catch (e) { return []; }
+}
+function savePadIndex(idx) { localStorage.setItem('pad-index', JSON.stringify(idx)); }
+function touchPadIndex(id, title) {
+  const idx = loadPadIndex();
+  const i = idx.findIndex(p => p.docId === id);
+  const entry = { docId: id, title: title || '(untitled)', lastOpened: Date.now() };
+  if (i >= 0) idx[i] = entry; else idx.push(entry);
+  savePadIndex(idx);
+}
+function removeFromPadIndex(id) {
+  savePadIndex(loadPadIndex().filter(p => p.docId !== id));
+}
+
+/* ---------------- DOM refs ---------------- */
+
+const titleInput = document.getElementById('titleInput');
+const textarea = document.getElementById('editor');
+const statusText = document.getElementById('statusText');
+const peerDot = document.getElementById('peerDot');
+
+const shareBtn = document.getElementById('shareBtn');
+const joinBtn = document.getElementById('joinBtn');
+const shareLinkInput = document.getElementById('shareLinkInput');
+const copyLinkBtn = document.getElementById('copyLinkBtn');
+
+const importBtn = document.getElementById('importBtn');
+const publishBtn = document.getElementById('publishBtn');
+const padListBtn = document.getElementById('padListBtn');
+
+const loginDialog = document.getElementById('loginDialog');
+const loginForm = document.getElementById('loginForm');
+const loginHandle = document.getElementById('loginHandle');
+const loginPassword = document.getElementById('loginPassword');
+const loginError = document.getElementById('loginError');
+const loginCancelBtn = document.getElementById('loginCancelBtn');
+const loginSubmitBtn = document.getElementById('loginSubmitBtn');
+
+const importDialog = document.getElementById('importDialog');
+const importForm = document.getElementById('importForm');
+const importInput = document.getElementById('importInput');
+const importError = document.getElementById('importError');
+const importCancelBtn = document.getElementById('importCancelBtn');
+const importSubmitBtn = document.getElementById('importSubmitBtn');
+
+const publishResultDialog = document.getElementById('publishResultDialog');
+const publishResultAt = document.getElementById('publishResultAt');
+const publishResultLink = document.getElementById('publishResultLink');
+const publishResultCloseBtn = document.getElementById('publishResultCloseBtn');
+
+const padListDialog = document.getElementById('padListDialog');
+const padListEl = document.getElementById('padListEl');
+const padListCloseBtn = document.getElementById('padListCloseBtn');
+
+/* ---------------- Yjs doc + local-only persistence ---------------- */
+
+const ydoc = new Y.Doc();
+const ytext = ydoc.getText('content');
+const ymeta = ydoc.getMap('meta');
+
+const LOCAL = 'local-edit';   // origin marker for our own transactions
+const REMOTE = 'remote';      // origin marker for transactions from peers
+
+const provider = new IndexeddbPersistence('pad-' + docId, ydoc); // local-only storage
+await provider.whenSynced;
+
+let lastValue = ytext.toString();
+textarea.value = lastValue;
+titleInput.value = ymeta.get('title') || '';
+document.title = titleInput.value ? titleInput.value + ' — Pad' : 'Pad';
+touchPadIndex(docId, titleInput.value);
+
+/* ---------------- textarea <-> Y.Text binding ---------------- */
+
+function diffAndApply(oldStr, newStr) {
+  const maxPrefix = Math.min(oldStr.length, newStr.length);
+  let start = 0;
+  while (start < maxPrefix && oldStr[start] === newStr[start]) start++;
+  let oldEnd = oldStr.length, newEnd = newStr.length;
+  while (oldEnd > start && newEnd > start && oldStr[oldEnd - 1] === newStr[newEnd - 1]) {
+    oldEnd--; newEnd--;
+  }
+  const delCount = oldEnd - start;
+  const insertText = newStr.slice(start, newEnd);
+  ydoc.transact(() => {
+    if (delCount > 0) ytext.delete(start, delCount);
+    if (insertText.length > 0) ytext.insert(start, insertText);
+  }, LOCAL);
+}
+
+textarea.addEventListener('input', () => {
+  const newValue = textarea.value;
+  diffAndApply(lastValue, newValue);
+  lastValue = newValue;
+});
+
+/* preserve caret across remote-origin changes using relative positions */
+let pendingRelStart = null, pendingRelEnd = null;
+
+ydoc.on('beforeTransaction', (tr) => {
+  if (tr.origin === LOCAL) { pendingRelStart = pendingRelEnd = null; return; }
+  if (document.activeElement === textarea) {
+    pendingRelStart = Y.createRelativePositionFromTypeIndex(ytext, textarea.selectionStart);
+    pendingRelEnd = Y.createRelativePositionFromTypeIndex(ytext, textarea.selectionEnd);
+  } else {
+    pendingRelStart = pendingRelEnd = null;
+  }
+});
+
+ydoc.on('afterTransaction', (tr) => {
+  if (tr.origin === LOCAL) { lastValue = ytext.toString(); return; }
+  const newValue = ytext.toString();
+  if (textarea.value !== newValue) textarea.value = newValue;
+  lastValue = newValue;
+  if (pendingRelStart) {
+    const abs = Y.createAbsolutePositionFromRelativePosition(pendingRelStart, ydoc);
+    if (abs) textarea.selectionStart = abs.index;
+  }
+  if (pendingRelEnd) {
+    const abs = Y.createAbsolutePositionFromRelativePosition(pendingRelEnd, ydoc);
+    if (abs) textarea.selectionEnd = abs.index;
+  }
+});
+
+/* title <-> Y.Map (plain last-write) */
+titleInput.addEventListener('input', () => {
+  ydoc.transact(() => { ymeta.set('title', titleInput.value); }, LOCAL);
+  document.title = titleInput.value ? titleInput.value + ' — Pad' : 'Pad';
+  touchPadIndex(docId, titleInput.value);
+});
+ymeta.observe(() => {
+  const t = ymeta.get('title') || '';
+  if (document.activeElement !== titleInput) titleInput.value = t;
+  document.title = t ? t + ' — Pad' : 'Pad';
+  touchPadIndex(docId, t);
+});
+
+/* ---------------- RTC wiring ---------------- */
+
+const rtc = new AtprotoRTC(); // defaults: com.austegard.rtc.signal, google STUN
+let sharing = false;
+const initedDCs = new WeakSet();
+
+function frame(tag, bytes) {
+  const f = new Uint8Array(1 + bytes.length);
+  f[0] = tag;
+  f.set(bytes, 1);
+  return f;
+}
+
+function broadcastUpdate(update) {
+  const f = frame(0x01, update);
+  for (const peer of rtc.peers.values()) {
+    if (peer.dc && peer.dc.readyState === 'open') {
+      try { peer.dc.send(f); } catch (e) { console.debug('[pad] send failed', e); }
+    }
+  }
+}
+
+function sendFullState(dc) {
+  try {
+    dc.send(frame(0x01, Y.encodeStateAsUpdate(ydoc)));
+    const meta = JSON.stringify({ type: 'hello', title: ymeta.get('title') || '' });
+    dc.send(frame(0x02, new TextEncoder().encode(meta)));
+  } catch (e) { console.debug('[pad] init send failed', e); }
+}
+
+ydoc.on('update', (update, origin) => {
+  if (origin === LOCAL) broadcastUpdate(update);
+});
+
+rtc.on('message', (did, data) => {
+  const bytes = new Uint8Array(data);
+  if (bytes.length === 0) return;
+  const tag = bytes[0];
+  if (tag === 0x01) {
+    Y.applyUpdate(ydoc, bytes.slice(1), REMOTE);
+  } else if (tag === 0x02) {
+    try {
+      const msg = JSON.parse(new TextDecoder().decode(bytes.slice(1)));
+      console.debug('[pad] control frame from', did, msg);
+    } catch (e) { /* ignore malformed control frame */ }
+  }
+});
+
+rtc.on('statechange', (did, peer) => {
+  if (peer.dc && peer.dc.readyState === 'open' && !initedDCs.has(peer.dc)) {
+    initedDCs.add(peer.dc);
+    sendFullState(peer.dc); // full state + informational hello on every new open channel
+  }
+  updateStatusUI();
+});
+
+function updateStatusUI() {
+  let openPeers = 0;
+  for (const p of rtc.peers.values()) if (p.dc && p.dc.readyState === 'open') openPeers++;
+  peerDot.classList.toggle('on', openPeers > 0);
+  let base = sharing ? 'Sharing' : (rtc.me && rtc.me.did ? 'Connected' : 'Local only');
+  statusText.textContent = base + ' · ' + openPeers + ' peer' + (openPeers === 1 ? '' : 's');
+}
+
+/* ---------------- login dialog (shared by share/join/publish) ---------------- */
+
+function openLoginDialog() {
+  return new Promise((resolve) => {
+    loginError.textContent = '';
+    loginHandle.value = rtc.me.handle || '';
+    loginPassword.value = '';
+    loginDialog.showModal();
+
+    function cleanup() {
+      loginForm.removeEventListener('submit', onSubmit);
+      loginCancelBtn.removeEventListener('click', onCancel);
+      loginDialog.removeEventListener('cancel', onCancel);
+    }
+    async function onSubmit(e) {
+      e.preventDefault();
+      loginError.textContent = '';
+      loginSubmitBtn.disabled = true;
+      try {
+        await rtc.login(loginHandle.value.trim(), loginPassword.value);
+        loginPassword.value = '';
+        cleanup();
+        loginDialog.close();
+        resolve(true);
+      } catch (err) {
+        loginError.textContent = err.message || String(err);
+      } finally {
+        loginSubmitBtn.disabled = false;
+      }
+    }
+    function onCancel() {
+      cleanup();
+      try { loginDialog.close(); } catch (e) {}
+      resolve(false);
+    }
+    loginForm.addEventListener('submit', onSubmit);
+    loginCancelBtn.addEventListener('click', onCancel);
+    loginDialog.addEventListener('cancel', onCancel);
+  });
+}
+
+/* ---------------- share (host) flow ---------------- */
+
+function showShareLink() {
+  const u = new URL(location.href);
+  u.searchParams.set('peer', rtc.me.did);
+  shareLinkInput.value = u.toString();
+  shareLinkInput.hidden = false;
+  copyLinkBtn.hidden = false;
+}
+function hideShareLink() {
+  shareLinkInput.hidden = true;
+  copyLinkBtn.hidden = true;
+}
+
+function startSharing() {
+  // Consent gate for incoming peers. Kept intentionally simple: a small
+  // mesh (a handful of directly-connected peers, all relaying full state
+  // + updates to each other) is acceptable for this app's scale.
+  rtc.onIncoming = async (did) => {
+    return confirm('Peer ' + did + ' wants to join this pad. Accept?');
+  };
+  rtc.start();
+  sharing = true;
+  shareBtn.textContent = 'Stop Sharing';
+  showShareLink();
+  updateStatusUI();
+}
+
+async function stopSharing() {
+  for (const did of Array.from(rtc.peers.keys())) rtc.disconnect(did);
+  rtc.stop();
+  sharing = false;
+  shareBtn.textContent = 'Share';
+  hideShareLink();
+  updateStatusUI();
+}
+
+shareBtn.addEventListener('click', async () => {
+  if (sharing) { await stopSharing(); return; }
+  if (!rtc.me.did) {
+    const ok = await openLoginDialog();
+    if (!ok) return;
+  }
+  startSharing();
+});
+
+copyLinkBtn.addEventListener('click', async () => {
+  try {
+    await navigator.clipboard.writeText(shareLinkInput.value);
+  } catch (e) {
+    shareLinkInput.select();
+    document.execCommand('copy');
+  }
+  copyLinkBtn.textContent = 'Copied!';
+  setTimeout(() => { copyLinkBtn.textContent = 'Copy link'; }, 1200);
+});
+
+/* ---------------- join (guest) flow ---------------- */
+
+if (peerDid) joinBtn.hidden = false;
+
+joinBtn.addEventListener('click', async () => {
+  if (!peerDid) return;
+  if (!rtc.me.did) {
+    const ok = await openLoginDialog();
+    if (!ok) return;
+  }
+  rtc.start();
+  joinBtn.disabled = true;
+  joinBtn.textContent = 'Joining…';
+  try {
+    const conn = await rtc.connect(peerDid);
+    conn.on('open', () => { joinBtn.textContent = 'Joined'; updateStatusUI(); });
+    conn.on('close', () => { joinBtn.textContent = 'Join'; joinBtn.disabled = false; updateStatusUI(); });
+  } catch (e) {
+    alert('Could not connect: ' + e.message);
+    joinBtn.disabled = false;
+    joinBtn.textContent = 'Join';
+  }
+  updateStatusUI();
+});
+
+/* ---------------- import (Tangled string -> pad) ---------------- */
+
+async function resolveTangledString(raw) {
+  raw = raw.trim();
+  let did, rkey, collection = 'sh.tangled.string';
+
+  if (raw.startsWith('at://')) {
+    const m = raw.match(/^at:\/\/([^/]+)\/([^/]+)\/([^/]+)/);
+    if (!m) throw new Error('Malformed at:// URI');
+    const repo = m[1];
+    collection = m[2];
+    rkey = m[3];
+    did = repo.startsWith('did:') ? repo : await AtprotoRTC.resolveHandle(repo);
+  } else if (/^https?:\/\//.test(raw)) {
+    const u = new URL(raw);
+    const parts = u.pathname.split('/').filter(Boolean);
+    const handlePart = parts.find(p => p.includes('.')) || parts[0];
+    const handle = (handlePart || '').replace(/^@/, '');
+    rkey = parts[parts.length - 1];
+    if (!handle || !rkey) throw new Error('Could not parse tangled.org URL');
+    did = handle.startsWith('did:') ? handle : await AtprotoRTC.resolveHandle(handle);
+  } else if (raw.includes('/')) {
+    const parts = raw.split('/').filter(Boolean);
+    const handleOrDid = parts[0];
+    rkey = parts[1];
+    if (!handleOrDid || !rkey) throw new Error('Expected handle/rkey');
+    did = handleOrDid.startsWith('did:') ? handleOrDid : await AtprotoRTC.resolveHandle(handleOrDid);
+  } else {
+    throw new Error('Enter handle/rkey, an at:// URI, or a tangled.org string URL');
+  }
+
+  const pds = await AtprotoRTC.resolvePds(did);
+  const q = new URLSearchParams({ repo: did, collection, rkey });
+  const r = await fetch(pds + '/xrpc/com.atproto.repo.getRecord?' + q);
+  if (!r.ok) throw new Error('Could not fetch string record (' + r.status + ')');
+  const j = await r.json();
+  const v = j.value || {};
+  return { filename: v.filename || '', description: v.description || '', contents: v.contents || '' };
+}
+
+importBtn.addEventListener('click', () => {
+  importError.textContent = '';
+  importInput.value = '';
+  importDialog.showModal();
+});
+importCancelBtn.addEventListener('click', () => importDialog.close());
+
+importForm.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  importError.textContent = '';
+  importSubmitBtn.disabled = true;
+  try {
+    const rec = await resolveTangledString(importInput.value);
+    if (ytext.length > 0) {
+      const proceed = confirm('Replace the current pad content with "' + (rec.filename || 'imported string') + '"?');
+      if (!proceed) { importSubmitBtn.disabled = false; return; }
+    }
+    ydoc.transact(() => {
+      ytext.delete(0, ytext.length);
+      ytext.insert(0, rec.contents);
+      ymeta.set('title', rec.filename || 'Imported');
+    }, LOCAL);
+    textarea.value = ytext.toString();
+    lastValue = textarea.value;
+    titleInput.value = ymeta.get('title') || '';
+    importDialog.close();
+  } catch (err) {
+    importError.textContent = err.message || String(err);
+  } finally {
+    importSubmitBtn.disabled = false;
+  }
+});
+
+/* ---------------- publish (pad -> Tangled string, PUBLIC) ---------------- */
+
+/* SHIM: lib gap - AtprotoRTC exposes no public authenticated createRecord
+   call; it only performs createSession/signal calls internally. We reuse
+   the already-authenticated rtc.me session (did/pds/accessJwt) to make a
+   minimal, explicit createRecord call directly against the user's own PDS. */
+async function publishTangledString(filename, contents) {
+  const body = {
+    repo: rtc.me.did,
+    collection: 'sh.tangled.string',
+    record: {
+      $type: 'sh.tangled.string',
+      filename: filename,
+      description: 'Published from pad',
+      contents: contents,
+      createdAt: new Date().toISOString()
+    }
+  };
+  const r = await fetch(rtc.me.pds + '/xrpc/com.atproto.repo.createRecord', {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer ' + rtc.me.accessJwt,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(body)
+  });
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error('Publish failed (' + r.status + '): ' + t);
+  }
+  return r.json();
+}
+
+publishBtn.addEventListener('click', async () => {
+  if (!rtc.me.did) {
+    const ok = await openLoginDialog();
+    if (!ok) return;
+  }
+  const proceed = confirm(
+    'This will publish the full pad content as a PUBLIC record on the open ' +
+    'ATProto network (readable by anyone, indexable by third parties, ' +
+    'permanent until you delete it). Continue?'
+  );
+  if (!proceed) return;
+
+  publishBtn.disabled = true;
+  try {
+    const filename = ymeta.get('title') || 'untitled';
+    const contents = ytext.toString();
+    const res = await publishTangledString(filename, contents);
+    const uri = res.uri || '';
+    publishResultAt.textContent = uri;
+    const m = uri.match(/^at:\/\/([^/]+)\/[^/]+\/(.+)$/);
+    if (m && rtc.me.handle) {
+      const link = 'https://tangled.org/@' + rtc.me.handle + '/strings/' + m[2];
+      publishResultLink.href = link;
+      publishResultLink.textContent = link;
+    } else {
+      publishResultLink.href = '#';
+      publishResultLink.textContent = '';
+    }
+    publishResultDialog.showModal();
+  } catch (err) {
+    alert('Publish failed: ' + (err.message || err));
+  } finally {
+    publishBtn.disabled = false;
+  }
+});
+publishResultCloseBtn.addEventListener('click', () => publishResultDialog.close());
+
+/* ---------------- pad list ---------------- */
+
+function renderPadList() {
+  const idx = loadPadIndex().sort((a, b) => b.lastOpened - a.lastOpened);
+  padListEl.textContent = '';
+  for (const entry of idx) {
+    const li = document.createElement('li');
+
+    const span = document.createElement('span');
+    span.textContent = (entry.title || '(untitled)') + (entry.docId === docId ? ' (current)' : '');
+    li.appendChild(span);
+
+    const openBtn = document.createElement('button');
+    openBtn.textContent = 'Open';
+    openBtn.disabled = entry.docId === docId;
+    openBtn.addEventListener('click', () => {
+      const u = new URL(location.origin + location.pathname);
+      u.searchParams.set('d', entry.docId);
+      location.href = u.toString();
+    });
+    li.appendChild(openBtn);
+
+    const delBtn = document.createElement('button');
+    delBtn.textContent = 'Delete';
+    delBtn.disabled = entry.docId === docId;
+    delBtn.addEventListener('click', () => {
+      if (confirm('Delete pad "' + (entry.title || '(untitled)') + '" from this device? This removes local data only.')) {
+        indexedDB.deleteDatabase('pad-' + entry.docId);
+        removeFromPadIndex(entry.docId);
+        renderPadList();
+      }
+    });
+    li.appendChild(delBtn);
+
+    padListEl.appendChild(li);
+  }
+
+  const newLi = document.createElement('li');
+  const newBtn = document.createElement('button');
+  newBtn.textContent = '+ New pad';
+  newBtn.addEventListener('click', () => {
+    const id = newDocId();
+    const u = new URL(location.origin + location.pathname);
+    u.searchParams.set('d', id);
+    location.href = u.toString();
+  });
+  newLi.appendChild(newBtn);
+  padListEl.appendChild(newLi);
+}
+
+padListBtn.addEventListener('click', () => { renderPadList(); padListDialog.showModal(); });
+padListCloseBtn.addEventListener('click', () => padListDialog.close());
+
+/* ---------------- cleanup ---------------- */
+
+window.addEventListener('beforeunload', () => {
+  rtc.teardown(); // best-effort removal of any in-flight signal records
+});
+
+updateStatusUI();
+</script>
+</body>
+</html>
