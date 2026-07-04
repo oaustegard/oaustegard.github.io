@@ -192,6 +192,7 @@
 <footer>
   <div class="row" id="shareRow">
     <button id="shareBtn">Share</button>
+    <button id="signOutBtn" hidden title="Forget the stored session on this browser">Sign out</button>
     <button id="joinBtn" hidden>Join</button>
     <input id="shareLinkInput" type="text" readonly hidden>
     <button id="copyLinkBtn" hidden>Copy link</button>
@@ -432,6 +433,10 @@ ymeta.observe(() => {
 /* ---------------- RTC wiring ---------------- */
 
 const rtc = new AtprotoRTC(); // defaults: com.austegard.rtc.signal, google STUN
+/* Resume a session persisted by this or any other /bsky utility (shared
+   'bsky_session' localStorage convention — tokens only, never the password).
+   Fire-and-forget: the UI works logged-out; this just skips the dialog. */
+rtc.resumeSession().then((me) => { if (me) updateStatusUI(); });
 let sharing = false;
 const initedDCs = new WeakSet();
 
@@ -518,7 +523,9 @@ function updateStatusUI() {
   for (const p of rtc.peers.values()) if (p.dc && p.dc.readyState === 'open') openPeers++;
   peerDot.classList.toggle('on', openPeers > 0);
   let base = sharing ? 'Sharing' : (rtc.me && rtc.me.did ? 'Connected' : 'Local only');
-  statusText.textContent = base + ' · ' + openPeers + ' peer' + (openPeers === 1 ? '' : 's');
+  statusText.textContent = base + ' · ' + openPeers + ' peer' + (openPeers === 1 ? '' : 's')
+    + (rtc.me && rtc.me.handle ? ' · ' + rtc.me.handle : '');
+  signOutBtn.hidden = !(rtc.me && rtc.me.did);
 }
 
 /* ---------------- login dialog (shared by share/join/publish) ---------------- */
@@ -622,6 +629,14 @@ copyLinkBtn.addEventListener('click', async () => {
 /* ---------------- join (guest) flow ---------------- */
 
 if (peerDid) joinBtn.hidden = false;
+
+const signOutBtn = document.getElementById('signOutBtn');
+signOutBtn.addEventListener('click', () => {
+  rtc.stop();
+  rtc.logout();          /* clears rtc.me and the shared 'bsky_session' key */
+  sharing = false;
+  updateStatusUI();
+});
 
 let hasJoinedOnce = false;
 joinBtn.addEventListener('click', async () => {
