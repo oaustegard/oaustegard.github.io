@@ -221,21 +221,23 @@
 <input type="file" id="file-input" style="display:none">
 
 <script type="module">
+import { AtprotoRTC } from '/bsky/atproto-rtc.js';
+
 /* ============================================================
    ATProto FileDrop — P2P file transfer, ATProto-record signaling.
    File bytes travel ONLY over WebRTC data channels between the
-   two browsers. ATProto carries just SDP offer/answer text (a
-   few KB) during connection setup: each side writes a signal
-   record into its OWN repo, and polls the PEER's repo for
-   records addressed to it. Records are deleted once consumed
-   and swept at sign-in.
+   two browsers. All identity resolution, session auth, signal
+   records (writes to own repo / reads of peer repo), sweeping,
+   polling, offer/answer/knock, glare avoidance, Constellation
+   discovery, consent gating, and PeerConnection/data-channel
+   setup are owned by atproto-rtc.js. This file owns only the
+   file-transfer protocol layered on top of the resulting data
+   channel, and the UI.
    ============================================================ */
 
-const COLLECTION   = 'com.austegard.filedrop.signal';
-const POLL_MS      = 2000;
-const SIGNAL_TTL_S = 300;           /* signals older than this are stale */
-const CHUNK_SIZE   = 64 * 1024;
-const BUF_HIGH     = 1024 * 1024;   /* backpressure threshold */
+const COLLECTION  = 'com.austegard.filedrop.signal';
+const CHUNK_SIZE  = 64 * 1024;
+const BUF_HIGH    = 1024 * 1024;   /* backpressure threshold */
 
 /* Peers are typically on different networks, connecting across the
    internet via server-reflexive candidates. STUN is therefore required,
@@ -247,7 +249,8 @@ const BUF_HIGH     = 1024 * 1024;   /* backpressure threshold */
 const ICE_SERVERS = location.hash.includes('nostun')
   ? []
   : [{ urls: 'stun:stun.l.google.com:19302' }];
-console.log('[rtc] iceServers:', JSON.stringify(ICE_SERVERS));
+
+const rtc = new AtprotoRTC({ collection: COLLECTION, iceServers: ICE_SERVERS });
 
 /* ---------- tiny DOM helpers ---------- */
 const $ = (id) => document.getElementById(id);
@@ -255,147 +258,20 @@ const setStatus = (t) => { $('status').textContent = t; };
 const showErr = (t) => { const e = $('err'); e.textContent = t; e.classList.add('on'); console.error('[filedrop]', t); };
 const clearErr = () => $('err').classList.remove('on');
 
-/* ---------- ATProto identity + auth ----------
-   Handle -> DID via the public AppView; DID -> PDS endpoint via the
-   DID document (plc.directory for did:plc, .well-known for did:web).
-   Session (accessJwt) is created against the user's OWN PDS. Reads of
-   a PEER's repo use unauthenticated listRecords on the peer's PDS. */
+/* ---------- UI-side peer state (row element, transfer state) ----------
+   The library owns did/handle/pds/trusted/pc/dc; filedrop.html keeps a
+   parallel map for UI + file-transfer state, keyed by the same DID. */
+const rows = new Map();   /* did -> { el, sending, sendQueue, recv } */
 
-async function resolveHandle(handle) {
-  const r = await fetch('https://public.api.bsky.app/xrpc/com.atproto.identity.resolveHandle?handle=' + encodeURIComponent(handle));
-  if (!r.ok) throw new Error('Could not resolve handle ' + handle + ' (' + r.status + ')');
-  return (await r.json()).did;
+function uiFor(did) {
+  let u = rows.get(did);
+  if (!u) { u = { el: null, sending: false, sendQueue: [], recv: null }; rows.set(did, u); }
+  return u;
 }
 
-async function resolvePds(did) {
-  let doc;
-  if (did.startsWith('did:plc:')) {
-    const r = await fetch('https://plc.directory/' + did);
-    if (!r.ok) throw new Error('plc.directory lookup failed for ' + did);
-    doc = await r.json();
-  } else if (did.startsWith('did:web:')) {
-    const host = did.slice('did:web:'.length).split(':').join('/');
-    const r = await fetch('https://' + host + '/.well-known/did.json');
-    if (!r.ok) throw new Error('did:web lookup failed for ' + did);
-    doc = await r.json();
-  } else {
-    throw new Error('Unsupported DID method: ' + did);
-  }
-  const svc = (doc.service || []).find(s => s.id === '#atproto_pds' || s.type === 'AtprotoPersonalDataServer');
-  if (!svc) throw new Error('No PDS endpoint in DID document for ' + did);
-  return svc.serviceEndpoint;
-}
-
-const me = { handle: null, did: null, pds: null, accessJwt: null, password: null };
-
-async function createSession() {
-  const r = await fetch(me.pds + '/xrpc/com.atproto.server.createSession', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ identifier: me.handle, password: me.password })
-  });
-  if (!r.ok) {
-    const body = await r.json().catch(() => ({}));
-    throw new Error('Sign-in failed: ' + (body.message || r.status));
-  }
-  const j = await r.json();
-  me.accessJwt = j.accessJwt;
-  me.did = j.did;
-}
-
-async function pdsCall(nsid, { method = 'GET', params, body, retried } = {}) {
-  let url = me.pds + '/xrpc/' + nsid;
-  if (params) url += '?' + new URLSearchParams(params);
-  const r = await fetch(url, {
-    method,
-    headers: {
-      'Authorization': 'Bearer ' + me.accessJwt,
-      ...(body ? { 'Content-Type': 'application/json' } : {})
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-  if (r.status === 401 && !retried) {          /* token expired — re-auth once */
-    await createSession();
-    return pdsCall(nsid, { method, params, body, retried: true });
-  }
-  if (!r.ok) throw new Error(nsid + ' -> ' + r.status);
-  return r.json();
-}
-
-/* ---------- signaling over ATProto records ---------- */
-async function sendSignal(toDid, msgType, payload) {
-  return pdsCall('com.atproto.repo.createRecord', {
-    method: 'POST',
-    body: {
-      repo: me.did,
-      collection: COLLECTION,
-      record: {
-        $type: COLLECTION,
-        to: toDid,
-        msgType: msgType,           /* 'offer' | 'answer' */
-        payload: payload,
-        createdAt: new Date().toISOString()
-      }
-    }
-  });
-}
-
-async function deleteOwnRecord(rkey) {
-  try {
-    await pdsCall('com.atproto.repo.deleteRecord', {
-      method: 'POST',
-      body: { repo: me.did, collection: COLLECTION, rkey: rkey }
-    });
-  } catch (e) { console.log('[sp] delete failed:', e.message); }
-}
-
-async function listMyRecords() {
-  const j = await pdsCall('com.atproto.repo.listRecords', {
-    params: { repo: me.did, collection: COLLECTION, limit: 100 }
-  });
-  return j.records || [];
-}
-
-/* Unauthenticated read of a peer's repo, straight from their PDS. */
-async function listPeerRecords(peer) {
-  const url = peer.pds + '/xrpc/com.atproto.repo.listRecords?' +
-    new URLSearchParams({ repo: peer.did, collection: COLLECTION, limit: '50' });
-  const r = await fetch(url);
-  if (!r.ok) throw new Error('listRecords on ' + peer.handle + ' -> ' + r.status);
-  return (await r.json()).records || [];
-}
-
-async function sweepOwnSignals() {
-  /* remove only records past the TTL: another tab signed into the SAME
-     account may have live handshakes in flight — deleting everything
-     would sever them. Fresh garbage ages out and is swept next time. */
-  try {
-    const recs = await listMyRecords();
-    let n = 0;
-    for (const rec of recs) {
-      const age = Date.now() - Date.parse(String((rec.value || {}).createdAt || ''));
-      if (isNaN(age) || age > SIGNAL_TTL_S * 1000) {
-        await deleteOwnRecord(rec.uri.split('/').pop());
-        n++;
-      }
-    }
-    if (n) console.log('[sweep] removed', n, 'stale signal records');
-  } catch (e) { console.log('[sweep] failed:', e.message); }
-}
-
-/* ---------- peers state ---------- */
-const peers = new Map();   /* did -> { did, handle, pds, trusted, pc, dc, el, recv, offerRkey, answerRkey, knockRkey } */
-const seenUris = new Map();      /* uri -> first-seen ms; pruned past TTL */
-const ignoredDids = new Set();   /* session-scoped: dismissed connection requests */
-
-function upsertPeerRow(did, handle, pds, trusted) {
-  let p = peers.get(did);
-  if (p) {
-    if (trusted && !p.trusted) { p.trusted = true; renderPeer(p, did); }
-    return p;
-  }
-  p = { did, handle, pds, trusted: !!trusted, pc: null, dc: null, el: null, recv: null, offerRkey: null, answerRkey: null, knockRkey: null };
-  peers.set(did, p);
+function ensureRow(did, handle) {
+  let u = uiFor(did);
+  if (u.el) return u;
   const el = document.createElement('div');
   el.className = 'peer';
   el.innerHTML = '<div><div class="pname"></div><div class="pstate">waiting for peer</div></div>' +
@@ -404,21 +280,22 @@ function upsertPeerRow(did, handle, pds, trusted) {
                  '<button class="acc" style="display:none;margin-left:auto">Accept</button>' +
                  '<button class="ign ghost" style="display:none">Ignore</button>' +
                  '<div class="files"></div>';
+  el.querySelector('.pname').textContent = handle;
   el.querySelector('button.send').addEventListener('click', () => pickAndSend(did));
   el.querySelector('button.acc').addEventListener('click', () => {
-    const pp = peers.get(did);
-    if (pp) { pp.trusted = true; renderPeer(pp, did); setStatus('Connecting to ' + pp.handle + '\u2026'); }
+    rtc.accept(did);
+    setStatus('Connecting to ' + handle + '\u2026');
   });
   el.querySelector('button.ign').addEventListener('click', () => {
-    ignoredDids.add(did);
-    const pp = peers.get(did);
-    if (pp) { if (pp.pc) try { pp.pc.close(); } catch (e) {} pp.el.remove(); peers.delete(did); }
+    rtc.ignore(did);
+    el.remove();
+    rows.delete(did);
   });
   /* the peer card itself is a drop target */
   ['dragenter', 'dragover'].forEach((ev) => el.addEventListener(ev, (e) => {
     e.preventDefault();
-    const pp = peers.get(did);
-    if (pp && pp.dc && pp.dc.readyState === 'open') el.classList.add('hover');
+    const p = rtc.peers.get(did);
+    if (p && p.dc && p.dc.readyState === 'open') el.classList.add('hover');
   }));
   el.addEventListener('dragleave', (e) => { e.preventDefault(); el.classList.remove('hover'); });
   el.addEventListener('drop', (e) => {
@@ -428,165 +305,34 @@ function upsertPeerRow(did, handle, pds, trusted) {
     if (f) offerFile(did, f);
   });
   $('peers').appendChild(el);
-  p.el = el;
-  renderPeer(p, did);
-  return p;
+  u.el = el;
+  return u;
 }
 
-function renderPeer(p, did) {
-  p.el.querySelector('.pname').textContent = p.handle;
-  const st = p.el.querySelector('.pstate');
+function renderPeer(did) {
+  const p = rtc.peers.get(did);
+  if (!p) return;
+  const u = ensureRow(did, p.handle);
+  u.el.querySelector('.pname').textContent = p.handle;
+  const st = u.el.querySelector('.pstate');
   const connected = p.dc && p.dc.readyState === 'open';
   st.textContent = !p.trusted ? 'wants to connect'
     : connected ? 'connected' : (p.pc ? 'connecting\u2026' : 'waiting for peer');
   st.classList.toggle('connected', connected);
-  p.el.querySelector('button.send').disabled = !connected;
-  p.el.querySelector('button.send').style.display = p.trusted ? '' : 'none';
-  p.el.querySelector('button.acc').style.display = p.trusted ? 'none' : '';
-  p.el.querySelector('button.ign').style.display = p.trusted ? 'none' : '';
-  p.el.classList.toggle('droppable', connected);
-  p.el.querySelector('.drop-hint').textContent = connected ? 'drop a file here or' : '';
+  u.el.querySelector('button.send').disabled = !connected;
+  u.el.querySelector('button.send').style.display = p.trusted ? '' : 'none';
+  u.el.querySelector('button.acc').style.display = p.trusted ? 'none' : '';
+  u.el.querySelector('button.ign').style.display = p.trusted ? 'none' : '';
+  u.el.classList.toggle('droppable', connected);
+  u.el.querySelector('.drop-hint').textContent = connected ? 'drop a file here or' : '';
 }
 
-/* ---------- WebRTC (vanilla ICE: candidates embedded in SDP) ---------- */
-function summarizeCandidates(tag, sdp) {
-  const lines = (sdp.match(/a=candidate:[^\r\n]+/g) || []);
-  const types = {};
-  let mdns = 0;
-  for (const l of lines) {
-    const parts = l.split(' ');
-    const typ = parts[parts.indexOf('typ') + 1] || '?';
-    types[typ] = (types[typ] || 0) + 1;
-    if (/\.local\b/.test(l)) mdns++;
-  }
-  console.log('[ice]', tag, lines.length, 'candidates', JSON.stringify(types), mdns + ' mDNS-masked');
-  if (!lines.length) console.log('[ice]', tag, 'WARNING: zero candidates in SDP');
-}
-
-async function logSelectedPair(pc, peerId) {
-  try {
-    const stats = await pc.getStats();
-    stats.forEach((s) => {
-      if (s.type === 'candidate-pair' && (s.selected || s.state === 'succeeded') && s.nominated) {
-        const local = stats.get(s.localCandidateId) || {};
-        const remote = stats.get(s.remoteCandidateId) || {};
-        console.log('[ice] selected pair with', peerId, ':',
-          local.candidateType, local.address || local.ip, '<->',
-          remote.candidateType, remote.address || remote.ip);
-      }
-    });
-  } catch (e) { console.log('[ice] getStats failed:', e.message); }
-}
-
-function waitIceComplete(pc) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
-  return new Promise((resolve) => {
-    const t = setTimeout(resolve, 3000); /* cap the wait */
-    pc.addEventListener('icegatheringstatechange', () => {
-      if (pc.iceGatheringState === 'complete') { clearTimeout(t); resolve(); }
-    });
-  });
-}
-
-function makePC(did) {
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
-  pc.oniceconnectionstatechange = () => {
-    console.log('[ice]', did, 'iceConnectionState ->', pc.iceConnectionState);
-    if (pc.iceConnectionState === 'connected' || pc.iceConnectionState === 'completed') {
-      logSelectedPair(pc, did);
-    }
-  };
-  pc.onconnectionstatechange = () => {
-    console.log('[rtc]', did, '->', pc.connectionState);
-    const p = peers.get(did);
-    if (!p) return;
-    if (pc.connectionState === 'connected') {
-      /* signaling done — remove our offer/answer records */
-      if (p.offerRkey)  { deleteOwnRecord(p.offerRkey);  p.offerRkey = null; }
-      if (p.answerRkey) { deleteOwnRecord(p.answerRkey); p.answerRkey = null; }
-      if (p.knockRkey)  { deleteOwnRecord(p.knockRkey);  p.knockRkey = null; }
-    }
-    if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected' || pc.connectionState === 'closed') {
-      p.pc = null; p.dc = null; renderPeer(p, did);
-    } else {
-      renderPeer(p, did);
-    }
-  };
-  return pc;
-}
-
-function bindDataChannel(dc, did) {
-  dc.binaryType = 'arraybuffer';
-  dc.onopen = () => {
-    console.log('[dc] open with', did);
-    const p = peers.get(did); if (p) renderPeer(p, did);
-  };
-  dc.onclose = () => {
-    const p = peers.get(did); if (p) { p.dc = null; renderPeer(p, did); }
-  };
-  dc.onmessage = (ev) => handleChannelMessage(did, ev.data);
-}
-
-async function offerTo(did) {
-  const p = peers.get(did);
-  if (!p || p.pc) return;
-  console.log('[rtc] offering to', p.handle);
-  const pc = makePC(did);
-  p.pc = pc;
-  const dc = pc.createDataChannel('filedrop', { ordered: true });
-  p.dc = dc;
-  bindDataChannel(dc, did);
-  try {
-    await pc.setLocalDescription(await pc.createOffer());
-    await waitIceComplete(pc);
-    summarizeCandidates('local offer to ' + p.handle, pc.localDescription.sdp);
-    const res = await sendSignal(did, 'offer', pc.localDescription.sdp);
-    p.offerRkey = res.uri.split('/').pop();
-  } catch (e) {
-    /* failed to publish the offer — reset so the next poll tick retries cleanly */
-    try { pc.close(); } catch (e2) {}
-    p.pc = null; p.dc = null;
-    throw e;
-  }
-  renderPeer(p, did);
-}
-
-async function handleOffer(did, sdp) {
-  const p = peers.get(did);
-  if (!p) return;
-  if (p.pc && p.pc.connectionState === 'connected') return;  /* already up */
-  if (p.pc) { try { p.pc.close(); } catch (e) {} }
-  console.log('[rtc] answering', p.handle);
-  const pc = makePC(did);
-  p.pc = pc;
-  pc.ondatachannel = (ev) => { p.dc = ev.channel; bindDataChannel(ev.channel, did); };
-  try {
-    summarizeCandidates('remote offer from ' + p.handle, sdp);
-    await pc.setRemoteDescription({ type: 'offer', sdp: sdp });
-    await pc.setLocalDescription(await pc.createAnswer());
-    await waitIceComplete(pc);
-    summarizeCandidates('local answer to ' + p.handle, pc.localDescription.sdp);
-    const res = await sendSignal(did, 'answer', pc.localDescription.sdp);
-    p.answerRkey = res.uri.split('/').pop();
-  } catch (e) {
-    /* failed mid-answer — reset; caller unmarks the offer record for retry */
-    try { pc.close(); } catch (e2) {}
-    p.pc = null; p.dc = null;
-    throw e;
-  }
-  renderPeer(p, did);
-}
-
-async function handleAnswer(did, sdp) {
-  const p = peers.get(did);
-  if (!p || !p.pc || p.pc.signalingState !== 'have-local-offer') return;
-  console.log('[rtc] got answer from', p.handle);
-  summarizeCandidates('remote answer from ' + p.handle, sdp);
-  await p.pc.setRemoteDescription({ type: 'answer', sdp: sdp });
-}
+/* Library statechange fires on any peer add/trust-change/connection-state
+   change — re-render that peer's row. */
+rtc.on('statechange', (did) => renderPeer(did));
 
 /* ---------- file transfer over the data channel ---------- */
-let pendingSend = null;   /* { did, file } awaiting FILE_ACCEPT */
+let pendingSend = null;   /* { did, file, row } awaiting FILE_ACCEPT */
 let pendingOffer = null;  /* { did, meta } shown in toast */
 
 /* Transfers are SERIALIZED per peer per direction. The data channel is one
@@ -599,14 +345,20 @@ async function fileSha256(file) {
   return [...new Uint8Array(digest)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
+function dcFor(did) {
+  const p = rtc.peers.get(did);
+  return p ? p.dc : null;
+}
+
 async function offerFile(did, file, row) {
-  const p = peers.get(did);
-  if (!p || !p.dc || p.dc.readyState !== 'open') { showErr('Not connected to ' + (p ? p.handle : did)); return; }
-  if (!row) row = newFileRow(p, file.name, file.size);
-  p.sendQueue = p.sendQueue || [];
-  if (pendingSend || p.sending) {
+  const p = rtc.peers.get(did);
+  const dc = dcFor(did);
+  const u = uiFor(did);
+  if (!dc || dc.readyState !== 'open') { showErr('Not connected to ' + (p ? p.handle : did)); return; }
+  if (!row) row = newFileRow(did, file.name, file.size);
+  if (pendingSend || u.sending) {
     row.set('Queued');
-    p.sendQueue.push({ file: file, row: row });
+    u.sendQueue.push({ file: file, row: row });
     return;
   }
   pendingSend = { did: did, file: file, row: row };   /* reserve BEFORE the hash await
@@ -621,15 +373,16 @@ async function offerFile(did, file, row) {
     sendNext(did);
     return;
   }
-  if (!p.dc || p.dc.readyState !== 'open') { pendingSend = null; row.set('Failed: channel closed', 'bad'); return; }
-  p.dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type, sha256: sha256 }));
+  const dc2 = dcFor(did);
+  if (!dc2 || dc2.readyState !== 'open') { pendingSend = null; row.set('Failed: channel closed', 'bad'); return; }
+  dc2.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type, sha256: sha256 }));
   row.set('Waiting for accept\u2026');
 }
 
 function sendNext(did) {
-  const p = peers.get(did);
-  if (!p || !p.sendQueue || !p.sendQueue.length) return;
-  const q = p.sendQueue.shift();
+  const u = uiFor(did);
+  if (!u.sendQueue.length) return;
+  const q = u.sendQueue.shift();
   offerFile(did, q.file, q.row);
 }
 
@@ -641,7 +394,8 @@ function pickAndSend(did) {
 }
 
 /* One row per transfer, sender and receiver alike: name, live status, own bar. */
-function newFileRow(p, name, size) {
+function newFileRow(did, name, size) {
+  const u = uiFor(did);
   const el = document.createElement('div');
   el.className = 'file-row';
   el.innerHTML = '<div class="f-line"><span class="f-name"></span>' +
@@ -649,7 +403,7 @@ function newFileRow(p, name, size) {
                  '<div class="bar-wrap"><div class="bar"></div></div>';
   el.querySelector('.f-name').textContent = name;
   el.querySelector('.f-size').textContent = formatBytes(size);
-  p.el.querySelector('.files').appendChild(el);
+  u.el.querySelector('.files').appendChild(el);
   const bar = el.querySelector('.bar');
   const status = el.querySelector('.f-status');
   return {
@@ -668,10 +422,10 @@ function newFileRow(p, name, size) {
 }
 
 function streamFile(did, file, row) {
-  const p = peers.get(did);
-  const dc = p && p.dc;
+  const u = uiFor(did);
+  const dc = dcFor(did);
   if (!dc || dc.readyState !== 'open') { row.set('Failed: channel closed', 'bad'); return; }
-  p.sending = true;
+  u.sending = true;
   let offset = 0;
   const reader = new FileReader();
   const readNext = () => reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK_SIZE));
@@ -684,16 +438,17 @@ function streamFile(did, file, row) {
     } else {
       dc.send(JSON.stringify({ type: 'FILE_DONE' }));
       row.set('Sent \u2713', 'ok');
-      p.sending = false;
+      u.sending = false;
       sendNext(did);
     }
   };
-  reader.onerror = () => { p.sending = false; row.set('Failed: read error', 'bad'); sendNext(did); };
+  reader.onerror = () => { u.sending = false; row.set('Failed: read error', 'bad'); sendNext(did); };
   readNext();
 }
 
 function handleChannelMessage(did, data) {
-  const p = peers.get(did);
+  const p = rtc.peers.get(did);
+  const u = uiFor(did);
   if (!p) return;
   if (typeof data === 'string') {
     let msg;
@@ -703,12 +458,13 @@ function handleChannelMessage(did, data) {
     }
     if (!msg || typeof msg.type !== 'string') return;
     if (msg.type === 'FILE_OFFER') {
-      if (pendingOffer || p.recv) {
+      if (pendingOffer || u.recv) {
         /* one incoming offer at a time, and NEVER while a receive from this
-           peer is streaming — accepting would overwrite p.recv and splice
+           peer is streaming — accepting would overwrite u.recv and splice
            two undemuxable byte streams. Auto-decline; the sender's queue
            (or user) retries after the current transfer. */
-        p.dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+        const dc = dcFor(did);
+        if (dc) dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
         return;
       }
       pendingOffer = { did: did, meta: msg };
@@ -727,20 +483,20 @@ function handleChannelMessage(did, data) {
         sendNext(did);
       }
     } else if (msg.type === 'FILE_DONE') {
-      if (p.recv) finishDownload(did);
+      if (u.recv) finishDownload(did);
     }
   } else {
-    if (!p.recv) return; /* chunks only arrive post-accept by protocol */
-    p.recv.chunks.push(data);
-    p.recv.received += data.byteLength;
-    p.recv.row.progress(p.recv.received, p.recv.meta.size, 'Receiving');
+    if (!u.recv) return; /* chunks only arrive post-accept by protocol */
+    u.recv.chunks.push(data);
+    u.recv.received += data.byteLength;
+    u.recv.row.progress(u.recv.received, u.recv.meta.size, 'Receiving');
   }
 }
 
 async function finishDownload(did) {
-  const p = peers.get(did);
-  const r = p.recv;
-  p.recv = null;
+  const u = uiFor(did);
+  const r = u.recv;
+  u.recv = null;
   const blob = new Blob(r.chunks, { type: r.meta.mime || 'application/octet-stream' });
   let verified = '';
   if (typeof r.meta.sha256 === 'string' && r.meta.sha256.length === 64) {
@@ -769,19 +525,21 @@ $('accept-btn').addEventListener('click', () => {
   if (!pendingOffer) return;
   const { did, meta } = pendingOffer;
   pendingOffer = null;
-  const p = peers.get(did);
-  if (!p || !p.dc || p.dc.readyState !== 'open') { showErr('Sender disconnected'); return; }
-  const row = newFileRow(p, meta.name, meta.size);
+  const dc = dcFor(did);
+  const p = rtc.peers.get(did);
+  if (!dc || dc.readyState !== 'open') { showErr('Sender disconnected'); return; }
+  const row = newFileRow(did, meta.name, meta.size);
   row.set('Receiving\u2026');
-  p.recv = { meta: meta, chunks: [], received: 0, row: row };
-  p.dc.send(JSON.stringify({ type: 'FILE_ACCEPT' }));
+  const u = uiFor(did);
+  u.recv = { meta: meta, chunks: [], received: 0, row: row };
+  dc.send(JSON.stringify({ type: 'FILE_ACCEPT' }));
 });
 
 $('decline-btn').addEventListener('click', () => {
   $('toast').classList.remove('on');
   if (!pendingOffer) return;
-  const p = peers.get(pendingOffer.did);
-  if (p && p.dc && p.dc.readyState === 'open') p.dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+  const dc = dcFor(pendingOffer.did);
+  if (dc && dc.readyState === 'open') dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
   pendingOffer = null;
 });
 
@@ -792,112 +550,28 @@ function formatBytes(b) {
   return (b / 1073741824).toFixed(2) + ' GB';
 }
 
-/* ---------- poll loop ---------- */
-let loginTime = 0;
+/* Data-channel messages via the library's top-level event — covers both
+   self-initiated and peer-initiated connections uniformly. */
+rtc.on('message', (did, data) => handleChannelMessage(did, data));
+rtc.on('statechange', (did) => renderPeer(did));
 
-async function pollPeer(did) {
-  const p = peers.get(did);
-  if (!p) return;
-  const recs = await listPeerRecords(p);
-  /* oldest-first so offer/answer arrive in order */
-  recs.sort((a, b) => String((a.value || {}).createdAt || '').localeCompare(String((b.value || {}).createdAt || '')));
-  for (const rec of recs) {
-    if (seenUris.has(rec.uri)) continue;
-    const v = rec.value || {};
-    if (v.to !== me.did) continue;
-    const age = Date.now() - Date.parse(String(v.createdAt || ''));
-    if (isNaN(age) || age > SIGNAL_TTL_S * 1000) { seenUris.set(rec.uri, Date.now()); continue; }
-    seenUris.set(rec.uri, Date.now());
-    try {
-      if (v.msgType === 'offer')  await handleOffer(did, String(v.payload || ''));
-      if (v.msgType === 'answer') await handleAnswer(did, String(v.payload || ''));
-    } catch (e) {
-      /* transient failure (e.g. answer write) — unmark so the record is retried */
-      seenUris.delete(rec.uri);
-      throw e;
-    }
-  }
-}
-
-async function poll() {
-  /* prune tracking state so hostile record churn can't grow memory unboundedly */
-  const cutoff = Date.now() - SIGNAL_TTL_S * 1000;
-  for (const [uri, ts] of seenUris) if (ts < cutoff) seenUris.delete(uri);
-  if (discoverChecked.size > 5000) discoverChecked.clear();  /* re-verification is cheap and gated */
-  for (const did of peers.keys()) {
-    try {
-      const p = peers.get(did);
-      if (!p.trusted) continue;   /* consent gate: no polling, offering, or knocking until accepted */
-      const connected = p.dc && p.dc.readyState === 'open';
-      if (!connected) await pollPeer(did);
-      /* glare avoidance: lexicographically smaller DID initiates.
-         The larger DID instead writes a one-time 'knock' so the peer
-         can discover us via the backlink index without typing anything. */
-      if (!p.pc && me.did < did) await offerTo(did);
-      else if (!p.pc && !p.knockRkey && me.did > did) {
-        const res = await sendSignal(did, 'knock', '');
-        p.knockRkey = res.uri.split('/').pop();
-        console.log('[knock] sent to', p.handle);
-      }
-    } catch (e) {
-      /* isolate: one peer's bad records or network hiccup must not halt polling of others */
-      console.log('[poll]', did, 'error:', e.message);
-    }
-  }
-  setTimeout(poll, POLL_MS);
-}
-
-/* ---------- peer discovery via Constellation backlink index ----------
-   constellation.microcosm.blue indexes firehose records by link target
-   (~seconds of latency, verified). Any signal record addressed to our
-   DID — offer or knock — shows up as a backlink, letting us discover a
-   peer we never typed. Each hit is only a HINT (the index may retain
-   deleted records), so we confirm a live, TTL-valid record in the
-   peer's repo before adding them. */
-const DISCOVER_MS = 6000;
-const discoverChecked = new Set();
-
-async function discoverPeers() {
-  try {
-    const q = 'https://constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?' +
-      new URLSearchParams({ subject: me.did, source: COLLECTION + ':to', limit: '50' });
-    const r = await fetch(q);
-    if (!r.ok) throw new Error('getBacklinks -> ' + r.status);
-    const j = await r.json();
-    for (const rec of (j.records || [])) {
-      const did = rec.did;
-      const key = did + '/' + rec.rkey;  /* per-record: a fresh knock re-triggers verification */
-      if (did === me.did || peers.has(did) || ignoredDids.has(did) || discoverChecked.has(key)) continue;
-      discoverChecked.add(key);
-      try {
-        const pds = await resolvePds(did);
-        const live = (await listPeerRecords({ did, pds, handle: did })).some(x => {
-          const v = x.value || {};
-          const age = Date.now() - Date.parse(String(v.createdAt || ''));
-          return v.to === me.did && !isNaN(age) && age <= SIGNAL_TTL_S * 1000;
-        });
-        if (!live) continue;             /* stale index entry — ignore */
-        const dr = await fetch(pds + '/xrpc/com.atproto.repo.describeRepo?repo=' + encodeURIComponent(did));
-        const handle = dr.ok ? (await dr.json()).handle : did;
-        console.log('[discover] live signal from', handle);
-        upsertPeerRow(did, handle, pds, false);   /* untrusted: renders as a connection request */
-        setStatus(handle + ' wants to connect');
-      } catch (e) { console.log('[discover]', did, '->', e.message); }
-    }
-  } catch (e) {
-    console.log('[discover] error:', e.message);
-  } finally {
-    setTimeout(discoverPeers, DISCOVER_MS);
-  }
-}
+/* ---------- consent gate ---------- */
+rtc.onIncoming = async (did) => {
+  /* Surface as a pending row immediately; do not block on a modal.
+     The library already marks the peer untrusted/pending via
+     _upsertPeer before calling this, and statechange has rendered
+     the row. We return false here (don't auto-trust); the user's
+     "Accept" button click calls rtc.accept(did) explicitly. */
+  const p = rtc.peers.get(did);
+  setStatus((p ? p.handle : did) + ' wants to connect');
+  return false;
+};
 
 /* ---------- pairing ---------- */
 async function addPeer(handle) {
-  const did = await resolveHandle(handle);
-  if (did === me.did) throw new Error("That's you.");
-  const pds = await resolvePds(did);
-  upsertPeerRow(did, handle, pds, true);   /* user-initiated = trusted */
+  const conn = await rtc.connect(handle);
   setStatus('Connecting to ' + handle + '\u2026');
+  return conn;
 }
 
 $('pair-btn').addEventListener('click', async () => {
@@ -932,19 +606,13 @@ $('login-btn').addEventListener('click', async () => {
   $('login-btn').disabled = true;
   setStatus('Signing in\u2026');
   try {
-    me.handle = handle;
-    me.did = await resolveHandle(handle);
-    me.pds = await resolvePds(me.did);
-    me.password = password;
-    await createSession();
-    loginTime = Date.now();
+    const meInfo = await rtc.login(handle, password);
     $('login-card').style.display = 'none';
     $('pair-card').style.display = '';
     $('me-wrap').style.display = '';
-    $('my-id').textContent = me.handle;
+    $('my-id').textContent = meInfo.handle;
     setStatus('Signed in \u2014 add a peer or share your link');
-    $('share-link').value = location.origin + location.pathname + '?peer=' + encodeURIComponent(me.handle);
-    await sweepOwnSignals();
+    $('share-link').value = location.origin + location.pathname + '?peer=' + encodeURIComponent(meInfo.handle);
     /* pre-specified recipients: ?peer=a.example,b.example or repeated ?peer= */
     /* ?peer=a.example (repeatable, comma-separable) or a naked ?a.example */
     const qs = new URLSearchParams(location.search);
@@ -954,9 +622,8 @@ $('login-btn').addEventListener('click', async () => {
     for (const h of preset) {
       try { await addPeer(h); } catch (e) { showErr(e.message); }
     }
-    poll();
-    discoverPeers();
-    console.log('[filedrop] ready as', me.handle, me.did, 'pds:', me.pds);
+    rtc.start();
+    console.log('[filedrop] ready as', meInfo.handle, meInfo.did, 'pds:', meInfo.pds);
   } catch (e) {
     showErr(e.message);
     setStatus('Not signed in');
@@ -968,18 +635,7 @@ $('login-password').addEventListener('keydown', (e) => { if (e.key === 'Enter') 
 
 /* ---------- teardown ---------- */
 window.addEventListener('beforeunload', () => {
-  /* best-effort removal of any in-flight signal records; the sweep at
-     next sign-in and the TTL filter cover the cases this misses */
-  for (const p of peers.values()) {
-    for (const rkey of [p.offerRkey, p.answerRkey]) {
-      if (!rkey || !me.accessJwt) continue;
-      fetch(me.pds + '/xrpc/com.atproto.repo.deleteRecord', {
-        method: 'POST', keepalive: true,
-        headers: { 'Authorization': 'Bearer ' + me.accessJwt, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ repo: me.did, collection: COLLECTION, rkey: rkey })
-      }).catch(() => {});
-    }
-  }
+  rtc.teardown();
 });
 </script>
 </body>
