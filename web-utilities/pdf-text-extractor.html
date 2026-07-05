@@ -553,6 +553,17 @@
         <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.25rem;">Auto-detect suits most papers &mdash; switch to a fixed count or raw order if columns come out interleaved.</div>
       </div>
 
+      <div id="concurrency-group" style="margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--border);">
+        <label for="concurrency" style="font-weight: 600; color: var(--accent); display: block; margin-bottom: 0.5rem;">Parallel Pages <span style="font-weight: normal; color: #6b7280; font-size: 0.85rem;">(streaming extraction)</span></label>
+        <select id="concurrency" style="width: 100%; padding: 0.5rem 0.75rem; border: 1px solid var(--border); border-radius: 4px; font-size: 0.9rem; background: white;">
+          <option value="1">1 &mdash; sequential (lowest memory)</option>
+          <option value="2">2</option>
+          <option value="4" selected>4 &mdash; recommended</option>
+          <option value="8">8</option>
+        </select>
+        <div style="font-size: 0.8rem; color: #6b7280; margin-top: 0.25rem;">Pages stream in as they're extracted. Higher values pipeline through pdf.js's worker &mdash; benefit tapers off (single worker thread); elapsed time is shown so you can compare.</div>
+      </div>
+
       <button id="extract-btn" disabled>Extract Text</button>
     </fieldset>
 
@@ -620,6 +631,7 @@
     let currentPdfUrl = null;
     let extractedMetadata = null;
     let extractedPages = null;
+    let isStreaming = false;
 
     // Parse URL parameters (supports both query string and hash)
     function parseUrlParams() {
@@ -639,8 +651,9 @@
       const format = params.get('format') || 'markdown';
       const pages = params.get('pages') || '';
       const order = params.get('order') || '';
+      const concurrency = params.get('concurrency') || '';
 
-      return { pdfUrl, format, pages, order };
+      return { pdfUrl, format, pages, order, concurrency };
     }
 
     // Fetch PDF from URL
@@ -671,7 +684,7 @@
 
     // Initialize from URL parameters
     async function initializeFromUrl() {
-      const { pdfUrl, format, pages, order } = parseUrlParams();
+      const { pdfUrl, format, pages, order, concurrency } = parseUrlParams();
 
       if (!pdfUrl) {
         return; // No URL provided, use normal UI
@@ -697,6 +710,12 @@
       if (order && ['auto', '1', '2', '3', 'pdf'].includes(order)) {
         const orderSel = document.getElementById('reading-order');
         if (orderSel) orderSel.value = order;
+      }
+
+      // Set parallel-pages concurrency if specified (1 | 2 | 4 | 8)
+      if (concurrency && ['1', '2', '4', '8'].includes(concurrency)) {
+        const concSel = document.getElementById('concurrency');
+        if (concSel) concSel.value = concurrency;
       }
 
       try {
@@ -810,7 +829,7 @@
     resultFormat.onchange = (e) => {
       if (extractedMetadata && extractedPages) {
         currentFormat = e.target.value;
-        extractedText = generateOutput(extractedMetadata, extractedPages, currentFormat);
+        extractedText = generateOutput(extractedMetadata, extractedPages, currentFormat, { partial: isStreaming });
         renderOutput();
       }
     };
@@ -1098,72 +1117,108 @@
 
         updatePageRangeInfo(pdf.numPages);
 
-        // Extract text from selected pages
-        const pages = [];
-        for (let idx = 0; idx < pagesToExtract.length; idx++) {
-          const i = pagesToExtract[idx];
-          progress.innerHTML = `<div class="spinner"></div>Extracting page ${i} of ${pdf.numPages} (${idx + 1}/${totalToExtract})...`;
+        // Show the output panel up-front and stream pages in as they finish. Pages complete out
+        // of order under parallelism, so a `nextToFlush` cursor emits the contiguous head of the
+        // results array and buffers the rest until earlier pages arrive.
+        const concurrencySel = document.getElementById('concurrency');
+        const concurrency = Math.max(1, Math.min(16, parseInt((concurrencySel && concurrencySel.value) || '4', 10) || 4));
+        const pages = new Array(pagesToExtract.length);
+        extractedMetadata = metadata;
+        extractedPages = [];
+        isStreaming = true;
+        resultFormat.value = currentFormat;
+        inputSection.classList.add('hidden');
+        outputContainer.style.display = 'block';
+        textOutput.textContent = '';
+        window.scrollTo({ top: 0, behavior: 'smooth' });
 
+        let nextToFlush = 0;
+        let completed = 0;
+        const startTime = performance.now();
+
+        const flushReady = () => {
+          while (nextToFlush < pages.length && pages[nextToFlush]) {
+            nextToFlush++;
+          }
+          // Keep extractedPages in sync with the flushed prefix so a format switch mid-stream
+          // sees only complete pages. For markdown/text re-render is roughly linear in output
+          // size; for JSON we re-serialize the growing pages array. Both are fine for typical
+          // PDFs (<= a few hundred pages).
+          extractedPages = pages.slice(0, nextToFlush);
+          extractedText = generateOutput(metadata, extractedPages, currentFormat, {
+            partial: nextToFlush < pages.length
+          });
+          renderOutput();
+          // Auto-scroll the output box to keep the newest page in view.
+          textOutput.scrollTop = textOutput.scrollHeight;
+        };
+
+        const extractOne = async (idx) => {
+          const i = pagesToExtract[idx];
           const page = await pdf.getPage(i);
           const textContent = await page.getTextContent();
-
-          // Column-aware geometric reading order by default; raw pdf.js order on request.
           const pageText = (readingMode === 'pdf')
             ? naiveLines(textContent)
             : readingOrder(boxedRuns(page, textContent), readingMode).join('\n');
+          try { page.cleanup(); } catch (_) { /* best-effort */ }
+          return { pageNumber: i, text: pageText.trim() };
+        };
 
-          pages.push({
-            pageNumber: i,
-            text: pageText.trim()
-          });
-        }
+        // Bounded-concurrency worker pool: N workers pull the next index from a shared cursor.
+        let cursor = 0;
+        const workerCount = Math.min(concurrency, pagesToExtract.length);
+        const workers = Array.from({ length: workerCount }, async () => {
+          while (true) {
+            const myIdx = cursor++;
+            if (myIdx >= pagesToExtract.length) return;
+            const result = await extractOne(myIdx);
+            pages[myIdx] = result;
+            completed++;
+            const elapsed = (performance.now() - startTime) / 1000;
+            const rate = completed / Math.max(0.001, elapsed);
+            progress.innerHTML = `<div class="spinner"></div>Streaming: ${completed} of ${totalToExtract} pages &middot; ${elapsed.toFixed(1)}s &middot; ${rate.toFixed(1)} pages/s`;
+            flushReady();
+          }
+        });
+        await Promise.all(workers);
 
-        // Store metadata and pages for format switching
-        extractedMetadata = metadata;
+        // Final render with the "partial" flag off, so JSON output closes cleanly, etc.
+        isStreaming = false;
         extractedPages = pages;
-
-        // Generate output in selected format
-        extractedText = generateOutput(metadata, pages, currentFormat);
-
-        // Update result format dropdown to match current format
-        resultFormat.value = currentFormat;
-
+        extractedText = generateOutput(metadata, pages, currentFormat, { partial: false });
         renderOutput();
 
-        // Hide input section and show results
-        inputSection.classList.add('hidden');
-        outputContainer.style.display = 'block';
-
-        // Scroll to results
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-
+        const elapsedTotal = ((performance.now() - startTime) / 1000).toFixed(2);
+        const rate = (totalToExtract / Math.max(0.001, (performance.now() - startTime) / 1000)).toFixed(1);
         const pageMsg = selectedPages
           ? `${selectedPages.length} of ${pdf.numPages} pages (${pageRangeInput.value.trim()})`
           : `${pdf.numPages} pages`;
-        progress.innerHTML = `<span class="success">✓ Successfully extracted text from ${pageMsg}</span>`;
+        progress.innerHTML = `<span class="success">✓ Extracted ${pageMsg} in ${elapsedTotal}s (${rate} pages/s, concurrency ${concurrency})</span>`;
 
       } catch (error) {
         progress.innerHTML = `<span class="warning">⚠ Error: ${error.message}</span>`;
         console.error('Extraction error:', error);
       } finally {
         extractBtn.disabled = false;
+        isStreaming = false;
       }
     };
 
-    function generateOutput(metadata, pages, format) {
+    function generateOutput(metadata, pages, format, opts) {
+      const options = opts || {};
       switch (format) {
         case 'markdown':
-          return generateMarkdown(metadata, pages);
+          return generateMarkdown(metadata, pages, options);
         case 'json':
-          return generateJSON(metadata, pages);
+          return generateJSON(metadata, pages, options);
         case 'text':
-          return generatePlainText(metadata, pages);
+          return generatePlainText(metadata, pages, options);
         default:
-          return generateMarkdown(metadata, pages);
+          return generateMarkdown(metadata, pages, options);
       }
     }
 
-    function generateMarkdown(metadata, pages) {
+    function generateMarkdown(metadata, pages, options) {
       let output = '';
 
       // Document header
@@ -1186,12 +1241,17 @@
         output += `---\n\n`;
       });
 
+      if (options && options.partial) {
+        output += `_(streaming &mdash; more pages arriving...)_\n`;
+      }
       return output;
     }
 
-    function generateJSON(metadata, pages) {
+    function generateJSON(metadata, pages, options) {
+      const meta = Object.assign({}, metadata);
+      if (options && options.partial) meta._streaming = true;
       const output = {
-        metadata: metadata,
+        metadata: meta,
         pages: pages.map(page => ({
           pageNumber: page.pageNumber,
           reference: `${metadata.filename}:${page.pageNumber}`,
@@ -1202,7 +1262,7 @@
       return JSON.stringify(output, null, 2);
     }
 
-    function generatePlainText(metadata, pages) {
+    function generatePlainText(metadata, pages, options) {
       let output = '';
 
       // Header
@@ -1225,6 +1285,9 @@
         output += page.text + '\n\n';
       });
 
+      if (options && options.partial) {
+        output += `\n(streaming - more pages arriving...)\n`;
+      }
       return output;
     }
 
