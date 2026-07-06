@@ -1,0 +1,1221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FileDrop &#xB7; direct browser-to-browser transfer</title>
+<!-- QR encode (invite/reply codes) + decode fallback (Safari has no BarcodeDetector).
+     Single-file libs on cdnjs; if either fails to load the copy/paste paths still work. -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js"></script>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%238a0f1e'/%3E%3Cpath d='M8 3v7M5 7l3 3 3-3' stroke='%23fff' stroke-width='1.8' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #f7f7f8; --panel: #ffffff; --border: #d9d9de;
+    --text: #1c1c21; --muted: #6b6b76; --accent: #8a0f1e;
+    --accent-soft: #f6e8ea; --ok: #1c7a3d; --warn: #b3541e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Segoe UI", system-ui, sans-serif;
+    background: var(--bg); color: var(--text);
+    display: flex; flex-direction: column; min-height: 100vh;
+  }
+  header {
+    padding: 14px 22px; background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: baseline; gap: 14px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; margin: 0; font-weight: 600; }
+  header .sub { font-size: 13px; color: var(--muted); }
+  #status { font-size: 13px; color: var(--muted); margin-left: auto; }
+  #status.ok { color: var(--ok); }
+  main { flex: 1; padding: 22px; max-width: 780px; width: 100%; margin: 0 auto; }
+  .step {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 16px; margin-bottom: 14px;
+  }
+  .step h3 { margin: 0 0 8px; font-size: 14px; }
+  .step h3 .n {
+    display: inline-block; width: 20px; height: 20px; line-height: 20px;
+    text-align: center; border-radius: 50%; background: var(--accent);
+    color: #fff; font-size: 12px; margin-right: 6px;
+  }
+  .step p { margin: 4px 0 10px; font-size: 13px; color: var(--muted); }
+  .step textarea {
+    width: 100%; min-height: 64px; font-family: Consolas, monospace; font-size: 11px;
+    border: 1px solid var(--border); border-radius: 6px; padding: 8px;
+    background: var(--bg); color: var(--text); resize: vertical; word-break: break-all;
+  }
+  .step .row { display: flex; gap: 10px; align-items: center; margin-top: 8px; flex-wrap: wrap; }
+  .step .hint { font-size: 12px; color: var(--muted); }
+  button {
+    padding: 7px 16px; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--panel); color: var(--text); font-size: 13px; cursor: pointer;
+  }
+  button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  button:disabled { background: var(--border); color: var(--muted); cursor: default; }
+  #transfer { display: none; }
+  #transfer.on { display: block; }
+  .bcast {
+    background: var(--panel); border: 2px dashed var(--border); border-radius: 8px;
+    padding: 24px 16px; margin-bottom: 14px; display: flex; align-items: center;
+    gap: 12px; justify-content: center; color: var(--muted); font-size: 13px;
+  }
+  .bcast.hover { border-color: var(--accent); background: var(--accent-soft); color: var(--text); }
+  .bcast b { color: var(--text); }
+  #files { display: flex; flex-direction: column; gap: 6px; }
+  .file-row {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 14px; display: flex; flex-direction: column; gap: 4px;
+  }
+  .file-row .f-line { display: flex; gap: 10px; align-items: baseline; font-size: 12px; }
+  .file-row .f-name { font-weight: 600; color: var(--text); word-break: break-all; }
+  .file-row .f-size { color: var(--muted); }
+  .file-row .f-status {
+    color: var(--muted); margin-left: auto; text-align: right;
+    font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .file-row .f-status.ok { color: var(--ok); }
+  .file-row .f-status.bad { color: #a11a1a; white-space: normal; }
+  .file-row .bar-wrap { height: 5px; background: var(--accent-soft); border-radius: 3px; overflow: hidden; }
+  .file-row .bar { height: 100%; width: 0%; background: var(--accent); transition: width .15s; }
+  .file-row.done .bar { background: var(--ok); }
+  #toast {
+    position: fixed; bottom: 24px; right: 24px; background: var(--panel);
+    border: 1px solid var(--border); border-left: 4px solid var(--accent);
+    border-radius: 8px; padding: 14px 18px; box-shadow: 0 4px 18px rgba(0,0,0,.12);
+    display: none; max-width: 340px;
+  }
+  #toast.on { display: block; }
+  #toast .t-title { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  #toast .t-file { font-size: 13px; color: var(--muted); margin-bottom: 10px; word-break: break-all; }
+  #toast button { margin-right: 8px; }
+  #err {
+    display: none; margin: 0 auto 12px; max-width: 780px;
+    background: #fdf1f1; border: 1px solid #e5b8b8; color: #7a1c1c;
+    border-radius: 8px; padding: 10px 14px; font-size: 13px; width: calc(100% - 44px);
+  }
+  #err.on { display: block; }
+  [hidden] { display: none !important; }
+  footer {
+    max-width: 780px; width: 100%; margin: 0 auto; padding: 16px 22px 36px;
+    font-size: 13px; color: var(--muted); line-height: 1.6;
+    border-top: 1px solid var(--border);
+  }
+  footer .what { margin: 4px 0 6px; }
+  footer .what b { color: var(--text); }
+  footer details summary { cursor: pointer; font-weight: 600; color: var(--text); padding: 8px 0; }
+  footer h4 { margin: 14px 0 4px; color: var(--text); font-size: 13px; }
+  footer p { margin: 4px 0 10px; }
+  footer code { background: var(--accent-soft); padding: 0 4px; border-radius: 4px; font-size: 12px; }
+  /* ---- QR display + in-page scanner ---- */
+  .qr-block { margin-top: 12px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+  .qr-frame {
+    background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 10px;
+    line-height: 0; align-self: flex-start;
+  }
+  .qr-frame img {
+    display: block; width: 232px; height: 232px; max-width: 72vw; max-height: 72vw;
+    image-rendering: pixelated; image-rendering: crisp-edges;
+  }
+  .scanner { margin-top: 12px; display: none; flex-direction: column; gap: 8px; }
+  .scanner.on { display: flex; }
+  .scanner video {
+    width: 100%; max-width: 360px; aspect-ratio: 1 / 1; object-fit: cover;
+    background: #000; border-radius: 8px; border: 1px solid var(--border);
+  }
+  .scanner .scan-note { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>FileDrop</h1>
+  <span class="sub">no list, no server &#x2014; a link or a QR scan</span>
+  <span id="status">Idle</span>
+</header>
+<div id="err"></div>
+<main>
+
+  <!-- SENDER PATH -->
+  <div id="sender-flow">
+    <div class="step" id="s-step1">
+      <h3><span class="n">1</span>Create an invite</h3>
+      <p>Generates a one-time connection offer and packs it into a link.</p>
+      <div class="row">
+        <button class="primary" id="btn-create">Create invite</button>
+        <span class="hint" id="gather-hint" hidden>Gathering network candidates&#x2026;</span>
+      </div>
+      <div id="invite-out" hidden>
+        <div class="row">
+          <button class="primary" id="btn-copy-link">Copy invite link</button>
+          <span class="hint">Send it over any channel you trust &#x2014; or have them scan the code.</span>
+        </div>
+        <textarea id="invite-text" readonly spellcheck="false"></textarea>
+        <div class="qr-block" id="invite-qr-block" hidden>
+          <div class="qr-frame"><img id="invite-qr" alt="Invite QR code"></div>
+          <span class="hint">On another phone, open the camera app and point it here &#x2014;
+             it opens the reply page directly. Keep this screen awake.</span>
+        </div>
+      </div>
+    </div>
+    <div class="step" id="s-step2" hidden>
+      <h3><span class="n">2</span>Their reply</h3>
+      <p>Their page shows a reply &#x2014; as a link and, on a phone, a QR code.
+         Point-to-point: tap <b>Scan reply</b> and aim your camera at their code.
+         Same browser: just <b>click</b> their reply link and this tab picks it up.
+         Otherwise paste it here.</p>
+      <textarea id="answer-in" spellcheck="false" placeholder="Paste reply link or code&#x2026;"></textarea>
+      <div class="row">
+        <button class="primary" id="btn-connect">Connect</button>
+        <button id="btn-scan-reply" hidden>Scan reply with camera</button>
+      </div>
+      <div class="scanner" id="scanner">
+        <video id="scan-video" playsinline muted></video>
+        <div class="row">
+          <button id="btn-scan-cancel">Cancel</button>
+          <span class="scan-note" id="scan-hint">Point the camera at their reply QR&#x2026;</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECEIVER PATH (page opened via an invite link) -->
+  <div id="receiver-flow" hidden>
+    <div class="step">
+      <h3><span class="n">1</span>Reply link</h3>
+      <p>You opened an invite. Send this reply link back to the person who
+         invited you &#x2014; when they click it, the connection completes.
+         Keep this page open.</p>
+      <div class="row">
+        <button class="primary" id="btn-copy-answer" disabled>Copy reply link</button>
+        <span class="hint" id="answer-hint">Generating&#x2026;</span>
+      </div>
+      <textarea id="answer-out" readonly spellcheck="false"></textarea>
+      <div class="qr-block" id="reply-qr-block" hidden>
+        <div class="qr-frame"><img id="reply-qr" alt="Reply QR code"></div>
+        <span class="hint">Or show this to the sender &#x2014; they tap &#x201C;Scan reply&#x201D;
+           and aim their camera here. Keep this screen awake.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- COURIER PATH (sender clicked a reply link: hand the answer to the
+       invite tab over BroadcastChannel, then this tab is disposable) -->
+  <div id="courier-flow" hidden>
+    <div class="step">
+      <h3><span class="n">&#x2713;</span><span id="courier-title">Delivering reply&#x2026;</span></h3>
+      <p id="courier-msg">Looking for your open FileDrop invite tab&#x2026;</p>
+      <div id="courier-fallback" hidden>
+        <p>No open invite tab was found in this browser. If your invite tab is
+           still open somewhere, paste this code into its
+           <b>Paste their reply</b> box:</p>
+        <textarea id="courier-code" readonly spellcheck="false"></textarea>
+        <div class="row">
+          <button class="primary" id="btn-copy-courier">Copy code</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- TRANSFER UI (both sides, once connected) -->
+  <div id="transfer">
+    <div class="bcast" id="dropzone">
+      <span><b>Send a file</b> &#x2014; drop it here or</span>
+      <button id="btn-pick">Choose file</button>
+    </div>
+    <div id="files"></div>
+  </div>
+
+</main>
+<footer>
+  <p class="what">
+    <b>FileDrop</b> sends a file <b>directly between two browsers</b>
+    over an encrypted peer-to-peer WebRTC channel &#x2014; with <b>no signaling
+    infrastructure at all</b>. The connection setup normally carried by a server
+    or a SharePoint list is instead a small code you pass to your colleague by
+    hand, over any channel you already trust (Teams, email, a sticky note).
+  </p>
+  <details>
+    <summary>How it works</summary>
+    <h4>Copy-paste signaling</h4>
+    <p>WebRTC needs each side to hand the other a few kilobytes of session-setup
+    text (SDP) before a direct connection exists. Here that exchange is manual:
+    the invite link carries the sender's compressed offer in its
+    <code>#fragment</code> (never sent to any server, including SharePoint),
+    and the reply link carries the receiver's answer back the same way. When
+    the sender clicks the reply link, the newly opened tab hands the answer to
+    the still-open invite tab over a same-origin <code>BroadcastChannel</code>
+    and can then be closed &#x2014; two clicks, one connection. This requires
+    both clicks to happen in the same browser; if the invite tab cannot be
+    found, the reply falls back to a code you paste. ICE trickle is disabled
+    &#x2014; each side waits for candidate gathering to finish so a single
+    blob carries everything.</p>
+    <h4>Phone-to-phone by QR</h4>
+    <p>Because a format-2 code is only a few hundred characters, the invite
+    and reply links fit in a scannable QR. The sender shows the invite QR; the
+    recipient scans it with their <b>camera app</b>, which opens the reply page;
+    that page shows a reply QR; the sender taps <b>Scan reply</b> to open an
+    in-page camera preview (<code>getUserMedia</code>) and reads it, feeding the
+    answer straight to the connection &#x2014; no second tab, no
+    <code>BroadcastChannel</code>. Decoding uses the browser's native
+    <code>BarcodeDetector</code> where present and falls back to a bundled
+    decoder on Safari. Laptops have cameras too; a camera-less desktop keeps the
+    link/paste paths, which never go away.</p>
+    <h4>Peer-to-peer transfer</h4>
+    <p>Files stream over the resulting data channel, DTLS-encrypted, in
+    64&#xA0;KB chunks with backpressure. Every file is SHA-256 hashed before
+    sending and verified on arrival; a mismatch is discarded. Transfers are
+    capped at 2&#xA0;GB (assembled in memory). Incoming files must be accepted
+    before any bytes flow.</p>
+    <p>On a phone the 2&#xA0;GB cap is theoretical: mobile Safari's per-tab
+    memory ceiling makes a few hundred&#xA0;MB the practical limit for a single
+    file, since the receiver holds the whole thing in RAM before saving. The
+    page also requests a <b>screen wake lock</b> while a QR is showing or a
+    transfer is running (Safari&#xA0;16.4+, Chrome, others) so the display does
+    not sleep mid-scan or mid-transfer; if the lock is refused, just keep the
+    screen on manually.</p>
+    <h4>Trade-offs vs. the list-signaled FileDrop</h4>
+    <p>No peer discovery, no rooms, one connection per page: you connect to
+    exactly the person you exchanged codes with, which is also the security
+    upside &#x2014; the trust boundary is your IM conversation, not a shared
+    list. The offer contains your machine's IP addresses, so only send invites
+    to people you would tell your IP address.</p>
+  </details>
+</footer>
+<div id="toast">
+  <div class="t-title" id="toast-title"></div>
+  <div class="t-file" id="toast-file"></div>
+  <button class="primary" id="accept-btn">Accept</button>
+  <button id="decline-btn">Decline</button>
+</div>
+<input type="file" id="file-input" style="display:none">
+
+<script type="module">
+/* ============================================================
+   FileDrop (manual signaling variant)
+
+   No SharePoint list, no signaling server, no third-party
+   broker. The SDP offer/answer exchange is performed by the
+   two humans, over IM: the offer rides in the invite link's
+   URL fragment; the answer rides back as a pasted code.
+
+   Roles:
+     - No #o= fragment on load  -> sender flow (create invite,
+       paste answer)
+     - #o= fragment present     -> receiver flow (auto-answer,
+       show reply code)
+
+   The file-transfer protocol (FILE_OFFER / FILE_ACCEPT /
+   FILE_DECLINE / FILE_DONE + binary chunks) is identical to
+   the list-signaled FileDrop, single-peer.
+   ============================================================ */
+
+const CHUNK_SIZE     = 64 * 1024;
+const BUF_HIGH       = 4 * 1024 * 1024;
+const BUF_LOW        = 1024 * 1024;
+const MAX_FILE_BYTES = 2 * 1024 * 1024 * 1024;
+const GATHER_TIMEOUT = 5000;   /* ms: proceed with whatever candidates exist */
+const CHANNEL_LABEL  = 'filedrop-manual';
+
+const ICE_SERVERS = location.hash.includes('nostun')
+  ? []
+  : [{ urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] }];
+
+const $ = (id) => document.getElementById(id);
+const setStatus = (t, ok) => { const s = $('status'); s.textContent = t; s.className = ok ? 'ok' : ''; };
+const showErr = (t) => { const e = $('err'); e.textContent = t; e.classList.add('on'); console.error('[filedrop-manual]', t); };
+const clearErr = () => $('err').classList.remove('on');
+
+/* ---------- QR / camera / wake-lock capability flags ----------
+   All optional. Missing any one degrades to the copy/paste path;
+   nothing here is required for the link-and-click signaling to work. */
+const HAS_QR_ENC = (typeof qrcode === 'function');           /* cdnjs qrcode-generator */
+const HAS_CAMERA = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia);
+const QR_MAX_CHARS = 1000;   /* beyond this a screen-to-camera scan is unreliable; hide the QR */
+let barcodeDetector = null;  /* set below if the native API supports qr_code (Chrome/Android) */
+const HAS_JSQR = (typeof jsQR === 'function');               /* cdnjs jsQR (Safari fallback) */
+
+(async () => {
+  try {
+    if ('BarcodeDetector' in window) {
+      const fmts = await window.BarcodeDetector.getSupportedFormats();
+      if (fmts.includes('qr_code')) barcodeDetector = new window.BarcodeDetector({ formats: ['qr_code'] });
+    }
+  } catch (e) { barcodeDetector = null; }
+})();
+/* a reply can be scanned in-page iff we have a camera AND some decoder */
+const canScan = () => HAS_CAMERA && (barcodeDetector !== null || HAS_JSQR);
+
+/* ---------- screen wake lock (iOS Safari 16.4+, Chrome, etc.) ----------
+   The QR must stay on-screen for the peer to scan, and the transfer
+   should not be interrupted by the display sleeping. Re-acquired when the
+   tab returns to the foreground, since iOS drops the lock on blur. */
+let wakeLock = null;
+let wakeWanted = false;
+async function keepAwake() {
+  wakeWanted = true;
+  try {
+    if ('wakeLock' in navigator && wakeLock === null && document.visibilityState === 'visible') {
+      wakeLock = await navigator.wakeLock.request('screen');
+      wakeLock.addEventListener('release', () => { wakeLock = null; });
+    }
+  } catch (e) { /* rejected (e.g. low battery) - not fatal */ }
+}
+function releaseAwake() {
+  wakeWanted = false;
+  try { if (wakeLock) wakeLock.release(); } catch (e) {}
+  wakeLock = null;
+}
+document.addEventListener('visibilitychange', () => {
+  if (wakeWanted && wakeLock === null && document.visibilityState === 'visible') keepAwake();
+});
+
+/* ---------- render a code as a scannable QR ----------
+   Encodes the FULL url (invite or reply) so a phone camera app opens it
+   directly and the copy-link fallback stays identical. EC level L keeps
+   the module count low; format-2 codes land around 240-300 bytes = a
+   ~type-11 QR, comfortably scannable off a phone screen. */
+function renderQR(imgEl, blockEl, text) {
+  if (!HAS_QR_ENC || !imgEl || !blockEl) return;
+  if (text.length > QR_MAX_CHARS) { blockEl.hidden = true; return; }
+  try {
+    const qr = qrcode(0, 'L');   /* type 0 = auto-fit smallest version */
+    qr.addData(text);
+    qr.make();
+    imgEl.src = qr.createDataURL(8, 4);   /* 8px cells, 4-module quiet zone */
+    blockEl.hidden = false;
+  } catch (e) {
+    console.log('[qr] encode failed - falling back to link only:', e.message);
+    blockEl.hidden = true;
+  }
+}
+
+function formatBytes(n) {
+  if (!Number.isFinite(n)) return '?';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) { n /= 1024; i++; }
+  return (i === 0 ? n : n.toFixed(1)) + ' ' + units[i];
+}
+
+/* ---------- blob codec: JSON -> deflate-raw -> base64url ----------
+   Prefix char declares the encoding so the two sides need not match
+   browser capabilities: '1' = deflated, '0' = plain UTF-8.          */
+
+function bytesToB64url(bytes) {
+  let bin = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
+  }
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function b64urlToBytes(s) {
+  const b64 = s.replace(/-/g, '+').replace(/_/g, '/');
+  const bin = atob(b64 + '='.repeat((4 - b64.length % 4) % 4));
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+async function pipeThrough(bytes, stream) {
+  const blob = new Blob([bytes]);
+  const piped = blob.stream().pipeThrough(stream);
+  return new Uint8Array(await new Response(piped).arrayBuffer());
+}
+
+/* ---------- format 2: binary SDP packing ----------
+   A data-channel-only SDP is ~95% boilerplate both browsers regenerate
+   identically. Only the connectivity-relevant fields are packed:
+
+     flags (role + setup) | ufrag | pwd | mid | fingerprint (32 raw
+     bytes) | candidates (type/kind, port, address)
+
+   and the receiver splices them into a canonical template before
+   setRemoteDescription. TCP candidates are dropped and duplicates
+   pruned. Anything unexpected (non-sha-256 fingerprint, missing field,
+   exotic candidate) makes packSdp return null and encodeBlob falls back
+   to format 1 (deflate of the raw SDP), so the worst case is a longer
+   code, never a broken one.
+
+   Candidate flag byte: bits 0-1 type (0 host, 1 srflx, 2 relay),
+   bits 2-3 addr kind (0 IPv4, 1 IPv6, 2 hostname e.g. mDNS .local). */
+
+const SETUP_VALS = ['actpass', 'active', 'passive'];
+const CAND_TYPES = ['host', 'srflx', 'relay'];
+const CAND_PRIO  = [2122260223, 1686052607, 41885695];
+const MAX_CANDS  = 15;
+
+function parseIPv4(s) {
+  const p = s.split('.');
+  if (p.length !== 4) return null;
+  const out = new Uint8Array(4);
+  for (let i = 0; i < 4; i++) {
+    const n = Number(p[i]);
+    if (!Number.isInteger(n) || n < 0 || n > 255) return null;
+    out[i] = n;
+  }
+  return out;
+}
+
+function parseIPv6(s) {
+  /* expand :: and an optional trailing dotted-quad into 16 bytes */
+  let head = s, v4 = null;
+  if (s.includes('.')) {
+    const cut = s.lastIndexOf(':');
+    v4 = parseIPv4(s.slice(cut + 1));
+    if (!v4) return null;
+    head = s.slice(0, cut) + ':0:0'; /* placeholder, replaced below */
+  }
+  const dbl = head.split('::');
+  if (dbl.length > 2) return null;
+  const left = dbl[0] ? dbl[0].split(':') : [];
+  const right = dbl.length === 2 && dbl[1] ? dbl[1].split(':') : [];
+  const fill = 8 - left.length - right.length;
+  if (dbl.length === 2 && fill < 0) return null;
+  if (dbl.length === 1 && left.length !== 8) return null;
+  const groups = dbl.length === 2
+    ? left.concat(Array(fill).fill('0'), right)
+    : left;
+  const out = new Uint8Array(16);
+  for (let i = 0; i < 8; i++) {
+    const n = parseInt(groups[i], 16);
+    if (!Number.isFinite(n) || n < 0 || n > 0xFFFF) return null;
+    out[i * 2] = n >> 8;
+    out[i * 2 + 1] = n & 0xFF;
+  }
+  if (v4) out.set(v4, 12);
+  return out;
+}
+
+function formatIPv6(b) {
+  const g = [];
+  for (let i = 0; i < 16; i += 2) g.push(((b[i] << 8) | b[i + 1]).toString(16));
+  return g.join(':');
+}
+
+function packSdp(t, sdp) {
+  try {
+    const get = (re) => { const m = sdp.match(re); return m ? m[1] : null; };
+    const ufrag = get(/a=ice-ufrag:([\x21-\x7E]+)/);
+    const pwd   = get(/a=ice-pwd:([\x21-\x7E]+)/);
+    const mid   = get(/a=mid:([\x21-\x7E]+)/);
+    const setup = get(/a=setup:(\w+)/);
+    const fpHex = get(/a=fingerprint:sha-256 ([0-9A-Fa-f:]{95})/);
+    const setupIdx = SETUP_VALS.indexOf(setup);
+    if (!ufrag || !pwd || !mid || !fpHex || setupIdx === -1) return null;
+    if (ufrag.length > 255 || pwd.length > 255 || mid.length > 255) return null;
+    if (!/m=application \d+ UDP\/DTLS\/SCTP webrtc-datachannel/.test(sdp)) return null;
+
+    const fp = new Uint8Array(32);
+    fpHex.split(':').forEach((h, i) => { fp[i] = parseInt(h, 16); });
+
+    /* udp candidates only, component 1, known types, deduped */
+    const cands = [];
+    const seen = new Set();
+    const re = /a=candidate:\S+ (\d+) (udp|UDP) \d+ ([\x21-\x7E]+) (\d+) typ (\w+)/g;
+    let m;
+    while ((m = re.exec(sdp)) !== null) {
+      if (m[1] !== '1') continue;
+      const type = CAND_TYPES.indexOf(m[5]);
+      if (type === -1) continue;
+      const addr = m[3], port = Number(m[4]);
+      if (!Number.isInteger(port) || port < 0 || port > 65535) continue;
+      const key = addr + ':' + port;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      let kind, bytes;
+      const v4 = parseIPv4(addr);
+      if (v4) { kind = 0; bytes = v4; }
+      else {
+        const v6 = parseIPv6(addr);
+        if (v6) { kind = 1; bytes = v6; }
+        else {
+          if (addr.length > 255) continue;
+          kind = 2;
+          const nm = new TextEncoder().encode(addr);
+          bytes = new Uint8Array(1 + nm.length);
+          bytes[0] = nm.length;
+          bytes.set(nm, 1);
+        }
+      }
+      cands.push({ type, kind, port, bytes });
+    }
+    if (!cands.length || cands.length > MAX_CANDS) return null;
+    cands.sort((a, b) => a.type - b.type);
+
+    const enc = new TextEncoder();
+    const uf = enc.encode(ufrag), pw = enc.encode(pwd), md = enc.encode(mid);
+    const parts = [];
+    parts.push(Uint8Array.of((t === 'a' ? 1 : 0) | (setupIdx << 1)));
+    parts.push(Uint8Array.of(uf.length), uf);
+    parts.push(Uint8Array.of(pw.length), pw);
+    parts.push(Uint8Array.of(md.length), md);
+    parts.push(fp);
+    parts.push(Uint8Array.of(cands.length));
+    for (const c of cands) {
+      parts.push(Uint8Array.of(c.type | (c.kind << 2), c.port >> 8, c.port & 0xFF), c.bytes);
+    }
+    let total = 0;
+    for (const p of parts) total += p.length;
+    const out = new Uint8Array(total);
+    let off = 0;
+    for (const p of parts) { out.set(p, off); off += p.length; }
+    return out;
+  } catch (e) {
+    console.log('[codec] packSdp failed, will fall back:', e.message);
+    return null;
+  }
+}
+
+function unpackSdp(b) {
+  let off = 0;
+  const need = (n) => { if (off + n > b.length) throw new Error('truncated code'); };
+  const dec = new TextDecoder();
+  const readStr = () => {
+    need(1); const len = b[off++];
+    need(len); const s = dec.decode(b.subarray(off, off + len)); off += len;
+    return s;
+  };
+  need(1);
+  const flags = b[off++];
+  const t = (flags & 1) ? 'a' : 'o';
+  const setup = SETUP_VALS[(flags >> 1) & 3];
+  if (!setup) throw new Error('bad setup flag');
+  const ufrag = readStr(), pwd = readStr(), mid = readStr();
+  need(32);
+  const fpHex = [...b.subarray(off, off + 32)]
+    .map((x) => x.toString(16).padStart(2, '0').toUpperCase()).join(':');
+  off += 32;
+  need(1);
+  const n = b[off++];
+  if (n < 1 || n > MAX_CANDS) throw new Error('bad candidate count');
+  const candLines = [];
+  for (let i = 0; i < n; i++) {
+    need(3);
+    const flag = b[off++];
+    const port = (b[off++] << 8) | b[off++];
+    const type = CAND_TYPES[flag & 3];
+    const kind = (flag >> 2) & 3;
+    if (!type) throw new Error('bad candidate type');
+    let addr;
+    if (kind === 0) { need(4); addr = b.subarray(off, off + 4).join('.'); off += 4; }
+    else if (kind === 1) { need(16); addr = formatIPv6(b.subarray(off, off + 16)); off += 16; }
+    else if (kind === 2) { addr = readStr(); }
+    else throw new Error('bad address kind');
+    const prio = CAND_PRIO[flag & 3] - i;
+    const rel = type === 'host' ? '' : ' raddr 0.0.0.0 rport 0';
+    candLines.push('a=candidate:' + (i + 1) + ' 1 udp ' + prio + ' ' + addr + ' ' + port + ' typ ' + type + rel);
+  }
+  const sdp = [
+    'v=0',
+    'o=- 4611731400430051336 2 IN IP4 127.0.0.1',
+    's=-',
+    't=0 0',
+    'a=group:BUNDLE ' + mid,
+    'a=extmap-allow-mixed',
+    'a=msid-semantic: WMS',
+    'm=application 9 UDP/DTLS/SCTP webrtc-datachannel',
+    'c=IN IP4 0.0.0.0'
+  ].concat(candLines, [
+    'a=ice-ufrag:' + ufrag,
+    'a=ice-pwd:' + pwd,
+    'a=ice-options:trickle',
+    'a=fingerprint:sha-256 ' + fpHex,
+    'a=setup:' + setup,
+    'a=mid:' + mid,
+    'a=sctp-port:5000',
+    'a=max-message-size:262144'
+  ]).join('\r\n') + '\r\n';
+  return { t: t, sdp: sdp };
+}
+
+async function encodeBlob(obj) {
+  const packed = packSdp(obj.t, obj.sdp);
+  if (packed) {
+    console.log('[codec] pack', obj.sdp.length, '->', packed.length, 'bytes');
+    return '2' + bytesToB64url(packed);
+  }
+  const raw = new TextEncoder().encode(JSON.stringify(obj));
+  if (typeof CompressionStream === 'function') {
+    try {
+      const deflated = await pipeThrough(raw, new CompressionStream('deflate-raw'));
+      console.log('[codec] deflate', raw.length, '->', deflated.length, 'bytes');
+      return '1' + bytesToB64url(deflated);
+    } catch (e) {
+      console.log('[codec] compression failed, falling back to plain:', e.message);
+    }
+  }
+  return '0' + bytesToB64url(raw);
+}
+
+async function decodeBlob(code) {
+  const mode = code[0];
+  const bytes = b64urlToBytes(code.slice(1).trim());
+  if (mode === '2') return unpackSdp(bytes);
+  let raw;
+  if (mode === '1') {
+    raw = await pipeThrough(bytes, new DecompressionStream('deflate-raw'));
+  } else if (mode === '0') {
+    raw = bytes;
+  } else {
+    throw new Error('unrecognized code format');
+  }
+  return JSON.parse(new TextDecoder().decode(raw));
+}
+
+/* ---------- non-trickle ICE: resolve when gathering completes ---------- */
+
+function gatherComplete(pc) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      console.log('[ice] gather timeout - proceeding with partial candidates');
+      cleanup(); resolve();
+    }, GATHER_TIMEOUT);
+    function onChange() {
+      if (pc.iceGatheringState === 'complete') { cleanup(); resolve(); }
+    }
+    function cleanup() {
+      clearTimeout(timer);
+      pc.removeEventListener('icegatheringstatechange', onChange);
+    }
+    pc.addEventListener('icegatheringstatechange', onChange);
+  });
+}
+
+/* ---------- connection ---------- */
+
+let pc = null;
+let dc = null;
+
+function newPC() {
+  const p = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+  p.oniceconnectionstatechange = () => {
+    console.log('[ice] state:', p.iceConnectionState);
+    if (p.iceConnectionState === 'failed') {
+      showErr('Connection failed: the two machines could not reach each other ' +
+              '(no relay is used). If both are on VPN or separate networks, ' +
+              'this can be a firewall limitation.');
+      setStatus('Failed');
+    }
+    if (p.iceConnectionState === 'disconnected' || p.iceConnectionState === 'closed') {
+      setStatus('Disconnected');
+    }
+  };
+  p.addEventListener('connectionstatechange', async () => {
+    if (p.connectionState === 'connected') {
+      try {
+        const stats = await p.getStats();
+        stats.forEach((s) => {
+          if (s.type === 'candidate-pair' && (s.selected || s.nominated) && s.state === 'succeeded') {
+            const local = stats.get(s.localCandidateId);
+            if (local) console.log('[ice] selected pair type:', local.candidateType);
+          }
+        });
+      } catch (e) { /* stats are best-effort */ }
+    }
+  });
+  return p;
+}
+
+function bindChannel(channel) {
+  dc = channel;
+  dc.binaryType = 'arraybuffer';
+  dc.onopen = () => {
+    console.log('[dc] open');
+    clearErr();
+    setStatus('Connected \u2713', true);
+    $('sender-flow').hidden = true;
+    $('receiver-flow').hidden = true;
+    $('transfer').classList.add('on');
+    keepAwake();   /* keep the display alive for the duration of the transfer */
+  };
+  dc.onclose = () => { console.log('[dc] closed'); setStatus('Disconnected'); releaseAwake(); };
+  dc.onmessage = (ev) => handleChannelMessage(ev.data);
+}
+
+/* ---------- sender flow ---------- */
+
+async function createInvite() {
+  clearErr();
+  $('btn-create').disabled = true;
+  $('gather-hint').hidden = false;
+  setStatus('Gathering\u2026');
+  try {
+    pc = newPC();
+    bindChannel(pc.createDataChannel(CHANNEL_LABEL, { ordered: true }));
+    await pc.setLocalDescription(await pc.createOffer());
+    await gatherComplete(pc);
+    const code = await encodeBlob({ t: 'o', sdp: pc.localDescription.sdp });
+    const link = location.href.split('#')[0] + '#o=' + code;
+    $('invite-text').value = link;
+    $('invite-out').hidden = false;
+    $('s-step2').hidden = false;
+    $('gather-hint').hidden = true;
+    renderQR($('invite-qr'), $('invite-qr-block'), link);
+    if (canScan()) $('btn-scan-reply').hidden = false;
+    keepAwake();   /* their camera needs this screen lit to read the invite QR */
+    listenForReply();
+    setStatus('Invite ready \u2014 waiting for the reply link');
+    console.log('[invite] link length:', link.length, 'chars');
+    if (link.length > 8000) {
+      showErr('Invite link is unusually long (' + link.length + ' chars); if your ' +
+              'IM truncates it, send the text below as a code instead and have ' +
+              'the recipient open the page and append it to the URL after #o=');
+    }
+  } catch (e) {
+    showErr('Could not create invite: ' + e.message);
+    $('btn-create').disabled = false;
+    $('gather-hint').hidden = true;
+    setStatus('Idle');
+  }
+}
+
+/* Accepts a raw code or a full reply link (anything before '#a=' is
+   stripped). Returns true when the answer was applied, so the courier
+   bridge knows whether to ack. */
+async function applyAnswer(codeIn) {
+  clearErr();
+  let code = String(codeIn || '').trim();
+  const cut = code.indexOf('#a=');
+  if (cut !== -1) code = code.slice(cut + 3);
+  if (!code) { showErr('Paste the reply link first.'); return false; }
+  if (!pc || pc.signalingState !== 'have-local-offer') {
+    showErr('No invite is pending in this tab - create an invite first.');
+    return false;
+  }
+  try {
+    const msg = await decodeBlob(code);
+    if (msg.t !== 'a') {
+      throw new Error(msg.t === 'o'
+        ? 'that is an invite, not a reply - your colleague should send THEIR reply link'
+        : 'not a reply');
+    }
+    await pc.setRemoteDescription({ type: 'answer', sdp: msg.sdp });
+    $('btn-connect').disabled = true;
+    setStatus('Connecting\u2026');
+    return true;
+  } catch (e) {
+    showErr('Could not apply the reply: ' + e.message);
+    return false;
+  }
+}
+
+/* ---------- reply-link bridge (BroadcastChannel) ----------
+   A clicked reply link opens a NEW tab, but the pending offer lives in
+   the ORIGINAL invite tab's memory. The new tab is a courier: it
+   broadcasts the answer on a same-origin channel; the invite tab applies
+   it and acks; the courier then tells the user it can be closed. */
+
+const BC_NAME = 'filedrop-manual-signal';
+let bc = null;
+
+function listenForReply() {
+  if (typeof BroadcastChannel !== 'function') {
+    console.log('[bridge] BroadcastChannel unavailable - paste fallback only');
+    return;
+  }
+  bc = new BroadcastChannel(BC_NAME);
+  bc.onmessage = async (ev) => {
+    const d = ev.data;
+    if (!d || d.t !== 'answer') return;
+    console.log('[bridge] reply received via broadcast');
+    const ok = await applyAnswer(d.code);
+    if (ok) bc.postMessage({ t: 'ack' });
+  };
+}
+
+async function courierDeliver(code) {
+  $('sender-flow').hidden = true;
+  $('courier-flow').hidden = false;
+  setStatus('Delivering\u2026');
+  const fallback = () => {
+    $('courier-title').textContent = 'Reply not delivered';
+    $('courier-msg').hidden = true;
+    $('courier-fallback').hidden = false;
+    $('courier-code').value = code;
+    setStatus('Manual step needed');
+  };
+  if (typeof BroadcastChannel !== 'function') { fallback(); return; }
+  const ch = new BroadcastChannel(BC_NAME);
+  const acked = new Promise((resolve) => {
+    ch.onmessage = (ev) => { if (ev.data && ev.data.t === 'ack') resolve(true); };
+    setTimeout(() => resolve(false), 1500);
+  });
+  ch.postMessage({ t: 'answer', code: code });
+  if (await acked) {
+    $('courier-title').textContent = 'Reply delivered';
+    $('courier-msg').textContent = 'The connection is completing in your original ' +
+      'FileDrop tab. You can close this tab.';
+    setStatus('Delivered \u2713', true);
+  } else {
+    fallback();
+  }
+  ch.close();
+}
+
+/* ---------- receiver flow ---------- */
+
+async function answerInvite(code) {
+  $('sender-flow').hidden = true;
+  $('receiver-flow').hidden = false;
+  setStatus('Answering\u2026');
+  try {
+    const msg = await decodeBlob(code);
+    if (msg.t !== 'o') throw new Error('the link does not contain a valid invite');
+    pc = newPC();
+    pc.ondatachannel = (ev) => bindChannel(ev.channel);
+    await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
+    await pc.setLocalDescription(await pc.createAnswer());
+    await gatherComplete(pc);
+    const reply = await encodeBlob({ t: 'a', sdp: pc.localDescription.sdp });
+    const replyLink = location.href.split('#')[0] + '#a=' + reply;
+    $('answer-out').value = replyLink;
+    $('btn-copy-answer').disabled = false;
+    $('answer-hint').textContent = 'Click it, or let them scan the code below. Leave this page open.';
+    renderQR($('reply-qr'), $('reply-qr-block'), replyLink);
+    keepAwake();   /* the sender scans this screen - keep it lit */
+    setStatus('Reply ready \u2014 waiting for sender to connect');
+    console.log('[reply] link length:', replyLink.length, 'chars');
+    /* strip the offer from the address bar so a reload does not
+       try to answer a consumed offer */
+    history.replaceState(null, '', location.pathname + location.search);
+  } catch (e) {
+    showErr('Could not answer the invite: ' + e.message);
+    setStatus('Failed');
+  }
+}
+
+/* ---------- file transfer protocol (single peer) ---------- */
+
+let sending = false;
+let sendQueue = [];
+let pendingSend = null;   /* { file, row } awaiting ACCEPT/DECLINE */
+let pendingOffer = null;  /* incoming meta awaiting user accept */
+let recv = null;          /* { meta, chunks, received, row } */
+
+/* crypto.subtle exists only in secure contexts (HTTPS / localhost). On a
+   plain-HTTP SharePoint site it is undefined, so hashing is optional: a
+   null sha256 in the offer means "unverified", which the receive path
+   already handles. */
+const CAN_HASH = !!(window.crypto && window.crypto.subtle);
+if (!CAN_HASH) console.log('[init] crypto.subtle unavailable (insecure context) - transfers will be unverified');
+
+async function fileSha256(file) {
+  if (!CAN_HASH) return null;
+  const digest = await crypto.subtle.digest('SHA-256', await file.arrayBuffer());
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+function newFileRow(name, size) {
+  const el = document.createElement('div');
+  el.className = 'file-row';
+  el.innerHTML = '<div class="f-line"><span class="f-name"></span>' +
+                 '<span class="f-size"></span><span class="f-status"></span></div>' +
+                 '<div class="bar-wrap"><div class="bar"></div></div>';
+  el.querySelector('.f-name').textContent = name;
+  el.querySelector('.f-size').textContent = formatBytes(size);
+  $('files').prepend(el);
+  const bar = el.querySelector('.bar');
+  const status = el.querySelector('.f-status');
+  return {
+    set(text, cls) {
+      status.textContent = text;
+      status.className = 'f-status' + (cls ? ' ' + cls : '');
+      if (cls === 'ok') { el.classList.add('done'); bar.style.width = '100%'; }
+      if (cls === 'bad') bar.style.width = '0%';
+    },
+    progress(done, total, verb) {
+      const pct = Math.round(done / total * 100);
+      bar.style.width = pct + '%';
+      status.textContent = verb + ' ' + formatBytes(done) + ' / ' + formatBytes(total) + ' \u00B7 ' + pct + '%';
+    }
+  };
+}
+
+async function offerFile(file, row) {
+  if (!dc || dc.readyState !== 'open') { showErr('Not connected.'); return; }
+  if (file.size > MAX_FILE_BYTES) {
+    showErr(file.name + ' is ' + formatBytes(file.size) + '; the cap is ' + formatBytes(MAX_FILE_BYTES) + '.');
+    return;
+  }
+  if (!row) row = newFileRow(file.name, file.size);
+  if (sending || pendingSend) {
+    sendQueue.push({ file, row });
+    row.set('Queued\u2026');
+    return;
+  }
+  if (CAN_HASH) row.set('Hashing\u2026');
+  const sha = await fileSha256(file);
+  if (!dc || dc.readyState !== 'open') { row.set('Failed: channel closed', 'bad'); return; }
+  pendingSend = { file, row };
+  dc.send(JSON.stringify({ type: 'FILE_OFFER', name: file.name, size: file.size, mime: file.type, sha256: sha }));
+  row.set('Waiting for accept\u2026');
+}
+
+function sendNext() {
+  const q = sendQueue.shift();
+  if (q) offerFile(q.file, q.row);
+}
+
+function streamFile(file, row) {
+  if (!dc || dc.readyState !== 'open') { row.set('Failed: channel closed', 'bad'); return; }
+  sending = true;
+  dc.bufferedAmountLowThreshold = BUF_LOW;
+  let offset = 0;
+  const reader = new FileReader();
+  const readNext = () => reader.readAsArrayBuffer(file.slice(offset, offset + CHUNK_SIZE));
+  const onLow = () => readNext();
+  reader.onload = (e) => {
+    if (!dc || dc.readyState !== 'open') { sending = false; row.set('Failed: channel closed', 'bad'); sendNext(); return; }
+    dc.send(e.target.result);
+    offset += e.target.result.byteLength;
+    row.progress(offset, file.size, 'Sending');
+    if (offset < file.size) {
+      if (dc.bufferedAmount >= BUF_HIGH) dc.addEventListener('bufferedamountlow', onLow, { once: true });
+      else readNext();
+    } else {
+      dc.send(JSON.stringify({ type: 'FILE_DONE' }));
+      row.set('Sent \u2713', 'ok');
+      sending = false;
+      sendNext();
+    }
+  };
+  reader.onerror = () => { sending = false; row.set('Failed: read error', 'bad'); sendNext(); };
+  readNext();
+}
+
+function handleChannelMessage(data) {
+  if (typeof data === 'string') {
+    let msg;
+    try { msg = JSON.parse(data); } catch (e) {
+      console.log('[dc] malformed message - ignored');
+      return;
+    }
+    if (!msg || typeof msg.type !== 'string') return;
+    if (msg.type === 'FILE_OFFER') {
+      if (pendingOffer || recv) {
+        dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+        return;
+      }
+      const size = Number(msg.size);
+      if (!Number.isFinite(size) || size < 0 || size > MAX_FILE_BYTES) {
+        console.log('[recv] rejecting offer, bad declared size:', msg.size);
+        dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+        showErr('Declined ' + (msg.name || 'file') + ': declared size is invalid or exceeds ' + formatBytes(MAX_FILE_BYTES));
+        return;
+      }
+      pendingOffer = {
+        name: String(msg.name || 'file'), size: size,
+        mime: String(msg.mime || ''),
+        sha256: (typeof msg.sha256 === 'string' && msg.sha256.length === 64) ? msg.sha256 : null
+      };
+      $('toast-title').textContent = 'Incoming file';
+      $('toast-file').textContent = pendingOffer.name + ' \u00B7 ' + formatBytes(size);
+      $('toast').classList.add('on');
+    } else if (msg.type === 'FILE_ACCEPT') {
+      if (pendingSend) {
+        const { file, row } = pendingSend; pendingSend = null;
+        streamFile(file, row);
+      }
+    } else if (msg.type === 'FILE_DECLINE') {
+      if (pendingSend) {
+        pendingSend.row.set('Declined by peer', 'bad');
+        pendingSend = null;
+        sendNext();
+      }
+    } else if (msg.type === 'FILE_DONE') {
+      if (recv) finishDownload();
+    }
+  } else {
+    if (!recv) return; /* chunks only arrive post-accept by protocol */
+    if (recv.received + data.byteLength > recv.meta.size) {
+      console.log('[recv] abort: sender exceeded declared size', recv.meta.size);
+      recv.row.set('Aborted: sender exceeded declared size', 'bad');
+      recv = null;
+      return;
+    }
+    recv.chunks.push(data);
+    recv.received += data.byteLength;
+    recv.row.progress(recv.received, recv.meta.size, 'Receiving');
+  }
+}
+
+async function finishDownload() {
+  const r = recv;
+  recv = null;
+  const blob = new Blob(r.chunks, { type: r.meta.mime || 'application/octet-stream' });
+  let verified = '';
+  if (r.meta.sha256) {
+    r.row.set('Verifying\u2026');
+    try {
+      const digest = await crypto.subtle.digest('SHA-256', await blob.arrayBuffer());
+      const got = [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
+      if (got !== r.meta.sha256) {
+        r.row.set('Integrity check FAILED \u2014 file discarded (expected ' +
+                  r.meta.sha256.slice(0, 12) + '\u2026, got ' + got.slice(0, 12) + '\u2026)', 'bad');
+        return;
+      }
+      verified = ', SHA-256 verified';
+    } catch (e) {
+      verified = ', verification unavailable';
+    }
+  }
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = r.meta.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 5000);
+  r.row.set('Received' + verified + ' \u2713 \u2014 saved to your Downloads folder', 'ok');
+}
+
+/* ---------- in-page reply scanner ----------
+   The sender's invite tab is still open with the pending offer in memory,
+   so the answer never needs a courier tab or BroadcastChannel: open the
+   camera right here, read the receiver's reply QR, hand it to applyAnswer.
+   Prefers the native BarcodeDetector; falls back to jsQR on a canvas frame
+   (Safari, which has no BarcodeDetector). */
+let scanStream = null;
+let scanning = false;
+let scanCanvas = null, scanCtx = null;
+
+async function startReplyScan() {
+  clearErr();
+  const panel = $('scanner'), video = $('scan-video');
+  if (!canScan()) { showErr('Camera scan is unavailable here - paste the reply link instead.'); return; }
+  if (!pc || pc.signalingState !== 'have-local-offer') {
+    showErr('No invite is pending in this tab - create an invite first.');
+    return;
+  }
+  try {
+    scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  } catch (e) {
+    showErr('Could not open the camera: ' + e.message + '. Paste the reply link instead.');
+    return;
+  }
+  video.srcObject = scanStream;
+  video.setAttribute('playsinline', '');   /* iOS: stay inline, do not go fullscreen */
+  try { await video.play(); } catch (e) {}
+  panel.classList.add('on');
+  $('btn-scan-reply').disabled = true;
+  $('scan-hint').textContent = 'Point the camera at their reply QR\u2026';
+  if (!scanCanvas) { scanCanvas = document.createElement('canvas'); scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true }); }
+  scanning = true;
+  keepAwake();
+  tickScan();
+}
+
+function stopReplyScan() {
+  scanning = false;
+  const panel = $('scanner'), video = $('scan-video');
+  if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
+  if (video) video.srcObject = null;
+  panel.classList.remove('on');
+  $('btn-scan-reply').disabled = false;
+}
+
+async function tickScan() {
+  if (!scanning) return;
+  const video = $('scan-video');
+  let raw = null;
+  if (video && video.readyState >= 2 && video.videoWidth) {
+    try {
+      if (barcodeDetector) {
+        const codes = await barcodeDetector.detect(video);
+        if (codes && codes.length) raw = codes[0].rawValue;
+      } else if (HAS_JSQR) {
+        scanCanvas.width = video.videoWidth;
+        scanCanvas.height = video.videoHeight;
+        scanCtx.drawImage(video, 0, 0, scanCanvas.width, scanCanvas.height);
+        const img = scanCtx.getImageData(0, 0, scanCanvas.width, scanCanvas.height);
+        const c = jsQR(img.data, img.width, img.height, { inversionAttempts: 'dontInvert' });
+        if (c) raw = c.data;
+      }
+    } catch (e) { /* transient per-frame decode error - keep scanning */ }
+  }
+  if (raw) { onReplyScanned(raw); return; }
+  setTimeout(tickScan, 120);   /* ~8 fps: enough to catch a held-still code, gentle on the phone */
+}
+
+async function onReplyScanned(raw) {
+  $('scan-hint').textContent = 'Code found - connecting\u2026';
+  stopReplyScan();
+  const ok = await applyAnswer(raw);
+  if (!ok) {
+    /* not a reply (e.g. scanned the invite by mistake) - let them try again */
+    $('btn-scan-reply').disabled = false;
+  }
+}
+
+/* ---------- UI wiring ---------- */
+
+async function copyText(text, btn, doneLabel) {
+  try {
+    await navigator.clipboard.writeText(text);
+    const orig = btn.textContent;
+    btn.textContent = doneLabel;
+    setTimeout(() => { btn.textContent = orig; }, 1600);
+  } catch (e) {
+    showErr('Clipboard blocked - select the text and copy manually.');
+  }
+}
+
+$('btn-create').addEventListener('click', createInvite);
+$('btn-copy-link').addEventListener('click', () => copyText($('invite-text').value, $('btn-copy-link'), 'Copied \u2713'));
+$('btn-connect').addEventListener('click', () => applyAnswer($('answer-in').value));
+$('btn-scan-reply').addEventListener('click', startReplyScan);
+$('btn-scan-cancel').addEventListener('click', stopReplyScan);
+$('btn-copy-answer').addEventListener('click', () => copyText($('answer-out').value, $('btn-copy-answer'), 'Copied \u2713'));
+$('btn-copy-courier').addEventListener('click', () => copyText($('courier-code').value, $('btn-copy-courier'), 'Copied \u2713'));
+
+$('accept-btn').addEventListener('click', () => {
+  $('toast').classList.remove('on');
+  if (!pendingOffer) return;
+  const meta = pendingOffer;
+  pendingOffer = null;
+  if (!dc || dc.readyState !== 'open') { showErr('Sender disconnected'); return; }
+  const row = newFileRow(meta.name, meta.size);
+  row.set('Receiving\u2026');
+  recv = { meta: meta, chunks: [], received: 0, row: row };
+  dc.send(JSON.stringify({ type: 'FILE_ACCEPT' }));
+});
+
+$('decline-btn').addEventListener('click', () => {
+  $('toast').classList.remove('on');
+  if (!pendingOffer) return;
+  pendingOffer = null;
+  if (dc && dc.readyState === 'open') dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
+});
+
+$('btn-pick').addEventListener('click', () => {
+  const inp = $('file-input');
+  inp.value = '';
+  inp.onchange = () => { if (inp.files[0]) offerFile(inp.files[0]); };
+  inp.click();
+});
+
+const dz = $('dropzone');
+dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('hover'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('hover'));
+dz.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dz.classList.remove('hover');
+  const f = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+  if (f) offerFile(f);
+});
+
+/* ---------- role selection on load ---------- */
+
+const mo = location.hash.match(/#o=([^&]+)/);
+const ma = location.hash.match(/#a=([^&]+)/);
+if (mo) {
+  answerInvite(mo[1]);
+} else if (ma) {
+  courierDeliver(ma[1]);
+} else {
+  console.log('[init] sender mode - create an invite to begin');
+}
+</script>
+</body>
+</html>
