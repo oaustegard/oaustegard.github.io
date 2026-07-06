@@ -28,7 +28,7 @@
  * this library does not interpret or transport them.
  *
  * @license MIT
- * @version 1.1.0
+ * @version 1.2.0
  *
  * @example
  *   import { AtprotoRTC } from '/bsky/atproto-rtc.js';
@@ -97,6 +97,8 @@ export class AtprotoRTC extends Emitter {
    * @param {Array}  [opts.iceServers] default: [{urls:'stun:stun.l.google.com:19302'}]
    * @param {number} [opts.pollMs=2000]
    * @param {number} [opts.signalTtlS=300]
+   * @param {boolean}[opts.persistSession=true] store token pair (never the
+   *                 password) in localStorage 'bsky_session' for resumeSession()
    */
   constructor(opts = {}) {
     super();
@@ -105,6 +107,7 @@ export class AtprotoRTC extends Emitter {
       ? opts.iceServers
       : [{ urls: 'stun:stun.l.google.com:19302' }];
     this.pollMs      = opts.pollMs      || 2000;
+    this.persistSession = opts.persistSession !== false;
     this.signalTtlS  = opts.signalTtlS  || 300;
     this.discoverMs  = opts.discoverMs  || 6000;
 
@@ -172,6 +175,66 @@ export class AtprotoRTC extends Emitter {
     return this.me;
   }
 
+  /* ── session persistence ──────────────────────────────────────────────
+     Convention shared with the other austegard.com/bsky utilities
+     (bsky-lib.js): localStorage key 'bsky_session' holding TOKENS ONLY —
+     { did, handle, accessJwt, refreshJwt } — never the app password. We
+     store a superset adding `pds` (this lib is PDS-aware, not
+     bsky.social-only); bsky-lib ignores the extra field, so one login on
+     this origin serves every utility. Tradeoff, same as those utilities
+     already accept: localStorage is readable by any script on the origin. */
+
+  _persistSession() {
+    if (!this.persistSession || typeof localStorage === 'undefined') return;
+    try {
+      localStorage.setItem('bsky_session', JSON.stringify({
+        did: this.me.did, handle: this.me.handle, pds: this.me.pds,
+        accessJwt: this.me.accessJwt, refreshJwt: this.me.refreshJwt
+      }));
+    } catch (e) { console.debug('[atproto-rtc] session persist failed', e); }
+  }
+
+  /**
+   * Resume a previously persisted session without a password. Refreshes
+   * the token pair against the stored PDS (rotating refresh tokens are
+   * re-persisted). Returns this.me on success, null if there is nothing
+   * usable — callers fall back to the login dialog.
+   */
+  async resumeSession() {
+    if (typeof localStorage === 'undefined') return null;
+    let s;
+    try { s = JSON.parse(localStorage.getItem('bsky_session')); } catch (e) { return null; }
+    if (!s || !s.refreshJwt) return null;
+    const pds = s.pds || 'https://bsky.social';   /* legacy bsky-lib sessions lack pds */
+    try {
+      const r = await fetch(pds + '/xrpc/com.atproto.server.refreshSession', {
+        method: 'POST', headers: { 'Authorization': 'Bearer ' + s.refreshJwt }
+      });
+      if (!r.ok) throw new Error('refresh failed: ' + r.status);
+      const j = await r.json();
+      this.me.did = j.did;
+      this.me.handle = j.handle || s.handle;
+      this.me.pds = pds;
+      this.me.accessJwt = j.accessJwt;
+      this.me.refreshJwt = j.refreshJwt;
+      this._persistSession();
+      await this._sweepOwnSignals();
+      this.emit('login', this.me);
+      return this.me;
+    } catch (e) {
+      console.debug('[atproto-rtc] session resume failed:', e.message);
+      try { localStorage.removeItem('bsky_session'); } catch (e2) { /* ignore */ }
+      return null;
+    }
+  }
+
+  logout() {
+    this.me = { did: null, handle: null, pds: null, accessJwt: null, refreshJwt: null, password: null };
+    if (typeof localStorage !== 'undefined') {
+      try { localStorage.removeItem('bsky_session'); } catch (e) { /* ignore */ }
+    }
+  }
+
   async _createSession() {
     const r = await fetch(this.me.pds + '/xrpc/com.atproto.server.createSession', {
       method: 'POST',
@@ -184,7 +247,9 @@ export class AtprotoRTC extends Emitter {
     }
     const j = await r.json();
     this.me.accessJwt = j.accessJwt;
+    this.me.refreshJwt = j.refreshJwt;
     this.me.did = j.did;
+    this._persistSession();
   }
 
   async _pdsCall(nsid, { method = 'GET', params, body, retried } = {}) {
@@ -199,7 +264,8 @@ export class AtprotoRTC extends Emitter {
       body: body ? JSON.stringify(body) : undefined
     });
     if (r.status === 401 && !retried) {          /* token expired — re-auth once */
-      await this._createSession();
+      if (this.me.password) await this._createSession();
+      else if (!(await this.resumeSession())) throw new Error(nsid + ' -> 401 (session expired; log in again)');
       return this._pdsCall(nsid, { method, params, body, retried: true });
     }
     if (!r.ok) throw new Error(nsid + ' -> ' + r.status);
