@@ -12583,13 +12583,6 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
          you send files between this computer and a phone. Same browser? Just
          <b>click</b> their reply link. Otherwise paste it below.</p>
       <textarea id="answer-in" spellcheck="false" placeholder="Paste reply link or code&#x2026;"></textarea>
-      <div class="scanner" id="scanner">
-        <video id="scan-video" playsinline muted></video>
-        <div class="row">
-          <button id="btn-scan-cancel">Cancel</button>
-          <span class="scan-note" id="scan-hint">Hold their reply QR up to the camera&#x2026;</span>
-        </div>
-      </div>
       <div class="row">
         <button class="primary" id="btn-scan-reply" hidden>Scan reply with camera</button>
         <button class="primary" id="btn-connect">Connect</button>
@@ -12633,6 +12626,27 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
           <button class="primary" id="btn-copy-courier">Copy code</button>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- SHARED SCANNER (reads a reply during setup, or a fresh invite on reconnect) -->
+  <div class="scanner" id="scanner">
+    <video id="scan-video" playsinline muted></video>
+    <div class="row">
+      <button id="btn-scan-cancel">Cancel</button>
+      <span class="scan-note" id="scan-hint">Hold their QR up to the camera&#x2026;</span>
+    </div>
+  </div>
+
+  <!-- RECONNECT (shown when an established connection dies, e.g. iOS app switch) -->
+  <div class="step" id="reconnect" hidden>
+    <h3><span class="n">&#x21BB;</span>Connection lost</h3>
+    <p>Usually from switching apps on a phone. Pair again without reloading:
+       <b>one</b> of you shows a fresh code; the other scans it &#x2014; or opens
+       the new link, which works from any device.</p>
+    <div class="row">
+      <button class="primary" id="btn-reconn-invite">Show a reconnect code</button>
+      <button class="primary" id="btn-reconn-scan" hidden>Scan their code</button>
     </div>
   </div>
 
@@ -13147,14 +13161,25 @@ function newPC() {
   p.oniceconnectionstatechange = () => {
     console.log('[ice] state:', p.iceConnectionState);
     if (p.iceConnectionState === 'failed') {
+      if (wasConnected) { tryIceRestart(); return; }
       showErr('Connection failed: the two machines could not reach each other ' +
               '(no relay is used). If both are on VPN or separate networks, ' +
               'this can be a firewall limitation.');
       setStatus('Failed');
     }
-    if (p.iceConnectionState === 'disconnected' || p.iceConnectionState === 'closed') {
-      setStatus('Disconnected');
+    if (p.iceConnectionState === 'connected' || p.iceConnectionState === 'completed') {
+      cancelDeadTimer();
+      if (wasConnected) setStatus('Connected \u2713', true);
     }
+    if (p.iceConnectionState === 'disconnected') {
+      setStatus('Disconnected');
+      /* often self-heals within seconds; declare dead only if it persists */
+      if (wasConnected && !deadTimer) deadTimer = setTimeout(() => {
+        deadTimer = null;
+        if (pc && pc.iceConnectionState === 'disconnected') connectionDead();
+      }, 5000);
+    }
+    if (p.iceConnectionState === 'closed') setStatus('Disconnected');
   };
   p.addEventListener('connectionstatechange', async () => {
     if (p.connectionState === 'connected') {
@@ -13178,13 +13203,16 @@ function bindChannel(channel) {
   dc.onopen = () => {
     console.log('[dc] open');
     clearErr();
+    wasConnected = true;
+    hideReconnect();
+    cancelDeadTimer();
     setStatus('Connected \u2713', true);
     $('sender-flow').hidden = true;
     $('receiver-flow').hidden = true;
     $('transfer').classList.add('on');
     keepAwake();   /* keep the display alive for the duration of the transfer */
   };
-  dc.onclose = () => { console.log('[dc] closed'); setStatus('Disconnected'); releaseAwake(); };
+  dc.onclose = () => { console.log('[dc] closed'); setStatus('Disconnected'); releaseAwake(); connectionDead(); };
   dc.onmessage = (ev) => handleChannelMessage(ev.data);
 }
 
@@ -13196,6 +13224,7 @@ async function createInvite() {
   $('gather-hint').hidden = false;
   setStatus('Gathering\u2026');
   try {
+    isInviter = true;
     pc = newPC();
     bindChannel(pc.createDataChannel(CHANNEL_LABEL, { ordered: true }));
     await pc.setLocalDescription(await pc.createOffer());
@@ -13272,6 +13301,12 @@ async function applyAnswer(codeIn) {
    broadcasts the answer on a same-origin channel; the invite tab applies
    it and acks; the courier then tells the user it can be closed. */
 
+/* ---------- connection liveness / reconnect state ---------- */
+let isInviter = false;      /* which side initiated the CURRENT pairing */
+let wasConnected = false;   /* dc has opened at least once this pairing */
+let reconnPending = false;  /* reconnect panel is showing */
+let deadTimer = null;       /* pending declare-dead fallback */
+
 const BC_NAME = 'filedrop-manual-signal';
 let bc = null;
 
@@ -13328,6 +13363,7 @@ async function answerInvite(code) {
   try {
     const msg = await decodeBlob(code);
     if (msg.t !== 'o') throw new Error('the link does not contain a valid invite');
+    isInviter = false;
     pc = newPC();
     pc.ondatachannel = (ev) => bindChannel(ev.channel);
     await pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
@@ -13459,6 +13495,10 @@ function handleChannelMessage(data) {
       return;
     }
     if (!msg || typeof msg.type !== 'string') return;
+    if (msg.type === 'ICE_NUDGE' || msg.type === 'ICE_RESTART_OFFER' || msg.type === 'ICE_RESTART_ANSWER') {
+      handleIceRestartMsg(msg);
+      return;
+    }
     if (msg.type === 'FILE_OFFER') {
       if (pendingOffer || recv) {
         dc.send(JSON.stringify({ type: 'FILE_DECLINE' }));
@@ -13544,11 +13584,136 @@ let scanStream = null;
 let scanning = false;
 let scanCanvas = null, scanCtx = null;
 
-async function startReplyScan() {
+/* ---------- connection death + recovery ----------
+   iOS suspends a backgrounded tab; ICE consent expires (~30s) and the
+   connection dies while the PAGE and its state survive. On resume we
+   detect the corpse and offer a same-page re-pair instead of a reload:
+   either side shows a fresh invite (existing createInvite machinery) and
+   the other scans it (the reply-scanner, generalized to read invites).
+   If the data channel itself is still open (brief blip / network change),
+   the inviter first attempts an ICE restart negotiated OVER the channel -
+   the channel is its own signaling path while it lives. */
+
+function cancelDeadTimer() { if (deadTimer) { clearTimeout(deadTimer); deadTimer = null; } }
+
+function connectionDead() {
+  if (reconnPending || !wasConnected) return;
+  reconnPending = true;
+  cancelDeadTimer();
+  console.log('[reconn] connection declared dead');
+  setStatus('Disconnected');
+  releaseAwake();
+  if (recv) { recv.row.set('Interrupted - reconnect and resend', 'bad'); recv = null; }
+  if (pendingSend) { pendingSend.row.set('Interrupted - resend after reconnecting', 'bad'); pendingSend = null; }
+  sending = false; sendQueue = [];
+  pendingOffer = null;
+  $('toast').classList.remove('on');
+  $('reconnect').hidden = false;
+  if (canScan()) $('btn-reconn-scan').hidden = false;
+  $('reconnect').scrollIntoView({ behavior: 'smooth', block: 'center' });
+}
+
+function hideReconnect() {
+  reconnPending = false;
+  $('reconnect').hidden = true;
+}
+
+function resetPeer() {
+  cancelDeadTimer();
+  try { if (dc) { dc.onclose = null; dc.onmessage = null; dc.close(); } } catch (e) {}
+  try { if (pc) pc.close(); } catch (e) {}
+  dc = null; pc = null; wasConnected = false;
+  if (bc) { try { bc.close(); } catch (e) {} bc = null; }
+}
+
+function reconnectAsInviter() {
+  hideReconnect();
+  resetPeer();
+  /* reuse the whole sender machinery: fresh pc, invite QR, reply scan/paste */
+  $('receiver-flow').hidden = true;
+  $('sender-flow').hidden = false;
+  $('invite-out').hidden = true;
+  $('s-step2').hidden = true;
+  $('btn-create').disabled = false;
+  $('btn-connect').disabled = false;
+  createInvite();
+  $('sender-flow').scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+function reconnectAsScanner() {
+  hideReconnect();
+  resetPeer();
+  startScan('invite');
+}
+
+/* Inviter-initiated ICE restart, signaled over the still-open data channel.
+   The answerer never initiates (avoids offer glare); if it detects failure
+   first it nudges the inviter instead. */
+async function tryIceRestart() {
+  if (!dc || dc.readyState !== 'open') { connectionDead(); return; }
+  cancelDeadTimer();
+  deadTimer = setTimeout(connectionDead, 12000);  /* restart must land within 12s */
+  try {
+    if (!isInviter) {
+      console.log('[reconn] nudging inviter to restart ICE');
+      dc.send(JSON.stringify({ type: 'ICE_NUDGE' }));
+      return;
+    }
+    console.log('[reconn] attempting ICE restart over the data channel');
+    setStatus('Reconnecting\u2026');
+    pc.restartIce();
+    await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+    await gatherComplete(pc);
+    dc.send(JSON.stringify({ type: 'ICE_RESTART_OFFER', sdp: pc.localDescription.sdp }));
+  } catch (e) {
+    console.log('[reconn] ICE restart failed:', e.message);
+    connectionDead();
+  }
+}
+
+async function handleIceRestartMsg(msg) {
+  try {
+    if (msg.type === 'ICE_NUDGE' && isInviter) { tryIceRestart(); return; }
+    if (msg.type === 'ICE_RESTART_OFFER' && !isInviter) {
+      cancelDeadTimer();
+      deadTimer = setTimeout(connectionDead, 12000);
+      await pc.setRemoteDescription({ type: 'offer', sdp: String(msg.sdp || '') });
+      await pc.setLocalDescription(await pc.createAnswer());
+      await gatherComplete(pc);
+      dc.send(JSON.stringify({ type: 'ICE_RESTART_ANSWER', sdp: pc.localDescription.sdp }));
+      return;
+    }
+    if (msg.type === 'ICE_RESTART_ANSWER' && isInviter) {
+      await pc.setRemoteDescription({ type: 'answer', sdp: String(msg.sdp || '') });
+      return;
+    }
+  } catch (e) {
+    console.log('[reconn] restart negotiation failed:', e.message);
+    connectionDead();
+  }
+}
+
+/* iOS resume: events were frozen while suspended, so the state handlers
+   above may never have fired. Check the corpse directly. */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible' || !wasConnected || reconnPending) return;
+  setTimeout(() => {   /* give a surviving connection a beat to report itself */
+    if (!wasConnected || reconnPending) return;
+    const pcDead = !pc || ['failed', 'closed', 'disconnected'].includes(pc.connectionState);
+    const dcDead = !dc || dc.readyState !== 'open';
+    if (dcDead && pcDead) connectionDead();
+    else if (pcDead && !dcDead) tryIceRestart();
+  }, 1200);
+});
+
+let scanKind = 'answer';   /* 'answer' (setup: read their reply) | 'invite' (reconnect: read their fresh invite) */
+
+async function startScan(kind) {
+  scanKind = kind || 'answer';
   clearErr();
   const panel = $('scanner'), video = $('scan-video');
-  if (!canScan()) { showErr('Camera scan is unavailable here - paste the reply link instead.'); return; }
-  if (!pc || pc.signalingState !== 'have-local-offer') {
+  if (!canScan()) { showErr('Camera scan is unavailable here - paste the link instead.'); return; }
+  if (scanKind === 'answer' && (!pc || pc.signalingState !== 'have-local-offer')) {
     showErr('No invite is pending in this tab - create an invite first.');
     return;
   }
@@ -13564,20 +13729,24 @@ async function startReplyScan() {
   panel.classList.add('on');
   panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
   $('btn-scan-reply').disabled = true;
-  $('scan-hint').textContent = 'Point the camera at their reply QR\u2026';
+  $('btn-reconn-scan').disabled = true;
+  $('scan-hint').textContent = scanKind === 'invite'
+    ? 'Point the camera at their reconnect QR\u2026'
+    : 'Point the camera at their reply QR\u2026';
   if (!scanCanvas) { scanCanvas = document.createElement('canvas'); scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true }); }
   scanning = true;
   keepAwake();
   tickScan();
 }
 
-function stopReplyScan() {
+function stopScan() {
   scanning = false;
   const panel = $('scanner'), video = $('scan-video');
   if (scanStream) { scanStream.getTracks().forEach((t) => t.stop()); scanStream = null; }
   if (video) video.srcObject = null;
   panel.classList.remove('on');
   $('btn-scan-reply').disabled = false;
+  $('btn-reconn-scan').disabled = false;
 }
 
 async function tickScan() {
@@ -13599,18 +13768,21 @@ async function tickScan() {
       }
     } catch (e) { /* transient per-frame decode error - keep scanning */ }
   }
-  if (raw) { onReplyScanned(raw); return; }
+  if (raw) { onScanned(raw); return; }
   setTimeout(tickScan, 120);   /* ~8 fps: enough to catch a held-still code, gentle on the phone */
 }
 
-async function onReplyScanned(raw) {
+async function onScanned(raw) {
   $('scan-hint').textContent = 'Code found - connecting\u2026';
-  stopReplyScan();
-  const ok = await applyAnswer(raw);
-  if (!ok) {
-    /* not a reply (e.g. scanned the invite by mistake) - let them try again */
-    $('btn-scan-reply').disabled = false;
+  stopScan();
+  if (scanKind === 'invite') {
+    /* a scanned invite is a full link; the code follows #o= */
+    const s = String(raw || ''); const cut = s.indexOf('#o=');
+    if (cut === -1) { showErr('That is not an invite code - have them tap "Show a reconnect code".'); return; }
+    await answerInvite(s.slice(cut + 3));
+    return;
   }
+  await applyAnswer(raw);
 }
 
 /* ---------- UI wiring ---------- */
@@ -13629,8 +13801,10 @@ async function copyText(text, btn, doneLabel) {
 $('btn-create').addEventListener('click', createInvite);
 $('btn-copy-link').addEventListener('click', () => copyText($('invite-text').value, $('btn-copy-link'), 'Copied \u2713'));
 $('btn-connect').addEventListener('click', () => applyAnswer($('answer-in').value));
-$('btn-scan-reply').addEventListener('click', startReplyScan);
-$('btn-scan-cancel').addEventListener('click', stopReplyScan);
+$('btn-scan-reply').addEventListener('click', () => startScan('answer'));
+$('btn-scan-cancel').addEventListener('click', stopScan);
+$('btn-reconn-invite').addEventListener('click', reconnectAsInviter);
+$('btn-reconn-scan').addEventListener('click', reconnectAsScanner);
 $('btn-copy-answer').addEventListener('click', () => copyText($('answer-out').value, $('btn-copy-answer'), 'Copied \u2713'));
 $('btn-copy-courier').addEventListener('click', () => copyText($('courier-code').value, $('btn-copy-courier'), 'Copied \u2713'));
 
