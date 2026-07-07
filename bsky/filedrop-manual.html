@@ -12582,16 +12582,16 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
          you send files between this computer and a phone. Same browser? Just
          <b>click</b> their reply link. Otherwise paste it below.</p>
       <textarea id="answer-in" spellcheck="false" placeholder="Paste reply link or code&#x2026;"></textarea>
-      <div class="row">
-        <button class="primary" id="btn-scan-reply" hidden>Scan reply with camera</button>
-        <button class="primary" id="btn-connect">Connect</button>
-      </div>
       <div class="scanner" id="scanner">
         <video id="scan-video" playsinline muted></video>
         <div class="row">
           <button id="btn-scan-cancel">Cancel</button>
           <span class="scan-note" id="scan-hint">Hold their reply QR up to the camera&#x2026;</span>
         </div>
+      </div>
+      <div class="row">
+        <button class="primary" id="btn-scan-reply" hidden>Scan reply with camera</button>
+        <button class="primary" id="btn-connect">Connect</button>
       </div>
     </div>
   </div>
@@ -12648,26 +12648,27 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 <footer>
   <p class="what">
     <b>FileDrop</b> sends a file <b>directly between two browsers</b>
-    over an encrypted peer-to-peer WebRTC channel &#x2014; with <b>no signaling
-    infrastructure at all</b>. The connection setup normally carried by a server
-    or a SharePoint list is instead a small code you pass to your colleague by
-    hand, over any channel you already trust (Teams, email, a sticky note).
+    over an encrypted peer-to-peer WebRTC channel &#x2014; <b>no server in the
+    middle, ever</b>. The connection is set up by a small code the two of you
+    exchange yourselves: as a link over any channel you already trust, or by
+    scanning each other's QR codes.
   </p>
   <details>
     <summary>How it works</summary>
     <h4>Copy-paste signaling</h4>
-    <p>WebRTC needs each side to hand the other a few kilobytes of session-setup
-    text (SDP) before a direct connection exists. Here that exchange is manual:
-    the invite link carries the sender's compressed offer in its
-    <code>#fragment</code> (never sent to any server, including SharePoint),
-    and the reply link carries the receiver's answer back the same way. When
-    the sender clicks the reply link, the newly opened tab hands the answer to
-    the still-open invite tab over a same-origin <code>BroadcastChannel</code>
+    <p>Before a direct connection exists, each side must hand the other a
+    short description of how to reach it (WebRTC session-setup text, packed
+    here to a couple hundred characters). That exchange is the two of you:
+    the invite link carries the sender's offer in its <code>#fragment</code>
+    &#x2014; the part of a URL that browsers never send to any server &#x2014;
+    and the reply link carries the answer back the same way. When the sender
+    clicks the reply link, the newly opened tab hands the answer to the
+    still-open invite tab over a same-origin <code>BroadcastChannel</code>
     and can then be closed &#x2014; two clicks, one connection. This requires
-    both clicks to happen in the same browser; if the invite tab cannot be
-    found, the reply falls back to a code you paste. ICE trickle is disabled
-    &#x2014; each side waits for candidate gathering to finish so a single
-    blob carries everything.</p>
+    both clicks to happen in the same browser; otherwise scan, or paste the
+    code. Each side waits until it has finished mapping its network routes
+    before producing its code, so a single code carries everything and the
+    exchange happens exactly once per side.</p>
     <h4>Phone-to-phone by QR</h4>
     <p>Because a format-2 code is only a few hundred characters, the invite
     and reply links fit in a scannable QR. The sender shows the invite QR; the
@@ -12692,12 +12693,12 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     transfer is running (Safari&#xA0;16.4+, Chrome, others) so the display does
     not sleep mid-scan or mid-transfer; if the lock is refused, just keep the
     screen on manually.</p>
-    <h4>Trade-offs vs. the list-signaled FileDrop</h4>
+    <h4>Scope and trust</h4>
     <p>No peer discovery, no rooms, one connection per page: you connect to
-    exactly the person you exchanged codes with, which is also the security
-    upside &#x2014; the trust boundary is your IM conversation, not a shared
-    list. The offer contains your machine's IP addresses, so only send invites
-    to people you would tell your IP address.</p>
+    exactly the person you exchanged codes with &#x2014; the trust boundary is
+    whatever channel carried the code. One caution: the code contains your
+    machine's network addresses, so only send invites to people you would
+    tell your IP address.</p>
   </details>
 </footer>
 <div id="toast">
@@ -12712,10 +12713,10 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 /* ============================================================
    FileDrop (manual signaling variant)
 
-   No SharePoint list, no signaling server, no third-party
-   broker. The SDP offer/answer exchange is performed by the
-   two humans, over IM: the offer rides in the invite link's
-   URL fragment; the answer rides back as a pasted code.
+   No signaling server, no third-party broker. The SDP
+   offer/answer exchange is performed by the two humans:
+   the offer rides in the invite link's URL fragment; the
+   answer rides back as a link, a QR scan, or a pasted code.
 
    Roles:
      - No #o= fragment on load  -> sender flow (create invite,
@@ -12725,7 +12726,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
 
    The file-transfer protocol (FILE_OFFER / FILE_ACCEPT /
    FILE_DECLINE / FILE_DONE + binary chunks) is identical to
-   the list-signaled FileDrop, single-peer.
+   the earlier FileDrop variants, single-peer.
    ============================================================ */
 
 const CHUNK_SIZE     = 64 * 1024;
@@ -13349,7 +13350,7 @@ let pendingOffer = null;  /* incoming meta awaiting user accept */
 let recv = null;          /* { meta, chunks, received, row } */
 
 /* crypto.subtle exists only in secure contexts (HTTPS / localhost). On a
-   plain-HTTP SharePoint site it is undefined, so hashing is optional: a
+   plain-HTTP host it is undefined, so hashing is optional: a
    null sha256 in the offer means "unverified", which the receive path
    already handles. */
 const CAN_HASH = !!(window.crypto && window.crypto.subtle);
@@ -13550,6 +13551,7 @@ async function startReplyScan() {
   video.setAttribute('playsinline', '');   /* iOS: stay inline, do not go fullscreen */
   try { await video.play(); } catch (e) {}
   panel.classList.add('on');
+  panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
   $('btn-scan-reply').disabled = true;
   $('scan-hint').textContent = 'Point the camera at their reply QR\u2026';
   if (!scanCanvas) { scanCanvas = document.createElement('canvas'); scanCtx = scanCanvas.getContext('2d', { willReadFrequently: true }); }
