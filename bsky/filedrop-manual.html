@@ -12566,6 +12566,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
           <span class="hint">Send it over any channel you trust &#x2014; or have them scan the code.</span>
         </div>
         <textarea id="invite-text" readonly spellcheck="false"></textarea>
+        <span class="hint" id="invite-code-info"></span>
         <div class="qr-block" id="invite-qr-block" hidden>
           <div class="qr-frame"><img id="invite-qr" alt="Invite QR code"></div>
           <span class="hint">Have the other device scan this with its camera &#x2014; a phone,
@@ -12607,6 +12608,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
         <span class="hint" id="answer-hint">Generating&#x2026;</span>
       </div>
       <textarea id="answer-out" readonly spellcheck="false"></textarea>
+      <span class="hint" id="reply-code-info"></span>
       <div class="qr-block" id="reply-qr-block" hidden>
         <div class="qr-frame"><img id="reply-qr" alt="Reply QR code"></div>
         <span class="hint">Or show this to the sender &#x2014; they tap &#x201C;Scan reply&#x201D;
@@ -12855,7 +12857,7 @@ async function pipeThrough(bytes, stream) {
    code, never a broken one.
 
    Candidate flag byte: bits 0-1 type (0 host, 1 srflx, 2 relay),
-   bits 2-3 addr kind (0 IPv4, 1 IPv6, 2 hostname e.g. mDNS .local). */
+   bits 2-3 addr kind (0 IPv4, 1 IPv6, 2 hostname, 3 UUID mDNS .local packed as 16 bytes). */
 
 const SETUP_VALS = ['actpass', 'active', 'passive'];
 const CAND_TYPES = ['host', 'srflx', 'relay'];
@@ -12910,7 +12912,11 @@ function formatIPv6(b) {
   return g.join(':');
 }
 
+let packFailReason = null;   /* why the last packSdp bailed - surfaced in the UI */
+
 function packSdp(t, sdp) {
+  packFailReason = null;
+  const fail = (why) => { packFailReason = why; return null; };
   try {
     const get = (re) => { const m = sdp.match(re); return m ? m[1] : null; };
     const ufrag = get(/a=ice-ufrag:([\x21-\x7E]+)/);
@@ -12919,9 +12925,12 @@ function packSdp(t, sdp) {
     const setup = get(/a=setup:(\w+)/);
     const fpHex = get(/a=fingerprint:sha-256 ([0-9A-Fa-f:]{95})/);
     const setupIdx = SETUP_VALS.indexOf(setup);
-    if (!ufrag || !pwd || !mid || !fpHex || setupIdx === -1) return null;
-    if (ufrag.length > 255 || pwd.length > 255 || mid.length > 255) return null;
-    if (!/m=application \d+ UDP\/DTLS\/SCTP webrtc-datachannel/.test(sdp)) return null;
+    if (!ufrag || !pwd || !mid || !fpHex || setupIdx === -1) {
+      return fail('missing field: ' + [!ufrag && 'ufrag', !pwd && 'pwd', !mid && 'mid',
+        !fpHex && 'sha-256 fingerprint', setupIdx === -1 && 'setup'].filter(Boolean).join(','));
+    }
+    if (ufrag.length > 255 || pwd.length > 255 || mid.length > 255) return fail('field too long');
+    if (!/m=application \d+ UDP\/DTLS\/SCTP webrtc-datachannel/.test(sdp)) return fail('unexpected m= line');
 
     const fp = new Uint8Array(32);
     fpHex.split(':').forEach((h, i) => { fp[i] = parseInt(h, 16); });
@@ -12946,6 +12955,15 @@ function packSdp(t, sdp) {
       else {
         const v6 = parseIPv6(addr);
         if (v6) { kind = 1; bytes = v6; }
+        else if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.local$/i.test(addr)) {
+          /* mDNS obfuscated host (UUID.local) - the dominant candidate type in
+             modern browsers and 40%+ of a naive payload. Pack the UUID as 16
+             raw bytes instead of a 42-char string. */
+          kind = 3;
+          bytes = new Uint8Array(16);
+          const hex = addr.slice(0, 36).replace(/-/g, '');
+          for (let i = 0; i < 16; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+        }
         else {
           if (addr.length > 255) continue;
           kind = 2;
@@ -12957,7 +12975,8 @@ function packSdp(t, sdp) {
       }
       cands.push({ type, kind, port, bytes });
     }
-    if (!cands.length || cands.length > MAX_CANDS) return null;
+    if (!cands.length) return fail('no usable UDP candidates (gathering incomplete?)');
+    if (cands.length > MAX_CANDS) return fail(cands.length + ' candidates > ' + MAX_CANDS);
     cands.sort((a, b) => a.type - b.type);
 
     const enc = new TextEncoder();
@@ -12980,7 +12999,7 @@ function packSdp(t, sdp) {
     return out;
   } catch (e) {
     console.log('[codec] packSdp failed, will fall back:', e.message);
-    return null;
+    return fail('exception: ' + e.message);
   }
 }
 
@@ -13018,6 +13037,12 @@ function unpackSdp(b) {
     if (kind === 0) { need(4); addr = b.subarray(off, off + 4).join('.'); off += 4; }
     else if (kind === 1) { need(16); addr = formatIPv6(b.subarray(off, off + 16)); off += 16; }
     else if (kind === 2) { addr = readStr(); }
+    else if (kind === 3) {
+      need(16);
+      const hx = [...b.subarray(off, off + 16)].map((x) => x.toString(16).padStart(2, '0')).join('');
+      addr = hx.slice(0,8)+'-'+hx.slice(8,12)+'-'+hx.slice(12,16)+'-'+hx.slice(16,20)+'-'+hx.slice(20)+'.local';
+      off += 16;
+    }
     else throw new Error('bad address kind');
     const prio = CAND_PRIO[flag & 3] - i;
     const rel = type === 'host' ? '' : ' raddr 0.0.0.0 rport 0';
@@ -13063,6 +13088,16 @@ async function encodeBlob(obj) {
     }
   }
   return '0' + bytesToB64url(raw);
+}
+
+/* human-readable line about which wire format the code took and why */
+function describeCode(code, link) {
+  const f = code[0];
+  const base = link.length + ' chars, format ' + f;
+  if (f === '2') return base + ' (packed SDP - compact)';
+  const why = packFailReason ? ' - packing skipped: ' + packFailReason : '';
+  if (f === '1') return base + ' (deflated fallback' + why + ')';
+  return base + ' (plain fallback' + why + ')';
 }
 
 async function decodeBlob(code) {
@@ -13166,6 +13201,7 @@ async function createInvite() {
     const code = await encodeBlob({ t: 'o', sdp: pc.localDescription.sdp });
     const link = location.href.split('#')[0] + '#o=' + code;
     $('invite-text').value = link;
+    $('invite-code-info').textContent = describeCode(code, link);
     $('invite-out').hidden = false;
     $('s-step2').hidden = false;
     $('gather-hint').hidden = true;
@@ -13288,6 +13324,7 @@ async function answerInvite(code) {
     const reply = await encodeBlob({ t: 'a', sdp: pc.localDescription.sdp });
     const replyLink = location.href.split('#')[0] + '#a=' + reply;
     $('answer-out').value = replyLink;
+    $('reply-code-info').textContent = describeCode(reply, replyLink);
     $('btn-copy-answer').disabled = false;
     $('answer-hint').textContent = 'Click it, or let them scan the code below. Leave this page open.';
     renderQR($('reply-qr'), $('reply-qr-block'), replyLink);
