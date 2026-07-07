@@ -1,0 +1,765 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Acoustic Link &mdash; data over sound, one file</title>
+<style>
+  :root {
+    --bg: #101418; --card: #1a2027; --edge: #2a333d;
+    --ink: #d7dee6; --dim: #8a97a3; --accent: #5db1a0; --warn: #e0b34d; --bad: #d97b6c;
+    --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 24px; background: var(--bg); color: var(--ink);
+    font: 15px/1.55 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 860px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 2px; font-weight: 650; }
+  .sub { color: var(--dim); margin: 0 0 20px; font-size: 13.5px; }
+  .card {
+    background: var(--card); border: 1px solid var(--edge); border-radius: 10px;
+    padding: 16px 18px; margin: 0 0 14px;
+  }
+  .card h2 {
+    font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--dim); margin: 0 0 10px; font-weight: 600;
+  }
+  textarea {
+    width: 100%; min-height: 84px; resize: vertical;
+    background: #12171c; color: var(--ink); border: 1px solid var(--edge);
+    border-radius: 6px; padding: 10px; font-family: var(--mono); font-size: 13px;
+  }
+  button {
+    background: var(--accent); color: #0d1114; border: 0; border-radius: 6px;
+    padding: 8px 18px; font-size: 14px; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: 0.45; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--accent); }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  .info { color: var(--dim); font-size: 13px; font-family: var(--mono); }
+  .status { font-size: 13px; color: var(--dim); min-height: 1.2em; }
+  .status.ok { color: var(--accent); }
+  .status.bad { color: var(--bad); }
+  .status.busy { color: var(--warn); }
+  #meter {
+    width: 100%; height: 64px; display: block; margin-top: 12px;
+    background: #12171c; border: 1px solid var(--edge); border-radius: 6px;
+  }
+  #rxLog { margin-top: 12px; }
+  .msg {
+    border: 1px solid var(--edge); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: 8px 12px; margin-bottom: 8px; background: #151b21;
+  }
+  .msghead { font-family: var(--mono); font-size: 11.5px; color: var(--dim); margin-bottom: 4px; }
+  .msgbody { font-family: var(--mono); font-size: 13px; white-space: pre-wrap; word-break: break-all; }
+  .notes { font-size: 13px; color: var(--dim); }
+  .notes p { margin: 6px 0; }
+  .notes b { color: var(--ink); font-weight: 600; }
+  code { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Acoustic Link</h1>
+  <p class="sub">16-MFSK, 1.5&ndash;4.3&nbsp;kHz, ~187&nbsp;bps &middot; a third signaling channel for filedrop-manual: no camera, no QR, no list &middot; single file, zero dependencies</p>
+
+  <div class="card">
+    <h2>Send &mdash; speaker</h2>
+    <textarea id="sendText" spellcheck="false">v9~AAF3kQhZ2mP0cXtR5nL8wKjD4sB7yG1uE6oI3aC0fT#hQ9zM2xV5bN8pL1kJ4gD7sF0aH3jK6lZ9cX2vB5nM8qW1eR4tY7uI0oP~fp:9Yt2Xe7Wq4Vu1Ts8Rr~cand:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d</textarea>
+    <div class="row">
+      <button id="sendBtn">Send</button>
+      <span id="sendInfo" class="info"></span>
+    </div>
+    <div id="sendStatus" class="status"></div>
+  </div>
+
+  <div class="card">
+    <h2>Receive &mdash; microphone</h2>
+    <div class="row">
+      <button id="listenBtn" class="ghost">Listen</button>
+      <span class="info">gold bar = pilot (1200 Hz) &middot; teal bars = the 16 data tones</span>
+    </div>
+    <div id="rxStatus" class="status"></div>
+    <canvas id="meter" width="820" height="64"></canvas>
+    <div id="rxLog"></div>
+  </div>
+
+  <div class="card">
+    <h2>Self-test &mdash; no audio hardware needed</h2>
+    <div class="row">
+      <button id="testBtn" class="ghost">Run in-memory loopback</button>
+      <span class="info">encode &#8594; add 15 dB-SNR noise &#8594; decode, entirely in RAM</span>
+    </div>
+    <div id="testStatus" class="status"></div>
+  </div>
+
+  <div class="card notes">
+    <h2>Notes</h2>
+    <p><b>Demo on one machine:</b> press Listen, then Send &mdash; the mic hears the speaker across the air gap between them. Two machines: one listens, the other sends.</p>
+    <p><b>Frame format:</b> 250 ms pilot &middot; 8-symbol sync &middot; 2-byte length &middot; payload (2 symbols/byte) &middot; CRC-16/CCITT. A ~200-byte packed SDP is about 9 seconds of audio.</p>
+    <p><b>Validated headless (Node invariant suite):</b> clean loopback at 48 k and 44.1 k, random silence padding, AWGN to 8 dB SNR (decodes to 3 dB), 48 k &#8594; 44.1 k resample mismatch, 25% gain wobble, and all three combined; pure noise never false-decodes (CRC + sync gate).</p>
+    <p><b>Browser-path (cannot be tested headless):</b> mic requires HTTPS and a user grant; the getUserMedia constraints disable echo cancellation / noise suppression / AGC, but some stacks ignore them &mdash; OS-level noise suppression can eat the tones; AudioWorklet loads from a Blob URL and falls back to ScriptProcessorNode automatically; speaker volume around 60&ndash;80% works best; decode passes cost ~100&ndash;250 ms of CPU each while listening.</p>
+    <p><b>Known v1 limits:</b> no FEC yet (CRC + resend is the protocol) &mdash; a Hamming(7,4) layer is the obvious next change, one hypothesis at a time. Range is conference-room scale, not hallway scale.</p>
+    <p><b>Deploy:</b> single self-contained file, zero dependencies &mdash; drop <code>modem.html</code> at the site root; GitHub&nbsp;Pages serves it at <code>/modem</code>.</p>
+  </div>
+</main>
+<script>
+/* Acoustic modem core: pure functions only. No DOM, no Web Audio, no I/O.
+   Scheme: 16-MFSK, phase-continuous, with a pilot tone, an 8-symbol sync
+   sequence, a 2-byte length field, the payload, and a CRC-16/CCITT trailer.
+   Every byte becomes two symbols (high nibble first). Symbol boundaries are
+   computed in floating point and rounded per symbol, so there is no
+   cumulative timing drift at non-integer samples-per-symbol rates. */
+(function (root, factory) {
+  var api = factory();
+  if (typeof module !== "undefined" && module.exports) { module.exports = api; }
+  if (root) { root.AcousticModem = api; }
+})(typeof self !== "undefined" ? self : this, function () {
+  "use strict";
+
+  var CFG = {
+    f0: 1500.0,          /* first tone, Hz */
+    df: 187.5,           /* tone spacing, Hz */
+    toneCount: 16,       /* 4 bits per symbol */
+    symbolSec: 1.0 / 46.875,  /* 21.333 ms per symbol, ~187.5 bps */
+    analysisFrac: 0.75,  /* fraction of the symbol analyzed (guard at edges) */
+    rampSec: 0.004,      /* raised-cosine edge per symbol, tames splatter */
+    pilotFreq: 1200.0,   /* below the data band, wakes up AGC and humans */
+    pilotSec: 0.25,
+    gapSec: 0.06,        /* silence between pilot and sync */
+    tailSec: 0.05,
+    sync: [0, 15, 3, 12, 6, 9, 1, 14],
+    amplitude: 0.8,
+    maxPayload: 1024
+  };
+
+  /* ------------------------------------------------------------- CRC-16 */
+  function crc16(bytes) {
+    var crc = 0xFFFF;
+    for (var i = 0; i < bytes.length; i++) {
+      crc ^= bytes[i] << 8;
+      for (var b = 0; b < 8; b++) {
+        crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
+        crc &= 0xFFFF;
+      }
+    }
+    return crc;
+  }
+
+  /* -------------------------------------------------- bytes -> symbols */
+  function bytesToSymbols(bytes) {
+    if (bytes.length < 1 || bytes.length > CFG.maxPayload) {
+      throw new Error("payload must be 1.." + CFG.maxPayload + " bytes");
+    }
+    var syms = CFG.sync.slice();
+    var len = bytes.length;
+    var i;
+    syms.push((len >> 12) & 0xF, (len >> 8) & 0xF, (len >> 4) & 0xF, len & 0xF);
+    for (i = 0; i < bytes.length; i++) {
+      syms.push((bytes[i] >> 4) & 0xF, bytes[i] & 0xF);
+    }
+    var c = crc16(bytes);
+    syms.push((c >> 12) & 0xF, (c >> 8) & 0xF, (c >> 4) & 0xF, c & 0xF);
+    return syms;
+  }
+
+  function frameSymbolCount(len) {
+    return CFG.sync.length + 4 + 2 * len + 4;
+  }
+
+  function estimateSeconds(len) {
+    return CFG.pilotSec + CFG.gapSec + frameSymbolCount(len) * CFG.symbolSec + CFG.tailSec;
+  }
+
+  /* ------------------------------------------------- symbols -> PCM */
+  function synthesize(symbols, sampleRate) {
+    var sr = sampleRate;
+    var symF = CFG.symbolSec * sr;
+    var pilotN = Math.round(CFG.pilotSec * sr);
+    var gapN = Math.round(CFG.gapSec * sr);
+    var tailN = Math.round(CFG.tailSec * sr);
+    var dataN = Math.round(symbols.length * symF);
+    var total = pilotN + gapN + dataN + tailN;
+    var pcm = new Float32Array(total);
+    var twoPi = Math.PI * 2;
+    var phase = 0;
+    var rampN = Math.max(1, Math.round(CFG.rampSec * sr));
+    var i, n, s;
+
+    /* pilot with fade at both ends */
+    var pf = twoPi * CFG.pilotFreq / sr;
+    for (n = 0; n < pilotN; n++) {
+      var env = 1.0;
+      if (n < rampN) { env = 0.5 - 0.5 * Math.cos(Math.PI * n / rampN); }
+      if (pilotN - n < rampN) { env = Math.min(env, 0.5 - 0.5 * Math.cos(Math.PI * (pilotN - n) / rampN)); }
+      pcm[n] = CFG.amplitude * env * Math.sin(phase);
+      phase += pf;
+    }
+
+    /* symbols: phase-continuous FSK with per-symbol raised-cosine edges */
+    var base = pilotN + gapN;
+    for (i = 0; i < symbols.length; i++) {
+      s = symbols[i];
+      var freq = CFG.f0 + s * CFG.df;
+      var inc = twoPi * freq / sr;
+      var s0 = Math.round(i * symF);
+      var s1 = Math.round((i + 1) * symF);
+      var segN = s1 - s0;
+      for (n = 0; n < segN; n++) {
+        var e = 1.0;
+        if (n < rampN) { e = 0.5 - 0.5 * Math.cos(Math.PI * n / rampN); }
+        if (segN - n <= rampN) { e = Math.min(e, 0.5 - 0.5 * Math.cos(Math.PI * (segN - n) / rampN)); }
+        pcm[base + s0 + n] = CFG.amplitude * e * Math.sin(phase);
+        phase += inc;
+        if (phase > twoPi) { phase -= twoPi; }
+      }
+    }
+    return pcm;
+  }
+
+  function encodeToPcm(bytes, sampleRate) {
+    return synthesize(bytesToSymbols(bytes), sampleRate);
+  }
+
+  /* ---------------------------------------------------------- Goertzel */
+  function goertzelPower(buf, len, freq, sr) {
+    var w = 2 * Math.PI * freq / sr;
+    var coeff = 2 * Math.cos(w);
+    var s0 = 0, s1 = 0, s2 = 0;
+    for (var i = 0; i < len; i++) {
+      s0 = buf[i] + coeff * s1 - s2;
+      s2 = s1;
+      s1 = s0;
+    }
+    return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+  }
+
+  function makeHann(n) {
+    var w = new Float32Array(n);
+    for (var i = 0; i < n; i++) { w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); }
+    return w;
+  }
+
+  /* ------------------------------------------------------------ decode */
+  /* Returns { ok, bytes, text?, startSample, endSample, syncScore, reason } */
+  function decodeFromPcm(pcm, sampleRate, opts) {
+    opts = opts || {};
+    var sr = sampleRate;
+    var symF = CFG.symbolSec * sr;
+    var symbolN = Math.round(symF);
+    var hop = Math.max(1, symbolN >> 2);
+    var anaN = Math.max(8, Math.round(symF * CFG.analysisFrac));
+    var half = anaN >> 1;
+    var minStart = Math.max(0, opts.minStart | 0);
+    var K = CFG.toneCount;
+    var freqs = new Float64Array(K);
+    var k, i;
+    for (k = 0; k < K; k++) { freqs[k] = CFG.f0 + k * CFG.df; }
+    var hann = makeHann(anaN);
+    var scratch = new Float32Array(anaN);
+    var energies = new Float64Array(K);
+
+    function toneEnergiesAt(center) {
+      var start = center - half;
+      var a, t;
+      if (start < 0 || start + anaN > pcm.length) { return null; }
+      for (a = 0; a < anaN; a++) { scratch[a] = pcm[start + a] * hann[a]; }
+      for (t = 0; t < K; t++) { energies[t] = goertzelPower(scratch, anaN, freqs[t], sr); }
+      return energies;
+    }
+
+    function argmax(arr) {
+      var bi = 0, bv = -Infinity;
+      for (var j = 0; j < arr.length; j++) { if (arr[j] > bv) { bv = arr[j]; bi = j; } }
+      return bi;
+    }
+
+    /* pass 1: dominant tone at every hop center */
+    var H = Math.max(0, Math.floor((pcm.length - anaN) / hop));
+    var dom = new Int8Array(H).fill(-1);
+    var domE = new Float64Array(H);
+    var h;
+    for (h = 0; h < H; h++) {
+      var c = h * hop + half;
+      var e = toneEnergiesAt(c);
+      if (!e) { continue; }
+      var bi = argmax(e);
+      dom[h] = bi;
+      domE[h] = e[bi];
+    }
+
+    /* pass 2: slide the sync pattern over the hop grid */
+    var S = CFG.sync;
+    var syncOffHops = new Int32Array(S.length);
+    for (k = 0; k < S.length; k++) {
+      syncOffHops[k] = Math.round(((k + 0.5) * symF - half) / hop);
+    }
+    var candidates = [];
+    var h0min = Math.floor(minStart / hop);
+    for (h = h0min; h < H; h++) {
+      var score = 0, esum = 0, valid = true;
+      for (k = 0; k < S.length; k++) {
+        var hi = h + syncOffHops[k];
+        if (hi < 0 || hi >= H || dom[hi] < 0) { valid = false; break; }
+        if (dom[hi] === S[k]) { score++; }
+        esum += domE[hi];
+      }
+      if (valid && score >= S.length - 1) {
+        candidates.push({ h: h, score: score, esum: esum });
+      }
+    }
+    if (candidates.length === 0) {
+      return { ok: false, reason: "nosync" };
+    }
+    candidates.sort(function (a, b) {
+      return (b.score - a.score) || (b.esum - a.esum);
+    });
+
+    /* thin near-duplicate candidates (same lock within one symbol) */
+    var picked = [];
+    for (i = 0; i < candidates.length && picked.length < 6; i++) {
+      var dup = false;
+      for (var j = 0; j < picked.length; j++) {
+        if (Math.abs(candidates[i].h - picked[j].h) * hop < symbolN) { dup = true; break; }
+      }
+      if (!dup) { picked.push(candidates[i]); }
+    }
+
+    function symbolAt(startSample, index) {
+      var center = startSample + Math.round((index + 0.5) * symF);
+      var e = toneEnergiesAt(center);
+      if (!e) { return -1; }
+      return argmax(e);
+    }
+
+    function syncQuality(startSample) {
+      var q = 0;
+      for (var kk = 0; kk < S.length; kk++) {
+        var center = startSample + Math.round((kk + 0.5) * symF);
+        var e = toneEnergiesAt(center);
+        if (!e) { return -1; }
+        var tot = 1e-12;
+        for (var t = 0; t < K; t++) { tot += e[t]; }
+        q += e[S[kk]] / tot;
+      }
+      return q;
+    }
+
+    for (i = 0; i < picked.length; i++) {
+      var coarse = picked[i].h * hop;
+
+      /* fine timing: maximize sync-tone energy share over +/- one hop */
+      var bestOff = 0, bestQ = -1;
+      var step = Math.max(1, hop >> 2);
+      for (var off = -hop; off <= hop; off += step) {
+        var q = syncQuality(coarse + off);
+        if (q > bestQ) { bestQ = q; bestOff = off; }
+      }
+      var s0 = coarse + bestOff;
+
+      /* parse the frame */
+      var idx = S.length;
+      var n0 = symbolAt(s0, idx), n1 = symbolAt(s0, idx + 1);
+      var n2 = symbolAt(s0, idx + 2), n3 = symbolAt(s0, idx + 3);
+      if (n0 < 0 || n1 < 0 || n2 < 0 || n3 < 0) { continue; }
+      var len = (n0 << 12) | (n1 << 8) | (n2 << 4) | n3;
+      if (len < 1 || len > CFG.maxPayload) { continue; }
+      var totalSyms = frameSymbolCount(len);
+      var lastCenter = s0 + Math.round((totalSyms - 0.5) * symF);
+      if (lastCenter + (anaN - half) > pcm.length) { continue; }
+
+      idx += 4;
+      var bytes = new Uint8Array(len);
+      var bad = false;
+      for (var bi2 = 0; bi2 < len; bi2++) {
+        var hiN = symbolAt(s0, idx + 2 * bi2);
+        var loN = symbolAt(s0, idx + 2 * bi2 + 1);
+        if (hiN < 0 || loN < 0) { bad = true; break; }
+        bytes[bi2] = (hiN << 4) | loN;
+      }
+      if (bad) { continue; }
+      idx += 2 * len;
+      var c0 = symbolAt(s0, idx), c1 = symbolAt(s0, idx + 1);
+      var c2 = symbolAt(s0, idx + 2), c3 = symbolAt(s0, idx + 3);
+      if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) { continue; }
+      var rxCrc = (c0 << 12) | (c1 << 8) | (c2 << 4) | c3;
+      if (rxCrc !== crc16(bytes)) {
+        if (i === picked.length - 1) {
+          return { ok: false, reason: "crc", startSample: s0, syncScore: picked[i].score };
+        }
+        continue;
+      }
+      return {
+        ok: true,
+        bytes: bytes,
+        startSample: s0,
+        endSample: s0 + Math.round(totalSyms * symF),
+        syncScore: picked[i].score,
+        reason: "ok"
+      };
+    }
+    return { ok: false, reason: "noframe" };
+  }
+
+  return {
+    CFG: CFG,
+    crc16: crc16,
+    bytesToSymbols: bytesToSymbols,
+    encodeToPcm: encodeToPcm,
+    decodeFromPcm: decodeFromPcm,
+    estimateSeconds: estimateSeconds,
+    frameSymbolCount: frameSymbolCount,
+    goertzelPower: goertzelPower,
+    makeHann: makeHann
+  };
+});
+</script>
+<script>
+/* App layer for the acoustic link page. Everything below touches browser
+   APIs (Web Audio, getUserMedia) and is therefore browser-verify-only:
+   validated logic lives in AcousticModem (tested headless); this file is
+   plumbing. Comments are block-style only; source is pure ASCII. */
+(function () {
+  "use strict";
+
+  var M = window.AcousticModem;
+  var $ = function (id) { return document.getElementById(id); };
+
+  var ctx = null;
+  function audioCtx() {
+    if (!ctx) {
+      var AC = window.AudioContext || window.webkitAudioContext;
+      ctx = new AC();
+      console.log("[link] AudioContext created, rate =", ctx.sampleRate);
+    }
+    if (ctx.state === "suspended") { ctx.resume(); }
+    return ctx;
+  }
+
+  function setStatus(el, msg, cls) {
+    el.textContent = msg;
+    el.className = "status" + (cls ? " " + cls : "");
+  }
+
+  /* ------------------------------------------------------------- SEND */
+  var sendBtn = $("sendBtn");
+  var sendText = $("sendText");
+  var sendInfo = $("sendInfo");
+  var sendStatus = $("sendStatus");
+  var enc = new TextEncoder();
+  var dec = new TextDecoder("utf-8");
+
+  function updateEstimate() {
+    try {
+      var n = enc.encode(sendText.value).length;
+      if (n < 1) { sendInfo.textContent = "empty"; return; }
+      if (n > M.CFG.maxPayload) {
+        sendInfo.textContent = n + " bytes \u2014 over the " + M.CFG.maxPayload + " byte cap";
+        return;
+      }
+      sendInfo.textContent = n + " bytes \u00B7 ~" + M.estimateSeconds(n).toFixed(1) + " s of air time";
+    } catch (e) { console.error("[link] estimate failed:", e); }
+  }
+  sendText.addEventListener("input", updateEstimate);
+
+  sendBtn.addEventListener("click", function () {
+    try {
+      var bytes = enc.encode(sendText.value);
+      if (bytes.length < 1 || bytes.length > M.CFG.maxPayload) {
+        setStatus(sendStatus, "payload must be 1.." + M.CFG.maxPayload + " bytes", "bad");
+        return;
+      }
+      var ac = audioCtx();
+      var pcm = M.encodeToPcm(bytes, ac.sampleRate);
+      var buf = ac.createBuffer(1, pcm.length, ac.sampleRate);
+      buf.getChannelData(0).set(pcm);
+      var src = ac.createBufferSource();
+      src.buffer = buf;
+      var gain = ac.createGain();
+      gain.gain.value = 0.9;
+      src.connect(gain);
+      gain.connect(ac.destination);
+      var secs = pcm.length / ac.sampleRate;
+      src.start();
+      console.log("[link] sending", bytes.length, "bytes,", secs.toFixed(2), "s at", ac.sampleRate, "Hz");
+      sendBtn.disabled = true;
+      setStatus(sendStatus, "transmitting\u2026 " + secs.toFixed(1) + " s", "busy");
+      src.onended = function () {
+        sendBtn.disabled = false;
+        setStatus(sendStatus, "sent " + bytes.length + " bytes", "ok");
+      };
+    } catch (e) {
+      console.error("[link] send failed:", e);
+      sendBtn.disabled = false;
+      setStatus(sendStatus, "send failed: " + e.message, "bad");
+    }
+  });
+
+  /* ---------------------------------------------------------- RECEIVE */
+  var listenBtn = $("listenBtn");
+  var rxStatus = $("rxStatus");
+  var rxLog = $("rxLog");
+  var meter = $("meter");
+  var mtx = meter.getContext("2d");
+
+  var listening = false;
+  var mediaStream = null;
+  var captureNode = null;
+  var srcNode = null;
+  var muteNode = null;
+
+  /* ring buffer of chunks with absolute sample accounting */
+  var chunks = [];
+  var bufLen = 0;
+  var totalAbs = 0;
+  var lastEndAbs = 0;
+  var lastText = "";
+  var lastTextAt = 0;
+  var decodeTimer = null;
+  var BUF_CAP_SEC = 25;
+
+  /* rolling tail for the live meter */
+  var tail = new Float32Array(4096);
+
+  function pushChunk(f32) {
+    chunks.push(f32);
+    bufLen += f32.length;
+    totalAbs += f32.length;
+    if (f32.length >= tail.length) {
+      tail.set(f32.subarray(f32.length - tail.length));
+    } else {
+      tail.copyWithin(0, f32.length);
+      tail.set(f32, tail.length - f32.length);
+    }
+    var cap = (ctx ? ctx.sampleRate : 48000) * BUF_CAP_SEC;
+    while (bufLen > cap && chunks.length > 1) {
+      bufLen -= chunks[0].length;
+      chunks.shift();
+    }
+  }
+
+  function assemble() {
+    var out = new Float32Array(bufLen);
+    var off = 0;
+    for (var i = 0; i < chunks.length; i++) {
+      out.set(chunks[i], off);
+      off += chunks[i].length;
+    }
+    return out;
+  }
+
+  function logMessage(text, bytes, score) {
+    var row = document.createElement("div");
+    row.className = "msg";
+    var t = new Date().toTimeString().slice(0, 8);
+    var head = document.createElement("div");
+    head.className = "msghead";
+    head.textContent = t + " \u00B7 " + bytes.length + " bytes \u00B7 CRC ok \u00B7 sync " + score + "/8";
+    var body = document.createElement("div");
+    body.className = "msgbody";
+    body.textContent = text;
+    row.appendChild(head);
+    row.appendChild(body);
+    rxLog.prepend(row);
+  }
+
+  function tryDecode() {
+    if (!listening || bufLen < (ctx.sampleRate * 1.5)) { return; }
+    try {
+      var pcm = assemble();
+      var bufStartAbs = totalAbs - bufLen;
+      var minStart = Math.max(0, lastEndAbs - bufStartAbs);
+      if (minStart >= pcm.length) { return; }
+      var t0 = performance.now();
+      var res = M.decodeFromPcm(pcm, ctx.sampleRate, { minStart: minStart });
+      var ms = (performance.now() - t0).toFixed(0);
+      if (res.ok) {
+        lastEndAbs = bufStartAbs + res.endSample;
+        var text = dec.decode(res.bytes);
+        var now = Date.now();
+        if (text === lastText && (now - lastTextAt) < 8000) {
+          console.log("[link] duplicate suppressed (room echo)");
+        } else {
+          lastText = text;
+          lastTextAt = now;
+          console.log("[link] decoded", res.bytes.length, "bytes in", ms, "ms, sync", res.syncScore);
+          logMessage(text, res.bytes, res.syncScore);
+          setStatus(rxStatus, "message received (" + res.bytes.length + " bytes)", "ok");
+        }
+      } else if (res.reason === "crc") {
+        setStatus(rxStatus, "heard a frame but CRC failed \u2014 move closer / raise volume", "bad");
+        console.log("[link] CRC failure at sample", res.startSample);
+      }
+    } catch (e) {
+      console.error("[link] decode pass failed:", e);
+    }
+  }
+
+  function drawMeter() {
+    if (!listening) { return; }
+    try {
+      var w = meter.width, h = meter.height;
+      mtx.clearRect(0, 0, w, h);
+      var K = M.CFG.toneCount;
+      var n = 1024;
+      var seg = tail.subarray(tail.length - n);
+      var bw = w / (K + 1);
+      var maxE = 1e-9;
+      var vals = [];
+      for (var k = -1; k < K; k++) {
+        var f = (k < 0) ? M.CFG.pilotFreq : (M.CFG.f0 + k * M.CFG.df);
+        var e = M.goertzelPower(seg, n, f, ctx.sampleRate);
+        vals.push(e);
+        if (e > maxE) { maxE = e; }
+      }
+      for (var j = 0; j < vals.length; j++) {
+        var v = Math.pow(vals[j] / maxE, 0.4);
+        var bh = Math.max(1, v * (h - 4));
+        mtx.fillStyle = (j === 0) ? "#e0b34d" : "#5db1a0";
+        mtx.fillRect(j * bw + 2, h - bh, bw - 4, bh);
+      }
+    } catch (e) { console.error("[link] meter failed:", e); }
+    requestAnimationFrame(drawMeter);
+  }
+
+  var WORKLET_SRC =
+    "class Cap extends AudioWorkletProcessor {" +
+    "  process(inputs) {" +
+    "    var ch = inputs[0] && inputs[0][0];" +
+    "    if (ch) { var c = new Float32Array(ch); this.port.postMessage(c, [c.buffer]); }" +
+    "    return true;" +
+    "  }" +
+    "}" +
+    "registerProcessor('cap', Cap);";
+
+  function attachCapture(ac, source) {
+    /* prefer AudioWorklet (Blob URL keeps it single-file); fall back to
+       ScriptProcessorNode if the worklet path is unavailable or blocked */
+    var url = URL.createObjectURL(new Blob([WORKLET_SRC], { type: "application/javascript" }));
+    return ac.audioWorklet.addModule(url).then(function () {
+      var node = new AudioWorkletNode(ac, "cap");
+      node.port.onmessage = function (e) { pushChunk(e.data); };
+      source.connect(node);
+      muteNode = ac.createGain();
+      muteNode.gain.value = 0;
+      node.connect(muteNode);
+      muteNode.connect(ac.destination);
+      console.log("[link] capture via AudioWorklet");
+      return node;
+    }).catch(function (err) {
+      console.warn("[link] AudioWorklet unavailable, falling back to ScriptProcessor:", err);
+      var node = ac.createScriptProcessor(4096, 1, 1);
+      node.onaudioprocess = function (e) {
+        pushChunk(new Float32Array(e.inputBuffer.getChannelData(0)));
+      };
+      source.connect(node);
+      muteNode = ac.createGain();
+      muteNode.gain.value = 0;
+      node.connect(muteNode);
+      muteNode.connect(ac.destination);
+      console.log("[link] capture via ScriptProcessor");
+      return node;
+    });
+  }
+
+  function stopListening() {
+    listening = false;
+    if (decodeTimer) { clearInterval(decodeTimer); decodeTimer = null; }
+    if (captureNode) { try { captureNode.disconnect(); } catch (e) {} captureNode = null; }
+    if (srcNode) { try { srcNode.disconnect(); } catch (e) {} srcNode = null; }
+    if (muteNode) { try { muteNode.disconnect(); } catch (e) {} muteNode = null; }
+    if (mediaStream) {
+      mediaStream.getTracks().forEach(function (t) { t.stop(); });
+      mediaStream = null;
+    }
+    chunks = []; bufLen = 0;
+    listenBtn.textContent = "Listen";
+    setStatus(rxStatus, "stopped", "");
+    console.log("[link] listening stopped");
+  }
+
+  listenBtn.addEventListener("click", function () {
+    if (listening) { stopListening(); return; }
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setStatus(rxStatus, "no microphone API \u2014 needs HTTPS (or localhost)", "bad");
+      return;
+    }
+    var ac = audioCtx();
+    setStatus(rxStatus, "requesting microphone\u2026", "busy");
+    navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1
+      }
+    }).then(function (stream) {
+      mediaStream = stream;
+      srcNode = ac.createMediaStreamSource(stream);
+      return attachCapture(ac, srcNode);
+    }).then(function (node) {
+      captureNode = node;
+      listening = true;
+      totalAbs = 0; lastEndAbs = 0; chunks = []; bufLen = 0;
+      listenBtn.textContent = "Stop";
+      setStatus(rxStatus, "listening at " + ac.sampleRate + " Hz\u2026", "busy");
+      decodeTimer = setInterval(tryDecode, 900);
+      requestAnimationFrame(drawMeter);
+    }).catch(function (err) {
+      console.error("[link] mic failed:", err);
+      setStatus(rxStatus, "microphone denied or unavailable: " + err.message, "bad");
+    });
+  });
+
+  /* --------------------------------------------------------- SELF-TEST */
+  var testBtn = $("testBtn");
+  var testStatus = $("testStatus");
+
+  function gaussPair() {
+    var u = Math.max(Math.random(), 1e-12), v = Math.random();
+    return Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+  }
+
+  testBtn.addEventListener("click", function () {
+    setStatus(testStatus, "running\u2026", "busy");
+    setTimeout(function () {
+      try {
+        var msg = "Self-test " + new Date().toISOString() + " \u2014 in-memory loopback, 15 dB SNR.";
+        var bytes = enc.encode(msg);
+        var sr = 48000;
+        var pcm = M.encodeToPcm(bytes, sr);
+        var padded = new Float32Array(Math.round(sr * 0.5) + pcm.length + Math.round(sr * 0.3));
+        padded.set(pcm, Math.round(sr * 0.5));
+        var rms = 0, na = 0;
+        for (var i = 0; i < padded.length; i++) {
+          if (Math.abs(padded[i]) > 0.01) { rms += padded[i] * padded[i]; na++; }
+        }
+        rms = Math.sqrt(rms / Math.max(1, na));
+        var sigma = rms / Math.pow(10, 15 / 20);
+        for (var j = 0; j < padded.length; j++) { padded[j] += sigma * gaussPair(); }
+        var t0 = performance.now();
+        var res = M.decodeFromPcm(padded, sr);
+        var ms = (performance.now() - t0).toFixed(0);
+        var ok = res.ok && dec.decode(res.bytes) === msg;
+        console.log("[link] self-test:", ok ? "PASS" : "FAIL", "(" + ms + " ms)", res.reason);
+        setStatus(testStatus, ok
+          ? "PASS \u2014 " + bytes.length + " bytes through synthetic noise in " + ms + " ms"
+          : "FAIL \u2014 " + res.reason, ok ? "ok" : "bad");
+      } catch (e) {
+        console.error("[link] self-test failed:", e);
+        setStatus(testStatus, "FAIL \u2014 " + e.message, "bad");
+      }
+    }, 30);
+  });
+
+  /* ------------------------------------------------------------- init */
+  updateEstimate();
+  console.log("[link] ready. band " + M.CFG.f0 + "\u2013" +
+    (M.CFG.f0 + (M.CFG.toneCount - 1) * M.CFG.df) + " Hz, " +
+    (1 / M.CFG.symbolSec).toFixed(1) + " sym/s, 4 bits/symbol.");
+})();
+</script>
+</body>
+</html>
