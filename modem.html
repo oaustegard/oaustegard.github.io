@@ -100,7 +100,7 @@
     <p><b>Demo on one machine:</b> press Listen, then Send &mdash; the mic hears the speaker across the air gap between them. Two machines: one listens, the other sends.</p>
     <p><b>Frame format:</b> 250 ms pilot &middot; 8-symbol sync &middot; version + length header block &middot; payload + CRC-16/CCITT, all carried in RS(15,11) codewords (11 data + 4 parity nibbles each). Every tone is one GF(16) symbol; each 15-symbol block corrects 2 errors or 4 erasures. A ~200-byte packed SDP is about 12 seconds of audio.</p>
     <p><b>Validated headless (Node invariant suite):</b> GF(16) arithmetic, RS errata recovery across 400 random error/erasure patterns, clean loopback at 48 k and 44.1 k, random silence padding, AWGN to 6 dB SNR (decodes to 4 dB), 48 k &#8594; 44.1 k resample mismatch, 25% gain wobble, all combined, and recovery from a steady in-band interfering tone; pure noise never false-decodes (CRC + sync gate).</p>
-    <p><b>Browser-path (cannot be tested headless):</b> mic requires HTTPS and a user grant; the getUserMedia constraints disable echo cancellation / noise suppression / AGC, but some stacks ignore them &mdash; OS-level noise suppression can eat the tones; AudioWorklet loads from a Blob URL and falls back to ScriptProcessorNode automatically; speaker volume around 60&ndash;80% works best; decode passes cost ~100&ndash;250 ms of CPU each while listening.</p>
+    <p><b>Browser-path (cannot be tested headless):</b> mic requires HTTPS and a user grant; the getUserMedia constraints disable echo cancellation / noise suppression / AGC, but some stacks ignore them &mdash; OS-level noise suppression can eat the tones; AudioWorklet loads from a Blob URL and falls back to ScriptProcessorNode automatically; on iOS, sending forces the loudspeaker route instead of the earpiece; speaker volume around 60&ndash;80% works best; decode passes cost ~100&ndash;250 ms of CPU each while listening.</p>
     <p><b>Known limits:</b> RS(15,11) corrects up to 2 wrong tones or 4 erasures per 15-symbol block; a burst ruining 3+ symbols in one block still fails that frame (CRC catches it, resend is the fallback). Broadband noise spread thin across a long frame is the hard case, not localized transients. Range is conference-room scale, not hallway scale.</p>
     <p><b>Deploy:</b> single self-contained file, zero dependencies &mdash; drop <code>modem.html</code> at the site root; GitHub&nbsp;Pages serves it at <code>/modem</code>.</p>
   </div>
@@ -637,6 +637,13 @@
         return;
       }
       var ac = audioCtx();
+      /* iOS routes Web Audio to the earpiece when a mic stream is live or the
+         audio session is in voice mode. Force the loudspeaker for send, unless
+         this same device is also listening (the single-machine demo needs the
+         play-and-record route). No-op without the AudioSession API. */
+      if (!listening && "audioSession" in navigator) {
+        try { navigator.audioSession.type = "playback"; } catch (e) { console.warn("[link] audioSession playback failed:", e); }
+      }
       var pcm = M.encodeToPcm(bytes, ac.sampleRate);
       var buf = ac.createBuffer(1, pcm.length, ac.sampleRate);
       buf.getChannelData(0).set(pcm);
@@ -852,6 +859,9 @@
       return;
     }
     var ac = audioCtx();
+    if ("audioSession" in navigator) {
+      try { navigator.audioSession.type = "play-and-record"; } catch (e) { console.warn("[link] audioSession play-and-record failed:", e); }
+    }
     setStatus(rxStatus, "requesting microphone\u2026", "busy");
     navigator.mediaDevices.getUserMedia({
       audio: {
