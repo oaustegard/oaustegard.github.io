@@ -734,14 +734,16 @@
         setStatus(sendStatus, "payload must be 1.." + M.CFG.maxPayload + " bytes", "bad");
         return;
       }
-      var ac = audioCtx();
-      /* iOS routes Web Audio to the earpiece when a mic stream is live or the
-         audio session is in voice mode. Force the loudspeaker for send, unless
-         this same device is also listening (the single-machine demo needs the
-         play-and-record route). No-op without the AudioSession API. */
+      /* iOS binds the audio-session route when the AudioContext activates, so
+         set the type BEFORE creating/resuming the context — flipping it on an
+         already-running context does not re-route its output (that was the
+         earpiece bug this fix was meant to solve). Force the loudspeaker for
+         send, unless this same device is also listening (the single-machine
+         demo needs the play-and-record route). No-op without the API. */
       if (!listening && "audioSession" in navigator) {
         try { navigator.audioSession.type = "playback"; } catch (e) { console.warn("[link] audioSession playback failed:", e); }
       }
+      var ac = audioCtx();
       var pcm = M.encodeToPcm(bytes, ac.sampleRate);
       var buf = ac.createBuffer(1, pcm.length, ac.sampleRate);
       buf.getChannelData(0).set(pcm);
@@ -1046,10 +1048,13 @@
       setStatus(rxStatus, "no microphone API \u2014 needs HTTPS (or localhost)", "bad");
       return;
     }
-    var ac = audioCtx();
+    /* Set the record route before the context activates (same ordering as
+       send). getUserMedia below re-activates under record anyway, but ordering
+       it correctly keeps the two paths consistent and non-fragile. */
     if ("audioSession" in navigator) {
       try { navigator.audioSession.type = "play-and-record"; } catch (e) { console.warn("[link] audioSession play-and-record failed:", e); }
     }
+    var ac = audioCtx();
     setStatus(rxStatus, "requesting microphone\u2026", "busy");
     navigator.mediaDevices.getUserMedia({
       audio: {
