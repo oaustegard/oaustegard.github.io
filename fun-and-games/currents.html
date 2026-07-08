@@ -255,7 +255,6 @@
   var mouse = [0, 0];
   var mouseTarget = [0, 0];
   var warp = 0.0;
-  var tiltBoost = 0.0;   /* extra field-bend proportional to how hard you are tilting */
   var paused = false;
   var tSim = 0;
   var last = performance.now();
@@ -286,76 +285,14 @@
     if (e.touches[0]) pointer(e.touches[0].clientX, e.touches[0].clientY);
   }, { passive: true });
 
-  /* ------------------------------------------------------------ tilt (mobile)
-     On a phone there is no cursor, so device tilt drives the same field-bending
-     pointer the mouse would. Hold the device however is comfortable -- the first
-     reading becomes "level" -- and leaning steers the currents from there, with
-     a harder lean stirring the field more. iOS 13+ requires a user gesture before
-     handing over orientation, so we ask on the first tap (enableTilt, wired into
-     the touch/click handlers below). */
-  var tiltRequested = false;
-  var tiltPermission = "unknown";
-  var orientCount = 0, lastBG = "-";
-  var baseBeta = null, baseGamma = null;
-  var tiltMag = 0;               /* 0..1, how hard the device is leaning */
-
-  function screenAngle() {
-    if (window.screen && screen.orientation && typeof screen.orientation.angle === "number") return screen.orientation.angle;
-    if (typeof window.orientation === "number") return window.orientation;
-    return 0;
-  }
-
-  function onOrient(e) {
-    if (e.beta === null && e.gamma === null) return;
-    var beta = e.beta || 0, gamma = e.gamma || 0;
-    orientCount++; lastBG = Math.round(beta) + "/" + Math.round(gamma);
-    if (baseBeta === null) { baseBeta = beta; baseGamma = gamma; return; }  /* calibrate "level" */
-
-    var R = 35.0;                 /* degrees of tilt for full travel to the edge */
-    var gx = Math.max(-1, Math.min(1, (gamma - baseGamma) / R));
-    var gy = Math.max(-1, Math.min(1, (beta  - baseBeta ) / R));
-
-    /* rotate the tilt vector into screen space so it stays correct in landscape */
-    var rad = screenAngle() * Math.PI / 180.0;
-    var cs = Math.cos(rad), sn = Math.sin(rad);
-    var px =  gx * cs + gy * sn;
-    var py = -gx * sn + gy * cs;
-
-    tiltMag = Math.min(1, Math.sqrt(px * px + py * py));
-    mouseTarget = [(0.5 + 0.45 * px) * canvas.width, (0.5 + 0.45 * py) * canvas.height];
-  }
-
-  function enableTilt() {
-    if (tiltRequested) return;
-    tiltRequested = true;
-    var DOE = window.DeviceOrientationEvent;
-    if (DOE && typeof DOE.requestPermission === "function") {
-      DOE.requestPermission().then(function (res) {
-        tiltPermission = res;
-        if (res === "granted") window.addEventListener("deviceorientation", onOrient, true);
-        else console.warn("[currents] tilt permission denied:", res);
-      }).catch(function (err) { tiltPermission = "error"; console.warn("[currents] tilt permission error:", err); });
-    } else if (DOE) {
-      tiltPermission = "granted (no prompt)";
-      window.addEventListener("deviceorientation", onOrient, true);
-    } else {
-      tiltPermission = "no DeviceOrientationEvent";
-    }
-  }
-
-  /* recalibrate "level" when the device is physically rotated */
-  window.addEventListener("orientationchange", function () { baseBeta = null; baseGamma = null; });
-
   function shiftMood() {
     moodIndex = (moodIndex + 1) % MOODS.length;
     tgt = cloneMood(MOODS[moodIndex]);
     console.log("[currents] mood ->", moodIndex);
   }
-  /* Mood shift + first-tap tilt-enable both ride the click event. On iOS a tap
-     synthesizes a click promptly (fast-tap is on: maximum-scale=1, no delay), and
-     requestPermission() only succeeds from a genuine activation like this -- a
-     passive touchstart gets rejected by WebKit, so we do NOT use one here. */
-  window.addEventListener("click", function () { enableTilt(); shiftMood(); });
+  /* pointerdown fires once for both mouse and touch, and (unlike click) reliably
+     in an iOS standalone home-screen app -- tap anywhere to shift the mood. */
+  window.addEventListener("pointerdown", shiftMood);
 
   window.addEventListener("keydown", function (e) {
     if (e.code === "Space" || e.key === " ") {
@@ -372,7 +309,7 @@
   /* on touch devices, tell the story in touch terms */
   var isTouch = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || ("ontouchstart" in window);
   if (isTouch) {
-    hint.innerHTML = "tilt to steer &middot; tap to shift the mood &middot; add to home screen";
+    hint.innerHTML = "drift with a fingertip &middot; tap to shift the mood";
   }
 
   /* give Android/Chrome an install manifest too (iOS uses the meta tags above).
@@ -410,38 +347,6 @@
     } catch (e) { console.warn("[currents] viewport toggle failed:", e); }
   }
 
-  /* measure a CSS env() inset from JS via a probe element (CSS-var bridge is buggy) */
-  function measureEnv(prop) {
-    var el = document.createElement("div");
-    el.style.cssText = "position:fixed;top:0;left:0;width:0;height:env(" + prop + ",0px);visibility:hidden;pointer-events:none";
-    document.body.appendChild(el);
-    var v = el.offsetHeight;
-    el.remove();
-    return v;
-  }
-
-  /* optional on-screen diagnostics: append ?debug to the URL */
-  var dbg = null;
-  if (/(^|[?&])debug($|[&=])/.test(location.search)) {
-    dbg = document.createElement("div");
-    dbg.style.cssText = "position:fixed;top:0;left:0;z-index:99;max-width:78vw;" +
-      "margin:6px 0 0 6px;padding:6px 8px;font:11px/1.4 ui-monospace,Menlo,monospace;" +
-      "color:#9ff;background:rgba(0,0,0,0.6);white-space:pre;pointer-events:none;border-radius:6px;";
-    document.body.appendChild(dbg);
-    setInterval(function () {
-      var DOE = window.DeviceOrientationEvent;
-      dbg.textContent =
-        "standalone: " + (!!window.navigator.standalone) +
-        "\nDeviceOrientationEvent: " + (typeof DOE) +
-        "\nrequestPermission: " + (DOE && typeof DOE.requestPermission) +
-        "\ntiltRequested: " + tiltRequested +
-        "\npermission: " + tiltPermission +
-        "\norient events: " + orientCount +
-        "\nlast beta/gamma: " + lastBG +
-        "\ntiltMag: " + tiltMag.toFixed(2) +
-        "\ninset t/b: " + measureEnv("safe-area-inset-top") + "/" + measureEnv("safe-area-inset-bottom");
-    }, 300);
-  }
 
   /* fade the hint in, then out */
   requestAnimationFrame(function () { hint.classList.add("show"); });
@@ -458,7 +363,6 @@
       mouse[0] += (mouseTarget[0] - mouse[0]) * 0.06;
       mouse[1] += (mouseTarget[1] - mouse[1]) * 0.06;
       warp += (tgt.warp - warp) * 0.03;
-      tiltBoost += (tiltMag * 0.18 - tiltBoost) * 0.05;
 
       var k = 0.03;
       lerpArr(cur.a, tgt.a, k);
@@ -469,7 +373,7 @@
       gl.uniform2f(U.res, canvas.width, canvas.height);
       gl.uniform1f(U.time, tSim);
       gl.uniform2f(U.mouse, mouse[0], mouse[1]);
-      gl.uniform1f(U.warp, warp + tiltBoost);
+      gl.uniform1f(U.warp, warp);
       gl.uniform3fv(U.pa, cur.a);
       gl.uniform3fv(U.pb, cur.b);
       gl.uniform3fv(U.pc, cur.c);
