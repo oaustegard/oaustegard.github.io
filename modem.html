@@ -84,12 +84,7 @@
   <p class="sub">16-MFSK, 4.0&ndash;6.8&nbsp;kHz, ~187&nbsp;bps raw &middot; RS(15,11)/GF(16) FEC + erasure flagging &middot; a third signaling channel for filedrop-manual: no camera, no QR, no list</p>
 
   <div class="card">
-    <h2>Send &mdash; speaker</h2>
-    <textarea id="sendText" spellcheck="false">v9~AAF3kQhZ2mP0cXtR5nL8wKjD4sB7yG1uE6oI3aC0fT#hQ9zM2xV5bN8pL1kJ4gD7sF0aH3jK6lZ9cX2vB5nM8qW1eR4tY7uI0oP~fp:9Yt2Xe7Wq4Vu1Ts8Rr~cand:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d</textarea>
-    <div class="row">
-      <button id="sendBtn">Send</button>
-      <span id="sendInfo" class="info"></span>
-    </div>
+    <h2>Link settings</h2>
     <div class="row">
       <label class="info" for="chordMode">chord density</label>
       <select id="chordMode">
@@ -98,6 +93,24 @@
         <option value="4">4 tones &middot; 10 bits/sym (2.5&times;)</option>
         <option value="8">8 tones &middot; 13 bits/sym (3.25&times;, densest)</option>
       </select>
+      <label class="info" for="saltInput" style="margin-left:12px;">salt</label>
+      <input id="saltInput" type="text" spellcheck="false" placeholder="shared secret (optional)" style="min-width:200px;" />
+      <button id="copyLinkBtn" class="ghost">Copy link</button>
+    </div>
+    <div class="info" style="margin-top:6px;">
+      Density is a <b>send</b> choice &mdash; the receiver reads it from the frame header, so it needs no coordination.
+      The <b>salt</b> is a shared secret that scrambles the payload: both sides must set the same value, and a wrong or
+      empty salt just fails to decode. It hides content from casual listeners but is not strong encryption &mdash; encrypt
+      the text yourself first if you need real confidentiality. Both persist in the URL (<code>?k=&hellip;&amp;salt=&hellip;</code>) for sharing.
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Send &mdash; speaker</h2>
+    <textarea id="sendText" spellcheck="false">v9~AAF3kQhZ2mP0cXtR5nL8wKjD4sB7yG1uE6oI3aC0fT#hQ9zM2xV5bN8pL1kJ4gD7sF0aH3jK6lZ9cX2vB5nM8qW1eR4tY7uI0oP~fp:9Yt2Xe7Wq4Vu1Ts8Rr~cand:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d</textarea>
+    <div class="row">
+      <button id="sendBtn">Send</button>
+      <span id="sendInfo" class="info"></span>
     </div>
     <div id="sendStatus" class="status"></div>
   </div>
@@ -178,7 +191,8 @@
     maxPayload: 1024,
     eraseRatio: 1.7,            /* weakest-on / strongest-off ratio below which -> erasure */
     rsN: 15, rsK: 11, rsNsym: 4,/* RS(15,11), 4 parity, corrects t=2 per block */
-    chordK: 1                   /* SEND mode: tones lit per payload symbol (1|2|4|8) */
+    chordK: 1,                  /* SEND mode: tones lit per payload symbol (1|2|4|8) */
+    salt: ""                    /* shared-secret payload whitening; "" = cleartext */
   };
   /* chord modes: k tones -> C(16,k) chords -> truncated to 2^bits for a clean
      GF(2^bits) so RS(15,11) runs over the field unchanged (one chord = one
@@ -336,6 +350,27 @@
     return crc;
   }
 
+  /* ------- salt keystream: shared-secret payload whitening (obscurity, not
+     strong crypto). Seeds mulberry32 from an xmur3 hash of the salt and emits
+     one m-bit value per coded payload symbol, XOR'd in after RS-encode. Sync +
+     header stay clear, so acquisition + mode detection work without the salt;
+     a wrong/absent salt just yields a CRC failure. */
+  function saltKeystream(salt, count, m) {
+    var out = new Array(count).fill(0), i;
+    if (!salt) { return out; }
+    var h = 1779033703 ^ salt.length;
+    for (i = 0; i < salt.length; i++) { h = Math.imul(h ^ salt.charCodeAt(i), 3432918353); h = (h << 13) | (h >>> 19); }
+    var s = (Math.imul(h ^ (h >>> 16), 2246822507) ^ Math.imul(h ^ (h >>> 13), 3266489909)) >>> 0;
+    var mask = (1 << m) - 1;
+    for (i = 0; i < count; i++) {
+      s = (s + 0x6D2B79F5) | 0;
+      var t = Math.imul(s ^ (s >>> 15), 1 | s);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      out[i] = ((t ^ (t >>> 14)) >>> 0) & mask;
+    }
+    return out;
+  }
+
   /* -------------------- header (always k=1 / GF16): version, mode, length -- */
   function headerNibbles(k, len) {
     return [CFG.version, k & 0xF, (len >> 12) & 0xF, (len >> 8) & 0xF, (len >> 4) & 0xF, len & 0xF];
@@ -368,7 +403,7 @@
   }
 
   /* -------------------- build the transmit chord sequence (tones per symbol) */
-  function bytesToChords(bytes, k) {
+  function bytesToChords(bytes, k, salt) {
     if (bytes.length < 1 || bytes.length > CFG.maxPayload) { throw new Error("payload must be 1.." + CFG.maxPayload + " bytes"); }
     var m = MODES[k].bits, maxSym = 1 << m;
     var chords = [], i, j;
@@ -384,8 +419,9 @@
     while (syms.length % CFG.rsK !== 0) { syms.push(0); }
     var coded = [];
     for (i = 0; i < syms.length; i += CFG.rsK) { var cw = RS[k].encode(syms.slice(i, i + CFG.rsK)); for (j = 0; j < cw.length; j++) { coded.push(cw[j]); } }
+    var ks = saltKeystream(salt || "", coded.length, m);
     for (i = 0; i < coded.length; i++) {
-      var v = coded[i] % maxSym;                 /* guard (encoder never exceeds) */
+      var v = (coded[i] ^ ks[i]) % maxSym;       /* whiten, then map to chord */
       chords.push(unrankComb(v, CFG.toneCount, k));
     }
     return chords;
@@ -436,7 +472,7 @@
     }
     return pcm;
   }
-  function encodeToPcm(bytes, sampleRate) { return synthesize(bytesToChords(bytes, CFG.chordK), sampleRate); }
+  function encodeToPcm(bytes, sampleRate) { return synthesize(bytesToChords(bytes, CFG.chordK, CFG.salt), sampleRate); }
 
   /* ---------------------------------------------------------- Goertzel */
   function goertzelPower(buf, len, freq, sr) {
@@ -517,12 +553,12 @@
       return corr.slice(0, CFG.rsK);
     }
     /* payload: 15 GF(2^bits) chord symbols in mode kk */
-    function readPayloadBlock(startSample, idx, kk) {
+    function readPayloadBlock(startSample, idx, kk, ks) {
       var syms = new Array(CFG.rsN), cand = [], j;
       for (j = 0; j < CFG.rsN; j++) {
         var s = chordAt(startSample, idx + j, kk);
         if (!s) { return null; }
-        syms[j] = s.sym;
+        syms[j] = ks ? (s.sym ^ ks[j]) : s.sym;   /* de-whiten (erasures ignored by RS) */
         if (s.erased) { cand.push({ pos: j, ratio: s.ratio }); }
       }
       cand.sort(function (a, b) { return a.ratio - b.ratio; });
@@ -644,9 +680,11 @@
       var nb = payloadBlockCountK(len, k);
       var totalSyms = frameSymbolCountK(len, k);
       if (!ctx.symbolPresent(s0, totalSyms - 1)) { continue; }
+      var salt = (opts && opts.salt != null) ? opts.salt : CFG.salt;
+      var ks = saltKeystream(salt || "", nb * CFG.rsN, MODES[k].bits);
       var dataSyms = [], bad = false, bIdx = S.length + CFG.rsN, blk;
       for (blk = 0; blk < nb; blk++) {
-        var data = ctx.readPayloadBlock(s0, bIdx + blk * CFG.rsN, k);
+        var data = ctx.readPayloadBlock(s0, bIdx + blk * CFG.rsN, k, ks.slice(blk * CFG.rsN, (blk + 1) * CFG.rsN));
         if (!data) { bad = true; break; }
         dataSyms = dataSyms.concat(data);
       }
@@ -677,6 +715,8 @@
       if (!ph) { continue; }
       var k = ph.k, len = ph.len, m = MODES[k].bits;
       var nb = payloadBlockCountK(len, k), dataSyms = [], blocksDone = 0, blk;
+      var salt = (opts && opts.salt != null) ? opts.salt : CFG.salt;
+      var ks = saltKeystream(salt || "", nb * CFG.rsN, m);
       var symbols = [];
       for (blk = 0; blk < nb; blk++) {
         var bi = payIdx + blk * CFG.rsN;
@@ -688,7 +728,7 @@
           var relInBlk = jj;
           symbols.push({ sym: cs.sym, tones: cs.tones, erased: cs.erased, kind: (relInBlk < CFG.rsK ? "data" : "parity") });
         }
-        var data = ctx.readPayloadBlock(s0, bi, k);
+        var data = ctx.readPayloadBlock(s0, bi, k, ks.slice(blk * CFG.rsN, (blk + 1) * CFG.rsN));
         if (!data) { break; }
         dataSyms = dataSyms.concat(data); blocksDone++;
       }
@@ -769,6 +809,8 @@
   var sendInfo = $("sendInfo");
   var sendStatus = $("sendStatus");
   var chordMode = $("chordMode");
+  var saltInput = $("saltInput");
+  var copyLinkBtn = $("copyLinkBtn");
   var enc = new TextEncoder();
   var dec = new TextDecoder("utf-8");
 
@@ -788,7 +830,36 @@
     } catch (e) { console.error("[link] estimate failed:", e); }
   }
   sendText.addEventListener("input", updateEstimate);
-  chordMode.addEventListener("change", updateEstimate);
+  chordMode.addEventListener("change", function () { updateEstimate(); syncURL(); });
+
+  /* salt + shareable-URL wiring. Density (k) and salt live in the query string
+     so a link carries the send mode and the shared secret. */
+  function syncURL() {
+    try {
+      var params = new URLSearchParams();
+      var k = parseInt(chordMode.value, 10) || 1;
+      if (k !== 1) { params.set("k", String(k)); }
+      if (saltInput.value) { params.set("salt", saltInput.value); }
+      var qs = params.toString();
+      history.replaceState(null, "", qs ? ("?" + qs) : location.pathname);
+    } catch (e) { console.warn("[link] url sync failed:", e); }
+  }
+  saltInput.addEventListener("input", function () { M.CFG.salt = saltInput.value; syncURL(); });
+  copyLinkBtn.addEventListener("click", function () {
+    var url = location.href;
+    var done = function () { var t = copyLinkBtn.textContent; copyLinkBtn.textContent = "Copied"; setTimeout(function () { copyLinkBtn.textContent = t; }, 1200); };
+    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(url).then(done, done); }
+    else { try { saltInput.focus(); done(); } catch (e) { /* no-op */ } }
+  });
+  (function applyQuery() {
+    try {
+      var q = new URLSearchParams(location.search);
+      var k = q.get("k") || q.get("chord");
+      if (k && M.MODES[parseInt(k, 10)]) { chordMode.value = String(parseInt(k, 10)); M.CFG.chordK = parseInt(k, 10); }
+      var salt = q.get("salt");
+      if (salt != null) { saltInput.value = salt; M.CFG.salt = salt; }
+    } catch (e) { console.warn("[link] query parse failed:", e); }
+  })();
 
   sendBtn.addEventListener("click", async function () {
     try {
