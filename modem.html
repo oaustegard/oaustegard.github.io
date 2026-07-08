@@ -58,6 +58,24 @@
   .notes p { margin: 6px 0; }
   .notes b { color: var(--ink); font-weight: 600; }
   code { font-family: var(--mono); font-size: 12.5px; color: var(--ink); }
+  .chip { display:inline-flex; align-items:center; gap:6px; font-family:var(--mono); font-size:12px; padding:3px 10px; border-radius:999px; border:1px solid var(--edge); color:var(--dim); }
+  .chip .dot { width:8px; height:8px; border-radius:50%; background:var(--dim); flex:0 0 auto; }
+  .chip.locked { color:var(--warn); border-color:var(--warn); } .chip.locked .dot{ background:var(--warn); }
+  .chip.receiving { color:var(--accent); border-color:var(--accent); } .chip.receiving .dot{ background:var(--accent); animation:pulse 1s infinite; }
+  .chip.verified { color:var(--accent); border-color:var(--accent); } .chip.verified .dot{ background:var(--accent); }
+  .chip.bad { color:var(--bad); border-color:var(--bad); } .chip.bad .dot{ background:var(--bad); }
+  @keyframes pulse{ 0%,100%{opacity:1;} 50%{opacity:0.3;} }
+  #liveBar{ height:4px; background:#12171c; border-radius:2px; margin:12px 0 4px; overflow:hidden; }
+  #liveBar > i{ display:block; height:100%; width:0; background:var(--accent); transition:width 0.25s ease; }
+  #liveGrid{ display:flex; flex-wrap:wrap; gap:3px; margin-top:10px; font-family:var(--mono); min-height:1.7em; }
+  .cell{ min-width:1.5em; height:1.7em; line-height:1.7em; text-align:center; border-radius:3px; font-size:12px; padding:0 3px; transition:background 0.2s; }
+  .cell.pending{ background:#12171c; color:#39434d; }
+  .cell.raw{ background:#181f26; color:var(--dim); }
+  .cell.raw.erased{ color:var(--warn); }
+  .cell.done{ background:#173029; color:var(--accent); font-weight:600; }
+  .cell.done.ws{ color:#4a5560; font-weight:400; }
+  .cell.flip{ animation:flip 0.3s ease; }
+  @keyframes flip{ 0%{transform:rotateX(85deg);} 100%{transform:rotateX(0);} }
 </style>
 </head>
 <body>
@@ -84,6 +102,17 @@
     <div id="rxStatus" class="status"></div>
     <canvas id="meter" width="820" height="64"></canvas>
     <div id="rxLog"></div>
+  </div>
+
+  <div class="card">
+    <h2>Live decode</h2>
+    <div class="row">
+      <span id="liveChip" class="chip"><span class="dot"></span><span id="liveChipText">idle</span></span>
+      <span id="liveInfo" class="info"></span>
+    </div>
+    <div id="liveBar"><i></i></div>
+    <div id="liveGrid"></div>
+    <div class="info" style="margin-top:8px;">hex = raw tones as heard &middot; each cell flips to its character once its RS block is corrected &middot; solid teal = CRC-verified. Run the self-test to watch a frame stream in with no hardware.</div>
   </div>
 
   <div class="card">
@@ -404,9 +433,8 @@
   }
   function makeHann(n) { var w = new Float32Array(n), i; for (i = 0; i < n; i++) { w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); } return w; }
 
-  /* ------------------------------------------------------------ decode */
-  /* Returns { ok, bytes, text?, startSample, endSample, syncScore, reason } */
-  function decodeFromPcm(pcm, sampleRate, opts) {
+  /* --------------------------- shared decode context (DSP + acquisition) */
+  function mkCtx(pcm, sampleRate, opts) {
     opts = opts || {};
     var sr = sampleRate;
     var symF = CFG.symbolSec * sr;
@@ -416,7 +444,7 @@
     var half = anaN >> 1;
     var minStart = Math.max(0, opts.minStart | 0);
     var K = CFG.toneCount;
-    var freqs = new Float64Array(K), k, i;
+    var freqs = new Float64Array(K), k;
     for (k = 0; k < K; k++) { freqs[k] = CFG.f0 + k * CFG.df; }
     var hann = makeHann(anaN);
     var scratch = new Float32Array(anaN);
@@ -430,8 +458,6 @@
       return energies;
     }
     function argmax(arr) { var bi = 0, bv = -Infinity, j; for (j = 0; j < arr.length; j++) { if (arr[j] > bv) { bv = arr[j]; bi = j; } } return bi; }
-
-    /* soft symbol: dominant tone + erasure confidence (top1/top2 ratio) */
     function softAt(startSample, index) {
       var center = startSample + Math.round((index + 0.5) * symF);
       var e = toneEnergiesAt(center);
@@ -444,10 +470,6 @@
       var ratio = (v2 > 0) ? (v1 / v2) : Infinity;
       return { tone: b1, ratio: ratio };
     }
-
-    /* read one 15-symbol RS block starting at symbol `idx`; RS-correct with
-       erasures chosen from the lowest-confidence symbols. Returns 11 data
-       nibbles or null. */
     function readBlock(startSample, idx) {
       var syms = new Array(CFG.rsN), cand = [], j;
       for (j = 0; j < CFG.rsN; j++) {
@@ -459,107 +481,182 @@
       cand.sort(function (a, b) { return a.ratio - b.ratio; });
       var erase = cand.slice(0, CFG.rsNsym).map(function (c) { return c.pos; });
       var corr = rsCorrect(syms, erase);
-      if (!corr) { corr = rsCorrect(syms, []); }   /* retry hard-decision only */
+      if (!corr) { corr = rsCorrect(syms, []); }
       if (!corr) { return null; }
       return corr.slice(0, CFG.rsK);
     }
-
-    /* ---- sync acquisition (unchanged in shape from v1) ---- */
-    var H = Math.max(0, Math.floor((pcm.length - anaN) / hop));
-    var dom = new Int8Array(H).fill(-1);
-    var domE = new Float64Array(H), h;
-    for (h = 0; h < H; h++) {
-      var c = h * hop + half;
-      var e = toneEnergiesAt(c);
-      if (!e) { continue; }
-      var bi = argmax(e); dom[h] = bi; domE[h] = e[bi];
+    function symbolPresent(s0, index) {
+      var center = s0 + Math.round((index + 0.5) * symF);
+      return (center - half >= 0) && (center + (anaN - half) <= pcm.length);
     }
-    var S = CFG.sync;
-    var syncOffHops = new Int32Array(S.length);
-    for (k = 0; k < S.length; k++) { syncOffHops[k] = Math.round(((k + 0.5) * symF - half) / hop); }
-    var candidates = [];
-    var h0min = Math.floor(minStart / hop);
-    for (h = h0min; h < H; h++) {
-      var score = 0, esum = 0, valid = true;
-      for (k = 0; k < S.length; k++) {
-        var hi = h + syncOffHops[k];
-        if (hi < 0 || hi >= H || dom[hi] < 0) { valid = false; break; }
-        if (dom[hi] === S[k]) { score++; }
-        esum += domE[hi];
+    function acquire() {
+      var H = Math.max(0, Math.floor((pcm.length - anaN) / hop));
+      var dom = new Int8Array(H).fill(-1);
+      var domE = new Float64Array(H), h, kk;
+      for (h = 0; h < H; h++) {
+        var c = h * hop + half;
+        var e = toneEnergiesAt(c);
+        if (!e) { continue; }
+        var bi = argmax(e); dom[h] = bi; domE[h] = e[bi];
       }
-      if (valid && score >= S.length - 1) { candidates.push({ h: h, score: score, esum: esum }); }
-    }
-    if (candidates.length === 0) { return { ok: false, reason: "nosync" }; }
-    candidates.sort(function (a, b) { return (b.score - a.score) || (b.esum - a.esum); });
-
-    var picked = [];
-    for (i = 0; i < candidates.length && picked.length < 6; i++) {
-      var dup = false;
-      for (var jj = 0; jj < picked.length; jj++) {
-        if (Math.abs(candidates[i].h - picked[jj].h) * hop < symbolN) { dup = true; break; }
+      var S = CFG.sync;
+      var syncOffHops = new Int32Array(S.length);
+      for (kk = 0; kk < S.length; kk++) { syncOffHops[kk] = Math.round(((kk + 0.5) * symF - half) / hop); }
+      var candidates = [];
+      var h0min = Math.floor(minStart / hop);
+      for (h = h0min; h < H; h++) {
+        var score = 0, esum = 0, valid = true;
+        for (kk = 0; kk < S.length; kk++) {
+          var hi = h + syncOffHops[kk];
+          if (hi < 0 || hi >= H || dom[hi] < 0) { valid = false; break; }
+          if (dom[hi] === S[kk]) { score++; }
+          esum += domE[hi];
+        }
+        if (valid && score >= S.length - 1) { candidates.push({ h: h, score: score, esum: esum }); }
       }
-      if (!dup) { picked.push(candidates[i]); }
-    }
-
-    function syncQuality(startSample) {
-      var q = 0, kk;
-      for (kk = 0; kk < S.length; kk++) {
-        var center = startSample + Math.round((kk + 0.5) * symF);
-        var e = toneEnergiesAt(center);
-        if (!e) { return -1; }
-        var tot = 1e-12, t;
-        for (t = 0; t < K; t++) { tot += e[t]; }
-        q += e[S[kk]] / tot;
+      if (candidates.length === 0) { return []; }
+      candidates.sort(function (a, b) { return (b.score - a.score) || (b.esum - a.esum); });
+      var picked = [], i, jj;
+      for (i = 0; i < candidates.length && picked.length < 6; i++) {
+        var dup = false;
+        for (jj = 0; jj < picked.length; jj++) {
+          if (Math.abs(candidates[i].h - picked[jj].h) * hop < symbolN) { dup = true; break; }
+        }
+        if (!dup) { picked.push(candidates[i]); }
       }
-      return q;
+      function syncQuality(startSample) {
+        var q = 0, k2;
+        for (k2 = 0; k2 < S.length; k2++) {
+          var center = startSample + Math.round((k2 + 0.5) * symF);
+          var e = toneEnergiesAt(center);
+          if (!e) { return -1; }
+          var tot = 1e-12, t;
+          for (t = 0; t < K; t++) { tot += e[t]; }
+          q += e[S[k2]] / tot;
+        }
+        return q;
+      }
+      var out = [];
+      for (i = 0; i < picked.length; i++) {
+        var coarse = picked[i].h * hop;
+        var bestOff = 0, bestQ = -1, off;
+        var step = Math.max(1, hop >> 2);
+        for (off = -hop; off <= hop; off += step) { var q = syncQuality(coarse + off); if (q > bestQ) { bestQ = q; bestOff = off; } }
+        out.push({ s0: coarse + bestOff, score: picked[i].score });
+      }
+      return out;
     }
 
+    return { symF: symF, softAt: softAt, readBlock: readBlock, acquire: acquire, symbolPresent: symbolPresent };
+  }
+
+  /* --------- utf-8 helper (partial-safe for the live view) --------- */
+  var _dec = (typeof TextDecoder !== "undefined") ? new TextDecoder("utf-8") : null;
+  function utf8Partial(bytes) {
+    if (_dec) { try { return _dec.decode(bytes); } catch (e) { return ""; } }
+    var s = "", i; for (i = 0; i < bytes.length; i++) { s += String.fromCharCode(bytes[i]); } return s;
+  }
+  function rawSymbols(ctx, s0, uptoIndex) {
+    var out = [], idx, hdrIdx = CFG.sync.length;
+    for (idx = hdrIdx; idx < uptoIndex; idx++) {
+      var s = ctx.softAt(s0, idx);
+      if (!s) { break; }
+      var rel = idx - hdrIdx;
+      var inBlock = rel % CFG.rsN;
+      var kind = (rel < CFG.rsN) ? "header" : (inBlock < CFG.rsK ? "data" : "parity");
+      out.push({ tone: s.tone, erased: s.ratio < CFG.eraseRatio, kind: kind });
+    }
+    return out;
+  }
+
+  /* ------------------------------------------------------------ decode */
+  /* Returns { ok, bytes, startSample, endSample, syncScore, reason } */
+  function decodeFromPcm(pcm, sampleRate, opts) {
+    var ctx = mkCtx(pcm, sampleRate, opts);
+    var picks = ctx.acquire();
+    if (!picks.length) { return { ok: false, reason: "nosync" }; }
+    var S = CFG.sync, i;
     var sawCrc = false, crcStart = -1, crcScore = 0;
-    for (i = 0; i < picked.length; i++) {
-      var coarse = picked[i].h * hop;
-      var bestOff = 0, bestQ = -1, off;
-      var step = Math.max(1, hop >> 2);
-      for (off = -hop; off <= hop; off += step) { var q = syncQuality(coarse + off); if (q > bestQ) { bestQ = q; bestOff = off; } }
-      var s0 = coarse + bestOff;
-
-      /* header block right after sync */
-      var hdr = readBlock(s0, S.length);
-      if (!hdr) { continue; }
-      if (hdr[0] !== CFG.version) { continue; }
+    for (i = 0; i < picks.length; i++) {
+      var s0 = picks[i].s0;
+      var hdr = ctx.readBlock(s0, S.length);
+      if (!hdr || hdr[0] !== CFG.version) { continue; }
       var len = (hdr[1] << 12) | (hdr[2] << 8) | (hdr[3] << 4) | hdr[4];
       if (len < 1 || len > CFG.maxPayload) { continue; }
-
       var nb = payloadBlockCount(len);
       var totalSyms = frameSymbolCount(len);
-      var lastCenter = s0 + Math.round((totalSyms - 0.5) * symF);
-      if (lastCenter + (anaN - half) > pcm.length) { continue; }
-
-      /* payload blocks */
+      if (!ctx.symbolPresent(s0, totalSyms - 1)) { continue; }
       var nibs = [], bad = false, bIdx = S.length + CFG.rsN, blk;
       for (blk = 0; blk < nb; blk++) {
-        var data = readBlock(s0, bIdx + blk * CFG.rsN);
+        var data = ctx.readBlock(s0, bIdx + blk * CFG.rsN);
         if (!data) { bad = true; break; }
         nibs = nibs.concat(data);
       }
       if (bad) { continue; }
-
       var need = 2 * len + 4;
       if (nibs.length < need) { continue; }
       var bytes = new Uint8Array(len), b2;
       for (b2 = 0; b2 < len; b2++) { bytes[b2] = (nibs[2 * b2] << 4) | nibs[2 * b2 + 1]; }
       var rxCrc = (nibs[2 * len] << 12) | (nibs[2 * len + 1] << 8) | (nibs[2 * len + 2] << 4) | nibs[2 * len + 3];
       if (rxCrc !== crc16(bytes)) {
-        if (!sawCrc) { sawCrc = true; crcStart = s0; crcScore = picked[i].score; }
+        if (!sawCrc) { sawCrc = true; crcStart = s0; crcScore = picks[i].score; }
         continue;
       }
-      return {
-        ok: true, bytes: bytes, startSample: s0,
-        endSample: s0 + Math.round(totalSyms * symF),
-        syncScore: picked[i].score, reason: "ok"
-      };
+      return { ok: true, bytes: bytes, startSample: s0, endSample: s0 + Math.round(totalSyms * ctx.symF), syncScore: picks[i].score, reason: "ok" };
     }
     if (sawCrc) { return { ok: false, reason: "crc", startSample: crcStart, syncScore: crcScore }; }
     return { ok: false, reason: "noframe" };
+  }
+
+  /* ------------------------------- streaming progress (live view only) */
+  /* Cosmetic partial decode for the reveal; authoritative result is still
+     decodeFromPcm. state: nosync|locked|receiving|complete. */
+  function decodeProgress(pcm, sampleRate, opts) {
+    var ctx = mkCtx(pcm, sampleRate, opts);
+    var picks = ctx.acquire();
+    var empty = { state: "nosync", symbols: [], nibbles: [], text: "", blocksDone: 0, blocks: 0 };
+    if (!picks.length) { return empty; }
+    var S = CFG.sync, hdrIdx = S.length, payIdx = S.length + CFG.rsN, i;
+    for (i = 0; i < picks.length; i++) {
+      var s0 = picks[i].s0;
+      if (!ctx.symbolPresent(s0, payIdx - 1)) {
+        if (i === picks.length - 1) { return { state: "locked", startSample: s0, syncScore: picks[i].score, symbols: [], nibbles: [], text: "", blocksDone: 0, blocks: 0 }; }
+        continue;
+      }
+      var hdr = ctx.readBlock(s0, hdrIdx);
+      if (!hdr || hdr[0] !== CFG.version) { continue; }
+      var len = (hdr[1] << 12) | (hdr[2] << 8) | (hdr[3] << 4) | hdr[4];
+      if (len < 1 || len > CFG.maxPayload) { continue; }
+      var nb = payloadBlockCount(len), nibs = [], blocksDone = 0, blk;
+      for (blk = 0; blk < nb; blk++) {
+        var bi = payIdx + blk * CFG.rsN;
+        if (!ctx.symbolPresent(s0, bi + CFG.rsN - 1)) { break; }
+        var data = ctx.readBlock(s0, bi);
+        if (!data) { break; }
+        nibs = nibs.concat(data); blocksDone++;
+      }
+      var totalSyms = frameSymbolCount(len), lastPresent = hdrIdx;
+      while (lastPresent < totalSyms && ctx.symbolPresent(s0, lastPresent)) { lastPresent++; }
+      var syms = rawSymbols(ctx, s0, lastPresent);
+      var payNibs = nibs.slice(0, 2 * len), nbytes = payNibs.length >> 1, b2;
+      var pbytes = new Uint8Array(nbytes);
+      for (b2 = 0; b2 < nbytes; b2++) { pbytes[b2] = (payNibs[2 * b2] << 4) | payNibs[2 * b2 + 1]; }
+      var text = utf8Partial(pbytes);
+      var verified = false, outBytes = null;
+      if (blocksDone >= nb && nibs.length >= 2 * len + 4) {
+        var full = new Uint8Array(len), c2;
+        for (c2 = 0; c2 < len; c2++) { full[c2] = (nibs[2 * c2] << 4) | nibs[2 * c2 + 1]; }
+        var rxCrc = (nibs[2 * len] << 12) | (nibs[2 * len + 1] << 8) | (nibs[2 * len + 2] << 4) | nibs[2 * len + 3];
+        if (rxCrc === crc16(full)) { verified = true; outBytes = full; text = utf8Partial(full); }
+      }
+      return {
+        state: (blocksDone >= nb) ? "complete" : "receiving",
+        startSample: s0, syncScore: picks[i].score, version: hdr[0], length: len,
+        blocks: nb, blocksDone: blocksDone, symbols: syms, nibbles: nibs,
+        text: text, verified: verified, bytes: outBytes
+      };
+    }
+    return empty;
   }
 
   return {
@@ -568,6 +665,7 @@
     bytesToSymbols: bytesToSymbols,
     encodeToPcm: encodeToPcm,
     decodeFromPcm: decodeFromPcm,
+    decodeProgress: decodeProgress,
     estimateSeconds: estimateSeconds,
     frameSymbolCount: frameSymbolCount,
     payloadBlockCount: payloadBlockCount,
@@ -796,6 +894,94 @@
     requestAnimationFrame(drawMeter);
   }
 
+  /* -------------------------------------------------- LIVE DECODE VIEW */
+  /* Cosmetic progressive reveal. The authoritative decode is still tryDecode;
+     this shows raw tones streaming in and flipping to text as each RS block
+     corrects. Driven live off the mic buffer, and off the self-test frame. */
+  var liveChip = $("liveChip"), liveChipText = $("liveChipText"), liveInfo = $("liveInfo");
+  var liveBarEl = $("liveBar").firstElementChild, liveGrid = $("liveGrid");
+  var liveTimer = null, liveFrameId = -1, liveLen = 0, liveCells = [], liveShownText = 0, liveRawShown = 0;
+
+  function setChip(cls, text) { liveChip.className = "chip" + (cls ? " " + cls : ""); liveChipText.textContent = text; }
+  function resetLive() {
+    liveGrid.innerHTML = ""; liveCells = []; liveLen = 0; liveFrameId = -1;
+    liveShownText = 0; liveRawShown = 0; liveBarEl.style.width = "0%"; liveInfo.textContent = "";
+    setChip("", "idle");
+  }
+  function buildGrid(len) {
+    liveGrid.innerHTML = ""; liveCells = new Array(len);
+    for (var i = 0; i < len; i++) {
+      var c = document.createElement("span"); c.className = "cell pending"; liveGrid.appendChild(c); liveCells[i] = c;
+    }
+    liveLen = len; liveShownText = 0; liveRawShown = 0;
+  }
+  function hex1(n) { return "0123456789abcdef".charAt(n & 0xF); }
+  function charCell(ch) {
+    if (ch === "\n") { return { t: "\u21B5", ws: true }; }
+    if (ch === " ") { return { t: "\u00B7", ws: true }; }
+    if (ch === "\t") { return { t: "\u2192", ws: true }; }
+    return { t: ch, ws: false };
+  }
+  function renderProgress(p, frameId) {
+    if (p.state === "nosync") { setChip("", "listening\u2026"); return; }
+    if (p.state === "locked") { setChip("locked", "locked \u00B7 reading header"); return; }
+    if (frameId !== liveFrameId || liveLen !== p.length) { liveFrameId = frameId; buildGrid(p.length); }
+
+    /* raw hex from payload data symbols (pre-correction) */
+    var rawNibs = [], s;
+    for (s = 0; s < p.symbols.length; s++) { if (p.symbols[s].kind === "data") { rawNibs.push(p.symbols[s]); } }
+    var rawBytes = Math.min(liveLen, rawNibs.length >> 1), i;
+    for (i = liveRawShown; i < rawBytes; i++) {
+      var c = liveCells[i]; if (!c || c.classList.contains("done")) { continue; }
+      var er = rawNibs[2 * i].erased || rawNibs[2 * i + 1].erased;
+      c.className = "cell raw" + (er ? " erased" : "");
+      c.textContent = hex1(rawNibs[2 * i].tone) + hex1(rawNibs[2 * i + 1].tone);
+    }
+    liveRawShown = Math.max(liveRawShown, rawBytes);
+
+    /* interpreted chars replace hex as blocks correct */
+    var interp = Math.min(liveLen, p.text.length), j;
+    for (j = liveShownText; j < interp; j++) {
+      var cell = liveCells[j]; if (!cell) { continue; }
+      var cc = charCell(p.text.charAt(j));
+      cell.className = "cell done flip" + (cc.ws ? " ws" : "");
+      cell.textContent = cc.t;
+      (function (el) { setTimeout(function () { el.classList.remove("flip"); }, 300); })(cell);
+    }
+    liveShownText = Math.max(liveShownText, interp);
+
+    liveBarEl.style.width = Math.round((p.blocks ? p.blocksDone / p.blocks : 0) * 100) + "%";
+    if (p.state === "complete" && p.verified) { setChip("verified", "verified \u2713 " + p.length + " bytes"); liveInfo.textContent = "CRC ok"; }
+    else if (p.state === "complete") { setChip("bad", "frame complete \u00B7 CRC failed"); liveInfo.textContent = "resend"; }
+    else { setChip("receiving", "receiving " + p.blocksDone + "/" + p.blocks); }
+  }
+
+  function liveTick() {
+    if (!listening || bufLen < (ctx.sampleRate * 0.3)) { return; }
+    var pcm = assemble();
+    var bufStartAbs = totalAbs - bufLen;
+    var p;
+    try { p = M.decodeProgress(pcm, ctx.sampleRate, { minStart: Math.max(0, lastEndAbs - bufStartAbs) }); }
+    catch (e) { console.error("[link] progress failed:", e); return; }
+    var frameId = Math.round(bufStartAbs + (p.startSample || 0));
+    renderProgress(p, frameId);
+  }
+
+  function streamPreview(pcm, sr) {
+    /* replay a fixed frame as if it were arriving, for a no-hardware demo */
+    if (liveTimer) { return; }   /* don't fight the live mic view */
+    resetLive(); setChip("", "replaying\u2026");
+    var total = pcm.length, steps = 60, i = 0;
+    (function step() {
+      i++;
+      var ptr = Math.max(1, Math.round(total * i / steps));
+      var p;
+      try { p = M.decodeProgress(pcm.subarray(0, ptr), sr, {}); } catch (e) { p = null; }
+      if (p) { renderProgress(p, 0); }
+      if (i < steps) { setTimeout(step, 45); }
+    })();
+  }
+
   var WORKLET_SRC =
     "class Cap extends AudioWorkletProcessor {" +
     "  process(inputs) {" +
@@ -839,6 +1025,8 @@
   function stopListening() {
     listening = false;
     if (decodeTimer) { clearInterval(decodeTimer); decodeTimer = null; }
+    if (liveTimer) { clearInterval(liveTimer); liveTimer = null; }
+    setChip("", "idle");
     if (captureNode) { try { captureNode.disconnect(); } catch (e) {} captureNode = null; }
     if (srcNode) { try { srcNode.disconnect(); } catch (e) {} srcNode = null; }
     if (muteNode) { try { muteNode.disconnect(); } catch (e) {} muteNode = null; }
@@ -881,6 +1069,8 @@
       listenBtn.textContent = "Stop";
       setStatus(rxStatus, "listening at " + ac.sampleRate + " Hz\u2026", "busy");
       decodeTimer = setInterval(tryDecode, 900);
+      resetLive(); setChip("", "listening\u2026");
+      liveTimer = setInterval(liveTick, 250);
       requestAnimationFrame(drawMeter);
     }).catch(function (err) {
       console.error("[link] mic failed:", err);
@@ -917,6 +1107,7 @@
         var t0 = performance.now();
         var res = M.decodeFromPcm(padded, sr);
         var ms = (performance.now() - t0).toFixed(0);
+        streamPreview(padded, sr);
         var ok = res.ok && dec.decode(res.bytes) === msg;
         console.log("[link] self-test:", ok ? "PASS" : "FAIL", "(" + ms + " ms)", res.reason);
         setStatus(testStatus, ok
