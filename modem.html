@@ -727,7 +727,7 @@
   }
   sendText.addEventListener("input", updateEstimate);
 
-  sendBtn.addEventListener("click", function () {
+  sendBtn.addEventListener("click", async function () {
     try {
       var bytes = enc.encode(sendText.value);
       if (bytes.length < 1 || bytes.length > M.CFG.maxPayload) {
@@ -744,6 +744,14 @@
         try { navigator.audioSession.type = "playback"; } catch (e) { console.warn("[link] audioSession playback failed:", e); }
       }
       var ac = audioCtx();
+      /* iOS: audioCtx() calls resume() but the context settles asynchronously,
+         and after switching to the "playback" session it can come up suspended
+         or interrupted. Starting a source before the context is actually running
+         plays into silence — the "speaker icon appears in the Dynamic Island but
+         no sound" symptom. Await the running state before scheduling the tone. */
+      if (ac.state !== "running") {
+        try { await ac.resume(); } catch (e) { console.warn("[link] resume failed:", e); }
+      }
       var pcm = M.encodeToPcm(bytes, ac.sampleRate);
       var buf = ac.createBuffer(1, pcm.length, ac.sampleRate);
       buf.getChannelData(0).set(pcm);
