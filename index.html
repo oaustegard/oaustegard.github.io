@@ -11,8 +11,53 @@
     <link rel="apple-touch-icon" href="/images/apple-touch-icon.png"/>
     <link rel="manifest" href="site.webmanifest" />
     <link rel="stylesheet" href="styles/style.css">
+    <style>
+        /* ── Currents background (homepage only) ──
+           A subtle domain-warped flow field painted from the site's own
+           palette tokens, so it tracks light/dark automatically. Sits behind
+           the Oscar/grid decoration (which is z-index -10) and above the paper
+           fallback, so if WebGL is unavailable the page looks exactly as before. */
+        #bgfx {
+            position: fixed;
+            inset: 0;
+            width: 100vw;
+            height: 100vh;
+            display: block;
+            z-index: -20;
+            pointer-events: none;
+        }
+        #bgfx-stop {
+            position: fixed;
+            left: 12px;
+            bottom: 12px;
+            z-index: 101;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 0.08em;
+            color: var(--muted);
+            background: var(--bg);
+            background: color-mix(in srgb, var(--bg) 80%, transparent);
+            border: 1px solid var(--rule);
+            border-radius: 999px;
+            padding: 5px 11px;
+            cursor: pointer;
+            line-height: 1;
+            opacity: 0.55;
+            -webkit-backdrop-filter: blur(3px);
+            backdrop-filter: blur(3px);
+            transition: color 0.2s, border-color 0.2s, opacity 0.2s;
+        }
+        #bgfx-stop:hover,
+        #bgfx-stop:focus-visible {
+            color: var(--link-hover);
+            border-color: var(--grouch);
+            opacity: 1;
+            outline: none;
+        }
+    </style>
 </head>
 <body>
+    <canvas id="bgfx" aria-hidden="true"></canvas>
     <h1>Hi 👋 I'm Oskar</h1>
     <h2>You may be interested in...</h2>
     <ul>
@@ -38,5 +83,256 @@
     </ul>
     <img id="grouch" src="/images/favicon-16x16.png" alt="Scram!" />
     <img id="grid" src="grid.svg" alt="Grid" />
+
+    <button id="bgfx-stop" type="button" hidden aria-pressed="false">&#9208; still</button>
+
+    <script>
+    (function () {
+        "use strict";
+
+        /* Subtle Currents: a paper-toned flow field for the site background.
+           Same domain-warped fbm engine as /fun-and-games/currents.html, but the
+           palette stage is a low-amplitude mix over the site's --bg toward its
+           --grouch (olive) and --tongue (red) tokens. Colors are read live from
+           CSS, so light/dark just work. Motion is slow and stills on request. */
+
+        var canvas = document.getElementById("bgfx");
+        var stopBtn = document.getElementById("bgfx-stop");
+
+        var gl = null;
+        try {
+            gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "low-power" })
+                || canvas.getContext("experimental-webgl");
+        } catch (e) { /* fall through to fallback */ }
+
+        if (!gl) {
+            /* No WebGL: leave the plain paper background and hide the control. */
+            canvas.style.display = "none";
+            return;
+        }
+
+        var VERT = [
+            "attribute vec2 a_pos;",
+            "void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }"
+        ].join("\n");
+
+        var FRAG = [
+            "precision highp float;",
+            "uniform vec2  u_res;",
+            "uniform float u_time;",
+            "uniform vec2  u_mouse;",
+            "uniform vec3  u_base;",
+            "uniform vec3  u_olive;",
+            "uniform vec3  u_red;",
+
+            "float hash(vec2 p){",
+            "  p = fract(p * vec2(123.34, 345.45));",
+            "  p += dot(p, p + 34.345);",
+            "  return fract(p.x * p.y);",
+            "}",
+            "float noise(vec2 p){",
+            "  vec2 i = floor(p);",
+            "  vec2 f = fract(p);",
+            "  vec2 u = f * f * (3.0 - 2.0 * f);",
+            "  float a = hash(i);",
+            "  float b = hash(i + vec2(1.0, 0.0));",
+            "  float c = hash(i + vec2(0.0, 1.0));",
+            "  float d = hash(i + vec2(1.0, 1.0));",
+            "  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);",
+            "}",
+            "float fbm(vec2 p){",
+            "  float v = 0.0;",
+            "  float a = 0.5;",
+            "  mat2 m = mat2(1.6, 1.2, -1.2, 1.6);",
+            "  for (int i = 0; i < 5; i++){",
+            "    v += a * noise(p);",
+            "    p = m * p;",
+            "    a *= 0.5;",
+            "  }",
+            "  return v;",
+            "}",
+
+            "void main(){",
+            "  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;",
+            "  vec2 m  = (u_mouse - 0.5 * u_res) / u_res.y;",
+            "  float t = u_time * 0.04;",
+
+            "  vec2 p = uv * 1.2;",
+
+            "  /* the cursor bends the field toward itself, gently */",
+            "  vec2 toM = m - uv;",
+            "  float dM = length(toM);",
+            "  p += normalize(toM + 1e-4) * 0.15 * exp(-dM * 2.5);",
+
+            "  /* two layers of domain warping -- flow inside flow */",
+            "  vec2 q = vec2(fbm(p + t), fbm(p + vec2(5.2, 1.3) - t));",
+            "  vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2) + 0.15 * t),",
+            "                fbm(p + 4.0 * q + vec2(8.3, 2.8) - 0.126 * t));",
+            "  float f = fbm(p + 4.0 * r);",
+
+            "  /* low-amplitude wash: mostly --bg, a touch of olive, less red */",
+            "  float wO = smoothstep(0.30, 0.80, f)   * 0.11;",
+            "  float wR = smoothstep(0.32, 0.78, r.x) * 0.065;",
+            "  vec3 col = u_base;",
+            "  col = mix(col, u_olive, wO);",
+            "  col = mix(col, u_red,   wR);",
+
+            "  gl_FragColor = vec4(col, 1.0);",
+            "}"
+        ].join("\n");
+
+        function compile(type, src) {
+            var s = gl.createShader(type);
+            gl.shaderSource(s, src);
+            gl.compileShader(s);
+            if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+                throw new Error(gl.getShaderInfoLog(s) || "shader compile failed");
+            }
+            return s;
+        }
+
+        var program;
+        try {
+            program = gl.createProgram();
+            gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+            gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+            gl.linkProgram(program);
+            if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+                throw new Error(gl.getProgramInfoLog(program) || "program link failed");
+            }
+            gl.useProgram(program);
+        } catch (e) {
+            canvas.style.display = "none";
+            return;
+        }
+
+        var buf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+        var loc_pos = gl.getAttribLocation(program, "a_pos");
+        gl.enableVertexAttribArray(loc_pos);
+        gl.vertexAttribPointer(loc_pos, 2, gl.FLOAT, false, 0, 0);
+
+        var U = {
+            res:   gl.getUniformLocation(program, "u_res"),
+            time:  gl.getUniformLocation(program, "u_time"),
+            mouse: gl.getUniformLocation(program, "u_mouse"),
+            base:  gl.getUniformLocation(program, "u_base"),
+            olive: gl.getUniformLocation(program, "u_olive"),
+            red:   gl.getUniformLocation(program, "u_red")
+        };
+
+        /* ---- palette read straight from the site's CSS tokens ---- */
+        function hexToRgb(hex) {
+            hex = (hex || "").trim().replace(/^#/, "");
+            if (hex.length === 3) hex = hex.replace(/(.)/g, "$1$1");
+            var n = parseInt(hex, 16);
+            if (isNaN(n) || hex.length !== 6) return [0.5, 0.5, 0.5];
+            return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
+        }
+        var pal = { base: [0.94, 0.94, 0.92], olive: [0.36, 0.42, 0.23], red: [0.64, 0.22, 0.22] };
+        function readPalette() {
+            var cs = getComputedStyle(document.documentElement);
+            pal.base  = hexToRgb(cs.getPropertyValue("--bg"));
+            pal.olive = hexToRgb(cs.getPropertyValue("--grouch"));
+            pal.red   = hexToRgb(cs.getPropertyValue("--tongue"));
+        }
+        readPalette();
+
+        /* ---- state ---- */
+        var dpr = 1;
+        var mouse = [0, 0], mouseTarget = [0, 0];
+        var tSim = 0, last = performance.now();
+        var running = true, rafId = 0;
+
+        function resize() {
+            dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+            var w = Math.floor(canvas.clientWidth * dpr);
+            var h = Math.floor(canvas.clientHeight * dpr);
+            if (canvas.width !== w || canvas.height !== h) {
+                canvas.width = w;
+                canvas.height = h;
+                gl.viewport(0, 0, w, h);
+            }
+            if (mouseTarget[0] === 0 && mouseTarget[1] === 0) {
+                mouseTarget = [w * 0.5, h * 0.5];
+                mouse = [w * 0.5, h * 0.5];
+            }
+        }
+        window.addEventListener("resize", resize);
+        resize();
+
+        function pointer(clientX, clientY) {
+            var rect = canvas.getBoundingClientRect();
+            mouseTarget = [(clientX - rect.left) * dpr, (rect.height - (clientY - rect.top)) * dpr];
+        }
+        window.addEventListener("mousemove", function (e) { pointer(e.clientX, e.clientY); });
+        window.addEventListener("touchmove", function (e) {
+            if (e.touches[0]) pointer(e.touches[0].clientX, e.touches[0].clientY);
+        }, { passive: true });
+
+        function draw() {
+            gl.uniform2f(U.res, canvas.width, canvas.height);
+            gl.uniform1f(U.time, tSim);
+            gl.uniform2f(U.mouse, mouse[0], mouse[1]);
+            gl.uniform3fv(U.base, pal.base);
+            gl.uniform3fv(U.olive, pal.olive);
+            gl.uniform3fv(U.red, pal.red);
+            gl.drawArrays(gl.TRIANGLES, 0, 3);
+        }
+
+        function frame(now) {
+            var dt = Math.min((now - last) / 1000, 0.05);
+            last = now;
+            tSim += dt;
+            mouse[0] += (mouseTarget[0] - mouse[0]) * 0.05;
+            mouse[1] += (mouseTarget[1] - mouse[1]) * 0.05;
+            draw();
+            if (running && !document.hidden) rafId = requestAnimationFrame(frame);
+            else rafId = 0;
+        }
+
+        function start() {
+            if (rafId || !running || document.hidden) return;
+            last = performance.now();
+            rafId = requestAnimationFrame(frame);
+        }
+
+        /* ---- controls ---- */
+        function setRunning(on) {
+            running = on;
+            stopBtn.setAttribute("aria-pressed", on ? "false" : "true");
+            stopBtn.innerHTML = on ? "&#9208; still" : "&#9654; drift";
+            stopBtn.title = on ? "Pause the background motion" : "Resume the background motion";
+            try { localStorage.setItem("bgfx", on ? "on" : "off"); } catch (e) {}
+            if (on) start();
+        }
+
+        stopBtn.hidden = false;
+        stopBtn.addEventListener("click", function () { setRunning(!running); });
+
+        /* honor stored choice; otherwise respect reduced-motion */
+        var stored = null;
+        try { stored = localStorage.getItem("bgfx"); } catch (e) {}
+        var prefersStill = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+        var startOn = stored ? (stored === "on") : !prefersStill;
+        setRunning(startOn);
+
+        /* always paint at least one frame so the texture is present when stilled */
+        draw();
+
+        /* repaint on theme flip (tokens swap under prefers-color-scheme) */
+        if (window.matchMedia) {
+            var dm = window.matchMedia("(prefers-color-scheme: dark)");
+            var onThemeChange = function () { readPalette(); draw(); };
+            if (dm.addEventListener) dm.addEventListener("change", onThemeChange);
+            else if (dm.addListener) dm.addListener(onThemeChange);
+        }
+
+        document.addEventListener("visibilitychange", function () {
+            if (!document.hidden) start();
+        });
+    })();
+    </script>
 </body>
 </html>
