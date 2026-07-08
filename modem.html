@@ -63,7 +63,7 @@
 <body>
 <main>
   <h1>Acoustic Link</h1>
-  <p class="sub">16-MFSK, 1.5&ndash;4.3&nbsp;kHz, ~187&nbsp;bps &middot; a third signaling channel for filedrop-manual: no camera, no QR, no list &middot; single file, zero dependencies</p>
+  <p class="sub">16-MFSK, 4.0&ndash;6.8&nbsp;kHz, ~187&nbsp;bps raw &middot; RS(15,11)/GF(16) FEC + erasure flagging &middot; a third signaling channel for filedrop-manual: no camera, no QR, no list</p>
 
   <div class="card">
     <h2>Send &mdash; speaker</h2>
@@ -79,7 +79,7 @@
     <h2>Receive &mdash; microphone</h2>
     <div class="row">
       <button id="listenBtn" class="ghost">Listen</button>
-      <span class="info">gold bar = pilot (1200 Hz) &middot; teal bars = the 16 data tones</span>
+      <span class="info">gold bar = pilot (3500 Hz) &middot; teal bars = the 16 data tones</span>
     </div>
     <div id="rxStatus" class="status"></div>
     <canvas id="meter" width="820" height="64"></canvas>
@@ -98,20 +98,24 @@
   <div class="card notes">
     <h2>Notes</h2>
     <p><b>Demo on one machine:</b> press Listen, then Send &mdash; the mic hears the speaker across the air gap between them. Two machines: one listens, the other sends.</p>
-    <p><b>Frame format:</b> 250 ms pilot &middot; 8-symbol sync &middot; 2-byte length &middot; payload (2 symbols/byte) &middot; CRC-16/CCITT. A ~200-byte packed SDP is about 9 seconds of audio.</p>
-    <p><b>Validated headless (Node invariant suite):</b> clean loopback at 48 k and 44.1 k, random silence padding, AWGN to 8 dB SNR (decodes to 3 dB), 48 k &#8594; 44.1 k resample mismatch, 25% gain wobble, and all three combined; pure noise never false-decodes (CRC + sync gate).</p>
+    <p><b>Frame format:</b> 250 ms pilot &middot; 8-symbol sync &middot; version + length header block &middot; payload + CRC-16/CCITT, all carried in RS(15,11) codewords (11 data + 4 parity nibbles each). Every tone is one GF(16) symbol; each 15-symbol block corrects 2 errors or 4 erasures. A ~200-byte packed SDP is about 12 seconds of audio.</p>
+    <p><b>Validated headless (Node invariant suite):</b> GF(16) arithmetic, RS errata recovery across 400 random error/erasure patterns, clean loopback at 48 k and 44.1 k, random silence padding, AWGN to 6 dB SNR (decodes to 4 dB), 48 k &#8594; 44.1 k resample mismatch, 25% gain wobble, all combined, and recovery from a steady in-band interfering tone; pure noise never false-decodes (CRC + sync gate).</p>
     <p><b>Browser-path (cannot be tested headless):</b> mic requires HTTPS and a user grant; the getUserMedia constraints disable echo cancellation / noise suppression / AGC, but some stacks ignore them &mdash; OS-level noise suppression can eat the tones; AudioWorklet loads from a Blob URL and falls back to ScriptProcessorNode automatically; speaker volume around 60&ndash;80% works best; decode passes cost ~100&ndash;250 ms of CPU each while listening.</p>
-    <p><b>Known v1 limits:</b> no FEC yet (CRC + resend is the protocol) &mdash; a Hamming(7,4) layer is the obvious next change, one hypothesis at a time. Range is conference-room scale, not hallway scale.</p>
+    <p><b>Known limits:</b> RS(15,11) corrects up to 2 wrong tones or 4 erasures per 15-symbol block; a burst ruining 3+ symbols in one block still fails that frame (CRC catches it, resend is the fallback). Broadband noise spread thin across a long frame is the hard case, not localized transients. Range is conference-room scale, not hallway scale.</p>
     <p><b>Deploy:</b> single self-contained file, zero dependencies &mdash; drop <code>modem.html</code> at the site root; GitHub&nbsp;Pages serves it at <code>/modem</code>.</p>
   </div>
 </main>
 <script>
-/* Acoustic modem core: pure functions only. No DOM, no Web Audio, no I/O.
-   Scheme: 16-MFSK, phase-continuous, with a pilot tone, an 8-symbol sync
-   sequence, a 2-byte length field, the payload, and a CRC-16/CCITT trailer.
-   Every byte becomes two symbols (high nibble first). Symbol boundaries are
-   computed in floating point and rounded per symbol, so there is no
-   cumulative timing drift at non-integer samples-per-symbol rates. */
+/* Acoustic modem core v2: pure functions only. No DOM, no Web Audio, no I/O.
+   Scheme: 16-MFSK, phase-continuous, pilot + 8-symbol sync + versioned frame.
+   Each tone is one GF(16) symbol (4 bits). Forward error correction is
+   Reed-Solomon RS(15,11) over GF(16): every 11 data nibbles carry 4 parity
+   nibbles, correcting 2 symbol errors OR up to 4 erasures per 15-symbol block
+   (2*errors + erasures <= 4). The demodulator flags low-confidence symbols as
+   erasures from the Goertzel energy spread, which the RS layer corrects at
+   twice the rate of unknown errors. A CRC-16/CCITT over the payload is the
+   final integrity gate after correction. Band is 4.0-6.8 kHz, above most
+   voice/room noise while staying where consumer transducers still respond. */
 (function (root, factory) {
   var api = factory();
   if (typeof module !== "undefined" && module.exports) { module.exports = api; }
@@ -120,57 +124,231 @@
   "use strict";
 
   var CFG = {
-    f0: 1500.0,          /* first tone, Hz */
-    df: 187.5,           /* tone spacing, Hz */
-    toneCount: 16,       /* 4 bits per symbol */
-    symbolSec: 1.0 / 46.875,  /* 21.333 ms per symbol, ~187.5 bps */
-    analysisFrac: 0.75,  /* fraction of the symbol analyzed (guard at edges) */
-    rampSec: 0.004,      /* raised-cosine edge per symbol, tames splatter */
-    pilotFreq: 1200.0,   /* below the data band, wakes up AGC and humans */
+    version: 2,                 /* frame format version (nibble in header) */
+    f0: 4000.0,                 /* first tone, Hz */
+    df: 187.5,                  /* tone spacing, Hz (4x symbol rate: orthogonal) */
+    toneCount: 16,              /* 4 bits per symbol */
+    symbolSec: 1.0 / 46.875,    /* 21.333 ms per symbol, ~187.5 raw bps */
+    analysisFrac: 0.75,         /* fraction of the symbol analyzed (edge guard) */
+    rampSec: 0.004,             /* raised-cosine edge per symbol */
+    pilotFreq: 3500.0,          /* just below the data band */
     pilotSec: 0.25,
-    gapSec: 0.06,        /* silence between pilot and sync */
+    gapSec: 0.06,
     tailSec: 0.05,
-    sync: [0, 15, 3, 12, 6, 9, 1, 14],
+    sync: [2, 7, 13, 0, 11, 5, 9, 14],  /* v2 sync (distinct from v1 lock) */
     amplitude: 0.8,
-    maxPayload: 1024
+    maxPayload: 1024,
+    eraseRatio: 1.7,            /* top1/top2 energy ratio below which -> erasure */
+    rsN: 15, rsK: 11, rsNsym: 4 /* RS(15,11), 4 parity, corrects t=2 */
   };
+
+  /* =============================================================== GF(16) */
+  /* prim poly x^4 + x + 1 (0x13), generator alpha = 2, field_charac = 15 */
+  var FC = 15;
+  var GFEXP = new Int16Array(30);
+  var GFLOG = new Int16Array(16);
+  (function initGF() {
+    var x = 1, i;
+    for (i = 0; i < 15; i++) {
+      GFEXP[i] = x; GFLOG[x] = i;
+      x <<= 1; if (x & 0x10) { x ^= 0x13; }
+    }
+    for (i = 15; i < 30; i++) { GFEXP[i] = GFEXP[i - 15]; }
+  })();
+  function gmul(a, b) { if (a === 0 || b === 0) { return 0; } return GFEXP[GFLOG[a] + GFLOG[b]]; }
+  function gdiv(a, b) { if (a === 0) { return 0; } return GFEXP[(GFLOG[a] - GFLOG[b] + FC) % FC]; }
+  function ginv(a) { return GFEXP[(FC - GFLOG[a]) % FC]; }
+  function gpow(a, p) {
+    if (a === 0) { return 0; }
+    var e = (GFLOG[a] * p) % FC; if (e < 0) { e += FC; }
+    return GFEXP[e];
+  }
+
+  /* ---------------------------------------------------------- poly over GF */
+  function polyScale(p, x) { var r = new Array(p.length), i; for (i = 0; i < p.length; i++) { r[i] = gmul(p[i], x); } return r; }
+  function polyAdd(p, q) {
+    var n = Math.max(p.length, q.length), r = new Array(n).fill(0), i;
+    for (i = 0; i < p.length; i++) { r[i + n - p.length] = p[i]; }
+    for (i = 0; i < q.length; i++) { r[i + n - q.length] ^= q[i]; }
+    return r;
+  }
+  function polyMul(p, q) {
+    var r = new Array(p.length + q.length - 1).fill(0), i, j;
+    for (j = 0; j < q.length; j++) { for (i = 0; i < p.length; i++) { r[i + j] ^= gmul(p[i], q[j]); } }
+    return r;
+  }
+  function polyEval(p, x) { var y = p[0], i; for (i = 1; i < p.length; i++) { y = gmul(y, x) ^ p[i]; } return y; }
+
+  /* ---------------------------------------------------------- RS encode */
+  var GEN = (function () {
+    var g = [1], i;
+    for (i = 0; i < CFG.rsNsym; i++) { g = polyMul(g, [1, gpow(2, i)]); }  /* fcr = 0 */
+    return g;
+  })();
+  function rsEncode(msg) {
+    /* msg: rsK data symbols -> returns rsN codeword (systematic) */
+    var out = msg.concat(new Array(CFG.rsNsym).fill(0));
+    var i, j;
+    for (i = 0; i < msg.length; i++) {
+      var coef = out[i];
+      if (coef !== 0) {
+        for (j = 1; j < GEN.length; j++) { out[i + j] ^= gmul(GEN[j], coef); }
+      }
+    }
+    var rem = out.slice(msg.length);
+    return msg.concat(rem);
+  }
+
+  /* ---------------------------------------------------------- RS decode */
+  function calcSyndromes(msg, nsym) {
+    var s = [0], i;
+    for (i = 0; i < nsym; i++) { s.push(polyEval(msg, gpow(2, i))); }
+    return s;   /* leading 0, then nsym syndromes */
+  }
+  function forneySyndromes(synd, pos, nmess) {
+    var fsynd = synd.slice(1), i, j;
+    for (i = 0; i < pos.length; i++) {
+      var x = gpow(2, nmess - 1 - pos[i]);
+      for (j = 0; j < fsynd.length - 1; j++) { fsynd[j] = gmul(fsynd[j], x) ^ fsynd[j + 1]; }
+    }
+    return fsynd;
+  }
+  function findErrorLocator(synd, nsym, eraseCount) {
+    var errLoc = [1], oldLoc = [1], i, j;
+    var syndShift = (synd.length > nsym) ? (synd.length - nsym) : 0;
+    for (i = 0; i < nsym - eraseCount; i++) {
+      var K = i + syndShift;
+      var delta = synd[K];
+      for (j = 1; j < errLoc.length; j++) { delta ^= gmul(errLoc[errLoc.length - 1 - j], synd[K - j]); }
+      oldLoc = oldLoc.concat([0]);
+      if (delta !== 0) {
+        if (oldLoc.length > errLoc.length) {
+          var newLoc = polyScale(oldLoc, delta);
+          oldLoc = polyScale(errLoc, ginv(delta));
+          errLoc = newLoc;
+        }
+        errLoc = polyAdd(errLoc, polyScale(oldLoc, delta));
+      }
+    }
+    while (errLoc.length && errLoc[0] === 0) { errLoc.shift(); }
+    var errs = errLoc.length - 1;
+    if ((errs - eraseCount) * 2 + eraseCount > nsym) { return null; }  /* too many */
+    return errLoc;
+  }
+  function findErrors(errLocRev, nmess) {
+    var errs = errLocRev.length - 1, errPos = [], i;
+    for (i = 0; i < nmess; i++) {
+      if (polyEval(errLocRev, gpow(2, i)) === 0) { errPos.push(nmess - 1 - i); }
+    }
+    if (errPos.length !== errs) { return null; }
+    return errPos;
+  }
+  function findErrataLocator(coefPos) {
+    var eLoc = [1], i;
+    for (i = 0; i < coefPos.length; i++) { eLoc = polyMul(eLoc, polyAdd([1], [gpow(2, coefPos[i]), 0])); }
+    return eLoc;
+  }
+  function findErrorEvaluator(synd, errLoc, nsym) {
+    var r = polyMul(synd, errLoc);
+    return r.slice(r.length - (nsym + 1));
+  }
+  function correctErrata(msg, synd, errPos) {
+    var coefPos = errPos.map(function (p) { return msg.length - 1 - p; });
+    var errLoc = findErrataLocator(coefPos);
+    var syndRev = synd.slice().reverse();
+    var errEval = findErrorEvaluator(syndRev, errLoc, errLoc.length - 1).reverse();
+    var X = [], i, j;
+    for (i = 0; i < coefPos.length; i++) { X.push(gpow(2, coefPos[i])); }
+    var E = new Array(msg.length).fill(0);
+    for (i = 0; i < X.length; i++) {
+      var Xi = X[i], XiInv = ginv(Xi);
+      var prime = 1;
+      for (j = 0; j < X.length; j++) { if (j !== i) { prime = gmul(prime, 1 ^ gmul(XiInv, X[j])); } }
+      var y = polyEval(errEval.slice().reverse(), XiInv);
+      y = gmul(gpow(Xi, 1), y);   /* fcr = 0 -> gpow(Xi, 1-fcr) = Xi */
+      if (prime === 0) { return null; }
+      E[errPos[i]] = gdiv(y, prime);
+    }
+    return polyAdd(msg, E);
+  }
+  function rsCorrect(recv, erasePos) {
+    /* recv: rsN symbols; erasePos: indices 0..rsN-1 (<= rsNsym). Returns
+       corrected rsN array, or null if uncorrectable. */
+    var nsym = CFG.rsNsym;
+    var msg = recv.slice();
+    var ep = (erasePos || []).slice();
+    if (ep.length > nsym) { return null; }
+    var i;
+    for (i = 0; i < ep.length; i++) { msg[ep[i]] = 0; }
+    var synd = calcSyndromes(msg, nsym);
+    var maxS = 0; for (i = 0; i < synd.length; i++) { if (synd[i] > maxS) { maxS = synd[i]; } }
+    if (maxS === 0) { return msg; }  /* clean (given erasures were zeroed and vanished) */
+    var fsynd = forneySyndromes(synd, ep, msg.length);
+    var errLoc = findErrorLocator(fsynd, nsym, ep.length);
+    if (!errLoc) { return null; }
+    var errPos = findErrors(errLoc.slice().reverse(), msg.length);
+    if (!errPos) { return null; }
+    var corrected = correctErrata(msg, synd, ep.concat(errPos));
+    if (!corrected) { return null; }
+    var chk = calcSyndromes(corrected, nsym);
+    var maxC = 0; for (i = 0; i < chk.length; i++) { if (chk[i] > maxC) { maxC = chk[i]; } }
+    if (maxC > 0) { return null; }
+    return corrected;
+  }
 
   /* ------------------------------------------------------------- CRC-16 */
   function crc16(bytes) {
-    var crc = 0xFFFF;
-    for (var i = 0; i < bytes.length; i++) {
+    var crc = 0xFFFF, i, b;
+    for (i = 0; i < bytes.length; i++) {
       crc ^= bytes[i] << 8;
-      for (var b = 0; b < 8; b++) {
-        crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1);
-        crc &= 0xFFFF;
-      }
+      for (b = 0; b < 8; b++) { crc = (crc & 0x8000) ? ((crc << 1) ^ 0x1021) : (crc << 1); crc &= 0xFFFF; }
     }
     return crc;
   }
 
   /* -------------------------------------------------- bytes -> symbols */
+  function nibblesOfBytes(bytes) {
+    var out = [], i;
+    for (i = 0; i < bytes.length; i++) { out.push((bytes[i] >> 4) & 0xF, bytes[i] & 0xF); }
+    return out;
+  }
+  function chunkEncode(nibs) {
+    /* pad to multiple of rsK, RS-encode each block, concat 15-symbol codewords */
+    var out = [], i, j;
+    var padded = nibs.slice();
+    while (padded.length % CFG.rsK !== 0) { padded.push(0); }
+    for (i = 0; i < padded.length; i += CFG.rsK) {
+      var block = padded.slice(i, i + CFG.rsK);
+      var cw = rsEncode(block);
+      for (j = 0; j < cw.length; j++) { out.push(cw[j]); }
+    }
+    return out;
+  }
+  function headerNibbles(len) {
+    return [CFG.version, (len >> 12) & 0xF, (len >> 8) & 0xF, (len >> 4) & 0xF, len & 0xF];
+  }
+  function payloadBlockCount(len) {
+    var dataNibs = 2 * len + 4;   /* payload nibbles + 4 CRC nibbles */
+    return Math.ceil(dataNibs / CFG.rsK);
+  }
+  function frameSymbolCount(len) {
+    return CFG.sync.length + CFG.rsN + payloadBlockCount(len) * CFG.rsN;
+  }
+  function estimateSeconds(len) {
+    return CFG.pilotSec + CFG.gapSec + frameSymbolCount(len) * CFG.symbolSec + CFG.tailSec;
+  }
   function bytesToSymbols(bytes) {
     if (bytes.length < 1 || bytes.length > CFG.maxPayload) {
       throw new Error("payload must be 1.." + CFG.maxPayload + " bytes");
     }
     var syms = CFG.sync.slice();
-    var len = bytes.length;
-    var i;
-    syms.push((len >> 12) & 0xF, (len >> 8) & 0xF, (len >> 4) & 0xF, len & 0xF);
-    for (i = 0; i < bytes.length; i++) {
-      syms.push((bytes[i] >> 4) & 0xF, bytes[i] & 0xF);
-    }
+    /* header block: version + 16-bit length, RS(15,11) */
+    syms = syms.concat(chunkEncode(headerNibbles(bytes.length)));
+    /* payload blocks: payload nibbles + CRC-16 nibbles, RS(15,11) */
     var c = crc16(bytes);
-    syms.push((c >> 12) & 0xF, (c >> 8) & 0xF, (c >> 4) & 0xF, c & 0xF);
+    var pnibs = nibblesOfBytes(bytes).concat([(c >> 12) & 0xF, (c >> 8) & 0xF, (c >> 4) & 0xF, c & 0xF]);
+    syms = syms.concat(chunkEncode(pnibs));
     return syms;
-  }
-
-  function frameSymbolCount(len) {
-    return CFG.sync.length + 4 + 2 * len + 4;
-  }
-
-  function estimateSeconds(len) {
-    return CFG.pilotSec + CFG.gapSec + frameSymbolCount(len) * CFG.symbolSec + CFG.tailSec;
   }
 
   /* ------------------------------------------------- symbols -> PCM */
@@ -186,9 +364,8 @@
     var twoPi = Math.PI * 2;
     var phase = 0;
     var rampN = Math.max(1, Math.round(CFG.rampSec * sr));
-    var i, n, s;
+    var i, n;
 
-    /* pilot with fade at both ends */
     var pf = twoPi * CFG.pilotFreq / sr;
     for (n = 0; n < pilotN; n++) {
       var env = 1.0;
@@ -198,11 +375,9 @@
       phase += pf;
     }
 
-    /* symbols: phase-continuous FSK with per-symbol raised-cosine edges */
     var base = pilotN + gapN;
     for (i = 0; i < symbols.length; i++) {
-      s = symbols[i];
-      var freq = CFG.f0 + s * CFG.df;
+      var freq = CFG.f0 + symbols[i] * CFG.df;
       var inc = twoPi * freq / sr;
       var s0 = Math.round(i * symF);
       var s1 = Math.round((i + 1) * symF);
@@ -218,29 +393,16 @@
     }
     return pcm;
   }
-
-  function encodeToPcm(bytes, sampleRate) {
-    return synthesize(bytesToSymbols(bytes), sampleRate);
-  }
+  function encodeToPcm(bytes, sampleRate) { return synthesize(bytesToSymbols(bytes), sampleRate); }
 
   /* ---------------------------------------------------------- Goertzel */
   function goertzelPower(buf, len, freq, sr) {
-    var w = 2 * Math.PI * freq / sr;
-    var coeff = 2 * Math.cos(w);
-    var s0 = 0, s1 = 0, s2 = 0;
-    for (var i = 0; i < len; i++) {
-      s0 = buf[i] + coeff * s1 - s2;
-      s2 = s1;
-      s1 = s0;
-    }
+    var w = 2 * Math.PI * freq / sr, coeff = 2 * Math.cos(w);
+    var s1 = 0, s2 = 0, s0, i;
+    for (i = 0; i < len; i++) { s0 = buf[i] + coeff * s1 - s2; s2 = s1; s1 = s0; }
     return s1 * s1 + s2 * s2 - coeff * s1 * s2;
   }
-
-  function makeHann(n) {
-    var w = new Float32Array(n);
-    for (var i = 0; i < n; i++) { w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); }
-    return w;
-  }
+  function makeHann(n) { var w = new Float32Array(n), i; for (i = 0; i < n; i++) { w[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)); } return w; }
 
   /* ------------------------------------------------------------ decode */
   /* Returns { ok, bytes, text?, startSample, endSample, syncScore, reason } */
@@ -254,48 +416,67 @@
     var half = anaN >> 1;
     var minStart = Math.max(0, opts.minStart | 0);
     var K = CFG.toneCount;
-    var freqs = new Float64Array(K);
-    var k, i;
+    var freqs = new Float64Array(K), k, i;
     for (k = 0; k < K; k++) { freqs[k] = CFG.f0 + k * CFG.df; }
     var hann = makeHann(anaN);
     var scratch = new Float32Array(anaN);
     var energies = new Float64Array(K);
 
     function toneEnergiesAt(center) {
-      var start = center - half;
-      var a, t;
+      var start = center - half, a, t;
       if (start < 0 || start + anaN > pcm.length) { return null; }
       for (a = 0; a < anaN; a++) { scratch[a] = pcm[start + a] * hann[a]; }
       for (t = 0; t < K; t++) { energies[t] = goertzelPower(scratch, anaN, freqs[t], sr); }
       return energies;
     }
+    function argmax(arr) { var bi = 0, bv = -Infinity, j; for (j = 0; j < arr.length; j++) { if (arr[j] > bv) { bv = arr[j]; bi = j; } } return bi; }
 
-    function argmax(arr) {
-      var bi = 0, bv = -Infinity;
-      for (var j = 0; j < arr.length; j++) { if (arr[j] > bv) { bv = arr[j]; bi = j; } }
-      return bi;
+    /* soft symbol: dominant tone + erasure confidence (top1/top2 ratio) */
+    function softAt(startSample, index) {
+      var center = startSample + Math.round((index + 0.5) * symF);
+      var e = toneEnergiesAt(center);
+      if (!e) { return null; }
+      var b1 = 0, v1 = -Infinity, b2 = 0, v2 = -Infinity, j;
+      for (j = 0; j < K; j++) {
+        if (e[j] > v1) { v2 = v1; b2 = b1; v1 = e[j]; b1 = j; }
+        else if (e[j] > v2) { v2 = e[j]; b2 = j; }
+      }
+      var ratio = (v2 > 0) ? (v1 / v2) : Infinity;
+      return { tone: b1, ratio: ratio };
     }
 
-    /* pass 1: dominant tone at every hop center */
+    /* read one 15-symbol RS block starting at symbol `idx`; RS-correct with
+       erasures chosen from the lowest-confidence symbols. Returns 11 data
+       nibbles or null. */
+    function readBlock(startSample, idx) {
+      var syms = new Array(CFG.rsN), cand = [], j;
+      for (j = 0; j < CFG.rsN; j++) {
+        var s = softAt(startSample, idx + j);
+        if (!s) { return null; }
+        syms[j] = s.tone;
+        if (s.ratio < CFG.eraseRatio) { cand.push({ pos: j, ratio: s.ratio }); }
+      }
+      cand.sort(function (a, b) { return a.ratio - b.ratio; });
+      var erase = cand.slice(0, CFG.rsNsym).map(function (c) { return c.pos; });
+      var corr = rsCorrect(syms, erase);
+      if (!corr) { corr = rsCorrect(syms, []); }   /* retry hard-decision only */
+      if (!corr) { return null; }
+      return corr.slice(0, CFG.rsK);
+    }
+
+    /* ---- sync acquisition (unchanged in shape from v1) ---- */
     var H = Math.max(0, Math.floor((pcm.length - anaN) / hop));
     var dom = new Int8Array(H).fill(-1);
-    var domE = new Float64Array(H);
-    var h;
+    var domE = new Float64Array(H), h;
     for (h = 0; h < H; h++) {
       var c = h * hop + half;
       var e = toneEnergiesAt(c);
       if (!e) { continue; }
-      var bi = argmax(e);
-      dom[h] = bi;
-      domE[h] = e[bi];
+      var bi = argmax(e); dom[h] = bi; domE[h] = e[bi];
     }
-
-    /* pass 2: slide the sync pattern over the hop grid */
     var S = CFG.sync;
     var syncOffHops = new Int32Array(S.length);
-    for (k = 0; k < S.length; k++) {
-      syncOffHops[k] = Math.round(((k + 0.5) * symF - half) / hop);
-    }
+    for (k = 0; k < S.length; k++) { syncOffHops[k] = Math.round(((k + 0.5) * symF - half) / hop); }
     var candidates = [];
     var h0min = Math.floor(minStart / hop);
     for (h = h0min; h < H; h++) {
@@ -306,100 +487,78 @@
         if (dom[hi] === S[k]) { score++; }
         esum += domE[hi];
       }
-      if (valid && score >= S.length - 1) {
-        candidates.push({ h: h, score: score, esum: esum });
-      }
+      if (valid && score >= S.length - 1) { candidates.push({ h: h, score: score, esum: esum }); }
     }
-    if (candidates.length === 0) {
-      return { ok: false, reason: "nosync" };
-    }
-    candidates.sort(function (a, b) {
-      return (b.score - a.score) || (b.esum - a.esum);
-    });
+    if (candidates.length === 0) { return { ok: false, reason: "nosync" }; }
+    candidates.sort(function (a, b) { return (b.score - a.score) || (b.esum - a.esum); });
 
-    /* thin near-duplicate candidates (same lock within one symbol) */
     var picked = [];
     for (i = 0; i < candidates.length && picked.length < 6; i++) {
       var dup = false;
-      for (var j = 0; j < picked.length; j++) {
-        if (Math.abs(candidates[i].h - picked[j].h) * hop < symbolN) { dup = true; break; }
+      for (var jj = 0; jj < picked.length; jj++) {
+        if (Math.abs(candidates[i].h - picked[jj].h) * hop < symbolN) { dup = true; break; }
       }
       if (!dup) { picked.push(candidates[i]); }
     }
 
-    function symbolAt(startSample, index) {
-      var center = startSample + Math.round((index + 0.5) * symF);
-      var e = toneEnergiesAt(center);
-      if (!e) { return -1; }
-      return argmax(e);
-    }
-
     function syncQuality(startSample) {
-      var q = 0;
-      for (var kk = 0; kk < S.length; kk++) {
+      var q = 0, kk;
+      for (kk = 0; kk < S.length; kk++) {
         var center = startSample + Math.round((kk + 0.5) * symF);
         var e = toneEnergiesAt(center);
         if (!e) { return -1; }
-        var tot = 1e-12;
-        for (var t = 0; t < K; t++) { tot += e[t]; }
+        var tot = 1e-12, t;
+        for (t = 0; t < K; t++) { tot += e[t]; }
         q += e[S[kk]] / tot;
       }
       return q;
     }
 
+    var sawCrc = false, crcStart = -1, crcScore = 0;
     for (i = 0; i < picked.length; i++) {
       var coarse = picked[i].h * hop;
-
-      /* fine timing: maximize sync-tone energy share over +/- one hop */
-      var bestOff = 0, bestQ = -1;
+      var bestOff = 0, bestQ = -1, off;
       var step = Math.max(1, hop >> 2);
-      for (var off = -hop; off <= hop; off += step) {
-        var q = syncQuality(coarse + off);
-        if (q > bestQ) { bestQ = q; bestOff = off; }
-      }
+      for (off = -hop; off <= hop; off += step) { var q = syncQuality(coarse + off); if (q > bestQ) { bestQ = q; bestOff = off; } }
       var s0 = coarse + bestOff;
 
-      /* parse the frame */
-      var idx = S.length;
-      var n0 = symbolAt(s0, idx), n1 = symbolAt(s0, idx + 1);
-      var n2 = symbolAt(s0, idx + 2), n3 = symbolAt(s0, idx + 3);
-      if (n0 < 0 || n1 < 0 || n2 < 0 || n3 < 0) { continue; }
-      var len = (n0 << 12) | (n1 << 8) | (n2 << 4) | n3;
+      /* header block right after sync */
+      var hdr = readBlock(s0, S.length);
+      if (!hdr) { continue; }
+      if (hdr[0] !== CFG.version) { continue; }
+      var len = (hdr[1] << 12) | (hdr[2] << 8) | (hdr[3] << 4) | hdr[4];
       if (len < 1 || len > CFG.maxPayload) { continue; }
+
+      var nb = payloadBlockCount(len);
       var totalSyms = frameSymbolCount(len);
       var lastCenter = s0 + Math.round((totalSyms - 0.5) * symF);
       if (lastCenter + (anaN - half) > pcm.length) { continue; }
 
-      idx += 4;
-      var bytes = new Uint8Array(len);
-      var bad = false;
-      for (var bi2 = 0; bi2 < len; bi2++) {
-        var hiN = symbolAt(s0, idx + 2 * bi2);
-        var loN = symbolAt(s0, idx + 2 * bi2 + 1);
-        if (hiN < 0 || loN < 0) { bad = true; break; }
-        bytes[bi2] = (hiN << 4) | loN;
+      /* payload blocks */
+      var nibs = [], bad = false, bIdx = S.length + CFG.rsN, blk;
+      for (blk = 0; blk < nb; blk++) {
+        var data = readBlock(s0, bIdx + blk * CFG.rsN);
+        if (!data) { bad = true; break; }
+        nibs = nibs.concat(data);
       }
       if (bad) { continue; }
-      idx += 2 * len;
-      var c0 = symbolAt(s0, idx), c1 = symbolAt(s0, idx + 1);
-      var c2 = symbolAt(s0, idx + 2), c3 = symbolAt(s0, idx + 3);
-      if (c0 < 0 || c1 < 0 || c2 < 0 || c3 < 0) { continue; }
-      var rxCrc = (c0 << 12) | (c1 << 8) | (c2 << 4) | c3;
+
+      var need = 2 * len + 4;
+      if (nibs.length < need) { continue; }
+      var bytes = new Uint8Array(len), b2;
+      for (b2 = 0; b2 < len; b2++) { bytes[b2] = (nibs[2 * b2] << 4) | nibs[2 * b2 + 1]; }
+      var rxCrc = (nibs[2 * len] << 12) | (nibs[2 * len + 1] << 8) | (nibs[2 * len + 2] << 4) | nibs[2 * len + 3];
       if (rxCrc !== crc16(bytes)) {
-        if (i === picked.length - 1) {
-          return { ok: false, reason: "crc", startSample: s0, syncScore: picked[i].score };
-        }
+        if (!sawCrc) { sawCrc = true; crcStart = s0; crcScore = picked[i].score; }
         continue;
       }
       return {
-        ok: true,
-        bytes: bytes,
-        startSample: s0,
+        ok: true, bytes: bytes, startSample: s0,
         endSample: s0 + Math.round(totalSyms * symF),
-        syncScore: picked[i].score,
-        reason: "ok"
+        syncScore: picked[i].score, reason: "ok"
       };
     }
+    if (sawCrc) { return { ok: false, reason: "crc", startSample: crcStart, syncScore: crcScore }; }
     return { ok: false, reason: "noframe" };
   }
 
@@ -411,10 +570,16 @@
     decodeFromPcm: decodeFromPcm,
     estimateSeconds: estimateSeconds,
     frameSymbolCount: frameSymbolCount,
+    payloadBlockCount: payloadBlockCount,
     goertzelPower: goertzelPower,
-    makeHann: makeHann
+    makeHann: makeHann,
+    /* exposed for the invariant suite */
+    rsEncode: rsEncode,
+    rsCorrect: rsCorrect,
+    _gf: { gmul: gmul, gdiv: gdiv, ginv: ginv, gpow: gpow }
   };
 });
+
 </script>
 <script>
 /* App layer for the acoustic link page. Everything below touches browser
