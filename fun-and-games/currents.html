@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Currents</title>
+<style>
+  /* full-bleed, no chrome, no scroll */
+  html, body { margin: 0; height: 100%; background: #050608; overflow: hidden; }
+  #gl { display: block; width: 100vw; height: 100vh; }
+  .overlay {
+    position: fixed; pointer-events: none; user-select: none;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #fff; letter-spacing: 0.14em;
+  }
+  #hint {
+    left: 0; right: 0; bottom: 8%; text-align: center;
+    font-size: 12px; opacity: 0; text-transform: lowercase;
+    text-shadow: 0 1px 12px rgba(0,0,0,0.6);
+    transition: opacity 1.4s ease;
+  }
+  #hint.show { opacity: 0.72; }
+  #hint.gone { opacity: 0; }
+  #sig {
+    right: 16px; bottom: 12px; font-size: 10px; opacity: 0.30;
+    text-transform: uppercase;
+    text-shadow: 0 1px 8px rgba(0,0,0,0.7);
+  }
+  #fallback {
+    position: fixed; inset: 0; display: none; place-items: center;
+    color: #cfd6e0; font-family: system-ui, sans-serif; text-align: center;
+    padding: 24px; line-height: 1.6;
+    background: radial-gradient(120% 120% at 30% 20%, #1a2540, #060810 70%);
+  }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="hint" class="overlay">drift with the cursor &middot; click to shift the mood &middot; space to still it</div>
+<div id="sig" class="overlay">Currents &middot; for Oskar</div>
+<div id="fallback">
+  <div>
+    <p>Your browser did not hand over a WebGL context, so the piece cannot paint itself.</p>
+    <p style="opacity:0.6">Everything is still here in one file &#8212; open it in a WebGL-capable browser and it will come alive.</p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* Currents: a single-file, zero-dependency WebGL flow field.
+     Domain-warped fractal noise painted with a cosine palette that drifts.
+     The cursor bends the field toward it and blooms a soft light.
+     Click cycles through curated moods; space stills the motion.
+
+     Deployment note (Oskar's world): source is pure ASCII, comments are block-style
+     only, and there is a <meta charset="utf-8">. To host it on SharePoint 2019,
+     prepend a single line -- the ASP.NET Page directive -- rename to .aspx, paste,
+     done. No build step, no server logic, no external fetch. */
+
+  var canvas = document.getElementById("gl");
+  var fallback = document.getElementById("fallback");
+  var hint = document.getElementById("hint");
+
+  var gl = null;
+  try {
+    gl = canvas.getContext("webgl", { antialias: false, alpha: false, powerPreference: "high-performance" })
+      || canvas.getContext("experimental-webgl");
+  } catch (e) {
+    console.error("[currents] context acquisition threw:", e);
+  }
+
+  if (!gl) {
+    console.warn("[currents] no WebGL context available; showing fallback.");
+    fallback.style.display = "grid";
+    return;
+  }
+  console.log("[currents] WebGL context acquired.");
+
+  /* ------------------------------------------------------------------ shaders */
+
+  var VERT = [
+    "attribute vec2 a_pos;",
+    "void main(){ gl_Position = vec4(a_pos, 0.0, 1.0); }"
+  ].join("\n");
+
+  var FRAG = [
+    "precision highp float;",
+    "uniform vec2  u_res;",
+    "uniform float u_time;",
+    "uniform vec2  u_mouse;",
+    "uniform float u_warp;",
+    "uniform vec3  u_pa;",
+    "uniform vec3  u_pb;",
+    "uniform vec3  u_pc;",
+    "uniform vec3  u_pd;",
+
+    "/* cheap hash -> value noise -> fbm */",
+    "float hash(vec2 p){",
+    "  p = fract(p * vec2(123.34, 345.45));",
+    "  p += dot(p, p + 34.345);",
+    "  return fract(p.x * p.y);",
+    "}",
+    "float noise(vec2 p){",
+    "  vec2 i = floor(p);",
+    "  vec2 f = fract(p);",
+    "  vec2 u = f * f * (3.0 - 2.0 * f);",
+    "  float a = hash(i);",
+    "  float b = hash(i + vec2(1.0, 0.0));",
+    "  float c = hash(i + vec2(0.0, 1.0));",
+    "  float d = hash(i + vec2(1.0, 1.0));",
+    "  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);",
+    "}",
+    "float fbm(vec2 p){",
+    "  float v = 0.0;",
+    "  float a = 0.5;",
+    "  mat2 m = mat2(1.6, 1.2, -1.2, 1.6);",
+    "  for (int i = 0; i < 6; i++){",
+    "    v += a * noise(p);",
+    "    p = m * p;",
+    "    a *= 0.5;",
+    "  }",
+    "  return v;",
+    "}",
+
+    "vec3 palette(float t){",
+    "  return u_pa + u_pb * cos(6.28318530718 * (u_pc * t + u_pd));",
+    "}",
+
+    "void main(){",
+    "  vec2 uv = (gl_FragCoord.xy - 0.5 * u_res) / u_res.y;",
+    "  vec2 m  = (u_mouse - 0.5 * u_res) / u_res.y;",
+    "  float t = u_time * 0.05;",
+
+    "  vec2 p = uv * 2.0;",
+
+    "  /* the cursor bends the field toward itself, falling off with distance */",
+    "  vec2 toM = m - uv;",
+    "  float dM = length(toM);",
+    "  p += normalize(toM + 1e-4) * u_warp * exp(-dM * 2.5);",
+
+    "  /* two layers of domain warping -- flow inside flow */",
+    "  vec2 q = vec2(fbm(p + vec2(0.0, 0.0) + t), fbm(p + vec2(5.2, 1.3) - t));",
+    "  vec2 r = vec2(fbm(p + 4.0 * q + vec2(1.7, 9.2) + 0.15 * t),",
+    "                fbm(p + 4.0 * q + vec2(8.3, 2.8) - 0.126 * t));",
+    "  float f = fbm(p + 4.0 * r);",
+
+    "  vec3 col = palette(f + 0.10 * length(q));",
+    "  col *= 0.60 + 0.60 * f;",
+
+    "  /* nudge away from grey for a little more life */",
+    "  float lum = dot(col, vec3(0.299, 0.587, 0.114));",
+    "  col = mix(col, vec3(lum), -0.10);",
+
+    "  /* a soft bloom follows the cursor */",
+    "  col += palette(f + 0.30) * 0.25 * exp(-dM * 3.0);",
+
+    "  /* gentle vignette + gamma */",
+    "  float vig = smoothstep(1.45, 0.15, length(uv));",
+    "  col *= 0.85 + 0.15 * vig;",
+    "  col = pow(clamp(col, 0.0, 1.0), vec3(0.90));",
+
+    "  gl_FragColor = vec4(col, 1.0);",
+    "}"
+  ].join("\n");
+
+  function compile(type, src) {
+    var s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+      console.error("[currents] shader compile failed:", gl.getShaderInfoLog(s));
+      throw new Error("shader compile failed");
+    }
+    return s;
+  }
+
+  var program;
+  try {
+    program = gl.createProgram();
+    gl.attachShader(program, compile(gl.VERTEX_SHADER, VERT));
+    gl.attachShader(program, compile(gl.FRAGMENT_SHADER, FRAG));
+    gl.linkProgram(program);
+    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+      console.error("[currents] program link failed:", gl.getProgramInfoLog(program));
+      throw new Error("program link failed");
+    }
+    gl.useProgram(program);
+    console.log("[currents] program linked.");
+  } catch (e) {
+    console.error("[currents] pipeline setup failed; showing fallback:", e);
+    fallback.style.display = "grid";
+    return;
+  }
+
+  /* full-screen quad */
+  var buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  var loc_pos = gl.getAttribLocation(program, "a_pos");
+  gl.enableVertexAttribArray(loc_pos);
+  gl.vertexAttribPointer(loc_pos, 2, gl.FLOAT, false, 0, 0);
+
+  var U = {
+    res:   gl.getUniformLocation(program, "u_res"),
+    time:  gl.getUniformLocation(program, "u_time"),
+    mouse: gl.getUniformLocation(program, "u_mouse"),
+    warp:  gl.getUniformLocation(program, "u_warp"),
+    pa:    gl.getUniformLocation(program, "u_pa"),
+    pb:    gl.getUniformLocation(program, "u_pb"),
+    pc:    gl.getUniformLocation(program, "u_pc"),
+    pd:    gl.getUniformLocation(program, "u_pd")
+  };
+
+  /* ---------------------------------------------------------------- moods */
+  /* Inigo-Quilez cosine palettes: color = a + b * cos(2pi * (c*t + d)) */
+  var MOODS = [
+    { a: [0.50, 0.50, 0.55], b: [0.45, 0.45, 0.50], c: [1.0, 1.0, 1.0], d: [0.00, 0.20, 0.45], warp: 0.28 },
+    { a: [0.20, 0.45, 0.72], b: [0.22, 0.30, 0.45], c: [1.0, 1.0, 1.0], d: [0.00, 0.22, 0.50], warp: 0.24 },
+    { a: [0.55, 0.42, 0.30], b: [0.45, 0.35, 0.22], c: [1.0, 1.0, 0.9], d: [0.05, 0.12, 0.22], warp: 0.30 },
+    { a: [0.42, 0.48, 0.48], b: [0.38, 0.42, 0.35], c: [1.0, 1.1, 0.6], d: [0.70, 0.85, 0.30], warp: 0.22 },
+    { a: [0.50, 0.30, 0.55], b: [0.45, 0.28, 0.45], c: [2.0, 1.0, 1.0], d: [0.50, 0.20, 0.25], warp: 0.34 }
+  ];
+
+  var moodIndex = 0;
+  var cur = cloneMood(MOODS[0]);
+  var tgt = cloneMood(MOODS[0]);
+
+  function cloneMood(m) {
+    return { a: m.a.slice(), b: m.b.slice(), c: m.c.slice(), d: m.d.slice(), warp: m.warp };
+  }
+  function lerpArr(from, to, k) {
+    for (var i = 0; i < from.length; i++) from[i] += (to[i] - from[i]) * k;
+  }
+
+  /* ---------------------------------------------------------------- state */
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  var mouse = [0, 0];
+  var mouseTarget = [0, 0];
+  var warp = 0.0;
+  var paused = false;
+  var tSim = 0;
+  var last = performance.now();
+
+  function resize() {
+    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    var w = Math.floor(canvas.clientWidth * dpr);
+    var h = Math.floor(canvas.clientHeight * dpr);
+    if (canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      gl.viewport(0, 0, w, h);
+    }
+    if (mouseTarget[0] === 0 && mouseTarget[1] === 0) {
+      mouseTarget = [w * 0.5, h * 0.5];
+      mouse = [w * 0.5, h * 0.5];
+    }
+  }
+  window.addEventListener("resize", resize);
+  resize();
+
+  function pointer(clientX, clientY) {
+    var rect = canvas.getBoundingClientRect();
+    mouseTarget = [(clientX - rect.left) * dpr, (rect.height - (clientY - rect.top)) * dpr];
+  }
+  window.addEventListener("mousemove", function (e) { pointer(e.clientX, e.clientY); });
+  window.addEventListener("touchmove", function (e) {
+    if (e.touches[0]) pointer(e.touches[0].clientX, e.touches[0].clientY);
+  }, { passive: true });
+
+  function shiftMood() {
+    moodIndex = (moodIndex + 1) % MOODS.length;
+    tgt = cloneMood(MOODS[moodIndex]);
+    console.log("[currents] mood ->", moodIndex);
+  }
+  window.addEventListener("click", shiftMood);
+  window.addEventListener("touchstart", function () { shiftMood(); }, { passive: true });
+
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Space" || e.key === " ") {
+      e.preventDefault();
+      paused = !paused;
+      console.log("[currents] paused:", paused);
+    }
+  });
+
+  document.addEventListener("visibilitychange", function () {
+    if (!document.hidden) last = performance.now();
+  });
+
+  /* fade the hint in, then out */
+  requestAnimationFrame(function () { hint.classList.add("show"); });
+  setTimeout(function () { hint.classList.remove("show"); hint.classList.add("gone"); }, 6000);
+
+  /* ---------------------------------------------------------------- loop */
+  function frame(now) {
+    try {
+      var dt = Math.min((now - last) / 1000, 0.05);
+      last = now;
+      if (!paused) tSim += dt;
+
+      /* ease everything for softness */
+      mouse[0] += (mouseTarget[0] - mouse[0]) * 0.06;
+      mouse[1] += (mouseTarget[1] - mouse[1]) * 0.06;
+      warp += (tgt.warp - warp) * 0.03;
+
+      var k = 0.03;
+      lerpArr(cur.a, tgt.a, k);
+      lerpArr(cur.b, tgt.b, k);
+      lerpArr(cur.c, tgt.c, k);
+      lerpArr(cur.d, tgt.d, k);
+
+      gl.uniform2f(U.res, canvas.width, canvas.height);
+      gl.uniform1f(U.time, tSim);
+      gl.uniform2f(U.mouse, mouse[0], mouse[1]);
+      gl.uniform1f(U.warp, warp);
+      gl.uniform3fv(U.pa, cur.a);
+      gl.uniform3fv(U.pb, cur.b);
+      gl.uniform3fv(U.pc, cur.c);
+      gl.uniform3fv(U.pd, cur.d);
+
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+    } catch (e) {
+      console.error("[currents] frame error:", e);
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  console.log("[currents] running. move, click, and press space.");
+})();
+</script>
+</body>
+</html>
