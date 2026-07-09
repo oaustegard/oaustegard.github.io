@@ -2,7 +2,6 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="ai-disclosure" content="ai-generated">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <title>A Thread of Circles</title>
 <style>
@@ -53,11 +52,15 @@
 const cv=document.getElementById('c'),ctx=cv.getContext('2d');
 const wordEl=document.getElementById('word'),rangeEl=document.getElementById('range'),kEl=document.getElementById('k');
 const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
-let dpr=1,W=0,H=0,coeffs=[],N=0,K=+rangeEl.value,t=0,wt=0,trace=[],cycleFrames=780;
-/* per-circle drift: tiny slow phase wander keyed to wall-clock time (wt never
-   wraps, so no two passes over the word are identical) */
-const DRIFT=0.045;
-const drift=i=>DRIFT*Math.sin(wt*(0.0011+0.00037*(i%5))+i*2.39996);
+let dpr=1,W=0,H=0,coeffs=[],N=0,K=+rangeEl.value,t=0,wt=0,trace=[],passes=[],cycleFrames=780;
+/* whole-word wander: a small smooth offset applied to the entire chain, so
+   letterforms stay intact and each pass lands a few px off the previous one.
+   Completed passes are kept and layered like repeated pen strokes. */
+const WANDER=3.5, MAX_PASSES=5;
+const wander=()=>({
+  x:WANDER*(Math.sin(wt*0.0016)+0.6*Math.sin(wt*0.00053+1.7)),
+  y:WANDER*(Math.sin(wt*0.0013+4.2)+0.6*Math.sin(wt*0.00071+0.9))
+});
 
 function resize(){
   dpr=Math.min(devicePixelRatio||1,2);
@@ -121,7 +124,7 @@ function dft(sig){
 function build(word){
   const sig=textSignal(word.trim()||'MUNINN');
   if(!sig)return;
-  coeffs=dft(sig); N=sig.length; t=0; trace=[];
+  coeffs=dft(sig); N=sig.length; t=0; trace=[]; passes=[];
   if(reduced){ /* draw the finished thread once, hold still */
     for(let i=0;i<cycleFrames;i++)trace.push(tip(2*Math.PI*i/cycleFrames));
   }
@@ -140,9 +143,10 @@ function frame(){
   ctx.fillStyle='#0E1420';ctx.fillRect(0,0,W,H);
   let x=0,y=0;
   if(!reduced){
+    const wo=wander();x=wo.x;y=wo.y;
     ctx.strokeStyle='rgba(126,148,186,.28)';ctx.lineWidth=1;
     for(let i=0;i<Math.min(K,coeffs.length);i++){
-      const f=coeffs[i],a=f.freq*t+f.phase+drift(i),px=x,py=y;
+      const f=coeffs[i],a=f.freq*t+f.phase,px=x,py=y;
       x+=f.amp*Math.cos(a);y+=f.amp*Math.sin(a);
       if(i>0&&f.amp>1.2){
         ctx.beginPath();ctx.arc(px,py,f.amp,0,7);ctx.stroke();
@@ -150,12 +154,21 @@ function frame(){
       }
     }
     trace.push({x,y});
-    if(trace.length>cycleFrames)trace.shift();
-    t+=2*Math.PI/cycleFrames; if(t>2*Math.PI)t-=2*Math.PI;
+    t+=2*Math.PI/cycleFrames;
+    if(t>2*Math.PI){
+      t-=2*Math.PI;
+      passes.push(trace);
+      if(passes.length>MAX_PASSES)passes.shift();
+      trace=[];
+    }
     wt++;
   }
+  ctx.lineJoin='round';ctx.lineCap='round';
+  for(let p=0;p<passes.length;p++){ /* oldest faintest */
+    ctx.strokeStyle=`rgba(230,185,92,${0.10+0.07*p})`;
+    ctx.lineWidth=1.2;stroke(passes[p]);
+  }
   if(trace.length>1){
-    ctx.lineJoin='round';ctx.lineCap='round';
     ctx.strokeStyle='rgba(230,185,92,.18)';ctx.lineWidth=5;stroke(trace);
     ctx.strokeStyle='#E6B95C';ctx.lineWidth=1.6;stroke(trace);
   }
@@ -174,7 +187,7 @@ function stroke(pts){
 wordEl.addEventListener('change',()=>build(wordEl.value));
 wordEl.addEventListener('keydown',e=>{if(e.key==='Enter')wordEl.blur();});
 rangeEl.addEventListener('input',()=>{
-  K=+rangeEl.value;kEl.textContent=K;trace=[];t=0;
+  K=+rangeEl.value;kEl.textContent=K;trace=[];passes=[];t=0;
   if(reduced){trace=[];for(let i=0;i<cycleFrames;i++)trace.push(tip(2*Math.PI*i/cycleFrames));}
 });
 addEventListener('resize',resize);
