@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="ai-disclosure" content="ai-generated">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>A Thread of Circles</title>
+<style>
+  :root{
+    --ink:#0E1420;        /* night */
+    --gold:#E6B95C;       /* the thread */
+    --gold-hot:#FFF3D6;   /* pen tip */
+    --steel:rgba(126,148,186,.28);  /* epicycle wire */
+    --ui:#8FA0BC;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%;overflow:hidden;background:var(--ink)}
+  canvas{display:block;width:100vw;height:100vh;touch-action:none}
+  #bar{
+    position:fixed;left:0;right:0;bottom:0;
+    display:flex;gap:14px;align-items:center;justify-content:center;
+    padding:14px 16px calc(14px + env(safe-area-inset-bottom));
+    font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+    color:var(--ui);
+    background:linear-gradient(to top, rgba(14,20,32,.92), rgba(14,20,32,0));
+  }
+  #word{
+    background:transparent;border:0;border-bottom:1px solid rgba(143,160,188,.4);
+    color:var(--gold);font:16px ui-monospace,SFMono-Regular,Menlo,monospace;
+    letter-spacing:.18em;text-transform:uppercase;text-align:center;
+    width:11ch;padding:4px 0;outline:none;caret-color:var(--gold);
+  }
+  #word:focus{border-bottom-color:var(--gold)}
+  label{display:flex;align-items:center;gap:8px;white-space:nowrap}
+  input[type=range]{width:110px;accent-color:var(--gold)}
+  #k{min-width:3ch;text-align:right;color:var(--gold);font-variant-numeric:tabular-nums}
+  #hint{
+    position:fixed;top:calc(16px + env(safe-area-inset-top));left:0;right:0;
+    text-align:center;font:11px ui-monospace,Menlo,monospace;color:var(--ui);
+    letter-spacing:.22em;text-transform:uppercase;opacity:.7;pointer-events:none;
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hint">one pen · many circles · pure fourier</div>
+<div id="bar">
+  <input id="word" value="MUNINN" maxlength="12" autocomplete="off" spellcheck="false" enterkeyhint="go" aria-label="Word to draw">
+  <label>circles <input id="range" type="range" min="4" max="320" value="200"><span id="k">200</span></label>
+</div>
+<script>
+(()=>{
+const cv=document.getElementById('c'),ctx=cv.getContext('2d');
+const wordEl=document.getElementById('word'),rangeEl=document.getElementById('range'),kEl=document.getElementById('k');
+const reduced=matchMedia('(prefers-reduced-motion: reduce)').matches;
+let dpr=1,W=0,H=0,coeffs=[],N=0,K=+rangeEl.value,t=0,wt=0,trace=[],cycleFrames=780;
+/* per-circle drift: tiny slow phase wander keyed to wall-clock time (wt never
+   wraps, so no two passes over the word are identical) */
+const DRIFT=0.045;
+const drift=i=>DRIFT*Math.sin(wt*(0.0011+0.00037*(i%5))+i*2.39996);
+
+function resize(){
+  dpr=Math.min(devicePixelRatio||1,2);
+  W=innerWidth;H=innerHeight;
+  cv.width=W*dpr;cv.height=H*dpr;
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+  build(wordEl.value||'MUNINN');
+}
+
+/* --- rasterize word, walk its edge, transform to screen space --- */
+function textSignal(word){
+  const oc=document.createElement('canvas'),x=oc.getContext('2d');
+  const font='900 150px Georgia, "Times New Roman", serif';
+  x.font=font;
+  const pad=24, tw=Math.ceil(x.measureText(word).width);
+  oc.width=tw+pad*2; oc.height=210;
+  x.font=font; x.textBaseline='middle'; x.fillStyle='#fff';
+  x.fillText(word,pad,105);
+  const d=x.getImageData(0,0,oc.width,oc.height).data, w=oc.width, h=oc.height;
+  const f=(px,py)=>px>=0&&py>=0&&px<w&&py<h&&d[(py*w+px)*4+3]>128;
+  const edges=[];
+  for(let py=0;py<h;py++)for(let px=0;px<w;px++)
+    if(f(px,py)&&(!f(px+1,py)||!f(px-1,py)||!f(px,py+1)||!f(px,py-1)))
+      edges.push({x:px,y:py});
+  if(edges.length<8)return null;
+  /* greedy nearest-neighbour walk: turns a pixel cloud into one continuous path */
+  const used=new Uint8Array(edges.length);
+  let idx=0;for(let i=1;i<edges.length;i++)if(edges[i].x<edges[idx].x)idx=i;
+  const path=[edges[idx]];used[idx]=1;
+  for(let n=1;n<edges.length;n++){
+    const p=path[path.length-1];let best=-1,bd=Infinity;
+    for(let i=0;i<edges.length;i++){if(used[i])continue;
+      const dx=edges[i].x-p.x,dy=edges[i].y-p.y,dd=dx*dx+dy*dy;
+      if(dd<bd){bd=dd;best=i;}}
+    used[best]=1;path.push(edges[best]);
+  }
+  /* downsample to ~640 points, fit to screen */
+  const target=640,step=Math.max(1,Math.floor(path.length/target)),sig=[];
+  for(let i=0;i<path.length;i+=step)sig.push(path[i]);
+  const s=Math.min(W*0.86/w,H*0.44/h);
+  const ox=W/2-(w*s)/2, oy=H/2-(h*s)/2-H*0.04;
+  return sig.map(p=>({x:ox+p.x*s,y:oy+p.y*s}));
+}
+
+/* --- discrete Fourier transform of the complex path --- */
+function dft(sig){
+  const n=sig.length,out=[];
+  for(let k=0;k<n;k++){
+    let re=0,im=0;
+    for(let i=0;i<n;i++){
+      const phi=2*Math.PI*k*i/n,c=Math.cos(phi),s=Math.sin(phi);
+      re+=sig[i].x*c+sig[i].y*s; im+=-sig[i].x*s+sig[i].y*c;
+    }
+    re/=n;im/=n;
+    out.push({freq:k<=n/2?k:k-n,amp:Math.hypot(re,im),phase:Math.atan2(im,re)});
+  }
+  out.sort((a,b)=>b.amp-a.amp);
+  return out;
+}
+
+function build(word){
+  const sig=textSignal(word.trim()||'MUNINN');
+  if(!sig)return;
+  coeffs=dft(sig); N=sig.length; t=0; trace=[];
+  if(reduced){ /* draw the finished thread once, hold still */
+    for(let i=0;i<cycleFrames;i++)trace.push(tip(2*Math.PI*i/cycleFrames));
+  }
+}
+
+function tip(time){
+  let x=0,y=0;
+  for(let i=0;i<Math.min(K,coeffs.length);i++){
+    const f=coeffs[i],a=f.freq*time+f.phase;
+    x+=f.amp*Math.cos(a); y+=f.amp*Math.sin(a);
+  }
+  return {x,y};
+}
+
+function frame(){
+  ctx.fillStyle='#0E1420';ctx.fillRect(0,0,W,H);
+  let x=0,y=0;
+  if(!reduced){
+    ctx.strokeStyle='rgba(126,148,186,.28)';ctx.lineWidth=1;
+    for(let i=0;i<Math.min(K,coeffs.length);i++){
+      const f=coeffs[i],a=f.freq*t+f.phase+drift(i),px=x,py=y;
+      x+=f.amp*Math.cos(a);y+=f.amp*Math.sin(a);
+      if(i>0&&f.amp>1.2){
+        ctx.beginPath();ctx.arc(px,py,f.amp,0,7);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(px,py);ctx.lineTo(x,y);ctx.stroke();
+      }
+    }
+    trace.push({x,y});
+    if(trace.length>cycleFrames)trace.shift();
+    t+=2*Math.PI/cycleFrames; if(t>2*Math.PI)t-=2*Math.PI;
+    wt++;
+  }
+  if(trace.length>1){
+    ctx.lineJoin='round';ctx.lineCap='round';
+    ctx.strokeStyle='rgba(230,185,92,.18)';ctx.lineWidth=5;stroke(trace);
+    ctx.strokeStyle='#E6B95C';ctx.lineWidth=1.6;stroke(trace);
+  }
+  if(!reduced){
+    ctx.fillStyle='#FFF3D6';
+    ctx.beginPath();ctx.arc(x,y,2.6,0,7);ctx.fill();
+  }
+  requestAnimationFrame(frame);
+}
+function stroke(pts){
+  ctx.beginPath();ctx.moveTo(pts[0].x,pts[0].y);
+  for(let i=1;i<pts.length;i++)ctx.lineTo(pts[i].x,pts[i].y);
+  ctx.stroke();
+}
+
+wordEl.addEventListener('change',()=>build(wordEl.value));
+wordEl.addEventListener('keydown',e=>{if(e.key==='Enter')wordEl.blur();});
+rangeEl.addEventListener('input',()=>{
+  K=+rangeEl.value;kEl.textContent=K;trace=[];t=0;
+  if(reduced){trace=[];for(let i=0;i<cycleFrames;i++)trace.push(tip(2*Math.PI*i/cycleFrames));}
+});
+addEventListener('resize',resize);
+resize();
+requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
