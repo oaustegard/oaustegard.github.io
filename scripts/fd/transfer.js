@@ -220,17 +220,29 @@ export class Sender {
     this._totalBytes = 0;
     this._sentBytes = 0;
     this._closed = true;
-    this._acceptResolve = null;
+    this._firstResolve = null;
+    this._acceptedQueue = null;
     this._okResolve = null;
     this._drainResolve = null;
+    this._terminal = null; // { event, payload } once 'done'/'declined' fires
     this._bindChannel(channel);
   }
 
   on(event, cb) {
+    // 'done'/'declined' are terminal, single-fire events. A listener attached
+    // *after* one already fired (a real possibility: small/fast transfers can
+    // finish before the caller gets around to registering a listener) must
+    // still see it — replay immediately, the way an already-settled Promise
+    // replays for a late .then().
+    if (this._terminal && this._terminal.event === event) {
+      cb(this._terminal.payload);
+      return;
+    }
     (this._listeners[event] || (this._listeners[event] = [])).push(cb);
   }
 
   _emit(event, payload) {
+    if (event === 'done' || event === 'declined') this._terminal = { event, payload };
     const cbs = this._listeners[event];
     if (!cbs) return;
     for (const cb of cbs) cb(payload);
@@ -269,8 +281,8 @@ export class Sender {
     return new Promise((resolve) => { this._drainResolve = resolve; });
   }
 
-  _awaitAccept() {
-    return new Promise((resolve) => { this._acceptResolve = resolve; });
+  _awaitFirstResponse() {
+    return new Promise((resolve) => { this._firstResolve = resolve; });
   }
 
   _awaitCollectionOk() {
@@ -283,10 +295,23 @@ export class Sender {
     try { msg = JSON.parse(data); } catch { return; }
     switch (msg.type) {
       case 'COLLECTION_ACCEPT':
-        if (this._acceptResolve) { const r = this._acceptResolve; this._acceptResolve = null; r(msg); }
+        if (this._firstResolve) {
+          // The very first accept (or the initial post-offer response).
+          const r = this._firstResolve;
+          this._firstResolve = null;
+          r(msg);
+        } else {
+          // A *fresh* accept arriving after we already believed a round was
+          // finished — i.e. a reconnect resume. The channel may have been
+          // rebound already (or is about to be, via Sender.resume()); queue
+          // this round after any in-flight one so we never send concurrently.
+          this._acceptedQueue = (this._acceptedQueue || Promise.resolve())
+            .then(() => this._onAccept(msg))
+            .catch((err) => this._emit('error', err));
+        }
         break;
       case 'COLLECTION_DECLINE':
-        if (this._acceptResolve) { const r = this._acceptResolve; this._acceptResolve = null; r(null); }
+        if (this._firstResolve) { const r = this._firstResolve; this._firstResolve = null; r(null); }
         break;
       case 'CHUNK_NACK':
         this._handleNack(msg.fid, msg.index).catch((err) => this._emit('error', err));
@@ -299,6 +324,14 @@ export class Sender {
         break;
       default:
         break;
+    }
+  }
+
+  /** Run one transfer round for `msg.need`; send COLLECTION_END once it fully completes. */
+  async _onAccept(msg) {
+    const completed = await this._runTransferRound(msg.need || []);
+    if (completed) {
+      this._send(JSON.stringify({ type: 'COLLECTION_END', id: this._id }));
     }
   }
 
@@ -381,21 +414,22 @@ export class Sender {
       };
       this._send(JSON.stringify(offer));
 
-      for (;;) {
-        const msg = await this._awaitAccept();
-        if (!msg) {
-          this._emit('declined', { id: this._id });
-          return { id: this._id };
-        }
-        const completed = await this._runTransferRound(msg.need || []);
-        if (completed) break;
-        // interrupted mid-round (channel closed): loop back and await the
-        // next COLLECTION_ACCEPT, which arrives once resume() rebinds and
-        // the receiver re-sends its watermarks.
+      const firstMsg = await this._awaitFirstResponse();
+      if (!firstMsg) {
+        this._emit('declined', { id: this._id });
+        return { id: this._id };
       }
 
-      this._send(JSON.stringify({ type: 'COLLECTION_END', id: this._id }));
-      await this._awaitCollectionOk();
+      // Await COLLECTION_OK *before* kicking off the round: a small/fast
+      // file can finish sending (and even get interrupted-and-resumed)
+      // faster than the receiver finishes verifying it, so COLLECTION_ACCEPT
+      // messages (including resume ones) must always be actionable — see
+      // _handleMessage's "else" branch — independent of how far along this
+      // first round gets. _onAccept is what actually sends COLLECTION_END
+      // once a round truly completes with nothing left to resend.
+      const okP = this._awaitCollectionOk();
+      this._acceptedQueue = Promise.resolve().then(() => this._onAccept(firstMsg));
+      await okP;
       this._emit('done', { id: this._id });
       return { id: this._id };
     } catch (err) {
@@ -419,14 +453,24 @@ export class Receiver {
     this._finished = false;
     this._closed = true;
     this._chunkQueue = Promise.resolve(); // serializes binary-frame processing in arrival order
+    this._terminal = null; // { event, payload } once 'done' fires
     this._bindChannel(channel);
   }
 
   on(event, cb) {
+    // 'done' is a terminal, single-fire event. A caller may register its
+    // listener after the transfer already finished (small/fast transfers can
+    // complete before the caller gets around to it) — replay immediately,
+    // the way an already-settled Promise replays for a late .then().
+    if (this._terminal && this._terminal.event === event) {
+      cb(this._terminal.payload);
+      return;
+    }
     (this._listeners[event] || (this._listeners[event] = [])).push(cb);
   }
 
   _emit(event, payload) {
+    if (event === 'done') this._terminal = { event, payload };
     const cbs = this._listeners[event];
     if (!cbs) return;
     for (const cb of cbs) cb(payload);
@@ -539,6 +583,10 @@ export class Receiver {
 
   async _handleManifest(fid, manifestBytes) {
     if (!this._files) return;
+    // A frame may already be queued for processing when the channel drops.
+    // Abandon it rather than trust in-flight state across a dead connection:
+    // resume() re-announces the true watermark and the sender resends the gap.
+    if (this._closed) return;
     const rec = this._files.get(fid);
     if (!rec) return;
     const rootBuf = new Uint8Array(await crypto.subtle.digest('SHA-256', manifestBytes));
@@ -561,6 +609,8 @@ export class Receiver {
 
   async _handleChunk(fid, index, payload) {
     if (!this._files) return;
+    // See _handleManifest: abandon already-queued frames from a dead channel.
+    if (this._closed) return;
     const rec = this._files.get(fid);
     if (!rec || rec.closed || !rec.manifestBytes) return;
 
