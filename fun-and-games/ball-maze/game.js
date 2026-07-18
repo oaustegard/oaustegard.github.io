@@ -140,15 +140,70 @@
     return path.reverse();
   }
 
-  function buildLevel(levelIndex) {
+  // Level construction is split in two so a resize or orientation flip can
+  // re-layout the SAME maze at a new size instead of regenerating it:
+  // generateLevelData() holds everything random in cell coordinates;
+  // layoutMaze() turns that into pixels.
+  function generateLevelData(levelIndex) {
     const availW = boardWrap.clientWidth - 8;
     const availH = boardWrap.clientHeight - 8;
     const spec = levelSpec(levelIndex + 1, availW, availH);
     const { cols, rows } = spec;
     const cells = generateMaze(cols, rows);
+    const path = solvePath(cells, cols, rows);
+    const pathSet = new Set(path.map(([c, r]) => c + ',' + r));
+    const shuffle = (arr) => {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    };
+    const holeDefs = [];
 
-    // fit square cells into the board area
-    const cs = Math.floor(Math.min(availW / cols, availH / rows));
+    // on-path holes: straight corridor cells along the solution path, hole
+    // offset perpendicular so the ball can squeeze past on the open side
+    const straight = [];
+    for (let i = 2; i < path.length - 2; i++) {
+      const [pc, pr] = path[i - 1], [c, r] = path[i], [nc, nr] = path[i + 1];
+      if (pc === c && nc === c) straight.push({ i, c, r, horizontal: false });
+      else if (pr === r && nr === r) straight.push({ i, c, r, horizontal: true });
+    }
+    shuffle(straight);
+    const picked = [];
+    for (const s of straight) {
+      if (picked.length >= spec.pathHoles) break;
+      if (picked.some(p => Math.abs(p.i - s.i) < 3)) continue; // spread out
+      picked.push(s);
+    }
+    for (const { c, r, horizontal } of picked) {
+      holeDefs.push({ c, r, horizontal,
+                      sign: Math.random() < 0.5 ? -1 : 1, onPath: true });
+    }
+
+    // decoy holes in cells off the path, away from start/goal
+    const candidates = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        if (pathSet.has(c + ',' + r)) continue;
+        if (c + r < 3) continue;                          // clear of start
+        if ((cols - 1 - c) + (rows - 1 - r) < 2) continue; // clear of goal
+        candidates.push([c, r]);
+      }
+    }
+    shuffle(candidates);
+    for (const [c, r] of candidates.slice(0, spec.holes - holeDefs.length)) {
+      holeDefs.push({ c, r, horizontal: false, sign: 0, onPath: false });
+    }
+
+    return { cols, rows, cells, path, holeDefs };
+  }
+
+  function layoutMaze(data) {
+    const { cols, rows, cells } = data;
+    const availW = boardWrap.clientWidth - 8;
+    const availH = boardWrap.clientHeight - 8;
+    const cs = Math.max(8, Math.floor(Math.min(availW / cols, availH / rows)));
     const ox = Math.floor((boardWrap.clientWidth - cols * cs) / 2);
     const oy = Math.floor((boardWrap.clientHeight - rows * cs) / 2);
     const t = Math.max(3, Math.round(cs * WALL_T)); // wall thickness
@@ -182,69 +237,27 @@
       }
     }
 
-    const path = solvePath(cells, cols, rows);
-    const pathSet = new Set(path.map(([c, r]) => c + ',' + r));
-    const shuffle = (arr) => {
-      for (let i = arr.length - 1; i > 0; i--) {
-        const j = (Math.random() * (i + 1)) | 0;
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-      }
-      return arr;
-    };
-    const holes = [];
-
-    // on-path holes: straight corridor cells along the solution path, hole
-    // offset perpendicular so the ball can squeeze past on the open side
-    const straight = [];
-    for (let i = 2; i < path.length - 2; i++) {
-      const [pc, pr] = path[i - 1], [c, r] = path[i], [nc, nr] = path[i + 1];
-      if (pc === c && nc === c) straight.push({ i, c, r, horizontal: false });
-      else if (pr === r && nr === r) straight.push({ i, c, r, horizontal: true });
-    }
-    shuffle(straight);
-    const picked = [];
-    for (const s of straight) {
-      if (picked.length >= spec.pathHoles) break;
-      if (picked.some(p => Math.abs(p.i - s.i) < 3)) continue; // spread out
-      picked.push(s);
-    }
-    for (const { c, r, horizontal } of picked) {
-      const off = HOLE_OFFSET * cs * (Math.random() < 0.5 ? -1 : 1);
-      holes.push({
+    const holes = data.holeDefs.map(({ c, r, horizontal, sign, onPath }) => {
+      const off = HOLE_OFFSET * cs * sign;
+      return {
         x: ox + (c + 0.5) * cs + (horizontal ? 0 : off),
         y: oy + (r + 0.5) * cs + (horizontal ? off : 0),
         r: cs * HOLE_R,
-        onPath: true,
-      });
-    }
-
-    // decoy holes in cells off the path, away from start/goal
-    const candidates = [];
-    for (let r = 0; r < rows; r++) {
-      for (let c = 0; c < cols; c++) {
-        if (pathSet.has(c + ',' + r)) continue;
-        if (c + r < 3) continue;                          // clear of start
-        if ((cols - 1 - c) + (rows - 1 - r) < 2) continue; // clear of goal
-        candidates.push([c, r]);
-      }
-    }
-    shuffle(candidates);
-    for (const [c, r] of candidates.slice(0, spec.holes - holes.length)) {
-      holes.push({
-        x: ox + (c + 0.5) * cs,
-        y: oy + (r + 0.5) * cs,
-        r: cs * HOLE_R,
-        onPath: false,
-      });
-    }
+        onPath,
+      };
+    });
 
     const maze = {
-      cols, rows, cs, ox, oy, wallT: t, walls, holes, path,
+      data, cols, rows, cs, ox, oy, wallT: t, walls, holes, path: data.path,
       start: { x: ox + 0.5 * cs, y: oy + 0.5 * cs },
       goal: { x: ox + (cols - 0.5) * cs, y: oy + (rows - 0.5) * cs },
     };
     maze.board = prerenderBoard(maze);
     return maze;
+  }
+
+  function buildLevel(levelIndex) {
+    return layoutMaze(generateLevelData(levelIndex));
   }
 
   // ---------------------------------------------------------------- render
@@ -545,19 +558,10 @@
   // ---------------------------------------------------------------- input
   function handleOrientation(e) {
     if (e.beta == null || e.gamma == null) return;
-    const angle = (screen.orientation && screen.orientation.angle != null)
-      ? screen.orientation.angle
-      : (window.orientation || 0);
-    let x, y;
-    switch (angle) {
-      case 90: x = e.beta; y = -e.gamma; break;
-      case -90:
-      case 270: x = -e.beta; y = e.gamma; break;
-      case 180: x = -e.gamma; y = -e.beta; break;
-      default: x = e.gamma; y = e.beta;
-    }
-    game.raw.x = Math.max(-1, Math.min(1, x / MAX_TILT));
-    game.raw.y = Math.max(-1, Math.min(1, y / MAX_TILT));
+    // beta/gamma are device axes, and the counter-rotation keeps the UI in
+    // device coordinates too, so the identity mapping is always correct
+    game.raw.x = Math.max(-1, Math.min(1, e.gamma / MAX_TILT));
+    game.raw.y = Math.max(-1, Math.min(1, e.beta / MAX_TILT));
   }
 
   async function enableTilt() {
@@ -602,8 +606,18 @@
   });
   boardWrap.addEventListener('pointermove', (e) => {
     if (!dragOrigin) return;
-    game.raw.x = Math.max(-1, Math.min(1, (e.clientX - dragOrigin.x) / 90));
-    game.raw.y = Math.max(-1, Math.min(1, (e.clientY - dragOrigin.y) / 90));
+    // pointer coords are viewport-based; undo the counter-rotation so the
+    // drag matches what the player sees
+    const dxv = e.clientX - dragOrigin.x, dyv = e.clientY - dragOrigin.y;
+    let dx, dy;
+    switch (uiAngle) {
+      case 90: dx = -dyv; dy = dxv; break;
+      case 270: dx = dyv; dy = -dxv; break;
+      case 180: dx = -dxv; dy = -dyv; break;
+      default: dx = dxv; dy = dyv;
+    }
+    game.raw.x = Math.max(-1, Math.min(1, dx / 90));
+    game.raw.y = Math.max(-1, Math.min(1, dy / 90));
   });
   const endDrag = () => {
     dragOrigin = null;
@@ -613,19 +627,82 @@
   boardWrap.addEventListener('pointerup', endDrag);
   boardWrap.addEventListener('pointercancel', endDrag);
 
+  // ------------------------------------------------------- orientation lock
+  // iOS Safari offers no way for a web app to lock orientation, so when the
+  // OS flips the viewport to landscape we counter-rotate #app back to the
+  // device's natural portrait with a CSS transform. Visually the game never
+  // leaves portrait — no OS orientation lock needed. While the fix is
+  // active, tilt and drag input use raw device axes (identity mapping),
+  // since the UI is already back in device coordinates.
+  const appEl = document.getElementById('app');
+  let uiAngle = 0; // viewport rotation the fix is currently countering
+
+  function orientationAngle() {
+    const a = (screen.orientation && screen.orientation.angle != null)
+      ? screen.orientation.angle
+      : (window.orientation || 0);
+    return ((a % 360) + 360) % 360;
+  }
+
+  function applyOrientationFix(forceAngle) {
+    uiAngle = forceAngle != null ? forceAngle : orientationAngle();
+    const s = appEl.style;
+    if (uiAngle === 90 || uiAngle === 270) {
+      const w = window.innerHeight, h = window.innerWidth; // device-portrait box
+      s.width = w + 'px';
+      s.height = h + 'px';
+      s.transformOrigin = 'top left';
+      s.transform = uiAngle === 90
+        ? 'translateY(' + w + 'px) rotate(-90deg)'
+        : 'translateX(' + h + 'px) rotate(90deg)';
+    } else if (uiAngle === 180) {
+      s.width = window.innerWidth + 'px';
+      s.height = window.innerHeight + 'px';
+      s.transformOrigin = 'center center';
+      s.transform = 'rotate(180deg)';
+    } else {
+      s.width = '';
+      s.height = '';
+      s.transform = '';
+      s.transformOrigin = '';
+    }
+  }
+
+  async function tryNativeLock() {
+    // works in installed/fullscreen contexts on Android; iOS throws and we
+    // fall back to the CSS counter-rotation above
+    try {
+      if (screen.orientation && screen.orientation.lock) {
+        await screen.orientation.lock('portrait');
+      }
+    } catch { /* not supported here — counter-rotation covers it */ }
+  }
+
   // ---------------------------------------------------------------- resize
   function resizeCanvas() {
+    applyOrientationFix();
     const scale = dpr();
     canvas.width = boardWrap.clientWidth * scale;
     canvas.height = boardWrap.clientHeight * scale;
     if (game.maze) {
-      // regenerate the level at the new size; the ball returns to the start
-      game.maze = buildLevel(game.level);
-      resetBall();
-      game.distAcc = 0;
+      // re-layout the SAME maze at the new size and carry the ball across
+      // proportionally — an orientation flip must not cost progress
+      const old = game.maze, b = game.ball;
+      const fx = (b.x - old.ox) / old.cs, fy = (b.y - old.oy) / old.cs;
+      game.maze = layoutMaze(old.data);
+      const m = game.maze, k = m.cs / old.cs;
+      b.x = m.ox + fx * m.cs;
+      b.y = m.oy + fy * m.cs;
+      b.vx *= k;
+      b.vy *= k;
+      b.r = m.cs * BALL_R;
     }
   }
   window.addEventListener('resize', () => {
+    clearTimeout(resizeCanvas._t);
+    resizeCanvas._t = setTimeout(resizeCanvas, 150);
+  });
+  window.addEventListener('orientationchange', () => {
     clearTimeout(resizeCanvas._t);
     resizeCanvas._t = setTimeout(resizeCanvas, 150);
   });
@@ -651,6 +728,7 @@
     const tiltOk = await enableTilt();
     startOverlay.classList.add('hidden');
     keepAwake();
+    tryNativeLock();
     game.score = score;
     scoreEl.textContent = score;
     startLevel(level);
@@ -670,7 +748,7 @@
 
   // expose internals for automated tests when loaded with ?debug
   if (new URLSearchParams(location.search).has('debug')) {
-    window.__ballMaze = { game, startLevel };
+    window.__ballMaze = { game, startLevel, applyOrientationFix, resizeCanvas };
   }
 
   // ---------------------------------------------------------------- pwa

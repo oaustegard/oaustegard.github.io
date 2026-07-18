@@ -50,5 +50,15 @@ uses stale-while-revalidate, so the game is installable and playable offline.
 - Maze walls are merged into axis-aligned rects; ball collision is
   circle-vs-AABB closest-point resolution with restitution, integrated at a
   fixed 120 Hz timestep.
-- Device orientation is remapped by `screen.orientation.angle` so tilt stays
-  correct in any screen orientation.
+- **Orientation lock without the OS lock**: iOS Safari can't
+  `screen.orientation.lock()`, so when the OS flips the viewport to
+  landscape the app counter-rotates `#app` back to device-natural portrait
+  with a CSS transform — visually the game never leaves portrait, even with
+  the iOS orientation lock off. Tilt input uses raw device beta/gamma
+  (identity mapping), which stays correct because the UI is always in
+  device coordinates; pointer-drag deltas are un-rotated to match. Native
+  `screen.orientation.lock('portrait')` is still attempted at game start
+  for platforms that support it (installed Android PWAs).
+- A resize or orientation flip re-lays-out the **same** maze at the new
+  size and carries the ball across proportionally — mid-level progress
+  survives rotation.
