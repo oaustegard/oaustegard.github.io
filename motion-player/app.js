@@ -70,12 +70,16 @@ const el = {
 /* ===================== Persistence ===================== */
 
 function loadPrefs() {
-  const defaults = { sensitivity: 1, verticalPan: true, rollStabilize: true, invertX: false, soundOn: true };
+  const defaults = { sensitivity: 1, verticalPan: true, rollStabilize: true, invertX: false, soundOn: true, motionOn: true };
   try {
     const raw = localStorage.getItem(LS_PREFS);
     if (!raw) return defaults;
     const parsed = JSON.parse(raw);
-    return { ...defaults, ...parsed };
+    const merged = { ...defaults, ...parsed };
+    // The sensitivity range narrowed from 0.5–3 to 0.1–2; clamp persisted
+    // values from the old range into the current slider bounds.
+    merged.sensitivity = Math.min(2, Math.max(0.1, Number(merged.sensitivity) || 1));
+    return merged;
   } catch {
     return defaults;
   }
@@ -89,6 +93,7 @@ function savePrefs() {
       rollStabilize: state.rollStabilize,
       invertX: state.invertX,
       soundOn: state.soundOn,
+      motionOn: state.motionOn,
     }));
   } catch { /* storage unavailable — ignore */ }
 }
@@ -200,6 +205,9 @@ const state = {
   invertX: prefs.invertX,
   sensitivity: prefs.sensitivity,
   soundOn: prefs.soundOn,
+  // Persisted intent to use motion control; actual activation still requires
+  // the iOS permission gesture (see the first-gesture auto-enable).
+  motionOn: prefs.motionOn,
   // true when zoom is at/near the "contain" (fit) scale — see updateFitMode().
   fitMode: false,
 };
@@ -430,10 +438,16 @@ function updateMotionButton() {
 }
 
 el.btnMotion.addEventListener('click', () => {
+  // Explicit button presses record intent (persisted); the watchdog's
+  // auto-backout in enableMotion() deliberately does not.
   if (state.motionEnabled) {
     disableMotion();
+    state.motionOn = false;
+    savePrefs();
     toast('Motion off');
   } else {
+    state.motionOn = true;
+    savePrefs();
     enableMotion();
   }
   showChrome();
@@ -774,12 +788,24 @@ el.unmuteChip.addEventListener('click', () => {
 // gesture on the gesture overlay (a real user gesture, so it's allowed to
 // unmute) — no need to make them tap the mute button every session.
 let firstGestureUnmuteArmed = true;
+let firstGestureMotionArmed = true;
 el.gestureOverlay.addEventListener('pointerdown', () => {
-  if (!firstGestureUnmuteArmed) return;
-  firstGestureUnmuteArmed = false;
-  if (state.soundOn && ytReady && ytIsMuted) {
-    unmute();
-    toast('Sound on');
+  if (firstGestureUnmuteArmed) {
+    firstGestureUnmuteArmed = false;
+    if (state.soundOn && ytReady && ytIsMuted) {
+      unmute();
+      toast('Sound on');
+    }
+  }
+  // Motion defaults ON: on iOS the permission prompt must ride a genuine user
+  // gesture, so the first tap on the player doubles as the auto-enable moment.
+  // (Non-iOS auto-enables in showPlayerScreen without waiting for a tap.)
+  if (firstGestureMotionArmed) {
+    firstGestureMotionArmed = false;
+    if (state.motionOn && !state.motionEnabled &&
+        motionPermissionState !== 'denied' && motionPermissionState !== 'unsupported') {
+      enableMotion();
+    }
   }
 });
 
@@ -817,7 +843,16 @@ function showPlayerScreen(videoId) {
   startRenderLoop();
   showChrome();
   firstGestureUnmuteArmed = true;
+  firstGestureMotionArmed = true;
   createYtPlayer(videoId);
+  // Motion defaults ON. Where no permission gesture is required (Android,
+  // desktop), start it right away; iOS waits for the first tap (see the
+  // gesture-overlay pointerdown handler).
+  if (state.motionOn && !state.motionEnabled &&
+      typeof DeviceOrientationEvent !== 'undefined' &&
+      typeof DeviceOrientationEvent.requestPermission !== 'function') {
+    enableMotion();
+  }
 }
 
 el.btnHome.addEventListener('click', () => {
