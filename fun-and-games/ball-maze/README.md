@@ -13,9 +13,13 @@ green goal.
   permission, as required.
 - **Points for distance** — you earn 1 point for every cell-length of ground
   the ball covers.
-- **5 levels, easy to hard** — each level generates a fresh random maze
-  (recursive backtracker), growing from 6×9 up to 14×21 cells.
-- **Level bonus** — completing level *N* awards 100 × *N* points.
+- **Endless levels, generated at runtime** — each level generates a fresh
+  random maze (recursive backtracker), starting at 6×9 cells and growing
+  every level until cells would drop below 22 px on the current screen;
+  after that, difficulty keeps ramping through hole count (up to 14 on the
+  path plus 18 decoys).
+- **Level bonus** — completing level *N* awards 100 × *N* points, so the
+  stakes keep rising.
 - **Holes** — from level 2 on, holes appear in the board. Roll over one and
   the ball drops in: −25 points and back to the start. Like the physical
   toy, most holes sit **on** the solution path, offset to one side of the

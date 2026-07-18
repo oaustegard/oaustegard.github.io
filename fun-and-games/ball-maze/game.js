@@ -10,15 +10,19 @@
   'use strict';
 
   // ---------------------------------------------------------------- levels
-  // pathHoles sit ON the solution path, offset to one side of the corridor
-  // so a narrow safe edge remains; the rest go in dead ends as decoys.
-  const LEVELS = [
-    { cols: 6,  rows: 9,  holes: 0,  pathHoles: 0 },
-    { cols: 8,  rows: 12, holes: 2,  pathHoles: 1 },
-    { cols: 10, rows: 15, holes: 5,  pathHoles: 2 },
-    { cols: 12, rows: 18, holes: 8,  pathHoles: 3 },
-    { cols: 14, rows: 21, holes: 12, pathHoles: 5 },
-  ];
+  // Levels are endless and generated at runtime. The grid grows every level
+  // until cells would drop below MIN_CELL px on this screen; after that,
+  // difficulty keeps ramping through hole count alone. pathHoles sit ON the
+  // solution path, offset to one side of the corridor so a narrow safe edge
+  // remains; the rest go in dead ends as decoys.
+  const MIN_CELL = 22;
+  function levelSpec(n, availW, availH) {
+    const cols = Math.max(4, Math.min(6 + 2 * (n - 1), Math.floor(availW / MIN_CELL)));
+    const rows = Math.max(6, Math.min(9 + 3 * (n - 1), Math.floor(availH / MIN_CELL)));
+    const pathHoles = n < 2 ? 0 : Math.min(n - 1, 14);
+    const holes = n < 2 ? 0 : pathHoles + Math.min(2 * n - 3, 18);
+    return { cols, rows, holes, pathHoles };
+  }
   const LEVEL_BONUS = 100;   // × level number on completion
   const HOLE_PENALTY = 25;
   const BEST_KEY = 'ball-maze-best';
@@ -61,7 +65,7 @@
   // ---------------------------------------------------------------- state
   const game = {
     state: 'idle',           // idle | playing | falling | between
-    level: 0,                // 0-based index into LEVELS
+    level: 0,                // 0-based level index (endless)
     score: 0,
     best: Number(localStorage.getItem(BEST_KEY)) || 0,
     distAcc: 0,              // px rolled since last distance point
@@ -135,13 +139,13 @@
   }
 
   function buildLevel(levelIndex) {
-    const spec = LEVELS[levelIndex];
+    const availW = boardWrap.clientWidth - 8;
+    const availH = boardWrap.clientHeight - 8;
+    const spec = levelSpec(levelIndex + 1, availW, availH);
     const { cols, rows } = spec;
     const cells = generateMaze(cols, rows);
 
     // fit square cells into the board area
-    const availW = boardWrap.clientWidth - 8;
-    const availH = boardWrap.clientHeight - 8;
     const cs = Math.floor(Math.min(availW / cols, availH / rows));
     const ox = Math.floor((boardWrap.clientWidth - cols * cs) / 2);
     const oy = Math.floor((boardWrap.clientHeight - rows * cs) / 2);
@@ -441,7 +445,7 @@
     game.distAcc = 0;
     game.fall = null;
     resetBall();
-    levelEl.textContent = (levelIndex + 1) + '/5';
+    levelEl.textContent = String(levelIndex + 1);
     game.state = 'playing';
   }
 
@@ -454,29 +458,20 @@
   }
 
   function completeLevel() {
-    const bonus = LEVEL_BONUS * (game.level + 1);
+    const level = game.level + 1;
+    const bonus = LEVEL_BONUS * level;
     addScore(bonus);
     if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
     game.state = 'between';
-    if (game.level + 1 < LEVELS.length) {
-      showMessage(
-        'Level ' + (game.level + 1) + ' complete!',
-        '+' + bonus,
-        'Next up: a bigger maze' +
-          (LEVELS[game.level + 1].holes > LEVELS[game.level].holes
-            ? ' with more holes.' : '.'),
-        'Level ' + (game.level + 2),
-        () => startLevel(game.level + 1));
-    } else {
-      showMessage(
-        '🏆 You beat all 5 levels!',
-        game.score + ' points',
-        game.score >= game.best
-          ? 'That’s your best run yet.'
-          : 'Best so far: ' + game.best + '.',
-        'Play again',
-        () => { game.score = 0; scoreEl.textContent = '0'; startLevel(0); });
-    }
+    const milestone = level % 5 === 0;
+    showMessage(
+      (milestone ? '🏆 ' : '') + 'Level ' + level + ' complete!',
+      '+' + bonus,
+      milestone
+        ? level + ' levels down, ' + game.score + ' points. The mazes keep coming — how far can you get?'
+        : 'Next: a fresh maze, a little meaner.',
+      'Level ' + (level + 1),
+      () => startLevel(game.level + 1));
   }
 
   let messageAction = null;
