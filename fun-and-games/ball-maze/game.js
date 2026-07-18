@@ -702,14 +702,42 @@
       b.r = m.cs * BALL_R;
     }
   }
-  window.addEventListener('resize', () => {
+  // A flip must be countered SYNCHRONOUSLY: any delay here splits the
+  // rotation into two visible steps (OS animation, then our flip-back).
+  // Applying the fix while the OS is still animating lets iOS reveal the
+  // already-counter-rotated layout at the end of its own animation, so the
+  // whole thing reads as one motion. A brief opacity dip masks the layout
+  // swap. Plain same-orientation resizes (desktop window drags, toolbar
+  // show/hide) keep the debounce.
+  let fadeTimer = 0;
+  function maskFlip() {
+    appEl.style.transition = 'none';
+    appEl.style.opacity = '0';
+    clearTimeout(fadeTimer);
+    fadeTimer = setTimeout(() => {
+      appEl.style.transition = 'opacity 0.18s ease-out';
+      appEl.style.opacity = '1';
+    }, 60);
+  }
+
+  function handleViewportChange(orientationEvent) {
+    const flipped = orientationAngle() !== uiAngle;
     clearTimeout(resizeCanvas._t);
-    resizeCanvas._t = setTimeout(resizeCanvas, 150);
-  });
-  window.addEventListener('orientationchange', () => {
-    clearTimeout(resizeCanvas._t);
-    resizeCanvas._t = setTimeout(resizeCanvas, 150);
-  });
+    if (flipped || orientationEvent) {
+      if (flipped) maskFlip();
+      resizeCanvas();
+    } else {
+      resizeCanvas._t = setTimeout(resizeCanvas, 150);
+    }
+  }
+  window.addEventListener('resize', () => handleViewportChange(false));
+  window.addEventListener('orientationchange', () => handleViewportChange(true));
+  if (screen.orientation && screen.orientation.addEventListener) {
+    screen.orientation.addEventListener('change', () => handleViewportChange(true));
+  }
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', () => handleViewportChange(false));
+  }
   resizeCanvas();
 
   // ---------------------------------------------------------------- wake lock
