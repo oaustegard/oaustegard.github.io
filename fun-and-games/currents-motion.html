@@ -47,6 +47,16 @@
     font-size: 10px; line-height: 1.7; opacity: 0.55; white-space: pre;
     text-shadow: 0 1px 8px rgba(0,0,0,0.8); display: none;
   }
+  /* escape hatch shown when a home-screen app refuses the motion prompt:
+     a real link so iOS opens it in actual Safari, where the prompt works */
+  #escape {
+    left: 0; right: 0; bottom: calc(16% + env(safe-area-inset-bottom)); text-align: center;
+    font-size: 13px; opacity: 0; text-transform: lowercase;
+    color: #fff; text-decoration: underline; text-underline-offset: 4px;
+    text-shadow: 0 1px 12px rgba(0,0,0,0.6);
+    transition: opacity 1s ease;
+  }
+  #escape.show { opacity: 0.85; pointer-events: auto; }
   /* iOS requires a user gesture before it will hand over the gyroscope.
      This gate doubles as the title card; elsewhere it fades on first tap too. */
   #gate {
@@ -72,6 +82,7 @@
 <div id="hint" class="overlay"></div>
 <div id="sig" class="overlay">Currents &middot; Motion</div>
 <div id="hud" class="overlay"></div>
+<a id="escape" class="overlay" target="_blank" rel="noopener">open in safari for motion &#8599;</a>
 <div id="gate">
   <div>
     <h1>currents in motion</h1>
@@ -114,6 +125,13 @@
   var hint = document.getElementById("hint");
   var gate = document.getElementById("gate");
   var hud = document.getElementById("hud");
+  var escBtn = document.getElementById("escape");
+
+  /* home-screen ("standalone") web apps run in their own WebKit container
+     that frequently refuses to show the motion prompt at all */
+  var isStandalone = (window.navigator.standalone === true) ||
+    (window.matchMedia && window.matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches);
+  escBtn.href = window.location.href;
 
   var gl = null;
   try {
@@ -399,12 +417,19 @@
     permInFlight = true;
     var t0 = performance.now();
     function deniedMsg() {
-      /* an instant settle means iOS never showed the prompt: it is replaying
-         a remembered "don't allow" for this site. Only a fresh tab clears
-         that -- there is no motion entry under aA -> website settings. */
+      /* an instant settle means iOS never showed the prompt. In a browser
+         tab that is a remembered "don't allow" (a fresh tab clears it). In
+         a home-screen app the container often cannot prompt at all -- the
+         only way out is a real Safari tab, so offer one. */
       var ms = Math.round(performance.now() - t0);
       console.warn("[motion] orientation permission denied after", ms, "ms",
-                   ms < 400 ? "(instant -- remembered denial, no prompt shown)" : "(user declined)");
+                   ms < 400 ? "(instant -- no prompt was shown)" : "(user declined)",
+                   isStandalone ? "[standalone]" : "[browser]");
+      if (isStandalone && ms < 400) {
+        say("ios refused the motion prompt inside this home-screen app");
+        escBtn.classList.add("show");
+        return;
+      }
       say(ms < 400
         ? "ios is replaying an earlier &ldquo;don&rsquo;t allow&rdquo; &middot; close this tab, reopen the page, and allow motion"
         : "motion access declined &middot; tap to be asked again");
@@ -498,7 +523,8 @@
     hud.textContent =
       "alpha " + fmt(lastRaw.alpha, 1) + "  beta " + fmt(lastRaw.beta, 1) + "  gamma " + fmt(lastRaw.gamma, 1) + "\n" +
       "hue " + ((hue % TAU + TAU) % TAU / TAU * 360).toFixed(0) + "  L " + light.toFixed(2) + "  C " + chroma.toFixed(3) + "\n" +
-      "energy " + energy.toFixed(2) + "  src " + (hasOrientation ? "gyro" : "pointer") + "  perm " + permState;
+      "energy " + energy.toFixed(2) + "  src " + (hasOrientation ? "gyro" : "pointer") + "  perm " + permState +
+      "  mode " + (isStandalone ? "app" : "browser");
   }
 
   document.addEventListener("visibilitychange", function () {
@@ -517,9 +543,11 @@
   try {
     var iconEl = document.querySelector('link[rel="apple-touch-icon"]');
     var iconHref = iconEl ? iconEl.href : "";
+    /* display "standalone", not "fullscreen": matches motion-player, whose
+       home-screen install demonstrably gets motion on iOS */
     var manifest = {
       name: "Currents in Motion", short_name: "Motion",
-      display: "fullscreen", orientation: "any",
+      display: "standalone", orientation: "any",
       background_color: "#050608", theme_color: "#050608",
       start_url: ".",
       icons: iconHref ? [{ src: iconHref, sizes: "180x180", type: "image/png" }] : []
