@@ -704,27 +704,17 @@
   }
   // A flip must be countered SYNCHRONOUSLY: any delay here splits the
   // rotation into two visible steps (OS animation, then our flip-back).
-  // Applying the fix while the OS is still animating lets iOS reveal the
-  // already-counter-rotated layout at the end of its own animation, so the
-  // whole thing reads as one motion. A brief opacity dip masks the layout
-  // swap. Plain same-orientation resizes (desktop window drags, toolbar
-  // show/hide) keep the debounce.
-  let fadeTimer = 0;
-  function maskFlip() {
-    appEl.style.transition = 'none';
-    appEl.style.opacity = '0';
-    clearTimeout(fadeTimer);
-    fadeTimer = setTimeout(() => {
-      appEl.style.transition = 'opacity 0.18s ease-out';
-      appEl.style.opacity = '1';
-    }, 60);
-  }
-
+  // Applied in the same event turn, iOS's own rotation animation ends by
+  // revealing the already-counter-rotated layout, so the whole thing reads
+  // as one motion. No masking on top — frame analysis of a real rotation
+  // showed the OS animation landing cleanly on the corrected layout, and
+  // an opacity mask just added a visible black flash after it. Plain
+  // same-orientation resizes (desktop drags, toolbar show/hide) keep the
+  // debounce.
   function handleViewportChange(orientationEvent) {
     const flipped = orientationAngle() !== uiAngle;
     clearTimeout(resizeCanvas._t);
     if (flipped || orientationEvent) {
-      if (flipped) maskFlip();
       resizeCanvas();
     } else {
       resizeCanvas._t = setTimeout(resizeCanvas, 150);
