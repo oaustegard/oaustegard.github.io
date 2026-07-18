@@ -10,18 +10,23 @@
   'use strict';
 
   // ---------------------------------------------------------------- levels
-  // pathHoles sit ON the solution path, offset to one side of the corridor
-  // so a narrow safe edge remains; the rest go in dead ends as decoys.
-  const LEVELS = [
-    { cols: 6,  rows: 9,  holes: 0,  pathHoles: 0 },
-    { cols: 8,  rows: 12, holes: 2,  pathHoles: 1 },
-    { cols: 10, rows: 15, holes: 5,  pathHoles: 2 },
-    { cols: 12, rows: 18, holes: 8,  pathHoles: 3 },
-    { cols: 14, rows: 21, holes: 12, pathHoles: 5 },
-  ];
+  // Levels are endless and generated at runtime. The grid grows every level
+  // until cells would drop below MIN_CELL px on this screen; after that,
+  // difficulty keeps ramping through hole count alone. pathHoles sit ON the
+  // solution path, offset to one side of the corridor so a narrow safe edge
+  // remains; the rest go in dead ends as decoys.
+  const MIN_CELL = 22;
+  function levelSpec(n, availW, availH) {
+    const cols = Math.max(4, Math.min(6 + 2 * (n - 1), Math.floor(availW / MIN_CELL)));
+    const rows = Math.max(6, Math.min(9 + 3 * (n - 1), Math.floor(availH / MIN_CELL)));
+    const pathHoles = n < 2 ? 0 : Math.min(n - 1, 14);
+    const holes = n < 2 ? 0 : pathHoles + Math.min(2 * n - 3, 18);
+    return { cols, rows, holes, pathHoles };
+  }
   const LEVEL_BONUS = 100;   // × level number on completion
   const HOLE_PENALTY = 25;
   const BEST_KEY = 'ball-maze-best';
+  const PROGRESS_KEY = 'ball-maze-progress';
 
   // physics constants (scaled by cell size where noted)
   const STEP = 1 / 120;      // fixed physics timestep, s
@@ -52,6 +57,7 @@
   const toastEl = document.getElementById('toast');
   const startOverlay = document.getElementById('start-overlay');
   const startBtn = document.getElementById('start-btn');
+  const continueBtn = document.getElementById('continue-btn');
   const msgOverlay = document.getElementById('message-overlay');
   const msgTitle = document.getElementById('message-title');
   const msgPoints = document.getElementById('message-points');
@@ -61,7 +67,7 @@
   // ---------------------------------------------------------------- state
   const game = {
     state: 'idle',           // idle | playing | falling | between
-    level: 0,                // 0-based index into LEVELS
+    level: 0,                // 0-based level index (endless)
     score: 0,
     best: Number(localStorage.getItem(BEST_KEY)) || 0,
     distAcc: 0,              // px rolled since last distance point
@@ -135,13 +141,13 @@
   }
 
   function buildLevel(levelIndex) {
-    const spec = LEVELS[levelIndex];
+    const availW = boardWrap.clientWidth - 8;
+    const availH = boardWrap.clientHeight - 8;
+    const spec = levelSpec(levelIndex + 1, availW, availH);
     const { cols, rows } = spec;
     const cells = generateMaze(cols, rows);
 
     // fit square cells into the board area
-    const availW = boardWrap.clientWidth - 8;
-    const availH = boardWrap.clientHeight - 8;
     const cs = Math.floor(Math.min(availW / cols, availH / rows));
     const ox = Math.floor((boardWrap.clientWidth - cols * cs) / 2);
     const oy = Math.floor((boardWrap.clientHeight - rows * cs) / 2);
@@ -416,6 +422,29 @@
       bestEl.textContent = game.best;
       localStorage.setItem(BEST_KEY, String(game.best));
     }
+    saveProgress();
+  }
+
+  // ---------------------------------------------------------------- progress
+  // The run (level + score) survives closing the app: saved on every score
+  // change and level transition, restored via the Continue button. A resume
+  // regenerates a fresh maze of the saved level — mazes are random anyway.
+  function saveProgress(level = game.level) {
+    try {
+      localStorage.setItem(PROGRESS_KEY,
+        JSON.stringify({ level, score: game.score }));
+    } catch { /* storage full/blocked — play on without persistence */ }
+  }
+
+  function loadProgress() {
+    try {
+      const p = JSON.parse(localStorage.getItem(PROGRESS_KEY));
+      if (p && Number.isInteger(p.level) && p.level >= 0 &&
+          Number.isInteger(p.score) && p.score >= 0) {
+        return p;
+      }
+    } catch { /* corrupt entry — treat as no progress */ }
+    return null;
   }
 
   let toastTimer = 0;
@@ -441,8 +470,9 @@
     game.distAcc = 0;
     game.fall = null;
     resetBall();
-    levelEl.textContent = (levelIndex + 1) + '/5';
+    levelEl.textContent = String(levelIndex + 1);
     game.state = 'playing';
+    saveProgress();
   }
 
   function startFall(hole) {
@@ -454,29 +484,21 @@
   }
 
   function completeLevel() {
-    const bonus = LEVEL_BONUS * (game.level + 1);
+    const level = game.level + 1;
+    const bonus = LEVEL_BONUS * level;
     addScore(bonus);
+    saveProgress(game.level + 1); // quitting at the overlay resumes at next level
     if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
     game.state = 'between';
-    if (game.level + 1 < LEVELS.length) {
-      showMessage(
-        'Level ' + (game.level + 1) + ' complete!',
-        '+' + bonus,
-        'Next up: a bigger maze' +
-          (LEVELS[game.level + 1].holes > LEVELS[game.level].holes
-            ? ' with more holes.' : '.'),
-        'Level ' + (game.level + 2),
-        () => startLevel(game.level + 1));
-    } else {
-      showMessage(
-        '🏆 You beat all 5 levels!',
-        game.score + ' points',
-        game.score >= game.best
-          ? 'That’s your best run yet.'
-          : 'Best so far: ' + game.best + '.',
-        'Play again',
-        () => { game.score = 0; scoreEl.textContent = '0'; startLevel(0); });
-    }
+    const milestone = level % 5 === 0;
+    showMessage(
+      (milestone ? '🏆 ' : '') + 'Level ' + level + ' complete!',
+      '+' + bonus,
+      milestone
+        ? level + ' levels down, ' + game.score + ' points. The mazes keep coming — how far can you get?'
+        : 'Next: a fresh maze, a little meaner.',
+      'Level ' + (level + 1),
+      () => startLevel(game.level + 1));
   }
 
   let messageAction = null;
@@ -625,13 +647,26 @@
   });
 
   // ---------------------------------------------------------------- start
-  startBtn.addEventListener('click', async () => {
+  async function beginGame(level, score) {
     const tiltOk = await enableTilt();
     startOverlay.classList.add('hidden');
     keepAwake();
-    startLevel(0);
+    game.score = score;
+    scoreEl.textContent = score;
+    startLevel(level);
     if (!tiltOk) toast('No tilt sensor — use keys or drag');
-  });
+  }
+
+  const savedRun = loadProgress();
+  if (savedRun && (savedRun.level > 0 || savedRun.score > 0)) {
+    continueBtn.textContent = 'Continue · Level ' + (savedRun.level + 1);
+    continueBtn.classList.remove('hidden');
+    startBtn.textContent = 'Start over';
+    startBtn.classList.add('secondary');
+  }
+  continueBtn.addEventListener('click', () =>
+    beginGame(savedRun.level, savedRun.score));
+  startBtn.addEventListener('click', () => beginGame(0, 0));
 
   // expose internals for automated tests when loaded with ?debug
   if (new URLSearchParams(location.search).has('debug')) {
