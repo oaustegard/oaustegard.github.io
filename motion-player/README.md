@@ -49,12 +49,13 @@ motion-player/
 ├── manifest.webmanifest (PWA manifest)
 ├── sw.js                (service worker, offline caching)
 ├── icons/
+│   ├── icon-source.png  (canonical 1024×1024 art, Gemini-generated)
 │   ├── icon-192.png     (app icon, 192×192)
 │   ├── icon-512.png     (app icon, 512×512)
 │   ├── maskable-512.png (maskable icon for adaptive display, 512×512)
 │   └── apple-touch-icon.png (iOS home screen icon, 180×180)
 ├── scripts/
-│   └── make_icons.py    (PNG icon generator, stdlib-only)
+│   └── make_icons.py    (icon derivation from source art)
 ├── tests/
 │   └── motion.test.mjs  (unit tests for motion math)
 └── SPEC.md              (normative implementation spec)
@@ -62,7 +63,7 @@ motion-player/
 
 ### Generating icons
 
-Icons are auto-generated from `scripts/make_icons.py` using only Python 3 stdlib (no Pillow, no numpy). The script implements a minimal PNG encoder with per-pixel anti-aliasing.
+The canonical art (`icons/icon-source.png`, 1024×1024) was generated with a Gemini image call (`gemini-2.5-flash-image`) routed through a Cloudflare AI Gateway; `scripts/make_icons.py` downscales it into the four icon files (requires Pillow). If the source art is deleted, the script regenerates it via the gateway (needs `CF_ACCOUNT_ID`, `CF_GATEWAY_ID`, `CF_API_TOKEN` in the environment — the Google key is stored gateway-side).
 
 To regenerate:
 ```bash
@@ -70,7 +71,7 @@ cd motion-player
 python3 scripts/make_icons.py
 ```
 
-Icons are purely deterministic and can be safely re-generated or committed to git.
+Derivation from the committed source art is deterministic; regenerating the source art itself is a fresh Gemini generation and will differ.
 
 ### Testing motion math
 

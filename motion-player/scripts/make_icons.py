@@ -1,265 +1,81 @@
 #!/usr/bin/env python3
-"""
-Generates PNG icons for the Motion Player PWA.
-Pure Python 3 stdlib: uses struct, zlib, math for PNG encoding and shape rendering.
-No Pillow, no numpy. Distance-field based anti-aliasing.
-"""
+"""Derive Motion Player app icons from Gemini-generated source art.
 
-import struct
-import zlib
-import math
+The canonical 1024x1024 art lives at icons/icon-source.png (committed).
+This script downscales it into the four PWA icon files. If the source is
+missing, it is regenerated with a Gemini image call routed through the
+Cloudflare AI Gateway (requires CF_ACCOUNT_ID, CF_GATEWAY_ID, CF_API_TOKEN
+in the environment; the Google API key is stored gateway-side).
+
+Usage (from motion-player/):
+    python3 scripts/make_icons.py
+
+Requires Pillow for resizing: pip install pillow
+"""
+import base64
+import json
 import os
+import sys
+import urllib.request
+from pathlib import Path
 
-def crc32(data):
-    """Compute CRC32 of data for PNG chunks."""
-    return zlib.crc32(data) & 0xffffffff
+from PIL import Image
 
-def write_png(filename, width, height, pixels):
-    """
-    Write an RGBA PNG file.
-    pixels: list of (r, g, b, a) tuples, row-major, len = width*height.
-    """
-    os.makedirs(os.path.dirname(filename) or '.', exist_ok=True)
+ROOT = Path(__file__).resolve().parent.parent
+ICONS = ROOT / "icons"
+SOURCE = ICONS / "icon-source.png"
 
-    # Convert pixels to scanlines: each scanline is [filter_byte] + RGBA data
-    scanlines = b''
-    for y in range(height):
-        scanline = b'\x00'  # filter byte 0 = no filtering
-        for x in range(width):
-            r, g, b, a = pixels[y * width + x]
-            scanline += bytes([r, g, b, a])
-        scanlines += scanline
+PROMPT = (
+    "Design a minimal flat app icon, exactly square, for a mobile video "
+    "player app called Motion Player. Composition: a near-black background "
+    "(#0b0d12) filling the entire canvas edge to edge, a solid bright "
+    "sky-blue (#38bdf8) play triangle (pointing right) centered optically, "
+    "encircled by a broken teal (#5eead4) arc ring (about 300 degrees, with "
+    "a clean gap) that suggests rotation and gyroscopic motion. Flat vector "
+    "style, crisp edges, no gradients, no text, no bevels, no drop shadows, "
+    "no border. The subject must sit comfortably within the central 70% of "
+    "the canvas."
+)
 
-    # Compress scanlines
-    compressed = zlib.compress(scanlines, 9)
 
-    with open(filename, 'wb') as f:
-        # PNG signature
-        f.write(b'\x89PNG\r\n\x1a\n')
+def generate_source():
+    account = os.environ["CF_ACCOUNT_ID"]
+    gateway = os.environ["CF_GATEWAY_ID"]
+    token = os.environ["CF_API_TOKEN"]
+    url = (
+        f"https://gateway.ai.cloudflare.com/v1/{account}/{gateway}"
+        "/google-ai-studio/v1beta/models/gemini-2.5-flash-image:generateContent"
+    )
+    body = json.dumps({
+        "contents": [{"parts": [{"text": PROMPT}]}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        "cf-aig-authorization": f"Bearer {token}",
+    })
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.load(resp)
+    b64 = data["candidates"][0]["content"]["parts"][0]["inlineData"]["data"]
+    SOURCE.write_bytes(base64.b64decode(b64))
+    print(f"generated {SOURCE} via Gemini")
 
-        # IHDR chunk: width, height, bit depth 8, color type 6 (RGBA)
-        ihdr_data = struct.pack('>IIBBBBB', width, height, 8, 6, 0, 0, 0)
-        ihdr = b'IHDR' + ihdr_data
-        f.write(struct.pack('>I', len(ihdr_data)))
-        f.write(ihdr)
-        f.write(struct.pack('>I', crc32(ihdr)))
 
-        # IDAT chunk(s): image data
-        idat = b'IDAT' + compressed
-        f.write(struct.pack('>I', len(compressed)))
-        f.write(idat)
-        f.write(struct.pack('>I', crc32(idat)))
+def derive():
+    src = Image.open(SOURCE).convert("RGB")
+    for name, size in [
+        ("icon-512.png", 512),
+        ("icon-192.png", 192),
+        ("maskable-512.png", 512),  # art sits well inside the 80% safe zone
+        ("apple-touch-icon.png", 180),  # opaque; iOS applies its own mask
+    ]:
+        out = ICONS / name
+        src.resize((size, size), Image.LANCZOS).save(out, optimize=True)
+        print(f"wrote {out} ({out.stat().st_size} bytes)")
 
-        # IEND chunk: end marker
-        iend = b'IEND'
-        f.write(struct.pack('>I', 0))
-        f.write(iend)
-        f.write(struct.pack('>I', crc32(iend)))
 
-def smoothstep(edge0, edge1, x):
-    """Smoothstep: 0 at edge0, 1 at edge1, smooth in between."""
-    if x <= edge0:
-        return 0.0
-    if x >= edge1:
-        return 1.0
-    t = (x - edge0) / (edge1 - edge0)
-    return t * t * (3.0 - 2.0 * t)
-
-def mix(a, b, t):
-    """Linear interpolation."""
-    return a * (1 - t) + b * t
-
-def signed_distance_to_segment(px, py, x1, y1, x2, y2):
-    """
-    Signed distance from point to line segment.
-    For CCW winding: negative on inside (left), positive on outside (right).
-    """
-    dx = x2 - x1
-    dy = y2 - y1
-    len_sq = dx * dx + dy * dy
-
-    if len_sq < 1e-6:
-        return math.sqrt((px - x1) ** 2 + (py - y1) ** 2)
-
-    t = ((px - x1) * dx + (py - y1) * dy) / len_sq
-    t = max(0, min(1, t))
-
-    cx = x1 + t * dx
-    cy = y1 + t * dy
-
-    # Cross product: positive if point is to the left of the edge
-    cross = (px - x1) * dy - (py - y1) * dx
-    dist_unsigned = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
-    # For CCW: inside (left) is negative, outside (right) is positive
-    sign = -1 if cross > 0 else 1
-
-    return sign * dist_unsigned
-
-def signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy):
-    """
-    Signed distance to triangle (counterclockwise winding).
-    Negative inside, positive outside.
-    """
-    d1 = signed_distance_to_segment(px, py, ax, ay, bx, by)
-    d2 = signed_distance_to_segment(px, py, bx, by, cx, cy)
-    d3 = signed_distance_to_segment(px, py, cx, cy, ax, ay)
-
-    # Point is inside if on the inside of all three edges (all negative)
-    if d1 < 0 and d2 < 0 and d3 < 0:
-        # Inside: return most negative distance (closest to edge)
-        return min(d1, d2, d3)
-    else:
-        # Outside: return closest distance to boundary
-        return max(d1, d2, d3)
-
-def render_icon(width, height, fill_scale=1.0):
-    """
-    Render motion player icon with proper signed distance fields.
-    width, height: canvas size
-    fill_scale: scale the art (0.7 for maskable variant, ~0.8 for standard icons)
-
-    Background is always a full-bleed, fully opaque #0b0d12 square filling the
-    entire canvas. Launchers/OSes apply their own masking (rounded corners,
-    circles, squircles, etc.) on top of square source art, so there is no need
-    (and no safe way, given prior SDF bugs) to pre-round the corners here.
-    Returns: list of (r, g, b, a) tuples
-    """
-    bg_color = (0x0b, 0x0d, 0x12)
-    play_color = (0x38, 0xbd, 0xf8)
-    ring_color = (0x5e, 0xad, 0xc4)
-
-    center_x = width / 2
-    center_y = height / 2
-
-    pixels = []
-
-    for y in range(height):
-        for x in range(width):
-            fx = float(x)
-            fy = float(y)
-
-            # ===== BACKGROUND (always full-bleed, fully opaque) =====
-            bg_alpha = 1.0
-
-            # ===== TRIANGLE =====
-            triangle_size = width * 0.34 * fill_scale
-            nudge_x = width * 0.04 * fill_scale
-
-            t_cx = center_x + nudge_x
-            t_cy = center_y
-            t_h = triangle_size / 2
-            t_w = triangle_size * 0.866 / 2
-
-            tri_v1 = (t_cx + t_w, t_cy)
-            tri_v2 = (t_cx - t_w / 2, t_cy - t_h)
-            tri_v3 = (t_cx - t_w / 2, t_cy + t_h)
-
-            triangle_sdf = signed_distance_to_triangle(fx, fy, tri_v1[0], tri_v1[1], tri_v2[0], tri_v2[1], tri_v3[0], tri_v3[1])
-            triangle_alpha = 1.0 - smoothstep(-1.5, 1.5, triangle_sdf)
-
-            # ===== ARC RING =====
-            scaled_radius = (width * 0.36) * fill_scale
-            scaled_stroke = (width * 0.05) * fill_scale
-
-            dx_to_center = fx - center_x
-            dy_to_center = fy - center_y
-            dist_to_center = math.sqrt(dx_to_center ** 2 + dy_to_center ** 2)
-
-            angle = math.atan2(dy_to_center, dx_to_center) * 180 / math.pi
-
-            arc_start = -120
-            arc_end = 180
-            gap_start = 0
-            gap_end = 60
-
-            in_arc = angle >= arc_start and angle <= arc_end and not (gap_start <= angle <= gap_end)
-
-            if in_arc:
-                ring_sdf = abs(dist_to_center - scaled_radius) - scaled_stroke / 2
-                ring_alpha = 1.0 - smoothstep(-1.5, 1.5, ring_sdf)
-            else:
-                ring_alpha = 0.0
-
-            # ===== COMPOSITING =====
-            result_r = float(bg_color[0])
-            result_g = float(bg_color[1])
-            result_b = float(bg_color[2])
-            result_a = bg_alpha
-
-            ring_r = float(ring_color[0])
-            ring_g = float(ring_color[1])
-            ring_b = float(ring_color[2])
-
-            result_r = mix(result_r, ring_r, ring_alpha)
-            result_g = mix(result_g, ring_g, ring_alpha)
-            result_b = mix(result_b, ring_b, ring_alpha)
-            result_a = ring_alpha + result_a * (1.0 - ring_alpha)
-
-            tri_r = float(play_color[0])
-            tri_g = float(play_color[1])
-            tri_b = float(play_color[2])
-
-            result_r = mix(result_r, tri_r, triangle_alpha)
-            result_g = mix(result_g, tri_g, triangle_alpha)
-            result_b = mix(result_b, tri_b, triangle_alpha)
-            result_a = triangle_alpha + result_a * (1.0 - triangle_alpha)
-
-            r_int = int(round(result_r))
-            g_int = int(round(result_g))
-            b_int = int(round(result_b))
-            a_int = int(round(result_a * 255))
-
-            r_int = max(0, min(255, r_int))
-            g_int = max(0, min(255, g_int))
-            b_int = max(0, min(255, b_int))
-            a_int = max(0, min(255, a_int))
-
-            pixels.append((r_int, g_int, b_int, a_int))
-
-    return pixels
-
-def main():
-    # Ensure icons directory exists
-    os.makedirs('icons', exist_ok=True)
-
-    # Standard (non-maskable) icons render the art slightly larger than the
-    # maskable variant since there's no OS-applied safe-zone crop to worry about.
-    STANDARD_SCALE = 0.8
-    MASKABLE_SCALE = 0.7
-
-    # Generate icon-192.png (full-bleed background, ring + triangle art)
-    print("Generating icon-192.png...")
-    pixels_192 = render_icon(192, 192, fill_scale=STANDARD_SCALE)
-    write_png('icons/icon-192.png', 192, 192, pixels_192)
-    size_192 = os.path.getsize('icons/icon-192.png')
-    print(f"  -> {size_192} bytes")
-
-    # Generate icon-512.png (full-bleed background, ring + triangle art)
-    print("Generating icon-512.png...")
-    pixels_512 = render_icon(512, 512, fill_scale=STANDARD_SCALE)
-    write_png('icons/icon-512.png', 512, 512, pixels_512)
-    size_512 = os.path.getsize('icons/icon-512.png')
-    print(f"  -> {size_512} bytes")
-
-    # Generate maskable-512.png (70% scale, full-bleed background)
-    print("Generating maskable-512.png...")
-    pixels_maskable = render_icon(512, 512, fill_scale=MASKABLE_SCALE)
-    write_png('icons/maskable-512.png', 512, 512, pixels_maskable)
-    size_maskable = os.path.getsize('icons/maskable-512.png')
-    print(f"  -> {size_maskable} bytes")
-
-    # Generate apple-touch-icon.png (180x180, full-bleed background, same art)
-    print("Generating apple-touch-icon.png...")
-    pixels_apple = render_icon(180, 180, fill_scale=STANDARD_SCALE)
-    write_png('icons/apple-touch-icon.png', 180, 180, pixels_apple)
-    size_apple = os.path.getsize('icons/apple-touch-icon.png')
-    print(f"  -> {size_apple} bytes")
-
-    print("\nIcon generation complete!")
-    print(f"icon-192.png:       {size_192} bytes")
-    print(f"icon-512.png:       {size_512} bytes")
-    print(f"maskable-512.png:   {size_maskable} bytes")
-    print(f"apple-touch-icon.png: {size_apple} bytes")
-
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    if not SOURCE.exists():
+        generate_source()
+    derive()
+    sys.exit(0)
