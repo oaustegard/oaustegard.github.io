@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="ai-disclosure" content="ai-assisted">
+  <meta name="theme-color" content="#14101f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Ball Maze">
+  <title>Ball Maze</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    html, body {
+      background: #14101f;
+      color: #f0ead8;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      overflow: hidden;
+      overscroll-behavior: none;
+      touch-action: none;
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #app {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      padding: calc(env(safe-area-inset-top) + 8px) env(safe-area-inset-right) calc(env(safe-area-inset-bottom) + 8px) env(safe-area-inset-left);
+    }
+
+    #hud {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      padding: 0 16px 8px;
+      font-variant-numeric: tabular-nums;
+    }
+
+    #hud .stat { text-align: center; }
+    #hud .label {
+      font-size: 0.65rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      opacity: 0.55;
+    }
+    #hud .value { font-size: 1.25rem; font-weight: 600; }
+    #hud #score-value { color: #ffd77a; }
+
+    #board-wrap {
+      flex: 1;
+      position: relative;
+      min-height: 0;
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+    }
+
+    .overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 2rem;
+      background: rgba(16, 12, 28, 0.88);
+      backdrop-filter: blur(6px);
+      -webkit-backdrop-filter: blur(6px);
+      z-index: 10;
+      transition: opacity 0.25s ease;
+    }
+
+    .overlay.hidden {
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    .overlay h1 { font-size: 2rem; margin-bottom: 0.75rem; }
+    .overlay h2 { font-size: 1.6rem; margin-bottom: 0.75rem; }
+    .overlay p {
+      font-size: 1rem;
+      line-height: 1.5;
+      max-width: 30rem;
+      margin-bottom: 1rem;
+      opacity: 0.85;
+    }
+    .overlay .big-points {
+      font-size: 2.2rem;
+      font-weight: 700;
+      color: #ffd77a;
+      margin-bottom: 1rem;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .overlay button {
+      font: inherit;
+      font-size: 1.1rem;
+      font-weight: 600;
+      color: #14101f;
+      background: #ffd77a;
+      border: none;
+      border-radius: 999px;
+      padding: 0.8rem 2.4rem;
+      cursor: pointer;
+    }
+    .overlay button:active { transform: scale(0.97); }
+
+    .overlay .fine-print {
+      margin-top: 1.25rem;
+      font-size: 0.8rem;
+      opacity: 0.5;
+    }
+
+    #toast {
+      position: fixed;
+      left: 50%;
+      top: 18%;
+      transform: translateX(-50%);
+      background: rgba(20, 14, 30, 0.9);
+      color: #ff9d8a;
+      font-weight: 600;
+      padding: 0.5rem 1.2rem;
+      border-radius: 999px;
+      opacity: 0;
+      transition: opacity 0.3s ease;
+      pointer-events: none;
+      z-index: 5;
+      white-space: nowrap;
+    }
+    #toast.show { opacity: 1; }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div id="hud">
+      <div class="stat">
+        <div class="label">Level</div>
+        <div class="value" id="level-value">1/5</div>
+      </div>
+      <div class="stat">
+        <div class="label">Score</div>
+        <div class="value" id="score-value">0</div>
+      </div>
+      <div class="stat">
+        <div class="label">Best</div>
+        <div class="value" id="best-value">0</div>
+      </div>
+    </div>
+    <div id="board-wrap">
+      <canvas id="board"></canvas>
+    </div>
+  </div>
+
+  <div id="toast"></div>
+
+  <div id="start-overlay" class="overlay">
+    <h1>🕳️ Ball Maze</h1>
+    <p>Tilt your phone to roll the ball from the top of the maze to the
+      green goal. Earn a point for every stretch of ground you cover, and a
+      big bonus for finishing each maze. From level&nbsp;2 on, watch out for
+      holes — fall in and the ball goes back to the start.</p>
+    <p>5 levels, easy to hard. New maze every time.</p>
+    <button id="start-btn">Start</button>
+    <div class="fine-print">No tilt sensor? Use arrow keys / WASD, or drag on the board.</div>
+  </div>
+
+  <div id="message-overlay" class="overlay hidden">
+    <h2 id="message-title"></h2>
+    <div class="big-points" id="message-points"></div>
+    <p id="message-body"></p>
+    <button id="message-btn">Continue</button>
+  </div>
+
+  <script src="game.js"></script>
+</body>
+</html>
