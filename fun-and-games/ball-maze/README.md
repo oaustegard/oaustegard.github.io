@@ -29,6 +29,11 @@ green goal.
   rest are decoys in dead ends. The geometry guarantees the open side is
   always passable, so every maze stays winnable.
 - **Best score** — persisted in `localStorage`.
+- **Version check** — tap the green goal disc to toggle a debug readout in
+  the score slot: game version, the orientation angle currently being
+  countered, and the viewport dimensions (e.g. `v11 a90 844x390`). Tap
+  again to restore the score. Handy for verifying which build an
+  installed copy is actually running.
 - **Continue where you left off** — the run (current level + score) is saved
   to `localStorage` on every score change and level transition. Reopening
   the app offers "Continue · Level N" alongside "Start over"; resuming
