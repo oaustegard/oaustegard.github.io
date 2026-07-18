@@ -22,6 +22,13 @@ green goal.
   path plus 18 decoys).
 - **Level bonus** — completing level *N* awards 100 × *N* points, so the
   stakes keep rising.
+- **Race the clock** — every level has a "par" time that scales with the
+  solution length (0.85 s per solution cell, min 8 s). The HUD timer runs
+  green while you're ahead of par and turns amber once you fall behind.
+  Finish under par for a big bonus (15 points per second saved); finish
+  over par for a small penalty (4 points per second). The penalty is capped
+  at the level's base bonus, so a slow level just means less reward, never a
+  net loss.
 - **Holes** — from level 2 on, holes appear in the board. Roll over one and
   the ball drops in: −25 points and back to the start. Like the physical
   toy, most holes sit **on** the solution path, offset to one side of the
