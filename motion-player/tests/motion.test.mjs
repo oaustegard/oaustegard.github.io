@@ -377,3 +377,79 @@ describe('MotionEngine sample processing (via direct handler invocation)', () =>
     assert.equal(samples.length, 0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// compensateScreenAngle option (orientation-neutralization support for
+// motion-player's #app counter-rotation — see SPEC.md "Screen-orientation
+// compensation")
+// ---------------------------------------------------------------------------
+
+describe('compensateScreenAngle option', () => {
+  test('defaults to true, preserving prior behavior', () => {
+    const engine = new MotionEngine();
+    assert.equal(engine.compensateScreenAngle, true);
+  });
+
+  test('true (default): a screen-angle change without a rebaseline event causes phi to jump', () => {
+    globalThis.screen = { orientation: { angle: 0 } };
+    try {
+      const samples = [];
+      const engine = new MotionEngine({ onUpdate: (s) => samples.push(s), smoothing: 1 });
+      engine._onDeviceOrientation({ alpha: 0, beta: 90, gamma: 0 }); // baseline at angle 0
+      closeTo(samples[0].rollDeg, 0, 1e-4);
+
+      // OS flips the viewport (screen.orientation.angle changes) before any
+      // 'orientationchange' rebaseline fires; same physical device pose.
+      globalThis.screen.orientation.angle = 90;
+      engine._onDeviceOrientation({ alpha: 0, beta: 90, gamma: 0 });
+      closeTo(samples[1].rollDeg, -90, 1e-3, 'roll should jump by the angle delta when compensation is on');
+    } finally {
+      delete globalThis.screen;
+    }
+  });
+
+  test('false: ignores screen.orientation.angle entirely when computing phi', () => {
+    globalThis.screen = { orientation: { angle: 90 } };
+    try {
+      const samples = [];
+      const engine = new MotionEngine({
+        onUpdate: (s) => samples.push(s),
+        smoothing: 1,
+        compensateScreenAngle: false,
+      });
+      engine._onDeviceOrientation({ alpha: 0, beta: 90, gamma: 0 }); // baseline; angle ignored
+      closeTo(samples[0].rollDeg, 0, 1e-4);
+
+      // Same physical pose, angle now flipped again — should have zero effect.
+      globalThis.screen.orientation.angle = 0;
+      engine._onDeviceOrientation({ alpha: 0, beta: 90, gamma: 0 });
+      closeTo(samples[1].rollDeg, 0, 1e-6, 'roll should not react to screen angle when compensation disabled');
+    } finally {
+      delete globalThis.screen;
+    }
+  });
+
+  test('false: does not schedule a rebaseline on orientationchange', async () => {
+    const engine = new MotionEngine({ smoothing: 1, compensateScreenAngle: false });
+    engine._onDeviceOrientation({ alpha: 0, beta: 90, gamma: 0 });
+    engine._onDeviceOrientation({ alpha: 90, beta: 90, gamma: 0 });
+    assert.equal(engine._needsBaseline, false);
+
+    engine._onOrientationChange();
+    assert.equal(engine._orientationTimer, null, 'no settle timer should be scheduled');
+    await new Promise((r) => setTimeout(r, 320));
+    assert.equal(engine._needsBaseline, false, 'no rebaseline should occur when compensation is disabled');
+  });
+
+  test('true (default): still schedules a rebaseline on orientationchange (unchanged behavior)', async () => {
+    const engine = new MotionEngine({ smoothing: 1 });
+    engine._onDeviceOrientation({ alpha: 0, beta: 90, gamma: 0 });
+    engine._onDeviceOrientation({ alpha: 90, beta: 90, gamma: 0 });
+    assert.equal(engine._needsBaseline, false);
+
+    engine._onOrientationChange();
+    assert.notEqual(engine._orientationTimer, null, 'a settle timer should be scheduled');
+    await new Promise((r) => setTimeout(r, 320));
+    assert.equal(engine._needsBaseline, true, 'orientationchange should still rebaseline by default');
+  });
+});

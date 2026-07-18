@@ -82,6 +82,50 @@ test.describe('Motion Player', () => {
     expect(errors).toEqual([]);
   });
 
+  test('orientation neutralization counter-rotates #app when the OS flips to landscape', async ({ page }) => {
+    // Fake screen.orientation reporting angle=90 (the OS has flipped the
+    // viewport to landscape) before any script runs, then force the
+    // viewport itself to landscape dims — mirroring ball-maze's headless
+    // rotation-testing approach (a real orientationchange event can't be
+    // simulated in Playwright, but neutralizeOrientation() reads angle at
+    // load time and on resize, so a pre-set fake angle exercises the same
+    // code path a real rotation would).
+    await page.addInitScript(() => {
+      Object.defineProperty(window.screen, 'orientation', {
+        configurable: true,
+        value: { angle: 90, addEventListener() {}, removeEventListener() {} },
+      });
+    });
+    await page.setViewportSize({ width: 812, height: 375 });
+
+    const errors = [];
+    page.on('pageerror', (err) => errors.push(err));
+
+    await page.goto('/motion-player/?v=dQw4w9WgXcQ');
+    await expect(page.locator('#player')).toBeVisible();
+
+    // deviceW/deviceH per the neutralization transform table (angle 90):
+    // deviceW = innerHeight, deviceH = innerWidth (device-natural portrait).
+    const appBox = await page.evaluate(() => {
+      const s = document.getElementById('app').style;
+      return { width: s.width, height: s.height, transform: s.transform };
+    });
+    expect(appBox.width).toBe('375px');
+    expect(appBox.height).toBe('812px');
+    expect(appBox.transform).toBe('translateY(375px) rotate(-90deg)');
+
+    // Cover geometry must reflect device-natural portrait (375x812), not the
+    // physical landscape viewport (812x375) — the same assertion as the
+    // plain-portrait containScale test, but reached via a faked rotation.
+    const debugState = await page.evaluate(() => window.__motionPlayerDebug());
+    expect(debugState.uiAngle).toBe(90);
+    expect(debugState.containScale).toBeGreaterThan(0);
+    expect(debugState.containScale).toBeLessThan(0.5);
+    expect(debugState.zoom).toBeGreaterThanOrEqual(debugState.containScale);
+
+    expect(errors).toEqual([]);
+  });
+
   test('motion.js twirl-invariance test vector holds in the browser', async ({ page }) => {
     await page.goto('/motion-player/');
 

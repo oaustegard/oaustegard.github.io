@@ -130,10 +130,20 @@ export class MotionEngine {
    * @param {object} opts
    * @param {(sample: {panXdeg:number, panYdeg:number, rollDeg:number}) => void} [opts.onUpdate]
    * @param {number} [opts.smoothing=0.25]
+   * @param {boolean} [opts.compensateScreenAngle=true] - Subtract
+   *   screen.orientation.angle from the raw screen-roll reading, and
+   *   re-baseline on 'orientationchange' (after a settle delay) so the
+   *   picture doesn't jump when the OS rotates the viewport. Set false when
+   *   the caller neutralizes OS rotation itself (see SPEC.md "Screen-
+   *   orientation compensation" / the motion-player #app counter-rotation):
+   *   in that case the engine should treat the screen angle as always 0 and
+   *   ride straight through orientationchange with no re-baseline, since the
+   *   UI never actually leaves device-natural portrait.
    */
   constructor(opts = {}) {
     this.onUpdate = typeof opts.onUpdate === 'function' ? opts.onUpdate : null;
     this.smoothing = typeof opts.smoothing === 'number' ? opts.smoothing : 0.25;
+    this.compensateScreenAngle = opts.compensateScreenAngle !== false;
 
     this._active = false;
 
@@ -256,6 +266,7 @@ export class MotionEngine {
   }
 
   _currentOrientationAngle() {
+    if (!this.compensateScreenAngle) return 0;
     if (typeof screen !== 'undefined' && screen.orientation &&
         typeof screen.orientation.angle === 'number') {
       return screen.orientation.angle;
@@ -267,6 +278,11 @@ export class MotionEngine {
   }
 
   _onOrientationChange() {
+    // When the caller neutralizes OS rotation itself (compensateScreenAngle:
+    // false), the screen angle is always treated as 0 and the UI never
+    // actually leaves device-natural portrait, so there is nothing to
+    // re-baseline — roll stabilization rides straight through the flip.
+    if (!this.compensateScreenAngle) return;
     if (this._orientationTimer !== null) clearTimeout(this._orientationTimer);
     const fire = () => {
       this._orientationTimer = null;
