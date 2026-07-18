@@ -641,10 +641,27 @@
   const appEl = document.getElementById('app');
   let uiAngle = 0; // viewport rotation the fix is currently countering
 
+  // In installed (home-screen) web apps iOS can leave screen.orientation
+  // stuck at its launch value after a rotation, so prefer whichever source
+  // reports a rotation; the deprecated window.orientation still updates
+  // reliably in standalone mode. inferredAngle is a last-resort quarter-turn
+  // deduced from gravity when BOTH report 0 yet the viewport is landscape —
+  // it clears itself as soon as a real source speaks or portrait returns.
+  let inferredAngle = null;
   function orientationAngle() {
-    const a = (screen.orientation && screen.orientation.angle != null)
-      ? screen.orientation.angle
-      : (window.orientation || 0);
+    const so = (screen.orientation && screen.orientation.angle != null)
+      ? screen.orientation.angle : null;
+    const wo = (typeof window.orientation === 'number') ? window.orientation : null;
+    let a = so || wo || 0;
+    if (a === 0) {
+      if (inferredAngle != null && window.innerWidth > window.innerHeight) {
+        a = inferredAngle;
+      } else {
+        inferredAngle = null;
+      }
+    } else {
+      inferredAngle = null;
+    }
     return ((a % 360) + 360) % 360;
   }
 
@@ -740,11 +757,18 @@
     // sideways board for ~100ms). Hold off until the signals agree, then
     // apply layout + transform in one shot. Only portrait-natural devices
     // rotate like this; desktops skip straight through.
-    if (naturalPortrait() && angleLandscape !== viewportLandscape &&
-        agreeRetries < 30) {
-      agreeRetries++;
-      resizeCanvas._t = setTimeout(() => handleViewportChange(true), 50);
-      return;
+    if (naturalPortrait() && angleLandscape !== viewportLandscape) {
+      if (agreeRetries < 12) {
+        agreeRetries++;
+        resizeCanvas._t = setTimeout(() => handleViewportChange(true), 50);
+        return;
+      }
+      if (viewportLandscape) {
+        // No angle source ever spoke (stuck standalone API): deduce the
+        // quarter-turn from gravity — at angle 90 screen-down is -gamma,
+        // so a negative device-x tilt means the device turned to 90.
+        inferredAngle = game.raw.x < 0 ? 90 : 270;
+      }
     }
     agreeRetries = 0;
     if (angle !== uiAngle || orientationEvent) {

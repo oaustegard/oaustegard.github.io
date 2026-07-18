@@ -62,7 +62,12 @@ uses stale-while-revalidate, so the game is installable and playable offline.
   counter-rotation is applied synchronously on the orientation-change
   events (no debounce) so it lands inside the OS's own rotation animation
   and reads as one motion — no masking; frame analysis showed the OS
-  animation ends cleanly on the corrected layout on its own. Native
+  animation ends cleanly on the corrected layout on its own. Installed
+  (home-screen) apps can leave `screen.orientation` stuck after rotating,
+  so the angle is taken from whichever source reports one —
+  `window.orientation` still updates in standalone mode — with a
+  last-resort quarter-turn inferred from the tilt sensor's gravity vector
+  when every API is stuck. Native
   `screen.orientation.lock('portrait')` is still attempted at
   game start for platforms that support it (installed Android PWAs).
 - A resize or orientation flip re-lays-out the **same** maze at the new
