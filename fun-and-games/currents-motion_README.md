@@ -52,9 +52,16 @@ whatever color neighborhood the device selects.
 ## Install as an app
 
 Like Currents, the page carries the meta tags and a runtime-generated
-manifest to be installed full-screen from Share → *Add to Home Screen* (iOS)
-or the install prompt (Android). Everything — icon included — is inlined in
-the one HTML file.
+manifest (`display: standalone`, matching motion-player) to be installed
+from Share → *Add to Home Screen* (iOS) or the install prompt (Android).
+Everything — icon included — is inlined in the one HTML file.
+
+**iOS home-screen caveat**: standalone web apps run in their own WebKit
+container, which frequently refuses to show the motion permission prompt at
+all — `requestPermission()` settles `"denied"` instantly with no dialog,
+while the same page prompts fine in Safari. When the page detects this
+(standalone mode + instant denial) it says so and shows an *"open in safari
+for motion"* link, which iOS opens in real Safari.
 
 ## Implementation notes
 
