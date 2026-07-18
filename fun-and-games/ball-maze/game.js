@@ -70,7 +70,7 @@
     level: 0,                // 0-based level index (endless)
     score: 0,
     best: Number(localStorage.getItem(BEST_KEY)) || 0,
-    distAcc: 0,              // px rolled since last distance point
+    visited: new Set(),      // cells credited with a distance point this level
     maze: null,
     ball: { x: 0, y: 0, vx: 0, vy: 0, r: 0 },
     fall: null,              // { hole, t } during fall animation
@@ -405,10 +405,14 @@
       }
     }
 
-    // distance points: one per cell-length rolled
-    game.distAcc += Math.hypot(b.x - px, b.y - py);
-    while (game.distAcc >= cs) {
-      game.distAcc -= cs;
+    // distance points: 1 per NEW cell of ground reached. Backtracking and
+    // re-treading after a hole fall earn nothing, so penalties stick —
+    // repeatedly dying can no longer be farmed back into a rising score.
+    const cc = Math.min(m.cols - 1, Math.max(0, Math.floor((b.x - m.ox) / cs)));
+    const cr = Math.min(m.rows - 1, Math.max(0, Math.floor((b.y - m.oy) / cs)));
+    const ck = cc + ',' + cr;
+    if (!game.visited.has(ck)) {
+      game.visited.add(ck);
       addScore(1);
     }
 
@@ -480,7 +484,7 @@
   function startLevel(levelIndex) {
     game.level = levelIndex;
     game.maze = buildLevel(levelIndex);
-    game.distAcc = 0;
+    game.visited = new Set(['0,0']); // start cell is free, not scored
     game.fall = null;
     resetBall();
     levelEl.textContent = String(levelIndex + 1);

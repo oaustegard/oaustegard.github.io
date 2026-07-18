@@ -1,4 +1,4 @@
-const CACHE_NAME = 'ball-maze-v5';
+const CACHE_NAME = 'ball-maze-v6';
 const PRECACHE_URLS = [
   './',
   'index.html',

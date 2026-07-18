@@ -11,8 +11,10 @@ green goal.
 - **Tilt to move** — the ball accelerates in the direction you tilt the
   device (DeviceOrientation). On iOS the Start button requests motion
   permission, as required.
-- **Points for distance** — you earn 1 point for every cell-length of ground
-  the ball covers.
+- **Points for distance** — you earn 1 point for each *new* cell of ground
+  you reach. Backtracking (or re-covering ground after falling in a hole)
+  earns nothing, so hole penalties actually stick — repeated deaths can't
+  be farmed back into a rising score.
 - **Endless levels, generated at runtime** — each level generates a fresh
   random maze (recursive backtracker), starting at 6×9 cells and growing
   every level until cells would drop below 22 px on the current screen;
