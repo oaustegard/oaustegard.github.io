@@ -40,8 +40,14 @@ whatever color neighborhood the device selects.
 
 - **Tap once** to begin — iOS requires a user gesture before it hands over
   the gyroscope (`DeviceOrientationEvent.requestPermission()`).
+- **✥ button** (top right) — explicitly requests motion access. A direct
+  click on a real button is the pattern that reliably gets the permission
+  prompt, including in home-screen mode (motion-player's proven approach).
+  It fades out once the sensor stream is live.
 - **Spin / tilt / roll / shake** as per the table above.
-- **Double-tap** toggles a small sensor readout HUD.
+- **Double-tap** toggles a HUD showing the live four-dimension mapping:
+  spin→hue, tilt→lightness, roll→chroma, and the Lorenz drift that time
+  contributes, plus shake energy and permission/mode state.
 
 **Desktop** (fallback, active until a real orientation event arrives):
 

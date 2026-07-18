@@ -57,6 +57,23 @@
     transition: opacity 1s ease;
   }
   #escape.show { opacity: 0.85; pointer-events: auto; }
+  /* explicit motion button (motion-player's proven pattern: a direct click
+     on a real button requests the sensors, even in home-screen mode) */
+  #btn-motion {
+    position: fixed; z-index: 11;
+    right: calc(14px + env(safe-area-inset-right)); top: calc(14px + env(safe-area-inset-top));
+    width: 44px; height: 44px; border-radius: 50%; padding: 0;
+    font-size: 21px; line-height: 42px; text-align: center;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color: #fff; opacity: 0.55;
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.28);
+    cursor: pointer; -webkit-tap-highlight-color: transparent;
+    display: none;
+    transition: opacity 0.8s ease;
+  }
+  #btn-motion.armed { display: block; }
+  #btn-motion.live { opacity: 0.16; pointer-events: none; }
   /* iOS requires a user gesture before it will hand over the gyroscope.
      This gate doubles as the title card; elsewhere it fades on first tap too. */
   #gate {
@@ -83,12 +100,14 @@
 <div id="sig" class="overlay">Currents &middot; Motion</div>
 <div id="hud" class="overlay"></div>
 <a id="escape" class="overlay" target="_blank" rel="noopener">open in safari for motion &#8599;</a>
+<button id="btn-motion" type="button" aria-label="enable motion" aria-pressed="false">&#x2725;</button>
 <div id="gate">
   <div>
     <h1>currents in motion</h1>
     <p>your phone is the brush</p>
     <p>spin for hue &middot; tilt for light &middot; roll for color &middot; shake to stir</p>
     <p style="margin-top:18px; opacity:0.85">tap to begin</p>
+    <p style="margin-top:10px">if the colors don&rsquo;t follow, tap &#x2725;</p>
   </div>
 </div>
 <div id="fallback">
@@ -126,12 +145,15 @@
   var gate = document.getElementById("gate");
   var hud = document.getElementById("hud");
   var escBtn = document.getElementById("escape");
+  var btnMotion = document.getElementById("btn-motion");
 
   /* home-screen ("standalone") web apps run in their own WebKit container
      that frequently refuses to show the motion prompt at all */
   var isStandalone = (window.navigator.standalone === true) ||
     (window.matchMedia && window.matchMedia("(display-mode: standalone), (display-mode: fullscreen)").matches);
   escBtn.href = window.location.href;
+
+  var isTouch = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || ("ontouchstart" in window);
 
   var gl = null;
   try {
@@ -221,8 +243,8 @@
     "  /* the device holds the color point; the field and the attractor",
     "     swirl around it */",
     "  float hue = u_hue + u_chaos.x * 0.9 + (f - 0.5) * 2.6 + 0.7 * length(q);",
-    "  float L   = clamp(u_light + u_chaos.y * 0.06 + (f - 0.5) * 0.32, 0.04, 0.96);",
-    "  float C   = clamp(u_chroma * (0.55 + 0.9 * f) + u_chaos.z * 0.035 + u_energy * 0.05, 0.0, 0.30);",
+    "  float L   = clamp(u_light + u_chaos.y * 0.07 + (f - 0.5) * 0.46, 0.04, 0.96);",
+    "  float C   = clamp(u_chroma * (0.45 + 0.75 * f) + u_chaos.z * 0.025 + u_energy * 0.04, 0.0, 0.20);",
 
     "  vec3 col = oklab2rgb(vec3(L, C * cos(hue), C * sin(hue)));",
     "  col = clamp(col, 0.0, 1.0);",
@@ -291,7 +313,7 @@
   /* color point: current eases toward target */
   var hue = 0, hueTarget = 0;             /* radians, unwrapped */
   var light = 0.55, lightTarget = 0.55;   /* OKLab L */
-  var chroma = 0.11, chromaTarget = 0.11; /* OKLab C */
+  var chroma = 0.09, chromaTarget = 0.09; /* OKLab C */
 
   var energy = 0;      /* shake energy, decays */
   var paused = false;
@@ -300,6 +322,7 @@
   var hasOrientation = false; /* flips true on first real deviceorientation event */
   var hudOn = false;
   var lastRaw = { alpha: null, beta: null, gamma: null };
+  var lastChaos = [0, 0, 0];
 
   /* Lorenz attractor -- the smooth-but-chaotic fourth dimension.
      Integrated per-frame; state normalized to roughly [-1, 1] each axis. */
@@ -338,6 +361,8 @@
     if (e.alpha === null && e.beta === null && e.gamma === null) return;
     if (!hasOrientation) {
       hasOrientation = true;
+      btnMotion.classList.add("live");
+      btnMotion.setAttribute("aria-pressed", "true");
       console.log("[motion] orientation stream live.");
     }
     lastRaw.alpha = e.alpha; lastRaw.beta = e.beta; lastRaw.gamma = e.gamma;
@@ -360,7 +385,7 @@
     /* gamma: -90..90 roll -> chroma. Level = muted wash, rolled on its
        side = full saturation. Sign ignored: either direction saturates. */
     if (e.gamma !== null) {
-      chromaTarget = 0.03 + (Math.abs(e.gamma) / 90) * 0.24;
+      chromaTarget = 0.02 + (Math.abs(e.gamma) / 90) * 0.15;
     }
   }
 
@@ -473,6 +498,21 @@
     if (needsGesture && !sensorsOn) requestSensorPermission();
   });
 
+  /* the explicit motion button: a plain click handler on a real button is
+     the one pattern proven to get the prompt in home-screen mode
+     (motion-player's btnMotion). Visible whenever sensors are plausible;
+     fades out once the stream is live. Sits above the gate so it can be
+     the very first tap. */
+  if (isTouch && typeof DeviceOrientationEvent !== "undefined") {
+    btnMotion.classList.add("armed");
+  }
+  btnMotion.addEventListener("click", function (e) {
+    e.stopPropagation();
+    if (sensorsOn) return;
+    if (needsGesture) requestSensorPermission();
+    else startSensors();
+  });
+
   /* Android / desktop need no gesture for sensors -- attach immediately so
      the gate is purely a title card there. */
   if (!needsGesture) startSensors();
@@ -492,7 +532,7 @@
   }, { passive: true });
   window.addEventListener("wheel", function (e) {
     if (hasOrientation) return;
-    chromaTarget = Math.max(0.02, Math.min(0.27, chromaTarget - e.deltaY * 0.0003));
+    chromaTarget = Math.max(0.02, Math.min(0.17, chromaTarget - e.deltaY * 0.0003));
   }, { passive: true });
 
   /* ---------------------------------------------------------------- extras */
@@ -518,13 +558,19 @@
     hud.style.display = hudOn ? "block" : "none";
   }
   function fmt(v, n) { return v === null ? "--" : v.toFixed(n); }
+  /* the four dimensions, live: three rotation axes -> three color axes,
+     plus time as the Lorenz attractor's wander */
   function updateHud() {
     if (!hudOn) return;
+    var hueDeg = ((hue % TAU + TAU) % TAU / TAU * 360).toFixed(0);
     hud.textContent =
-      "alpha " + fmt(lastRaw.alpha, 1) + "  beta " + fmt(lastRaw.beta, 1) + "  gamma " + fmt(lastRaw.gamma, 1) + "\n" +
-      "hue " + ((hue % TAU + TAU) % TAU / TAU * 360).toFixed(0) + "  L " + light.toFixed(2) + "  C " + chroma.toFixed(3) + "\n" +
-      "energy " + energy.toFixed(2) + "  src " + (hasOrientation ? "gyro" : "pointer") + "  perm " + permState +
-      "  mode " + (isStandalone ? "app" : "browser");
+      "spin  \u03b1 " + fmt(lastRaw.alpha, 0) + "\u00b0 \u2192 hue    " + hueDeg + "\u00b0\n" +
+      "tilt  \u03b2 " + fmt(lastRaw.beta, 0) + "\u00b0 \u2192 light  " + light.toFixed(2) + "\n" +
+      "roll  \u03b3 " + fmt(lastRaw.gamma, 0) + "\u00b0 \u2192 chroma " + chroma.toFixed(3) + "\n" +
+      "time  lorenz \u2192 drift  " +
+        lastChaos[0].toFixed(2) + " " + lastChaos[1].toFixed(2) + " " + lastChaos[2].toFixed(2) + "\n" +
+      "shake " + energy.toFixed(2) + "  src " + (hasOrientation ? "gyro" : "pointer") +
+      "  perm " + permState + "  mode " + (isStandalone ? "app" : "browser");
   }
 
   document.addEventListener("visibilitychange", function () {
@@ -532,7 +578,6 @@
   });
 
   /* tell the story in the right terms for the input we actually have */
-  var isTouch = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || ("ontouchstart" in window);
   var baseHint = isTouch
     ? "spin for hue &middot; tilt for light &middot; roll for color &middot; shake to stir"
     : "steer with the cursor &middot; scroll for color &middot; space to still it &middot; h for readout";
@@ -586,6 +631,7 @@
       energy *= Math.pow(0.35, dt); /* ~1s half-life-ish decay */
 
       var chaos = paused ? [0, 0, 0] : lorenzStep(dt);
+      lastChaos = chaos;
 
       /* ease everything for softness */
       var k = 1 - Math.pow(0.001, dt); /* frame-rate independent easing */
