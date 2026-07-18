@@ -154,6 +154,7 @@ The repository is organized into thematic subdirectories containing standalone w
   - **bsky-thread.js**: Thread processing and display
   - See `bsky/_MAP.md` for the current module structure and dependencies.
 - `/fun-and-games/`: Interactive pages, curiosities, and small games.
+- `/motion-player/`: An installable PWA that plays YouTube videos inline with motion-based (device-orientation) pan/zoom/roll-stabilization plus touch gestures. Self-contained directory (own `manifest.webmanifest`, `sw.js`, icons) so the service-worker scope stays isolated; see `motion-player/README.md` and `motion-player/SPEC.md`.
 - `/web-utilities/`: General-purpose web tools like formatters, converters, and bookmarklets.
 - **Creating New Sections**: To create a new tool category, create a new directory (e.g., `/new-tools/`). Add an `index.html` file inside it, modeled after `/ai-tools/index.html`, which uses the `github-toc.js` component to list the tools in that directory. After creating a new section also make sure to update this file (AGENTS.md) accordingly!
 - `/images/`: Site-wide images and assets.
