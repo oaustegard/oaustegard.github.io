@@ -66,5 +66,9 @@ the one HTML file.
   easing so the color never spins the long way around the wheel.
 - On iOS the permission request is called synchronously inside the
   `pointerdown` task — any `await` beforehand makes Safari silently deny
-  (same lesson as `/motion-player/`).
+  (same lesson as `/motion-player/`). Orientation and motion permission are
+  requested independently (a motion denial must not cost us orientation),
+  a denial shows an on-screen message and any later tap retries, and a
+  watchdog falls back to `deviceorientationabsolute` if the regular stream
+  stays silent after a grant.
 - No WebGL → a graceful text fallback, same as Currents.

@@ -354,37 +354,78 @@
     if (mag > 3) energy = Math.min(1, energy + (mag - 3) * 0.012);
   }
 
+  /* transient on-screen status line -- the console is invisible on a phone */
+  var sayTimer = null;
+  function say(html) {
+    hint.innerHTML = html;
+    hint.classList.remove("gone");
+    hint.classList.add("show");
+    clearTimeout(sayTimer);
+    sayTimer = setTimeout(function () { hint.classList.remove("show"); hint.classList.add("gone"); }, 6000);
+  }
+
+  var sensorsOn = false;
+  var permState = "none"; /* none | granted | denied (HUD shows it for debugging) */
+
   function startSensors() {
+    if (sensorsOn) return;
+    sensorsOn = true;
     window.addEventListener("deviceorientation", onOrientation);
     window.addEventListener("devicemotion", onMotion);
     console.log("[motion] sensor listeners attached.");
+    /* watchdog: some Androids only deliver the -absolute variant, and a
+       granted permission can still yield a silent stream. Fall back, and
+       if even that stays quiet, say so on screen. */
+    setTimeout(function () {
+      if (hasOrientation) return;
+      window.addEventListener("deviceorientationabsolute", onOrientation);
+      console.warn("[motion] no orientation events; trying deviceorientationabsolute.");
+      setTimeout(function () {
+        if (!hasOrientation) say("no motion data from this device &middot; steering by touch instead");
+      }, 1600);
+    }, 1600);
   }
 
   var needsGesture = (typeof DeviceOrientationEvent !== "undefined" &&
                       typeof DeviceOrientationEvent.requestPermission === "function");
 
-  function openGate() {
-    gate.classList.add("gone");
-    requestAnimationFrame(function () { hint.classList.add("show"); });
-    setTimeout(function () { hint.classList.remove("show"); hint.classList.add("gone"); }, 6000);
+  /* iOS: requestPermission() MUST be called synchronously inside the
+     gesture task -- no await before it -- or Safari silently denies.
+     Orientation and motion are requested independently: a rejection of
+     one must not cost us the other (Promise.all would). */
+  function requestSensorPermission() {
+    DeviceOrientationEvent.requestPermission().then(function (state) {
+      console.log("[motion] orientation permission:", state);
+      permState = state;
+      if (state === "granted") {
+        startSensors();
+      } else {
+        say("motion access denied &middot; tap to retry &middot; if no prompt appears, reset it under aA &rarr; website settings");
+      }
+    }).catch(function (err) {
+      console.warn("[motion] orientation permission threw:", err);
+      permState = "denied";
+      say("motion access denied &middot; tap to retry &middot; if no prompt appears, reset it under aA &rarr; website settings");
+    });
+    if (typeof DeviceMotionEvent !== "undefined" &&
+        typeof DeviceMotionEvent.requestPermission === "function") {
+      /* shake detection is a bonus; ignore a denial */
+      DeviceMotionEvent.requestPermission().then(function (state) {
+        console.log("[motion] motion permission:", state);
+      }).catch(function () {});
+    }
   }
 
-  gate.addEventListener("pointerdown", function () {
-    /* iOS: requestPermission() MUST be called synchronously inside the
-       gesture task -- no await before it -- or Safari silently denies. */
-    if (needsGesture) {
-      var op = DeviceOrientationEvent.requestPermission();
-      var mp = (typeof DeviceMotionEvent !== "undefined" &&
-                typeof DeviceMotionEvent.requestPermission === "function")
-               ? DeviceMotionEvent.requestPermission() : Promise.resolve("granted");
-      Promise.all([op, mp]).then(function (res) {
-        console.log("[motion] permissions:", res.join(", "));
-        startSensors();
-      }).catch(function (err) {
-        console.warn("[motion] permission denied; pointer fallback stays active.", err);
-      });
-    }
-    openGate();
+  function openGate() {
+    gate.classList.add("gone");
+    say(baseHint);
+  }
+
+  /* one window-level handler: the first tap opens the gate and (on iOS)
+     requests the sensors; any later tap retries while they are still off. */
+  window.addEventListener("pointerdown", function () {
+    if (needsGesture && !sensorsOn) requestSensorPermission();
+    if (!gate.classList.contains("gone")) openGate();
   });
 
   /* Android / desktop need no gesture for sensors -- attach immediately so
@@ -437,7 +478,7 @@
     hud.textContent =
       "alpha " + fmt(lastRaw.alpha, 1) + "  beta " + fmt(lastRaw.beta, 1) + "  gamma " + fmt(lastRaw.gamma, 1) + "\n" +
       "hue " + ((hue % TAU + TAU) % TAU / TAU * 360).toFixed(0) + "  L " + light.toFixed(2) + "  C " + chroma.toFixed(3) + "\n" +
-      "energy " + energy.toFixed(2) + "  src " + (hasOrientation ? "gyro" : "pointer");
+      "energy " + energy.toFixed(2) + "  src " + (hasOrientation ? "gyro" : "pointer") + "  perm " + permState;
   }
 
   document.addEventListener("visibilitychange", function () {
@@ -446,9 +487,10 @@
 
   /* tell the story in the right terms for the input we actually have */
   var isTouch = (window.matchMedia && window.matchMedia("(pointer: coarse)").matches) || ("ontouchstart" in window);
-  hint.innerHTML = isTouch
+  var baseHint = isTouch
     ? "spin for hue &middot; tilt for light &middot; roll for color &middot; shake to stir"
     : "steer with the cursor &middot; scroll for color &middot; space to still it &middot; h for readout";
+  hint.innerHTML = baseHint;
 
   /* give Android/Chrome an install manifest too (iOS uses the meta tags above).
      Built at runtime from the inlined icon so the file still ships no external asset. */
