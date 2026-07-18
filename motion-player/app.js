@@ -241,11 +241,93 @@ function toast(msg) {
   }, TOAST_MS);
 }
 
+/* ===================== Orientation neutralization ===================== */
+// iOS Safari offers no way for a web app to lock orientation, so when the OS
+// flips the viewport to landscape we counter-rotate #app back to the
+// device's natural portrait with a CSS transform — no OS orientation lock
+// needed, the app never visually leaves portrait. Technique ported from Ball
+// Maze (merged PR #314; fun-and-games/ball-maze/game.js) — same container
+// sizing, transform table, and native-lock attempt.
+//
+// viewportW()/viewportH() return the device-natural dimensions, which are
+// invariant across OS rotation — so cover size, containScale, zoom and pan
+// never need to change (no re-layout, no jump) when the OS flips.
+
+const appEl = document.getElementById('app');
+let uiAngle = 0; // viewport rotation the neutralizer is currently countering
+
+function orientationAngle() {
+  const a = (screen.orientation && screen.orientation.angle != null)
+    ? screen.orientation.angle
+    : (window.orientation || 0);
+  return ((a % 360) + 360) % 360;
+}
+
+/** Device-natural width/height — invariant under OS rotation. */
+function viewportW() {
+  return (uiAngle === 90 || uiAngle === 270) ? window.innerHeight : window.innerWidth;
+}
+function viewportH() {
+  return (uiAngle === 90 || uiAngle === 270) ? window.innerWidth : window.innerHeight;
+}
+
+function neutralizeOrientation(forceAngle) {
+  uiAngle = forceAngle != null ? forceAngle : orientationAngle();
+  const s = appEl.style;
+  const deviceW = viewportW();
+  const deviceH = viewportH();
+  if (uiAngle === 90) {
+    s.width = deviceW + 'px';
+    s.height = deviceH + 'px';
+    s.transform = `translateY(${deviceW}px) rotate(-90deg)`;
+  } else if (uiAngle === 270) {
+    s.width = deviceW + 'px';
+    s.height = deviceH + 'px';
+    s.transform = `translateX(${deviceH}px) rotate(90deg)`;
+  } else if (uiAngle === 180) {
+    s.width = deviceW + 'px';
+    s.height = deviceH + 'px';
+    s.transform = `translate(${deviceW}px, ${deviceH}px) rotate(180deg)`;
+  } else {
+    s.width = '';
+    s.height = '';
+    s.transform = '';
+  }
+}
+
+/**
+ * Un-rotate a viewport-oriented vector into app-space (device-natural
+ * portrait) coordinates — the inverse of the linear part of
+ * neutralizeOrientation()'s transform. #app's transform-origin is 0 0, but
+ * every caller here works in vectors/center-relative points (pan deltas;
+ * pinch midpoint relative to the stage center), so the additive translation
+ * term cancels and this single linear map serves both call sites.
+ */
+function unrotateVector(dx, dy, angle) {
+  switch (angle) {
+    case 90: return { x: -dy, y: dx };
+    case 270: return { x: dy, y: -dx };
+    case 180: return { x: -dx, y: -dy };
+    default: return { x: dx, y: dy };
+  }
+}
+
+async function tryNativeLock() {
+  // Works in installed/fullscreen contexts on Android; iOS throws (no
+  // screen.orientation.lock support there) and the CSS counter-rotation
+  // above covers it instead. Never unlock.
+  try {
+    if (screen.orientation && screen.orientation.lock) {
+      await screen.orientation.lock('portrait');
+    }
+  } catch { /* not supported here — counter-rotation covers it */ }
+}
+
 /* ===================== Cover sizing ===================== */
 
 function computeCoverSize() {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  const w = viewportW();
+  const h = viewportH();
   const W = Math.max(w, h * ASPECT);
   const H = W / ASPECT;
   coverSize = { W, H };
@@ -280,8 +362,8 @@ function reconcileZoomToContainScale() {
 /* ===================== Pan clamp ===================== */
 
 function pxPerDeg(sensitivity) {
-  const w = window.innerWidth;
-  const h = window.innerHeight;
+  const w = viewportW();
+  const h = viewportH();
   return (1.4 * Math.max(w, h) / 90) * 3 * sensitivity;
 }
 
@@ -295,8 +377,8 @@ function softClampAxis(v, max) {
 }
 
 function maxPanFor(zoom) {
-  const vw = window.innerWidth;
-  const vh = window.innerHeight;
+  const vw = viewportW();
+  const vh = viewportH();
   const scaledW = coverSize.W * zoom;
   const scaledH = coverSize.H * zoom;
   const overflowX = Math.max(0, (scaledW - vw) / 2);
@@ -317,8 +399,13 @@ function rotatePoint(x, y, angleDeg) {
 
 const gestures = new GestureController(el.gestureOverlay, {
   onPan(dxPx, dyPx) {
+    // The overlay's local coords are viewport-oriented (its bounding rect is
+    // the post-transform, viewport-aligned box); un-rotate into app space
+    // before the existing roll-compensation rotation. See "Orientation
+    // neutralization" above.
+    const un = unrotateVector(dxPx, dyPx, uiAngle);
     const roll = state.rollStabilize ? rendered.roll : 0;
-    const rotated = rotatePoint(dxPx, dyPx, -roll);
+    const rotated = rotatePoint(un.x, un.y, -roll);
     state.panX += rotated.x;
     state.panY += rotated.y;
     showChrome();
@@ -327,8 +414,11 @@ const gestures = new GestureController(el.gestureOverlay, {
     const rect = el.stage.getBoundingClientRect();
     const mx = cxPx - rect.width / 2;
     const my = cyPx - rect.height / 2;
+    // mx/my are viewport-oriented, center-relative — un-rotate the same way
+    // as onPan's deltas before applying roll compensation.
+    const un = unrotateVector(mx, my, uiAngle);
     const roll = state.rollStabilize ? rendered.roll : 0;
-    const v = rotatePoint(mx, my, -roll);
+    const v = rotatePoint(un.x, un.y, -roll);
 
     const oldZoom = state.zoom;
     const newZoom = Math.min(ZOOM_MAX, Math.max(containScale, oldZoom * factor));
@@ -367,6 +457,12 @@ const engine = new MotionEngine({
     state.motion.rollDeg = sample.rollDeg;
   },
   smoothing: 0.25,
+  // #app is counter-rotated back to device-natural portrait ourselves (see
+  // "Orientation neutralization"), so the engine should treat the screen
+  // angle as always 0 and ride straight through orientationchange with no
+  // re-baseline — the UI never actually leaves device-natural portrait from
+  // the engine's point of view.
+  compensateScreenAngle: false,
 });
 
 let motionPermissionState = null; // null | 'granted' | 'denied' | 'unsupported'
@@ -465,20 +561,13 @@ el.btnRecenter.addEventListener('click', () => {
   showChrome();
 });
 
-/* orientation-change re-baseline (spec: settle ~300ms then recenter) */
-let orientationSettleTimer = null;
-function handleOrientationChange() {
-  clearTimeout(orientationSettleTimer);
-  orientationSettleTimer = setTimeout(() => {
-    computeCoverSize();
-    reconcileZoomToContainScale();
-    if (engine && engine.active) engine.recenter();
-  }, 300);
-}
-window.addEventListener('orientationchange', handleOrientationChange);
-if (screen.orientation && screen.orientation.addEventListener) {
-  screen.orientation.addEventListener('change', handleOrientationChange);
-}
+// Orientation-change handling now lives in the "Orientation neutralization"
+// section above: the #app counter-rotation plus the invariant viewportW()/
+// viewportH() helpers mean cover size, containScale, zoom and pan are all
+// unaffected by an OS rotation, and the engine (compensateScreenAngle:
+// false) rides straight through it with no re-baseline. See
+// handleViewportChange() below, wired to resize/orientationchange/
+// screen.orientation 'change'.
 
 /* ===================== Render loop ===================== */
 
@@ -870,6 +959,7 @@ function showPlayerScreen(videoId) {
   reconcileZoomToContainScale();
   startRenderLoop();
   showChrome();
+  tryNativeLock();
   firstGestureUnmuteArmed = true;
   firstGestureMotionArmed = true;
   createYtPlayer(videoId);
@@ -949,14 +1039,32 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   });
 }
 
-/* ===================== Resize ===================== */
+/* ===================== Resize / orientation ===================== */
 
-window.addEventListener('resize', () => {
-  if (!el.player.hidden) {
-    computeCoverSize();
-    reconcileZoomToContainScale();
-  }
-});
+// Debounced (mirrors Ball Maze's 150ms settle — some browsers report
+// transient innerWidth/innerHeight mid-rotation) handler for genuine
+// viewport changes (browser chrome show/hide, on-screen keyboard, real
+// resize) as well as OS orientation flips: re-run the neutralizer so #app
+// stays counter-rotated, and — only for genuine viewport changes, since
+// viewportW()/viewportH() are invariant across an OS rotation — recompute
+// cover size / re-clamp zoom.
+let viewportChangeTimer = null;
+function handleViewportChange() {
+  clearTimeout(viewportChangeTimer);
+  viewportChangeTimer = setTimeout(() => {
+    neutralizeOrientation();
+    if (!el.player.hidden) {
+      computeCoverSize();
+      reconcileZoomToContainScale();
+    }
+  }, 150);
+}
+window.addEventListener('resize', handleViewportChange);
+window.addEventListener('orientationchange', handleViewportChange);
+if (screen.orientation && screen.orientation.addEventListener) {
+  screen.orientation.addEventListener('change', handleViewportChange);
+}
+neutralizeOrientation();
 
 /* ===================== Test/debug hook ===================== */
 
@@ -968,6 +1076,7 @@ window.__motionPlayerDebug = () => ({
   coverSize: { ...coverSize },
   zoom: state.zoom,
   fitMode: state.fitMode,
+  uiAngle,
 });
 
 /* ===================== Boot ===================== */

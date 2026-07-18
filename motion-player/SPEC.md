@@ -113,13 +113,98 @@ when `w < 0.25`, **hold the last stable `phi`** (do not update roll). Yaw is
 similarly degenerate when the view axis is near-vertical
 (`|v.z| > 0.97`): hold last `psi`.
 
-### Screen-orientation compensation
+### Screen-orientation compensation — neutralization (normative)
 
-`phi`, `psi` panning axes are defined in *device* coordinates; the CSS pixel
-frame rotates when the OS rotates the UI. Subtract
-`screen.orientation?.angle ?? window.orientation ?? 0` from `phi` before
-baselining/diffing, and **recenter the baseline on `orientationchange`**
-(after a ~300ms settle delay) so the picture never jumps when the OS rotates.
+iOS Safari gives a web app no way to lock orientation. Rather than
+compensating for OS rotation inside the pan/roll math (subtracting the
+screen angle, re-baselining on `orientationchange`), the app **counter-
+rotates its own UI back to device-natural portrait** with a CSS transform on
+a single `#app` wrapper — the OS may flip the viewport, but the picture the
+user sees never leaves portrait. Ported from Ball Maze (merged PR #314;
+`fun-and-games/ball-maze/game.js`) — same container sizing, transform table,
+and native-lock attempt; motion-player mirrors the geometry exactly.
+
+**`#app` wrapper.** All top-level UI (landing screen, player screen, toast)
+lives inside `<div id="app">`, `position: fixed`, top-left, `transform-origin:
+0 0`. A neutralizer (`neutralizeOrientation()` in `app.js`) runs on load and
+on `orientationchange` / `screen.orientation` `'change'` / `resize` (debounced
+150ms — some browsers report transient `innerWidth`/`innerHeight` mid-
+rotation). It reads `angle = screen.orientation?.angle ?? window.orientation
+?? 0`, computes the device-natural portrait dimensions `deviceW`/`deviceH`
+(swap `innerWidth`/`innerHeight` when `angle` is 90 or 270), and applies:
+
+| `angle` | `#app` size | transform |
+|---|---|---|
+| 0 | `innerWidth × innerHeight` | none |
+| 90 | `deviceW × deviceH` | `translateY(deviceW) rotate(-90deg)` |
+| 270 | `deviceW × deviceH` | `translateX(deviceH) rotate(90deg)` |
+| 180 | `deviceW × deviceH` | `translate(deviceW, deviceH) rotate(180deg)` |
+
+(The 180 case uses a translate + `rotate(180deg)` rather than ball-maze's
+`transform-origin: center center` shortcut, so every angle shares the same
+top-left origin — the two are equivalent, just uniform here.)
+
+Every element under `#app` sizes itself as a percentage of `#app` (never
+`100dvh`, which tracks the *physical* viewport and would mismatch `#app`'s
+box once it's swapped to portrait dimensions), and nothing under `#app` uses
+`position: fixed` (which is relative to the physical viewport, not `#app`) —
+the settings scrim in particular was changed from `fixed` to `absolute` so it
+rotates with the rest of the chrome.
+
+**Invariant viewport helpers.** `viewportW()`/`viewportH()` return the
+device-natural dimensions (the same swap rule as `deviceW`/`deviceH` above),
+keyed off the neutralizer's last-computed `uiAngle`. Every place that used to
+read `window.innerWidth`/`innerHeight` directly — `computeCoverSize()`,
+`pxPerDeg()`, `maxPanFor()` — now reads these instead. Because they're
+invariant across an OS rotation, cover size, `containScale`, zoom and pan
+**never change** when the OS flips the viewport: no re-layout, no jump, and
+no need to re-clamp or recenter anything on `orientationchange` beyond
+re-running the neutralizer.
+
+**Pointer input un-rotation.** The gesture overlay's local coordinates (from
+`GestureController`, via `getBoundingClientRect()`) are *viewport*-oriented —
+the overlay lives inside the rotated `#app`, so its post-transform bounding
+box is axis-aligned in viewport space, not app space. `app.js` converts pan
+deltas and the pinch midpoint from viewport-oriented to app-oriented via a
+single linear map, `unrotateVector(dx, dy, angle)`, applied **before** the
+existing roll-compensation rotation:
+
+```
+angle   0:  (dx, dy)
+angle  90:  (-dy, dx)
+angle 270:  (dy, -dx)
+angle 180:  (-dx, -dy)
+```
+
+(Derived as the inverse of the linear part of the `#app` transform table
+above; verified against ball-maze's pointer-drag un-rotation, which uses the
+same table.) The pinch midpoint is made center-relative first (subtracting
+half the stage's bounding-rect width/height, which — like the overlay — is
+the viewport-aligned box), so the same vector map applies to both call
+sites without needing the additive translation term.
+
+**`MotionEngine.compensateScreenAngle`.** The engine itself no longer needs to
+know about screen rotation: motion-player constructs it with
+`compensateScreenAngle: false`, which makes `_currentOrientationAngle()`
+always return 0 (so `phi` is never offset by the screen angle) and makes
+`_onOrientationChange()` a no-op (no re-baseline) — roll stabilization rides
+straight through an OS flip because, from the engine's point of view, the UI
+never actually left device-natural portrait. The option defaults to `true`
+(previous behavior, still covered by existing tests) for any other caller
+that doesn't neutralize orientation itself.
+
+**Native lock attempt.** On entering the player screen, `tryNativeLock()`
+calls `screen.orientation.lock('portrait')` in a promise-catch — this
+succeeds on installed/fullscreen Android PWAs (in which case the OS never
+even flips the viewport) and silently rejects everywhere else (notably iOS,
+which has no such API), where the CSS counter-rotation above is what
+actually neutralizes the flip. The lock is never released.
+
+**Trade-off (unchanged from ball-maze):** `env(safe-area-inset-*)` insets are
+computed against the *physical* device edges, so while the UI is counter-
+rotated the safe-area padding is physically misaligned (e.g. the "top" inset
+padding no longer corresponds to the physical top of the device). This is
+accepted, not fixed, exactly as in ball-maze — it doesn't affect angle 0.
 
 ---
 
@@ -134,7 +219,13 @@ export function rotZ(deg): number[9]              // helpers used by tests
 export function matMul(a, b): number[9]
 
 export class MotionEngine {
-  constructor(opts = {})   // { onUpdate(sample), smoothing = 0.25 }
+  constructor(opts = {})   // { onUpdate(sample), smoothing = 0.25,
+                            //   compensateScreenAngle = true }
+      // compensateScreenAngle: subtract screen.orientation.angle from phi and
+      // re-baseline on orientationchange (default, prior behavior). Set false
+      // when the caller neutralizes OS rotation itself (see "Screen-
+      // orientation compensation — neutralization" below): phi is then never
+      // offset by the screen angle, and orientationchange never re-baselines.
   static async requestPermission()  // 'granted' | 'denied' | 'unsupported'
       // calls DeviceOrientationEvent.requestPermission() when it exists (iOS);
       // resolves 'granted' immediately elsewhere; never throws.
@@ -305,6 +396,15 @@ YouTube to be reachable:
   hook — not used by the app itself) is well below the old hardcoded
   `ZOOM_MIN = 0.5`, confirming the fix from a desktop browser without needing
   to simulate a real pinch gesture.
+- Orientation neutralization: `page.addInitScript` a fake `screen.orientation`
+  (`{ angle: 90, addEventListener(){} }`) and a landscape viewport
+  (812×375, mirroring ball-maze's headless-rotation approach — a real
+  rotation event can't be simulated in Playwright, but reading a pre-set
+  `angle` exercises the same code path); assert `#app`'s inline style carries
+  the `rotate(-90deg)` transform and the `deviceW × deviceH` box from the
+  transform table above, and that `__motionPlayerDebug()` reports
+  device-natural portrait cover geometry (`containScale < 0.5`, as in the
+  plain portrait test) even though the physical viewport is landscape.
 
 ## Visual design
 
