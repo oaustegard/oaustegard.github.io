@@ -62,6 +62,7 @@ const el = {
   settingVertical: document.getElementById('setting-vertical'),
   settingRoll: document.getElementById('setting-roll'),
   settingInvert: document.getElementById('setting-invert'),
+  settingCaptions: document.getElementById('setting-captions'),
   motionDebug: document.getElementById('motion-debug'),
 
   toast: document.getElementById('toast'),
@@ -70,7 +71,7 @@ const el = {
 /* ===================== Persistence ===================== */
 
 function loadPrefs() {
-  const defaults = { sensitivity: 1, verticalPan: true, rollStabilize: true, invertX: false, soundOn: true, motionOn: true };
+  const defaults = { sensitivity: 1, verticalPan: true, rollStabilize: true, invertX: false, soundOn: true, motionOn: true, captionsOn: false };
   try {
     const raw = localStorage.getItem(LS_PREFS);
     if (!raw) return defaults;
@@ -94,6 +95,7 @@ function savePrefs() {
       invertX: state.invertX,
       soundOn: state.soundOn,
       motionOn: state.motionOn,
+      captionsOn: state.captionsOn,
     }));
   } catch { /* storage unavailable — ignore */ }
 }
@@ -208,6 +210,10 @@ const state = {
   // Persisted intent to use motion control; actual activation still requires
   // the iOS permission gesture (see the first-gesture auto-enable).
   motionOn: prefs.motionOn,
+  // Subtitles default OFF: YouTube force-enables captions on muted playback
+  // (and we always autoplay muted), so we explicitly unload the captions
+  // module unless the user opts in.
+  captionsOn: prefs.captionsOn,
   // true when zoom is at/near the "contain" (fit) scale — see updateFitMode().
   fitMode: false,
 };
@@ -602,6 +608,7 @@ el.settingSensitivityVal.textContent = state.sensitivity.toFixed(1);
 el.settingVertical.checked = state.verticalPan;
 el.settingRoll.checked = state.rollStabilize;
 el.settingInvert.checked = state.invertX;
+el.settingCaptions.checked = state.captionsOn;
 
 el.settingSensitivity.addEventListener('input', () => {
   state.sensitivity = parseFloat(el.settingSensitivity.value);
@@ -620,6 +627,23 @@ el.settingInvert.addEventListener('change', () => {
   state.invertX = el.settingInvert.checked;
   savePrefs();
 });
+el.settingCaptions.addEventListener('change', () => {
+  state.captionsOn = el.settingCaptions.checked;
+  savePrefs();
+  applyCaptionsPref();
+});
+
+// YouTube force-enables captions on muted playback; there is no playerVar to
+// force them OFF, so we load/unload the html5 player's captions module to
+// match the user's preference (applied on ready and on toggle).
+function applyCaptionsPref() {
+  if (!ytPlayer || !ytReady) return;
+  if (state.captionsOn) {
+    safeCall(() => ytPlayer.loadModule('captions'));
+  } else {
+    safeCall(() => ytPlayer.unloadModule('captions'));
+  }
+}
 
 /* ===================== YouTube IFrame API ===================== */
 
@@ -704,12 +728,16 @@ async function createYtPlayer(videoId) {
         onReady: () => {
           ytReady = true;
           el.unmuteChip.hidden = false;
+          applyCaptionsPref();
           try { ytPlayer.playVideo(); } catch { /* ignore */ }
         },
         onStateChange: (ev) => {
           // 1 = playing, 2 = paused (YT.PlayerState)
           ytIsPlaying = ev.data === 1;
           updatePlayPauseIcon();
+          // YouTube may re-arm captions when playback starts (muted-autoplay
+          // auto-captions); re-assert the preference. Idempotent.
+          if (ev.data === 1) applyCaptionsPref();
         },
         onError: () => {
           showPlayerError('This video could not be played.');
