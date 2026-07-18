@@ -12,56 +12,13 @@ bash .claude/install-skills.sh
 
 **To add/remove skills**: Edit the `SKILLS` array in `.claude/install-skills.sh`
 
-## Code Maps - Navigation & Maintenance
+## Navigating the Codebase
 
-This repository uses **code maps** (`_MAP.md` files) to provide navigable overviews of the codebase structure without requiring you to read every file.
-
-### Using Code Maps
-
-1. **Start with the root map**: Read `_MAP.md` first to understand the overall structure
-2. **Navigate hierarchically**: Click through subdirectory links (e.g., `[bsky/](./bsky/_MAP.md)`) to explore specific areas
-3. **Understand dependencies**: Maps show exports/imports to reveal module relationships
-4. **Only read source files when needed**: Use maps to identify relevant files before reading them
-
-**Example workflow:**
-```
-1. Read _MAP.md (see 10 subdirectories)
-2. Read bsky/_MAP.md (see bsky-core.js exports 16 functions)
-3. Read bsky-quote.js (see it imports from bsky-core.js)
-4. Now read the actual source files only if needed
-```
-
-### Maintaining Code Maps
-
-**IMPORTANT**: When you modify code that affects exports or imports, you MUST regenerate the maps.
-
-#### GitHub Action: Update Code Maps
-
-- Trigger the "Update Code Maps" workflow from the Actions tab to regenerate maps and auto-commit updates.
-- The workflow also runs automatically on pushes to `main`.
-
-#### When to regenerate:
-- ✅ After adding/removing exported functions, classes, or variables
-- ✅ After adding/removing import statements
-- ✅ After creating new files in the codebase
-- ✅ After renaming or moving files
-- ❌ Not needed for internal implementation changes that don't affect the module interface
-
-#### How to regenerate:
-
-```bash
-# Regenerate all maps (dependencies auto-install on first run)
-python .claude/skills/mapping-codebases/scripts/codemap.py .
-
-# Include updated maps in your commit
-git add '*/_MAP.md'
-```
-
-#### Update Code Maps workflow (GitHub Actions)
-
-You can run the **Update Code Maps** workflow from GitHub Actions. It lives in `.github/workflows/update-code-maps.yml` and currently runs via `workflow_dispatch` (manual).
-
-**Best practice**: Regenerate maps just before committing code changes that affect module interfaces. You can also use the Update Code Maps workflow after changes that alter imports/exports, in addition to the local `codemap.py` command.
+Static `_MAP.md` code maps are **retired** — do not generate or commit them
+(the old `mapping-codebases` skill and "Update Code Maps" workflow are gone).
+For structural exploration, use tree-sitter-based dynamic parsing instead
+(e.g. the `tree-sitting` skill where available): parse on demand, query for
+symbols/exports/references, and read only the line ranges you need.
 
 ## Environment Constraints
 
@@ -152,7 +109,6 @@ The repository is organized into thematic subdirectories containing standalone w
   - **bsky-quote.js**: Quote post processing
   - **bsky-search.js**: Search functionality with auto-processing
   - **bsky-thread.js**: Thread processing and display
-  - See `bsky/_MAP.md` for the current module structure and dependencies.
 - `/fun-and-games/`: Interactive pages, curiosities, and small games.
 - `/motion-player/`: An installable PWA that plays YouTube videos inline with motion-based (device-orientation) pan/zoom/roll-stabilization plus touch gestures. Self-contained directory (own `manifest.webmanifest`, `sw.js`, icons) so the service-worker scope stays isolated; see `motion-player/README.md` and `motion-player/SPEC.md`.
 - `/web-utilities/`: General-purpose web tools like formatters, converters, and bookmarklets.
@@ -163,17 +119,16 @@ The repository is organized into thematic subdirectories containing standalone w
 
 ## Development Workflow
 
-1. **Understand first**: Read relevant `_MAP.md` files before making changes to understand code structure
+1. **Understand first**: Explore the relevant code structure before making changes (tree-sitter queries beat whole-file reads)
 2. **Make changes**: Implement requested features or fixes
-3. **Update maps**: Regenerate if you changed exports/imports in JavaScript files
-4. **Test**: Run tests if applicable (`npm test`)
-5. **Commit**: Include updated `_MAP.md` files in commits when relevant
+3. **Test**: Run tests if applicable (`npm test`)
+4. **Commit**: Use clear, descriptive commit messages
 
 ## Do / Don't
 
 - **Do**: Follow the `tool-name.html` + `tool-name_README.md` pattern when creating new tools.
 - **Do**: Use hyphen-separated names for new files to maintain consistency.
-- **Do**: Regenerate code maps after changing JavaScript module exports/imports.
+- **Don't**: Generate or commit `_MAP.md` code maps — they are retired in favor of dynamic tree-sitter parsing.
 - **Don't**: Edit any files in the `_site/` directory directly, as it is a build artifact.
 - **Don't**: Commit generated files like `sitemap.xml` to the repository. It is generated during the build process.
 

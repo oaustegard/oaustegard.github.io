@@ -7,7 +7,6 @@ SKILLS_DIR=".claude/skills"
 
 # Skills to install (edit this list as needed)
 SKILLS=(
-  "mapping-codebases"
   "generating-patches"
   "versioning-skills"
 )
