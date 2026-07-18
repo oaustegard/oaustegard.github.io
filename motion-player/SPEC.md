@@ -120,29 +120,46 @@ compensating for OS rotation inside the pan/roll math (subtracting the
 screen angle, re-baselining on `orientationchange`), the app **counter-
 rotates its own UI back to device-natural portrait** with a CSS transform on
 a single `#app` wrapper — the OS may flip the viewport, but the picture the
-user sees never leaves portrait. Ported from Ball Maze (merged PR #314;
-`fun-and-games/ball-maze/game.js`) — same container sizing, transform table,
-and native-lock attempt; motion-player mirrors the geometry exactly.
+user sees never leaves portrait. Ported from Ball Maze
+(`fun-and-games/ball-maze/game.js`), including its later on-device refinements
+(see "Rotation-signal handling" below).
 
 **`#app` wrapper.** All top-level UI (landing screen, player screen, toast)
-lives inside `<div id="app">`, `position: fixed`, top-left, `transform-origin:
-0 0`. A neutralizer (`neutralizeOrientation()` in `app.js`) runs on load and
-on `orientationchange` / `screen.orientation` `'change'` / `resize` (debounced
-150ms — some browsers report transient `innerWidth`/`innerHeight` mid-
-rotation). It reads `angle = screen.orientation?.angle ?? window.orientation
-?? 0`, computes the device-natural portrait dimensions `deviceW`/`deviceH`
-(swap `innerWidth`/`innerHeight` when `angle` is 90 or 270), and applies:
+lives inside `<div id="app">`, `position: fixed`, top-left. A neutralizer
+(`neutralizeOrientation()` in `app.js`) runs on load and on the viewport-change
+signals below. It resolves `angle` (see below), and — only on portrait-natural
+devices (`naturalPortrait()`; on a landscape-natural desktop/tablet, angle
+90/270 means a turn *to* portrait, where counter-rotating would be wrong) —
+applies:
 
-| `angle` | `#app` size | transform |
+| `angle` | `#app` size | transform (origin) |
 |---|---|---|
-| 0 | `innerWidth × innerHeight` | none |
-| 90 | `deviceW × deviceH` | `translateY(deviceW) rotate(-90deg)` |
-| 270 | `deviceW × deviceH` | `translateX(deviceH) rotate(90deg)` |
-| 180 | `deviceW × deviceH` | `translate(deviceW, deviceH) rotate(180deg)` |
+| 0 | auto | none |
+| 90 | `min × max` of inner dims | `translateY(min) rotate(-90deg)` (top-left) |
+| 270 | `min × max` of inner dims | `translateX(max) rotate(90deg)` (top-left) |
+| 180 | `innerWidth × innerHeight` | `rotate(180deg)` (center) |
 
-(The 180 case uses a translate + `rotate(180deg)` rather than ball-maze's
-`transform-origin: center center` shortcut, so every angle shares the same
-top-left origin — the two are equivalent, just uniform here.)
+The 90/270 box uses `min(innerWidth, innerHeight) × max(…)` rather than reading
+the two dimensions positionally, because `innerWidth`/`innerHeight` can be
+stale mid-rotation on iOS; min/max yields the correct device-natural portrait
+box (short × long) regardless.
+
+**Rotation-signal handling.** `angle` is resolved from whichever source
+reports a rotation: `screen.orientation.angle || window.orientation || 0`
+(installed standalone iOS can freeze `screen.orientation` at its launch value
+while `window.orientation` still updates). A flip is applied **synchronously**
+(no debounce) so it lands inside the OS's own rotation animation and reads as
+one motion; only plain *same-orientation* resizes (chrome show/hide, on-screen
+keyboard) keep a 150 ms debounce. On iOS the `resize` and angle-update signals
+arrive at different moments during a rotation, so while the reported angle and
+the viewport shape disagree on a portrait-natural device the neutralizer
+**holds** (polling every 50 ms, capped at 12 tries) instead of painting an
+un-countered landscape box (the mid-rotation "shrink"). If every angle API
+stays stuck while the viewport is landscape, a last-resort quarter-turn is
+inferred from gravity (`engine.lastRawEvent.gamma` sign) and cleared as soon as
+a real source speaks or portrait returns. Signals listened to:
+`orientationchange`, `screen.orientation` `'change'`, `visualViewport` resize,
+and window `resize`.
 
 Every element under `#app` sizes itself as a percentage of `#app` (never
 `100dvh`, which tracks the *physical* viewport and would mismatch `#app`'s

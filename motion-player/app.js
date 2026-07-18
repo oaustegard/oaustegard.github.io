@@ -246,8 +246,13 @@ function toast(msg) {
 // flips the viewport to landscape we counter-rotate #app back to the
 // device's natural portrait with a CSS transform — no OS orientation lock
 // needed, the app never visually leaves portrait. Technique ported from Ball
-// Maze (merged PR #314; fun-and-games/ball-maze/game.js) — same container
-// sizing, transform table, and native-lock attempt.
+// Maze (fun-and-games/ball-maze/game.js), including its later refinements:
+// prefer whichever angle source reports a rotation (window.orientation still
+// updates when standalone iOS freezes screen.orientation), gate to portrait-
+// natural devices, wait out iOS's staggered angle/resize signals before
+// painting (avoids the mid-rotation shrink), and infer the quarter-turn from
+// gravity when every API is stuck. Synchronous flip handling makes a rotation
+// read as one motion.
 //
 // viewportW()/viewportH() return the device-natural dimensions, which are
 // invariant across OS rotation — so cover size, containScale, zoom and pan
@@ -256,11 +261,41 @@ function toast(msg) {
 const appEl = document.getElementById('app');
 let uiAngle = 0; // viewport rotation the neutralizer is currently countering
 
+// In installed (home-screen) web apps iOS can leave screen.orientation stuck
+// at its launch value after a rotation, so prefer whichever source reports a
+// rotation; the deprecated window.orientation still updates reliably in
+// standalone mode. inferredAngle is a last-resort quarter-turn deduced from
+// gravity when BOTH report 0 yet the viewport is landscape — it clears itself
+// as soon as a real source speaks or portrait returns.
+let inferredAngle = null;
 function orientationAngle() {
-  const a = (screen.orientation && screen.orientation.angle != null)
-    ? screen.orientation.angle
-    : (window.orientation || 0);
+  const so = (screen.orientation && screen.orientation.angle != null)
+    ? screen.orientation.angle : null;
+  const wo = (typeof window.orientation === 'number') ? window.orientation : null;
+  let a = so || wo || 0;
+  if (a === 0) {
+    if (inferredAngle != null && window.innerWidth > window.innerHeight) {
+      a = inferredAngle;
+    } else {
+      inferredAngle = null;
+    }
+  } else {
+    inferredAngle = null;
+  }
   return ((a % 360) + 360) % 360;
+}
+
+// Counter-rotation only makes sense on portrait-natural devices (phones). On
+// landscape-natural screens (desktops, some tablets) angle 90/270 means the
+// device was turned to PORTRAIT — forcing our portrait layout sideways there
+// would be exactly wrong. type and angle come from the same update, so this
+// stays consistent even mid-rotation.
+function naturalPortrait() {
+  const o = screen.orientation;
+  if (!o || !o.type) return window.innerHeight >= window.innerWidth;
+  const landscapeType = o.type.indexOf('landscape') === 0;
+  const quarterTurn = o.angle === 90 || o.angle === 270;
+  return landscapeType === quarterTurn;
 }
 
 /** Device-natural width/height — invariant under OS rotation. */
@@ -273,25 +308,30 @@ function viewportH() {
 
 function neutralizeOrientation(forceAngle) {
   uiAngle = forceAngle != null ? forceAngle : orientationAngle();
+  // don't counter-rotate on landscape-natural devices (see naturalPortrait)
+  if (forceAngle == null && !naturalPortrait()) uiAngle = 0;
   const s = appEl.style;
-  const deviceW = viewportW();
-  const deviceH = viewportH();
-  if (uiAngle === 90) {
-    s.width = deviceW + 'px';
-    s.height = deviceH + 'px';
-    s.transform = `translateY(${deviceW}px) rotate(-90deg)`;
-  } else if (uiAngle === 270) {
-    s.width = deviceW + 'px';
-    s.height = deviceH + 'px';
-    s.transform = `translateX(${deviceH}px) rotate(90deg)`;
+  if (uiAngle === 90 || uiAngle === 270) {
+    // innerWidth/innerHeight can be stale mid-rotation on iOS; min/max yields
+    // the right device-natural portrait box (short × long) either way
+    const w = Math.min(window.innerWidth, window.innerHeight);
+    const h = Math.max(window.innerWidth, window.innerHeight);
+    s.width = w + 'px';
+    s.height = h + 'px';
+    s.transformOrigin = 'top left';
+    s.transform = uiAngle === 90
+      ? `translateY(${w}px) rotate(-90deg)`
+      : `translateX(${h}px) rotate(90deg)`;
   } else if (uiAngle === 180) {
-    s.width = deviceW + 'px';
-    s.height = deviceH + 'px';
-    s.transform = `translate(${deviceW}px, ${deviceH}px) rotate(180deg)`;
+    s.width = window.innerWidth + 'px';
+    s.height = window.innerHeight + 'px';
+    s.transformOrigin = 'center center';
+    s.transform = 'rotate(180deg)';
   } else {
     s.width = '';
     s.height = '';
     s.transform = '';
+    s.transformOrigin = '';
   }
 }
 
@@ -1041,28 +1081,61 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 
 /* ===================== Resize / orientation ===================== */
 
-// Debounced (mirrors Ball Maze's 150ms settle — some browsers report
-// transient innerWidth/innerHeight mid-rotation) handler for genuine
-// viewport changes (browser chrome show/hide, on-screen keyboard, real
-// resize) as well as OS orientation flips: re-run the neutralizer so #app
-// stays counter-rotated, and — only for genuine viewport changes, since
-// viewportW()/viewportH() are invariant across an OS rotation — recompute
-// cover size / re-clamp zoom.
-let viewportChangeTimer = null;
-function handleViewportChange() {
-  clearTimeout(viewportChangeTimer);
-  viewportChangeTimer = setTimeout(() => {
-    neutralizeOrientation();
-    if (!el.player.hidden) {
-      computeCoverSize();
-      reconcileZoomToContainScale();
-    }
-  }, 150);
+// Re-run the neutralizer so #app stays counter-rotated, and — only when the
+// device-natural viewport actually changed, since viewportW()/viewportH() are
+// invariant across an OS rotation — recompute cover size / re-clamp zoom.
+function applyViewport() {
+  neutralizeOrientation();
+  if (!el.player.hidden) {
+    computeCoverSize();
+    reconcileZoomToContainScale();
+  }
 }
-window.addEventListener('resize', handleViewportChange);
-window.addEventListener('orientationchange', handleViewportChange);
+
+// An OS flip is applied SYNCHRONOUSLY (no debounce) so it lands inside the
+// OS's own rotation animation and reads as one motion rather than a rotate-
+// then-flip-back. But on iOS the resize event and the orientation-angle
+// update arrive at different moments during a rotation; painting while they
+// disagree briefly shows an un-countered (shrunken) landscape layout. So while
+// the reported angle and the viewport shape disagree on a portrait-natural
+// device, hold off — poll until they agree, then apply in one shot. Plain
+// same-orientation resizes (chrome show/hide, on-screen keyboard) keep a
+// debounce, since some browsers report transient dims mid-change.
+let viewportChangeTimer = null;
+let agreeRetries = 0;
+function handleViewportChange(orientationEvent) {
+  clearTimeout(viewportChangeTimer);
+  const angle = orientationAngle();
+  const angleLandscape = angle === 90 || angle === 270;
+  const viewportLandscape = window.innerWidth > window.innerHeight;
+  if (naturalPortrait() && angleLandscape !== viewportLandscape) {
+    if (agreeRetries < 12) {
+      agreeRetries++;
+      viewportChangeTimer = setTimeout(() => handleViewportChange(true), 50);
+      return;
+    }
+    if (viewportLandscape) {
+      // No angle source ever spoke (stuck standalone API): deduce the
+      // quarter-turn from gravity — at angle 90 screen-down is -gamma, so a
+      // negative device-x (gamma) tilt means the device turned to 90.
+      const g = engine && engine.lastRawEvent ? engine.lastRawEvent.gamma : 0;
+      inferredAngle = (g != null && g < 0) ? 90 : 270;
+    }
+  }
+  agreeRetries = 0;
+  if (angle !== uiAngle || orientationEvent) {
+    applyViewport();                              // flip: apply immediately
+  } else {
+    viewportChangeTimer = setTimeout(applyViewport, 150); // resize: debounce
+  }
+}
+window.addEventListener('resize', () => handleViewportChange(false));
+window.addEventListener('orientationchange', () => handleViewportChange(true));
 if (screen.orientation && screen.orientation.addEventListener) {
-  screen.orientation.addEventListener('change', handleViewportChange);
+  screen.orientation.addEventListener('change', () => handleViewportChange(true));
+}
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', () => handleViewportChange(false));
 }
 neutralizeOrientation();
 
@@ -1077,6 +1150,7 @@ window.__motionPlayerDebug = () => ({
   zoom: state.zoom,
   fitMode: state.fitMode,
   uiAngle,
+  inferredAngle,
 });
 
 /* ===================== Boot ===================== */
