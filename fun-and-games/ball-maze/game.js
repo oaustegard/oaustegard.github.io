@@ -24,6 +24,7 @@
     return { cols, rows, holes, pathHoles };
   }
   const LEVEL_BONUS = 100;   // × level number on completion
+  const GAME_VERSION = 'v11'; // keep in sync with sw.js CACHE_NAME
   const HOLE_PENALTY = 25;
   const BEST_KEY = 'ball-maze-best';
   const PROGRESS_KEY = 'ball-maze-progress';
@@ -431,9 +432,20 @@
   }
 
   // ---------------------------------------------------------------- scoring
+  // Tapping the goal disc toggles a debug readout in the score slot:
+  // version, the orientation angle being countered, and viewport dims —
+  // enough to verify on-device which build is running and what it sees.
+  let showDebug = false;
+  function renderScore() {
+    scoreEl.textContent = showDebug
+      ? GAME_VERSION + ' a' + uiAngle + ' ' +
+        window.innerWidth + 'x' + window.innerHeight
+      : String(game.score);
+  }
+
   function addScore(points) {
     game.score = Math.max(0, game.score + points);
-    scoreEl.textContent = game.score;
+    renderScore();
     if (game.score > game.best) {
       game.best = game.score;
       bestEl.textContent = game.best;
@@ -623,7 +635,31 @@
     game.raw.x = Math.max(-1, Math.min(1, dx / 90));
     game.raw.y = Math.max(-1, Math.min(1, dy / 90));
   });
-  const endDrag = () => {
+  // map viewport coords back to board-local coords through the
+  // counter-rotation, for hit-testing taps on the board
+  function clientToBoard(cx, cy) {
+    const r = boardWrap.getBoundingClientRect();
+    switch (uiAngle) {
+      case 90: return { x: r.bottom - cy, y: cx - r.left };
+      case 270: return { x: cy - r.top, y: r.right - cx };
+      case 180: return { x: r.right - cx, y: r.bottom - cy };
+      default: return { x: cx - r.left, y: cy - r.top };
+    }
+  }
+
+  const endDrag = (e) => {
+    // a release without movement is a tap; tapping the goal disc toggles
+    // the version/debug readout in the score slot
+    if (dragOrigin && e && game.maze &&
+        Math.hypot(e.clientX - dragOrigin.x, e.clientY - dragOrigin.y) < 12) {
+      const p = clientToBoard(e.clientX, e.clientY);
+      const g = game.maze.goal;
+      const hitR = Math.max(game.maze.cs * 0.6, 24);
+      if (Math.hypot(p.x - g.x, p.y - g.y) < hitR) {
+        showDebug = !showDebug;
+        renderScore();
+      }
+    }
     dragOrigin = null;
     game.raw.x = 0;
     game.raw.y = 0;
@@ -735,6 +771,7 @@
       b.vy *= k;
       b.r = m.cs * BALL_R;
     }
+    renderScore(); // keep the debug readout's angle/dims current
   }
   // A flip must be countered SYNCHRONOUSLY: any delay here splits the
   // rotation into two visible steps (OS animation, then our flip-back).
@@ -809,7 +846,7 @@
     keepAwake();
     tryNativeLock();
     game.score = score;
-    scoreEl.textContent = score;
+    renderScore();
     startLevel(level);
     if (!tiltOk) toast('No tilt sensor — use keys or drag');
   }
