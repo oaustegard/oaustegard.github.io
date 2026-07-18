@@ -1,4 +1,4 @@
-const CACHE_NAME = 'motion-player-v5';
+const CACHE_NAME = 'motion-player-v6';
 const PRECACHE_URLS = [
   './',
   'index.html',
