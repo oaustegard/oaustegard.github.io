@@ -72,7 +72,7 @@ def mix(a, b, t):
 def signed_distance_to_segment(px, py, x1, y1, x2, y2):
     """
     Signed distance from point to line segment.
-    Uses perpendicular distance to the line, clamped to segment bounds.
+    For CCW winding: negative on inside (left), positive on outside (right).
     """
     dx = x2 - x1
     dy = y2 - y1
@@ -87,9 +87,11 @@ def signed_distance_to_segment(px, py, x1, y1, x2, y2):
     cx = x1 + t * dx
     cy = y1 + t * dy
 
+    # Cross product: positive if point is to the left of the edge
     cross = (px - x1) * dy - (py - y1) * dx
     dist_unsigned = math.sqrt((px - cx) ** 2 + (py - cy) ** 2)
-    sign = 1 if cross > 0 else -1
+    # For CCW: inside (left) is negative, outside (right) is positive
+    sign = -1 if cross > 0 else 1
 
     return sign * dist_unsigned
 
@@ -102,17 +104,24 @@ def signed_distance_to_triangle(px, py, ax, ay, bx, by, cx, cy):
     d2 = signed_distance_to_segment(px, py, bx, by, cx, cy)
     d3 = signed_distance_to_segment(px, py, cx, cy, ax, ay)
 
+    # Point is inside if on the inside of all three edges (all negative)
     if d1 < 0 and d2 < 0 and d3 < 0:
-        return -max(d1, d2, d3)
+        # Inside: return most negative distance (closest to edge)
+        return min(d1, d2, d3)
     else:
+        # Outside: return closest distance to boundary
         return max(d1, d2, d3)
 
-def render_icon(width, height, fill_scale=1.0, full_bleed_bg=False):
+def render_icon(width, height, fill_scale=1.0):
     """
     Render motion player icon with proper signed distance fields.
     width, height: canvas size
-    fill_scale: scale the art (0.7 for maskable variant)
-    full_bleed_bg: if True, background fills entire square (no rounded corners)
+    fill_scale: scale the art (0.7 for maskable variant, ~0.8 for standard icons)
+
+    Background is always a full-bleed, fully opaque #0b0d12 square filling the
+    entire canvas. Launchers/OSes apply their own masking (rounded corners,
+    circles, squircles, etc.) on top of square source art, so there is no need
+    (and no safe way, given prior SDF bugs) to pre-round the corners here.
     Returns: list of (r, g, b, a) tuples
     """
     bg_color = (0x0b, 0x0d, 0x12)
@@ -129,25 +138,8 @@ def render_icon(width, height, fill_scale=1.0, full_bleed_bg=False):
             fx = float(x)
             fy = float(y)
 
-            # ===== BACKGROUND =====
-            if full_bleed_bg:
-                bg_alpha = 1.0
-            else:
-                corner_radius = width * 0.22
-                half_size = width / 2
-
-                dx = abs(fx - center_x) - (half_size - corner_radius)
-                dy = abs(fy - center_y) - (half_size - corner_radius)
-
-                if dx < 0 and dy < 0:
-                    bg_sdf = -max(-dx, -dy)
-                elif dx > 0 and dy > 0:
-                    dist = math.sqrt(dx * dx + dy * dy)
-                    bg_sdf = dist - corner_radius
-                else:
-                    bg_sdf = max(dx, dy)
-
-                bg_alpha = smoothstep(1.5, -1.5, bg_sdf)
+            # ===== BACKGROUND (always full-bleed, fully opaque) =====
+            bg_alpha = 1.0
 
             # ===== TRIANGLE =====
             triangle_size = width * 0.34 * fill_scale
@@ -163,7 +155,7 @@ def render_icon(width, height, fill_scale=1.0, full_bleed_bg=False):
             tri_v3 = (t_cx - t_w / 2, t_cy + t_h)
 
             triangle_sdf = signed_distance_to_triangle(fx, fy, tri_v1[0], tri_v1[1], tri_v2[0], tri_v2[1], tri_v3[0], tri_v3[1])
-            triangle_alpha = smoothstep(1.5, -1.5, triangle_sdf)
+            triangle_alpha = 1.0 - smoothstep(-1.5, 1.5, triangle_sdf)
 
             # ===== ARC RING =====
             scaled_radius = (width * 0.36) * fill_scale
@@ -184,7 +176,7 @@ def render_icon(width, height, fill_scale=1.0, full_bleed_bg=False):
 
             if in_arc:
                 ring_sdf = abs(dist_to_center - scaled_radius) - scaled_stroke / 2
-                ring_alpha = smoothstep(1.5, -1.5, ring_sdf)
+                ring_alpha = 1.0 - smoothstep(-1.5, 1.5, ring_sdf)
             else:
                 ring_alpha = 0.0
 
@@ -230,35 +222,36 @@ def main():
     # Ensure icons directory exists
     os.makedirs('icons', exist_ok=True)
 
-    # Generate icon-192.png
+    # Standard (non-maskable) icons render the art slightly larger than the
+    # maskable variant since there's no OS-applied safe-zone crop to worry about.
+    STANDARD_SCALE = 0.8
+    MASKABLE_SCALE = 0.7
+
+    # Generate icon-192.png (full-bleed background, ring + triangle art)
     print("Generating icon-192.png...")
-    pixels_192 = render_icon(192, 192)
+    pixels_192 = render_icon(192, 192, fill_scale=STANDARD_SCALE)
     write_png('icons/icon-192.png', 192, 192, pixels_192)
     size_192 = os.path.getsize('icons/icon-192.png')
     print(f"  -> {size_192} bytes")
 
-    # Generate icon-512.png
+    # Generate icon-512.png (full-bleed background, ring + triangle art)
     print("Generating icon-512.png...")
-    pixels_512 = render_icon(512, 512)
+    pixels_512 = render_icon(512, 512, fill_scale=STANDARD_SCALE)
     write_png('icons/icon-512.png', 512, 512, pixels_512)
     size_512 = os.path.getsize('icons/icon-512.png')
     print(f"  -> {size_512} bytes")
 
     # Generate maskable-512.png (70% scale, full-bleed background)
     print("Generating maskable-512.png...")
-    pixels_maskable = render_icon(512, 512, fill_scale=0.7, full_bleed_bg=True)
+    pixels_maskable = render_icon(512, 512, fill_scale=MASKABLE_SCALE)
     write_png('icons/maskable-512.png', 512, 512, pixels_maskable)
     size_maskable = os.path.getsize('icons/maskable-512.png')
     print(f"  -> {size_maskable} bytes")
 
-    # Generate apple-touch-icon.png (180x180, opaque background)
+    # Generate apple-touch-icon.png (180x180, full-bleed background, same art)
     print("Generating apple-touch-icon.png...")
-    # Apple touch icon: fill entire square with opaque background
-    apple_pixels = []
-    for y in range(180):
-        for x in range(180):
-            apple_pixels.append((0x0b, 0x0d, 0x12, 255))
-    write_png('icons/apple-touch-icon.png', 180, 180, apple_pixels)
+    pixels_apple = render_icon(180, 180, fill_scale=STANDARD_SCALE)
+    write_png('icons/apple-touch-icon.png', 180, 180, pixels_apple)
     size_apple = os.path.getsize('icons/apple-touch-icon.png')
     print(f"  -> {size_apple} bytes")
 

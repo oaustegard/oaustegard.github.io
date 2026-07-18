@@ -538,12 +538,25 @@ function showPlayerError(message) {
   el.playerError.hidden = false;
 }
 
+// YT.Player replaces the host div with its iframe, and destroy() removes
+// that iframe without restoring the div — recreate it for replays.
+function ensureYtHost() {
+  let host = document.getElementById('yt-host');
+  if (!host) {
+    host = document.createElement('div');
+    host.id = 'yt-host';
+    el.ytWrapper.appendChild(host);
+  }
+  el.ytHost = host;
+  return host;
+}
+
 async function createYtPlayer(videoId) {
   try {
     const YT = await loadYouTubeAPI();
     if (!YT || !YT.Player) throw new Error('YT.Player unavailable');
 
-    ytPlayer = new YT.Player(el.ytHost, {
+    ytPlayer = new YT.Player(ensureYtHost(), {
       videoId,
       playerVars: {
         playsinline: 1,

@@ -73,6 +73,9 @@ self.addEventListener('fetch', (event) => {
           }
           return response;
         });
+        // When serving from cache, the revalidation runs in the background —
+        // swallow its rejection so an offline update isn't an unhandled error.
+        fetchPromise.catch(() => {});
 
         // Return cached response immediately if available, otherwise wait for network
         return cachedResponse || fetchPromise;
