@@ -26,6 +26,7 @@
   const LEVEL_BONUS = 100;   // × level number on completion
   const HOLE_PENALTY = 25;
   const BEST_KEY = 'ball-maze-best';
+  const PROGRESS_KEY = 'ball-maze-progress';
 
   // physics constants (scaled by cell size where noted)
   const STEP = 1 / 120;      // fixed physics timestep, s
@@ -56,6 +57,7 @@
   const toastEl = document.getElementById('toast');
   const startOverlay = document.getElementById('start-overlay');
   const startBtn = document.getElementById('start-btn');
+  const continueBtn = document.getElementById('continue-btn');
   const msgOverlay = document.getElementById('message-overlay');
   const msgTitle = document.getElementById('message-title');
   const msgPoints = document.getElementById('message-points');
@@ -420,6 +422,29 @@
       bestEl.textContent = game.best;
       localStorage.setItem(BEST_KEY, String(game.best));
     }
+    saveProgress();
+  }
+
+  // ---------------------------------------------------------------- progress
+  // The run (level + score) survives closing the app: saved on every score
+  // change and level transition, restored via the Continue button. A resume
+  // regenerates a fresh maze of the saved level — mazes are random anyway.
+  function saveProgress(level = game.level) {
+    try {
+      localStorage.setItem(PROGRESS_KEY,
+        JSON.stringify({ level, score: game.score }));
+    } catch { /* storage full/blocked — play on without persistence */ }
+  }
+
+  function loadProgress() {
+    try {
+      const p = JSON.parse(localStorage.getItem(PROGRESS_KEY));
+      if (p && Number.isInteger(p.level) && p.level >= 0 &&
+          Number.isInteger(p.score) && p.score >= 0) {
+        return p;
+      }
+    } catch { /* corrupt entry — treat as no progress */ }
+    return null;
   }
 
   let toastTimer = 0;
@@ -447,6 +472,7 @@
     resetBall();
     levelEl.textContent = String(levelIndex + 1);
     game.state = 'playing';
+    saveProgress();
   }
 
   function startFall(hole) {
@@ -461,6 +487,7 @@
     const level = game.level + 1;
     const bonus = LEVEL_BONUS * level;
     addScore(bonus);
+    saveProgress(game.level + 1); // quitting at the overlay resumes at next level
     if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
     game.state = 'between';
     const milestone = level % 5 === 0;
@@ -620,13 +647,26 @@
   });
 
   // ---------------------------------------------------------------- start
-  startBtn.addEventListener('click', async () => {
+  async function beginGame(level, score) {
     const tiltOk = await enableTilt();
     startOverlay.classList.add('hidden');
     keepAwake();
-    startLevel(0);
+    game.score = score;
+    scoreEl.textContent = score;
+    startLevel(level);
     if (!tiltOk) toast('No tilt sensor — use keys or drag');
-  });
+  }
+
+  const savedRun = loadProgress();
+  if (savedRun && (savedRun.level > 0 || savedRun.score > 0)) {
+    continueBtn.textContent = 'Continue · Level ' + (savedRun.level + 1);
+    continueBtn.classList.remove('hidden');
+    startBtn.textContent = 'Start over';
+    startBtn.classList.add('secondary');
+  }
+  continueBtn.addEventListener('click', () =>
+    beginGame(savedRun.level, savedRun.score));
+  startBtn.addEventListener('click', () => beginGame(0, 0));
 
   // expose internals for automated tests when loaded with ?debug
   if (new URLSearchParams(location.search).has('debug')) {

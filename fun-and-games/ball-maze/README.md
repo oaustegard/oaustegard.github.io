@@ -27,6 +27,10 @@ green goal.
   rest are decoys in dead ends. The geometry guarantees the open side is
   always passable, so every maze stays winnable.
 - **Best score** — persisted in `localStorage`.
+- **Continue where you left off** — the run (current level + score) is saved
+  to `localStorage` on every score change and level transition. Reopening
+  the app offers "Continue · Level N" alongside "Start over"; resuming
+  regenerates a fresh maze of the saved level.
 
 No tilt sensor? Arrow keys / WASD or dragging on the board work as
 fallbacks, so it's playable on desktop too.
