@@ -116,6 +116,14 @@ export function expSmooth(current, target, k) {
 const GIMBAL_ROLL_W = 0.25;   // hold last phi when hypot(up.x, up.y) < this
 const GIMBAL_YAW_VZ = 0.97;   // hold last psi when |v.z| > this
 const ORIENTATION_SETTLE_MS = 300;
+// Some Android/Chrome stacks never fire 'deviceorientation' and only ever
+// deliver 'deviceorientationabsolute'. If no regular event has arrived
+// within this window after start(), also listen for the absolute variant.
+const ABSOLUTE_FALLBACK_WATCHDOG_MS = 1500;
+// Once regular events are flowing again, ignore absolute events that land
+// within this many ms of the last regular one (avoid double-processing the
+// same physical sample from both event types).
+const ABSOLUTE_DEDUPE_WINDOW_MS = 500;
 
 export class MotionEngine {
   /**
@@ -146,9 +154,22 @@ export class MotionEngine {
     this._sRoll = 0;
 
     this._orientationTimer = null;
+    this._watchdogTimer = null;
+    this._absoluteAttached = false;
+    // Timestamp (ms) of the last genuine 'deviceorientation' event, used to
+    // dedupe against 'deviceorientationabsolute' — 0 means "none yet".
+    this._lastRegularEventAt = 0;
+
+    // Diagnosability (see SPEC.md / AGENTS bug report): the most recent raw
+    // event received (regular or absolute), and a running count of all raw
+    // events, so callers can tell "engine started but nothing ever arrived"
+    // apart from "engine working fine".
+    this.lastRawEvent = null;
+    this.eventCount = 0;
 
     // Bind handlers once so add/removeEventListener refer to the same fn.
     this._onDeviceOrientation = this._onDeviceOrientation.bind(this);
+    this._onDeviceOrientationAbsolute = this._onDeviceOrientationAbsolute.bind(this);
     this._onOrientationChange = this._onOrientationChange.bind(this);
   }
 
@@ -177,9 +198,28 @@ export class MotionEngine {
     if (this._active) return;
     this._active = true;
     this._needsBaseline = true;
+    this._lastRegularEventAt = 0;
+    this._absoluteAttached = false;
+    this.eventCount = 0;
+    this.lastRawEvent = null;
+
     if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
       window.addEventListener('deviceorientation', this._onDeviceOrientation);
       window.addEventListener('orientationchange', this._onOrientationChange);
+
+      if (typeof setTimeout === 'function') {
+        this._watchdogTimer = setTimeout(() => {
+          this._watchdogTimer = null;
+          // No regular 'deviceorientation' event arrived in time — some
+          // Android/Chrome stacks only ever deliver the "absolute" variant.
+          // Attach it too (keep both attached); the handler dedupes.
+          if (this._active && this._lastRegularEventAt === 0 &&
+              typeof window.addEventListener === 'function') {
+            window.addEventListener('deviceorientationabsolute', this._onDeviceOrientationAbsolute);
+            this._absoluteAttached = true;
+          }
+        }, ABSOLUTE_FALLBACK_WATCHDOG_MS);
+      }
     }
   }
 
@@ -190,9 +230,17 @@ export class MotionEngine {
       clearTimeout(this._orientationTimer);
       this._orientationTimer = null;
     }
+    if (this._watchdogTimer !== null) {
+      clearTimeout(this._watchdogTimer);
+      this._watchdogTimer = null;
+    }
     if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
       window.removeEventListener('deviceorientation', this._onDeviceOrientation);
       window.removeEventListener('orientationchange', this._onOrientationChange);
+      if (this._absoluteAttached) {
+        window.removeEventListener('deviceorientationabsolute', this._onDeviceOrientationAbsolute);
+        this._absoluteAttached = false;
+      }
     }
   }
 
@@ -234,8 +282,36 @@ export class MotionEngine {
     }
   }
 
+  /** Handler for the regular 'deviceorientation' event. */
   _onDeviceOrientation(event) {
+    this._lastRegularEventAt = Date.now();
+    this._processOrientationEvent(event);
+  }
+
+  /**
+   * Handler for the 'deviceorientationabsolute' fallback event (only
+   * attached after the start() watchdog sees no regular event in time).
+   * Skip processing if regular events are already flowing again — some
+   * stacks fire both, and we don't want to double-process the same sample.
+   */
+  _onDeviceOrientationAbsolute(event) {
+    const now = typeof Date !== 'undefined' ? Date.now() : 0;
+    if (now - this._lastRegularEventAt < ABSOLUTE_DEDUPE_WINDOW_MS) return;
+    this._processOrientationEvent(event);
+  }
+
+  _processOrientationEvent(event) {
     const { alpha, beta, gamma } = event;
+
+    this.eventCount++;
+    this.lastRawEvent = {
+      alpha,
+      beta,
+      gamma,
+      absolute: !!event.absolute,
+      timestamp: typeof Date !== 'undefined' ? Date.now() : 0,
+    };
+
     if (alpha == null || beta == null || gamma == null) return;
 
     const m = eulerToMatrix(alpha, beta, gamma);

@@ -11,11 +11,15 @@ const LS_RECENT = 'motion-player:recent';
 const LS_PREFS = 'motion-player:prefs';
 const ASPECT = 16 / 9;
 const LERP_K = 0.28;
-const ZOOM_MIN = 0.5;
+// ZOOM_MIN is no longer a hardcoded constant — the zoom floor is the dynamic
+// "contain" scale (computed in computeCoverSize()) so the whole video width
+// is always reachable by zooming out, in both portrait and landscape.
 const ZOOM_MAX = 5;
 const YT_LOAD_TIMEOUT_MS = 6000;
 const CHROME_AUTOHIDE_MS = 3000;
 const TOAST_MS = 1600;
+const MOTION_WATCHDOG_MS = 2500;
+const MOTION_DEBUG_INTERVAL_MS = 200;
 
 /* ===================== DOM refs ===================== */
 
@@ -58,6 +62,7 @@ const el = {
   settingVertical: document.getElementById('setting-vertical'),
   settingRoll: document.getElementById('setting-roll'),
   settingInvert: document.getElementById('setting-invert'),
+  motionDebug: document.getElementById('motion-debug'),
 
   toast: document.getElementById('toast'),
 };
@@ -65,7 +70,7 @@ const el = {
 /* ===================== Persistence ===================== */
 
 function loadPrefs() {
-  const defaults = { sensitivity: 1, verticalPan: true, rollStabilize: true, invertX: false };
+  const defaults = { sensitivity: 1, verticalPan: true, rollStabilize: true, invertX: false, soundOn: true };
   try {
     const raw = localStorage.getItem(LS_PREFS);
     if (!raw) return defaults;
@@ -83,6 +88,7 @@ function savePrefs() {
       verticalPan: state.verticalPan,
       rollStabilize: state.rollStabilize,
       invertX: state.invertX,
+      soundOn: state.soundOn,
     }));
   } catch { /* storage unavailable — ignore */ }
 }
@@ -163,6 +169,19 @@ function parseQueryVideoId() {
     const id = extractVideoId(decoded);
     if (id) return id;
   }
+  // Web Share Target (Android): YouTube shares the link in `text` (sometimes
+  // `title`), not `url`. Try each verbatim, then any URL embedded in the text.
+  for (const key of ['text', 'title']) {
+    const value = params.get(key);
+    if (!value) continue;
+    const id = extractVideoId(value);
+    if (id) return id;
+    const embedded = value.match(/https?:\/\/\S+/);
+    if (embedded) {
+      const embeddedId = extractVideoId(embedded[0]);
+      if (embeddedId) return embeddedId;
+    }
+  }
   return null;
 }
 
@@ -180,10 +199,17 @@ const state = {
   verticalPan: prefs.verticalPan,
   invertX: prefs.invertX,
   sensitivity: prefs.sensitivity,
+  soundOn: prefs.soundOn,
+  // true when zoom is at/near the "contain" (fit) scale — see updateFitMode().
+  fitMode: false,
 };
 
 const rendered = { x: 0, y: 0, roll: 0, zoom: 1 };
 let coverSize = { W: 0, H: 0 };
+// Dynamic zoom floor: min(vw/coverW, vh/coverH) — the scale at which the
+// entire video is visible ("contain"). Recomputed wherever coverSize is
+// recomputed (computeCoverSize()). Replaces the old hardcoded ZOOM_MIN.
+let containScale = 1;
 
 /* ===================== Toast ===================== */
 
@@ -211,6 +237,30 @@ function computeCoverSize() {
   coverSize = { W, H };
   el.ytWrapper.style.width = `${W}px`;
   el.ytWrapper.style.height = `${H}px`;
+  // "contain" scale: the zoom level at which the full cover-sized video fits
+  // entirely inside the viewport (letterboxed/pillarboxed as needed). This
+  // is the dynamic zoom floor — ~0.27 in portrait for a 16:9 video, ~1 in
+  // landscape.
+  containScale = Math.min(w / W, h / H);
+}
+
+/** Recompute state.fitMode from the current zoom vs. containScale. */
+function updateFitMode() {
+  state.fitMode = state.zoom <= containScale * 1.02;
+}
+
+/**
+ * After coverSize/containScale change (resize, orientation change): if the
+ * user was at "fit", stay at fit (snap to the new containScale) so rotating
+ * never shrinks the picture further; otherwise just re-clamp zoom into the
+ * new [containScale, ZOOM_MAX] range.
+ */
+function reconcileZoomToContainScale() {
+  if (state.fitMode) {
+    state.zoom = containScale;
+  } else {
+    state.zoom = Math.min(ZOOM_MAX, Math.max(containScale, state.zoom));
+  }
 }
 
 /* ===================== Pan clamp ===================== */
@@ -267,12 +317,13 @@ const gestures = new GestureController(el.gestureOverlay, {
     const v = rotatePoint(mx, my, -roll);
 
     const oldZoom = state.zoom;
-    const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, oldZoom * factor));
+    const newZoom = Math.min(ZOOM_MAX, Math.max(containScale, oldZoom * factor));
     if (newZoom !== oldZoom) {
       const invFactor = 1 / newZoom - 1 / oldZoom;
       state.panX += v.x * invFactor;
       state.panY += v.y * invFactor;
       state.zoom = newZoom;
+      updateFitMode();
     }
     showChrome();
   },
@@ -280,11 +331,15 @@ const gestures = new GestureController(el.gestureOverlay, {
     toggleChrome();
   },
   onDoubleTap() {
-    state.zoom = 1;
+    // Toggle between "Fill" (cover, zoom 1) and "Fit" (contain, zoom =
+    // containScale) — whichever the user is NOT currently at.
+    const goingToFit = !state.fitMode;
+    state.zoom = Math.min(ZOOM_MAX, Math.max(containScale, goingToFit ? containScale : 1));
     state.panX = 0;
     state.panY = 0;
+    updateFitMode();
     if (engine) engine.recenter();
-    toast('Recentered');
+    toast(goingToFit ? 'Fit' : 'Fill');
     showChrome();
   },
 });
@@ -301,7 +356,17 @@ const engine = new MotionEngine({
 });
 
 let motionPermissionState = null; // null | 'granted' | 'denied' | 'unsupported'
+let motionWatchdogTimer = null;
 
+// NOTE (iOS permission gesture requirement): DeviceOrientationEvent
+// .requestPermission() must be *called* synchronously within the click
+// handler's task, before any other `await`. enableMotion() is invoked
+// directly (not awaited) from the btnMotion click handler below, and the
+// very first thing it does — with no prior `await` — is call
+// MotionEngine.requestPermission(), which itself calls
+// DeviceOrientationEvent.requestPermission() as its first statement. Do not
+// insert any `await` (or anything that yields to the event loop) ahead of
+// that call, or iOS Safari will silently reject the permission prompt.
 async function enableMotion() {
   if (motionPermissionState === null || motionPermissionState === 'denied') {
     try {
@@ -329,9 +394,29 @@ async function enableMotion() {
   state.motionEnabled = true;
   toast('Motion on');
   updateMotionButton();
+
+  // Watchdog: if the engine hasn't received a single orientation event
+  // (regular or absolute-fallback) after a few seconds, this device/browser
+  // likely doesn't deliver motion data at all — tell the user and back out
+  // of "motion enabled" so the UI doesn't lie about the toggle state.
+  clearTimeout(motionWatchdogTimer);
+  motionWatchdogTimer = setTimeout(() => {
+    motionWatchdogTimer = null;
+    if (state.motionEnabled && engine.eventCount === 0) {
+      toast('No motion data — this browser may not support device orientation');
+      engine.stop();
+      state.motionEnabled = false;
+      state.motion.panXdeg = 0;
+      state.motion.panYdeg = 0;
+      state.motion.rollDeg = 0;
+      updateMotionButton();
+    }
+  }, MOTION_WATCHDOG_MS);
 }
 
 function disableMotion() {
+  clearTimeout(motionWatchdogTimer);
+  motionWatchdogTimer = null;
   engine.stop();
   state.motionEnabled = false;
   state.motion.panXdeg = 0;
@@ -366,6 +451,7 @@ function handleOrientationChange() {
   clearTimeout(orientationSettleTimer);
   orientationSettleTimer = setTimeout(() => {
     computeCoverSize();
+    reconcileZoomToContainScale();
     if (engine && engine.active) engine.recenter();
   }, 300);
 }
@@ -455,15 +541,47 @@ function openSettings() {
   el.settingsSheet.hidden = false;
   el.settingsScrim.hidden = false;
   showChrome();
+  startMotionDebugUpdates();
 }
 function closeSettings() {
   el.settingsSheet.hidden = true;
   el.settingsScrim.hidden = true;
   showChrome();
+  stopMotionDebugUpdates();
 }
 el.btnSettings.addEventListener('click', openSettings);
 el.settingsClose.addEventListener('click', closeSettings);
 el.settingsScrim.addEventListener('click', closeSettings);
+
+/* Live motion diagnostics — updates while the settings sheet is open so a
+ * user can report exactly what their device delivers (bug: "motion sensing
+ * reported completely dead on a real phone"). */
+let motionDebugTimer = null;
+function updateMotionDebugRow() {
+  const perm = motionPermissionState || 'not requested';
+  if (!engine.eventCount) {
+    el.motionDebug.textContent = `no motion events (permission: ${perm})`;
+    return;
+  }
+  const raw = engine.lastRawEvent;
+  const fmt = (n) => (typeof n === 'number' ? n.toFixed(1) : '—');
+  const { panXdeg, panYdeg, rollDeg } = state.motion;
+  el.motionDebug.textContent =
+    `α${fmt(raw && raw.alpha)} β${fmt(raw && raw.beta)} γ${fmt(raw && raw.gamma)}` +
+    `  pan(${fmt(panXdeg)}, ${fmt(panYdeg)}) roll ${fmt(rollDeg)}` +
+    `  perm:${perm}`;
+}
+function startMotionDebugUpdates() {
+  stopMotionDebugUpdates();
+  updateMotionDebugRow();
+  motionDebugTimer = setInterval(updateMotionDebugRow, MOTION_DEBUG_INTERVAL_MS);
+}
+function stopMotionDebugUpdates() {
+  if (motionDebugTimer !== null) {
+    clearInterval(motionDebugTimer);
+    motionDebugTimer = null;
+  }
+}
 
 el.settingSensitivity.value = String(state.sensitivity);
 el.settingSensitivityVal.textContent = state.sensitivity.toFixed(1);
@@ -629,13 +747,40 @@ function mute() {
   updateMuteIcon();
 }
 
+// Explicit user intent: pressing mute/unmute (button or chip) persists
+// soundOn so future sessions auto-unmute (or don't) without being asked.
+function userUnmute() {
+  unmute();
+  state.soundOn = true;
+  savePrefs();
+}
+function userMute() {
+  mute();
+  state.soundOn = false;
+  savePrefs();
+}
+
 el.btnMute.addEventListener('click', () => {
-  if (ytIsMuted) unmute(); else mute();
+  if (ytIsMuted) userUnmute(); else userMute();
   showChrome();
 });
 el.unmuteChip.addEventListener('click', () => {
-  unmute();
+  userUnmute();
   showChrome();
+});
+
+// Autoplay policy requires muted playback, but we remember the user's sound
+// intent (state.soundOn, persisted) and auto-unmute on their first genuine
+// gesture on the gesture overlay (a real user gesture, so it's allowed to
+// unmute) — no need to make them tap the mute button every session.
+let firstGestureUnmuteArmed = true;
+el.gestureOverlay.addEventListener('pointerdown', () => {
+  if (!firstGestureUnmuteArmed) return;
+  firstGestureUnmuteArmed = false;
+  if (state.soundOn && ytReady && ytIsMuted) {
+    unmute();
+    toast('Sound on');
+  }
 });
 
 el.btnBack10.addEventListener('click', () => {
@@ -658,6 +803,7 @@ function showLanding() {
   el.player.hidden = true;
   stopRenderLoop();
   disableMotion();
+  stopMotionDebugUpdates();
   renderRecents();
 }
 
@@ -667,8 +813,10 @@ function showPlayerScreen(videoId) {
   el.playerError.hidden = true;
   el.player.classList.remove('chrome-hidden');
   computeCoverSize();
+  reconcileZoomToContainScale();
   startRenderLoop();
   showChrome();
+  firstGestureUnmuteArmed = true;
   createYtPlayer(videoId);
 }
 
@@ -741,7 +889,22 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
 /* ===================== Resize ===================== */
 
 window.addEventListener('resize', () => {
-  if (!el.player.hidden) computeCoverSize();
+  if (!el.player.hidden) {
+    computeCoverSize();
+    reconcileZoomToContainScale();
+  }
+});
+
+/* ===================== Test/debug hook ===================== */
+
+// Read-only snapshot of internal view-state for Playwright tests (e.g. bug:
+// "cannot zoom out far enough in portrait" — asserts the dynamic contain
+// scale replaced the old hardcoded ZOOM_MIN). Not used by the app itself.
+window.__motionPlayerDebug = () => ({
+  containScale,
+  coverSize: { ...coverSize },
+  zoom: state.zoom,
+  fitMode: state.fitMode,
 });
 
 /* ===================== Boot ===================== */

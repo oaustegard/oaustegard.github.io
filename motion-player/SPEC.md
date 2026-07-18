@@ -12,8 +12,12 @@ static site, no build step, no bundler — plain ES modules).
    screen in **cover** mode: in portrait, a 16:9 landscape video is scaled so its
    *height* fills the screen — most of its width overflows horizontally.
 2. **Touch**: one-finger drag pans the picture. Two-finger pinch zooms (about the
-   pinch midpoint). Double-tap recenters pan and resets zoom. Single tap toggles
-   the control chrome.
+   pinch midpoint), clamped to `[containScale, 5]` where `containScale` is the
+   dynamic "fit" zoom — the scale at which the whole video is visible (~0.27 in
+   portrait for a 16:9 video, ~1 in landscape). Double-tap resets pan and
+   **toggles zoom between "Fill" (cover, zoom 1) and "Fit" (contain, zoom =
+   containScale)**, showing a "Fill"/"Fit" toast. Single tap toggles the
+   control chrome.
 3. **Motion** (opt-in via a button, required for iOS permission): turning the
    phone left/right (yaw) pans the picture horizontally — *window metaphor*:
    turn left → you see more of the left side of the video. Tilting up/down
@@ -134,10 +138,14 @@ export class MotionEngine {
   static async requestPermission()  // 'granted' | 'denied' | 'unsupported'
       // calls DeviceOrientationEvent.requestPermission() when it exists (iOS);
       // resolves 'granted' immediately elsewhere; never throws.
-  start()                  // addEventListener('deviceorientation', ...)
-  stop()
+  start()                  // addEventListener('deviceorientation', ...) +
+                            // absolute-fallback watchdog (see below)
+  stop()                   // removes both listeners, clears the watchdog
   recenter()               // next event re-baselines psi0/theta0/phi0
   get active(): boolean
+  lastRawEvent             // {alpha,beta,gamma,absolute,timestamp} of the
+                           // most recent raw event, or null if none yet
+  eventCount               // running count of all raw events received
 }
 ```
 
@@ -146,6 +154,21 @@ unwrapped, exponentially smoothed (`smoothed += k·(target − smoothed)` per
 event), gimbal-guarded. The engine must be constructible and its pure functions
 importable in Node (no `window` access at module top level; guard all DOM/event
 usage inside methods).
+
+### Robustness: absolute-orientation fallback (normative)
+
+Some Android/Chrome stacks never fire `deviceorientation` and only ever
+deliver `deviceorientationabsolute`. `start()` arms a watchdog: if no regular
+`deviceorientation` event has arrived within 1.5 s, it *also* attaches the
+same processing path to `deviceorientationabsolute` (both listeners stay
+attached afterward — no need to detach the regular one). To avoid
+double-processing the same physical sample when a stack fires both, an
+absolute event is ignored if a regular event arrived less than 500 ms ago
+(tracked via a `lastRegularEventAt` timestamp). `stop()` removes whichever
+listeners were attached. Every raw event, from either source, updates
+`lastRawEvent` and increments `eventCount` before any gimbal/baseline
+processing — including events with a null `alpha/beta/gamma` (they're
+otherwise ignored, but still evidence the platform is delivering *something*).
 
 ## `gestures.js` exports (exact API)
 
@@ -187,22 +210,44 @@ has `touch-action: none` so the browser never scrolls.
 - If the API fails to load (offline/blocked), show a friendly error on the
   landing screen — the shell must still render (Playwright-testable without
   YouTube network access).
+- **Sound intent** (`soundOn`, persisted, default `true`): autoplay policy
+  requires muted playback, so the player always boots muted regardless of
+  intent. Once ready and playing muted, the **first** `pointerdown` anywhere
+  on the gesture overlay is a genuine user gesture — if `soundOn` is `true`
+  and the video is still muted, auto-unmute right there (toast "Sound on").
+  Explicitly pressing the mute button sets `soundOn = false` and persists;
+  unmuting (mute button or the unmute chip) sets `soundOn = true` and
+  persists. The unmute chip still shows while muted regardless of `soundOn`.
 
 ### View state & render loop
 Single source of truth:
 
 ```js
 state = {
-  zoom: 1,            // touch zoom, clamped [0.5, 5]
+  zoom: 1,            // touch zoom, clamped [containScale, 5] (dynamic floor, see below)
   panX, panY,         // touch pan, CSS px, screen frame
   motion: { panXdeg, panYdeg, rollDeg },  // latest engine sample (0s when off)
   motionEnabled, rollStabilize, verticalPan,   // toggles (persist to localStorage)
   sensitivity,        // 0.5..3, default 1 (persist)
+  soundOn,            // default true (persist) — see "Sound intent" below
+  fitMode,            // true when zoom is at/near containScale — see below
 }
 ```
 
 - Base cover size (JS, on resize): given viewport `w×h` and aspect `A = 16/9`,
   iframe size `W = max(w, h·A)`, `H = W / A`. Center it. Zoom multiplies on top.
+- **Dynamic zoom floor** (`containScale`): recomputed alongside cover size as
+  `min(w / W, h / H)` — the zoom level at which the whole cover-sized video
+  fits inside the viewport ("contain"/"fit"). This replaces a hardcoded
+  `ZOOM_MIN = 0.5`, which was too tight to see the full video width in
+  portrait (~0.27 for 16:9). All zoom clamps (pinch, double-tap, programmatic)
+  use `[containScale, 5]`.
+- **`fitMode`**: `true` whenever `zoom <= containScale * 1.02` (i.e. the user
+  is at/near "fit"), recomputed after every pinch and every double-tap;
+  `false` once the user zooms above that. On resize/orientation-change, after
+  recomputing cover size + `containScale`: if `fitMode`, snap zoom to the
+  *new* `containScale` (so "fit" stays "fit" across rotation instead of
+  shrinking further); otherwise just re-clamp zoom into `[containScale, 5]`.
 - Degrees→px: `pxPerDeg = (1.4 · max(w, h) / 90) · 3 · sensitivity` — i.e. about
   30° of yaw sweeps a full screen-length at sensitivity 1. (Constant factored
   into one named function; tune later.)
@@ -215,7 +260,9 @@ state = {
   come further in than 25% of the viewport (soft-clamp: overshoot decays).
 - rAF loop lerps rendered values toward targets (`k = 0.28`) and writes the CSS
   custom properties on the wrapper — never touch layout properties per-frame.
-- Double-tap: reset zoom→1, pan→0, `engine.recenter()`.
+- Double-tap: reset pan→0, `engine.recenter()`, and **toggle zoom** between
+  cover (`zoom = 1`, "Fill") and contain (`zoom = containScale`, "Fit") —
+  whichever the user is not currently at — with a "Fill"/"Fit" toast.
 
 ### Chrome (controls)
 - Screen-aligned (outside the transformed wrapper), auto-hides after 3 s of no
@@ -223,9 +270,22 @@ state = {
 - Buttons: play/pause, mute, −10 s, +10 s, **Motion** toggle (runs the iOS
   permission flow on first enable; label the denied state), **Recenter**,
   settings (⚙ bottom sheet: sensitivity slider, vertical-pan toggle,
-  roll-stabilize toggle, invert-X toggle), and a home/back button (→ landing).
+  roll-stabilize toggle, invert-X toggle, live motion diagnostics row), and a
+  home/back button (→ landing).
 - Show a transient toast for state changes ("Motion on", "Permission denied —
-  use touch", "Recentered").
+  use touch", "Recentered", "Fill"/"Fit", "Sound on", "No motion data — this
+  browser may not support device orientation").
+- **Motion diagnostics** (`#motion-debug` in the settings sheet): while the
+  sheet is open, refresh ~5×/sec with either "no motion events" or the most
+  recent raw `α β γ` (1 decimal) plus the current `state.motion` pan/roll
+  outputs and the permission state — lets a user report exactly what their
+  phone delivers when motion sensing appears dead. Sourced from
+  `MotionEngine#lastRawEvent` / `#eventCount` (see `motion.js` below).
+- **Motion watchdog**: after `engine.start()`, if `engine.eventCount` is still
+  `0` after 2.5 s, toast "No motion data — this browser may not support
+  device orientation", flip the Motion toggle back off, and `engine.stop()` —
+  the device/browser isn't delivering orientation events at all, so leaving
+  the toggle "on" would be a lie.
 - Register `sw.js` on load (scope `./`; skip silently on failure or
   `location.protocol === 'file:'`).
 
@@ -240,6 +300,11 @@ YouTube to be reachable:
   `pageerror`s (the YT script tag may fail to load — app must catch that).
 - Unit-ish check in-page: `import('./motion.js')` and assert the twirl test
   vector (spec §test-vectors #4) from the browser context.
+- Dynamic zoom floor: with the viewport forced to a portrait size, assert
+  `window.__motionPlayerDebug().containScale` (a test-only read-only snapshot
+  hook — not used by the app itself) is well below the old hardcoded
+  `ZOOM_MIN = 0.5`, confirming the fix from a desktop browser without needing
+  to simulate a real pinch gesture.
 
 ## Visual design
 
