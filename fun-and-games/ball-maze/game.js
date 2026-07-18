@@ -24,8 +24,17 @@
     return { cols, rows, holes, pathHoles };
   }
   const LEVEL_BONUS = 100;   // × level number on completion
-  const GAME_VERSION = 'v11'; // keep in sync with sw.js CACHE_NAME
+  const GAME_VERSION = 'v12'; // keep in sync with sw.js CACHE_NAME
   const HOLE_PENALTY = 25;
+
+  // time scoring: each level gets a "par" time based on its solution length.
+  // Finishing under par pays a big bonus (per second saved); finishing over
+  // par costs a small per-second penalty. Par is generous enough that a
+  // clean run beats it, so the bonus is the common case.
+  const PAR_SEC_PER_CELL = 0.85;  // par time = solution-path cells × this
+  const PAR_MIN_SEC = 8;          // floor so tiny early mazes aren't trivial
+  const TIME_BONUS_PER_SEC = 15;  // points per second finished under par
+  const TIME_PENALTY_PER_SEC = 4; // points per second finished over par
   const BEST_KEY = 'ball-maze-best';
   const PROGRESS_KEY = 'ball-maze-progress';
 
@@ -54,6 +63,7 @@
   const boardWrap = document.getElementById('board-wrap');
   const levelEl = document.getElementById('level-value');
   const scoreEl = document.getElementById('score-value');
+  const timeEl = document.getElementById('time-value');
   const bestEl = document.getElementById('best-value');
   const toastEl = document.getElementById('toast');
   const startOverlay = document.getElementById('start-overlay');
@@ -72,6 +82,8 @@
     score: 0,
     best: Number(localStorage.getItem(BEST_KEY)) || 0,
     visited: new Set(),      // cells credited with a distance point this level
+    elapsed: 0,              // seconds spent playing the current level
+    par: 0,                  // par time for the current level, seconds
     maze: null,
     ball: { x: 0, y: 0, vx: 0, vy: 0, r: 0 },
     fall: null,              // { hole, t } during fall animation
@@ -454,6 +466,18 @@
     saveProgress();
   }
 
+  // ---------------------------------------------------------------- timer
+  function formatTime(sec) {
+    const s = Math.max(0, Math.floor(sec));
+    return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0');
+  }
+
+  function renderTime() {
+    timeEl.textContent = formatTime(game.elapsed);
+    // amber once the ball is behind par, green while ahead of pace
+    timeEl.classList.toggle('over', game.par > 0 && game.elapsed > game.par);
+  }
+
   // ---------------------------------------------------------------- progress
   // The run (level + score) survives closing the app: saved on every score
   // change and level transition, restored via the Continue button. A resume
@@ -498,6 +522,10 @@
     game.maze = buildLevel(levelIndex);
     game.visited = new Set(['0,0']); // start cell is free, not scored
     game.fall = null;
+    // par scales with the solution length, so bigger mazes get more time
+    game.par = Math.max(PAR_MIN_SEC, game.maze.path.length * PAR_SEC_PER_CELL);
+    game.elapsed = 0;
+    renderTime();
     resetBall();
     levelEl.textContent = String(levelIndex + 1);
     game.state = 'playing';
@@ -514,18 +542,35 @@
 
   function completeLevel() {
     const level = game.level + 1;
-    const bonus = LEVEL_BONUS * level;
-    addScore(bonus);
+    const base = LEVEL_BONUS * level;
+
+    // time result: bonus for beating par, penalty for missing it. The
+    // penalty can't sink the base bonus below zero, so a level never costs
+    // points overall — slow just means less reward.
+    const delta = game.par - game.elapsed;      // + = under par
+    let timePoints;
+    if (delta >= 0) {
+      timePoints = Math.round(delta * TIME_BONUS_PER_SEC);
+    } else {
+      timePoints = -Math.min(base, Math.round(-delta * TIME_PENALTY_PER_SEC));
+    }
+    const gained = base + timePoints;
+    addScore(gained);
     saveProgress(game.level + 1); // quitting at the overlay resumes at next level
     if (navigator.vibrate) navigator.vibrate([30, 40, 30]);
     game.state = 'between';
+
+    const beat = delta >= 0;
+    const timeLine = beat
+      ? 'Beat par by ' + formatTime(delta) + ' — time bonus +' + timePoints + '.'
+      : 'Over par by ' + formatTime(-delta) + ' — time penalty ' + timePoints + '.';
     const milestone = level % 5 === 0;
     showMessage(
       (milestone ? '🏆 ' : '') + 'Level ' + level + ' complete!',
-      '+' + bonus,
-      milestone
-        ? level + ' levels down, ' + game.score + ' points. The mazes keep coming — how far can you get?'
-        : 'Next: a fresh maze, a little meaner.',
+      '+' + gained,
+      timeLine + (milestone
+        ? ' ' + level + ' levels down — how far can you get?'
+        : ''),
       'Level ' + (level + 1),
       () => startLevel(game.level + 1));
   }
@@ -553,6 +598,8 @@
     lastTime = now;
 
     if (game.state === 'playing') {
+      game.elapsed += dt;      // wall-clock while playing (pauses on overlays)
+      renderTime();
       acc += dt;
       while (acc >= STEP) {
         acc -= STEP;
