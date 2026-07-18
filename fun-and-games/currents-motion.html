@@ -393,19 +393,33 @@
      gesture task -- no await before it -- or Safari silently denies.
      Orientation and motion are requested independently: a rejection of
      one must not cost us the other (Promise.all would). */
+  var permInFlight = false;
   function requestSensorPermission() {
+    if (permInFlight) return;
+    permInFlight = true;
+    var t0 = performance.now();
+    function deniedMsg() {
+      /* an instant settle means iOS never showed the prompt: it is replaying
+         a remembered "don't allow" for this site. Only a fresh tab clears
+         that -- there is no motion entry under aA -> website settings. */
+      var ms = Math.round(performance.now() - t0);
+      console.warn("[motion] orientation permission denied after", ms, "ms",
+                   ms < 400 ? "(instant -- remembered denial, no prompt shown)" : "(user declined)");
+      say(ms < 400
+        ? "ios is replaying an earlier &ldquo;don&rsquo;t allow&rdquo; &middot; close this tab, reopen the page, and allow motion"
+        : "motion access declined &middot; tap to be asked again");
+    }
     DeviceOrientationEvent.requestPermission().then(function (state) {
+      permInFlight = false;
       console.log("[motion] orientation permission:", state);
       permState = state;
-      if (state === "granted") {
-        startSensors();
-      } else {
-        say("motion access denied &middot; tap to retry &middot; if no prompt appears, reset it under aA &rarr; website settings");
-      }
+      if (state === "granted") startSensors();
+      else deniedMsg();
     }).catch(function (err) {
+      permInFlight = false;
       console.warn("[motion] orientation permission threw:", err);
       permState = "denied";
-      say("motion access denied &middot; tap to retry &middot; if no prompt appears, reset it under aA &rarr; website settings");
+      deniedMsg();
     });
     if (typeof DeviceMotionEvent !== "undefined" &&
         typeof DeviceMotionEvent.requestPermission === "function") {
@@ -422,10 +436,16 @@
   }
 
   /* one window-level handler: the first tap opens the gate and (on iOS)
-     requests the sensors; any later tap retries while they are still off. */
+     requests the sensors; any later tap retries while they are still off.
+     The request also arms on click (fires at tap-end) as belt-and-suspenders
+     for engines picky about which gesture event carries user activation --
+     permInFlight keeps one tap to one prompt. */
   window.addEventListener("pointerdown", function () {
     if (needsGesture && !sensorsOn) requestSensorPermission();
     if (!gate.classList.contains("gone")) openGate();
+  });
+  window.addEventListener("click", function () {
+    if (needsGesture && !sensorsOn) requestSensorPermission();
   });
 
   /* Android / desktop need no gesture for sensors -- attach immediately so
