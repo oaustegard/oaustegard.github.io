@@ -58,9 +58,12 @@ uses stale-while-revalidate, so the game is installable and playable offline.
   with a CSS transform — visually the game never leaves portrait, even with
   the iOS orientation lock off. Tilt input uses raw device beta/gamma
   (identity mapping), which stays correct because the UI is always in
-  device coordinates; pointer-drag deltas are un-rotated to match. Native
-  `screen.orientation.lock('portrait')` is still attempted at game start
-  for platforms that support it (installed Android PWAs).
+  device coordinates; pointer-drag deltas are un-rotated to match. The
+  counter-rotation is applied synchronously on the orientation-change
+  events (no debounce) so it lands inside the OS's own rotation animation
+  and reads as one motion, with a ~180 ms opacity dip masking the layout
+  swap. Native `screen.orientation.lock('portrait')` is still attempted at
+  game start for platforms that support it (installed Android PWAs).
 - A resize or orientation flip re-lays-out the **same** maze at the new
   size and carries the ball across proportionally — mid-level progress
   survives rotation.
