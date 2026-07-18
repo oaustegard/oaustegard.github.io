@@ -648,11 +648,28 @@
     return ((a % 360) + 360) % 360;
   }
 
+  // Counter-rotation only makes sense on portrait-natural devices (phones).
+  // On landscape-natural screens (desktops, some tablets) angle 90/270
+  // means the device was turned to PORTRAIT — forcing our portrait layout
+  // sideways there would be exactly wrong. type and angle come from the
+  // same update, so this stays consistent even mid-rotation.
+  function naturalPortrait() {
+    const o = screen.orientation;
+    if (!o || !o.type) return window.innerHeight >= window.innerWidth;
+    const landscapeType = o.type.indexOf('landscape') === 0;
+    const quarterTurn = o.angle === 90 || o.angle === 270;
+    return landscapeType === quarterTurn;
+  }
+
   function applyOrientationFix(forceAngle) {
     uiAngle = forceAngle != null ? forceAngle : orientationAngle();
+    if (forceAngle == null && !naturalPortrait()) uiAngle = 0;
     const s = appEl.style;
     if (uiAngle === 90 || uiAngle === 270) {
-      const w = window.innerHeight, h = window.innerWidth; // device-portrait box
+      // innerWidth/innerHeight can be stale mid-rotation on iOS; min/max
+      // yields the right portrait-shaped box either way
+      const w = Math.min(window.innerWidth, window.innerHeight);
+      const h = Math.max(window.innerWidth, window.innerHeight);
       s.width = w + 'px';
       s.height = h + 'px';
       s.transformOrigin = 'top left';
@@ -711,10 +728,26 @@
   // an opacity mask just added a visible black flash after it. Plain
   // same-orientation resizes (desktop drags, toolbar show/hide) keep the
   // debounce.
+  let agreeRetries = 0;
   function handleViewportChange(orientationEvent) {
-    const flipped = orientationAngle() !== uiAngle;
     clearTimeout(resizeCanvas._t);
-    if (flipped || orientationEvent) {
+    const angle = orientationAngle();
+    const angleLandscape = angle === 90 || angle === 270;
+    const viewportLandscape = window.innerWidth > window.innerHeight;
+    // On iOS the resize and the orientation-angle update arrive at
+    // different moments during a rotation. Painting while they disagree
+    // briefly shows an UN-countered landscape layout (seen on-device as a
+    // sideways board for ~100ms). Hold off until the signals agree, then
+    // apply layout + transform in one shot. Only portrait-natural devices
+    // rotate like this; desktops skip straight through.
+    if (naturalPortrait() && angleLandscape !== viewportLandscape &&
+        agreeRetries < 30) {
+      agreeRetries++;
+      resizeCanvas._t = setTimeout(() => handleViewportChange(true), 50);
+      return;
+    }
+    agreeRetries = 0;
+    if (angle !== uiAngle || orientationEvent) {
       resizeCanvas();
     } else {
       resizeCanvas._t = setTimeout(resizeCanvas, 150);
