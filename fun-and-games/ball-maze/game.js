@@ -10,12 +10,14 @@
   'use strict';
 
   // ---------------------------------------------------------------- levels
+  // pathHoles sit ON the solution path, offset to one side of the corridor
+  // so a narrow safe edge remains; the rest go in dead ends as decoys.
   const LEVELS = [
-    { cols: 6,  rows: 9,  holes: 0 },
-    { cols: 8,  rows: 12, holes: 2 },
-    { cols: 10, rows: 15, holes: 5 },
-    { cols: 12, rows: 18, holes: 8 },
-    { cols: 14, rows: 21, holes: 12 },
+    { cols: 6,  rows: 9,  holes: 0,  pathHoles: 0 },
+    { cols: 8,  rows: 12, holes: 2,  pathHoles: 1 },
+    { cols: 10, rows: 15, holes: 5,  pathHoles: 2 },
+    { cols: 12, rows: 18, holes: 8,  pathHoles: 3 },
+    { cols: 14, rows: 21, holes: 12, pathHoles: 5 },
   ];
   const LEVEL_BONUS = 100;   // × level number on completion
   const HOLE_PENALTY = 25;
@@ -28,6 +30,17 @@
   const DAMP = 1.1;          // per-second velocity damping
   const REST = 0.32;         // wall bounce restitution
   const MAXV = 26;           // × cellSize px/s speed cap
+
+  // hole geometry (× cellSize). An on-path hole is offset HOLE_OFFSET from
+  // the corridor centerline; the ball falls in within HOLE_FALL × holeR of
+  // its center. With wall thickness 0.12 and ball radius 0.27 the ball's
+  // center can ride up to 0.17 from the centerline, so the open side leaves
+  // a ~0.11-cell band of safe ball-center positions: passable, but tight.
+  const BALL_R = 0.27;
+  const WALL_T = 0.12;
+  const HOLE_R = 0.27;
+  const HOLE_OFFSET = 0.14;
+  const HOLE_FALL = 0.72;
 
   // ---------------------------------------------------------------- dom
   const canvas = document.getElementById('board');
@@ -91,7 +104,8 @@
   }
 
   function solvePath(cells, cols, rows) {
-    // BFS from (0,0) to (cols-1, rows-1); returns Set of "c,r" on the path
+    // BFS from (0,0) to (cols-1, rows-1); returns the ordered path
+    // start → goal as an array of [c, r]
     const prev = new Map();
     const queue = [[0, 0]];
     const visited = new Set(['0,0']);
@@ -111,10 +125,13 @@
         queue.push([nc, nr]);
       }
     }
-    const path = new Set();
+    const path = [];
     let key = (cols - 1) + ',' + (rows - 1);
-    while (key) { path.add(key); key = prev.get(key); }
-    return path;
+    while (key) {
+      path.push(key.split(',').map(Number));
+      key = prev.get(key);
+    }
+    return path.reverse();
   }
 
   function buildLevel(levelIndex) {
@@ -128,7 +145,7 @@
     const cs = Math.floor(Math.min(availW / cols, availH / rows));
     const ox = Math.floor((boardWrap.clientWidth - cols * cs) / 2);
     const oy = Math.floor((boardWrap.clientHeight - rows * cs) / 2);
-    const t = Math.max(3, Math.round(cs * 0.14)); // wall thickness
+    const t = Math.max(3, Math.round(cs * WALL_T)); // wall thickness
 
     // merge wall segments into rects (runs along each grid line)
     const walls = [];
@@ -159,30 +176,64 @@
       }
     }
 
-    // place holes on cells off the solution path, away from start/goal
     const path = solvePath(cells, cols, rows);
+    const pathSet = new Set(path.map(([c, r]) => c + ',' + r));
+    const shuffle = (arr) => {
+      for (let i = arr.length - 1; i > 0; i--) {
+        const j = (Math.random() * (i + 1)) | 0;
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    };
+    const holes = [];
+
+    // on-path holes: straight corridor cells along the solution path, hole
+    // offset perpendicular so the ball can squeeze past on the open side
+    const straight = [];
+    for (let i = 2; i < path.length - 2; i++) {
+      const [pc, pr] = path[i - 1], [c, r] = path[i], [nc, nr] = path[i + 1];
+      if (pc === c && nc === c) straight.push({ i, c, r, horizontal: false });
+      else if (pr === r && nr === r) straight.push({ i, c, r, horizontal: true });
+    }
+    shuffle(straight);
+    const picked = [];
+    for (const s of straight) {
+      if (picked.length >= spec.pathHoles) break;
+      if (picked.some(p => Math.abs(p.i - s.i) < 3)) continue; // spread out
+      picked.push(s);
+    }
+    for (const { c, r, horizontal } of picked) {
+      const off = HOLE_OFFSET * cs * (Math.random() < 0.5 ? -1 : 1);
+      holes.push({
+        x: ox + (c + 0.5) * cs + (horizontal ? 0 : off),
+        y: oy + (r + 0.5) * cs + (horizontal ? off : 0),
+        r: cs * HOLE_R,
+        onPath: true,
+      });
+    }
+
+    // decoy holes in cells off the path, away from start/goal
     const candidates = [];
     for (let r = 0; r < rows; r++) {
       for (let c = 0; c < cols; c++) {
-        const key = c + ',' + r;
-        if (path.has(key)) continue;
+        if (pathSet.has(c + ',' + r)) continue;
         if (c + r < 3) continue;                          // clear of start
         if ((cols - 1 - c) + (rows - 1 - r) < 2) continue; // clear of goal
         candidates.push([c, r]);
       }
     }
-    for (let i = candidates.length - 1; i > 0; i--) {
-      const j = (Math.random() * (i + 1)) | 0;
-      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    shuffle(candidates);
+    for (const [c, r] of candidates.slice(0, spec.holes - holes.length)) {
+      holes.push({
+        x: ox + (c + 0.5) * cs,
+        y: oy + (r + 0.5) * cs,
+        r: cs * HOLE_R,
+        onPath: false,
+      });
     }
-    const holes = candidates.slice(0, spec.holes).map(([c, r]) => ({
-      x: ox + (c + 0.5) * cs,
-      y: oy + (r + 0.5) * cs,
-      r: cs * 0.34,
-    }));
 
     const maze = {
-      cols, rows, cs, ox, oy, wallT: t, walls, holes,
+      cols, rows, cs, ox, oy, wallT: t, walls, holes, path,
       start: { x: ox + 0.5 * cs, y: oy + 0.5 * cs },
       goal: { x: ox + (cols - 0.5) * cs, y: oy + (rows - 0.5) * cs },
     };
@@ -344,7 +395,7 @@
 
     // holes
     for (const hole of m.holes) {
-      if (Math.hypot(b.x - hole.x, b.y - hole.y) < hole.r * 0.8) {
+      if (Math.hypot(b.x - hole.x, b.y - hole.y) < hole.r * HOLE_FALL) {
         startFall(hole);
         return;
       }
@@ -381,7 +432,7 @@
     b.x = m.start.x;
     b.y = m.start.y;
     b.vx = b.vy = 0;
-    b.r = m.cs * 0.3;
+    b.r = m.cs * BALL_R;
   }
 
   function startLevel(levelIndex) {

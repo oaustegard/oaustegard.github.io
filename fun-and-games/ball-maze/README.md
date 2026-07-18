@@ -17,8 +17,11 @@ green goal.
   (recursive backtracker), growing from 6×9 up to 14×21 cells.
 - **Level bonus** — completing level *N* awards 100 × *N* points.
 - **Holes** — from level 2 on, holes appear in the board. Roll over one and
-  the ball drops in: −25 points and back to the start. Holes are placed off
-  the solution path, so every maze stays winnable.
+  the ball drops in: −25 points and back to the start. Like the physical
+  toy, most holes sit **on** the solution path, offset to one side of the
+  corridor so a narrow safe edge remains — hug the wall to get past. The
+  rest are decoys in dead ends. The geometry guarantees the open side is
+  always passable, so every maze stays winnable.
 - **Best score** — persisted in `localStorage`.
 
 No tilt sensor? Arrow keys / WASD or dragging on the board work as
