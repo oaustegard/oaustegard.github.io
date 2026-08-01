@@ -22,6 +22,22 @@ async function setRow(page, index, { mode, field, value }) {
 }
 
 test.describe('Bluesky advanced search builder', () => {
+  /*
+   * The page is entirely local, but the shared stylesheet @imports Google
+   * Fonts — a render-blocking third-party request that lands in the load
+   * event. Sandboxed CI has no egress to it and stalls ~12s per navigation.
+   * Cutting off every non-local request keeps these tests hermetic and fast;
+   * nothing under test depends on the network.
+   */
+  test.beforeEach(async ({ page }) => {
+    await page.route('**/*', route => {
+      const host = new URL(route.request().url()).hostname;
+      return (host === 'localhost' || host === '127.0.0.1')
+        ? route.continue()
+        : route.abort();
+    });
+  });
+
   test('starts empty and offers no URL', async ({ page }) => {
     await page.goto(PAGE);
     await expect(page.locator('#url-out')).toHaveClass(/empty/);
