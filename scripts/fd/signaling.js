@@ -40,15 +40,22 @@ function defaultPageUrl() {
   return location.origin + location.pathname.replace(/\.html$/, '') + '?b=' + Date.now().toString(36);
 }
 
-/* ---------- non-trickle ICE: resolve when gathering completes ---------- */
-function gatherComplete(pc, timeoutMs) {
-  if (pc.iceGatheringState === 'complete') return Promise.resolve();
+/* ---------- non-trickle ICE: resolve when gathering completes ----------
+   Resolves TRUE when gathering genuinely reached 'complete', FALSE when the
+   timeout fired first. The two used to be indistinguishable, which meant an
+   SDP could be shipped carrying no usable candidates and the only symptom
+   was a connection that never came up — surfacing much later, and looking
+   like the peer went away rather than like gathering never produced
+   anything. Callers log the difference; none of them abort on it, since
+   proceeding with a partial candidate set is still the right move. */
+export function gatherComplete(pc, timeoutMs) {
+  if (pc.iceGatheringState === 'complete') return Promise.resolve(true);
   return new Promise((resolve) => {
     const timer = setTimeout(() => {
-      cleanup(); resolve();
+      cleanup(); resolve(false);
     }, timeoutMs);
     function onChange() {
-      if (pc.iceGatheringState === 'complete') { cleanup(); resolve(); }
+      if (pc.iceGatheringState === 'complete') { cleanup(); resolve(true); }
     }
     function cleanup() {
       clearTimeout(timer);
@@ -56,6 +63,26 @@ function gatherComplete(pc, timeoutMs) {
     }
     pc.addEventListener('icegatheringstatechange', onChange);
   });
+}
+
+/** How many candidates a local description ended up carrying. */
+export function countCandidates(sdp) {
+  return (String(sdp || '').match(/^a=candidate:/gm) || []).length;
+}
+
+/**
+ * Gather, then say plainly what came of it. `label` names the exchange in
+ * the log so a truncated gather is attributable to the offer, the reply, or
+ * a restart. Zero candidates after a timeout is the case worth seeing: the
+ * code that follows cannot connect.
+ */
+async function gatherAndReport(pc, timeoutMs, label) {
+  const complete = await gatherComplete(pc, timeoutMs);
+  const n = countCandidates(pc.localDescription && pc.localDescription.sdp);
+  if (complete) console.log('[ice] ' + label + ': gathering complete,', n, 'candidates');
+  else if (n === 0) console.warn('[ice] ' + label + ': gathering timed out with NO candidates - this code cannot connect');
+  else console.log('[ice] ' + label + ': gathering timed out after', timeoutMs + 'ms, proceeding with', n, 'candidates');
+  return complete;
 }
 
 /**
@@ -185,7 +212,7 @@ export class Signaling {
     this.pc = this._newPC();
     this._bindChannel(this.pc.createDataChannel(this.channelLabel, { ordered: true }));
     await this.pc.setLocalDescription(await this.pc.createOffer());
-    await gatherComplete(this.pc, this.gatherTimeout);
+    await gatherAndReport(this.pc, this.gatherTimeout, 'invite');
     const code = await encodeBlob({ t: 'o', sdp: this.pc.localDescription.sdp });
     const link = this.pageUrl() + '#o=' + code;
     console.log('[invite] link length:', link.length, 'chars');
@@ -226,7 +253,7 @@ export class Signaling {
     this.pc.ondatachannel = (ev) => this._bindChannel(ev.channel);
     await this.pc.setRemoteDescription({ type: 'offer', sdp: msg.sdp });
     await this.pc.setLocalDescription(await this.pc.createAnswer());
-    await gatherComplete(this.pc, this.gatherTimeout);
+    await gatherAndReport(this.pc, this.gatherTimeout, 'reply');
     const reply = await encodeBlob({ t: 'a', sdp: this.pc.localDescription.sdp });
     const replyLink = this.pageUrl() + '#a=' + reply;
     console.log('[reply] link length:', replyLink.length, 'chars');
@@ -264,6 +291,21 @@ export class Signaling {
     this.dc = null; this.pc = null; this.wasConnected = false;
   }
 
+  /**
+   * Has the peer connection been replaced since `pc` was captured?
+   *
+   * The restart paths below await SDP work and ICE gathering — seconds, on a
+   * flapping network — and `resetPeer()` can land in the middle of that,
+   * because declaring the connection dead is exactly what prompts the app to
+   * re-pair. Without this check the code after the await runs against a
+   * connection that is closed or already superseded: `this.dc.send()` on a
+   * null channel throws, the catch reports it as another death, and a
+   * deliberate re-pair looks like a second failure.
+   */
+  _stale(pc) {
+    return this.pc !== pc;
+  }
+
   /** Reconnect by showing a fresh invite (reuses createInvite). Returns {code, link}. */
   async reconnectAsInviter() {
     this.reconnPending = false;
@@ -283,6 +325,7 @@ export class Signaling {
      first it nudges the inviter instead. */
   async tryIceRestart() {
     if (!this.dc || this.dc.readyState !== 'open') { this._connectionDead(); return; }
+    const pc = this.pc;
     this._cancelDeadTimer();
     this.deadTimer = setTimeout(() => this._connectionDead(), RESTART_DEADLINE);
     try {
@@ -293,33 +336,40 @@ export class Signaling {
       }
       console.log('[reconn] attempting ICE restart over the data channel');
       this._emit('statechange', { kind: 'reconnecting' });
-      this.pc.restartIce();
-      await this.pc.setLocalDescription(await this.pc.createOffer({ iceRestart: true }));
-      await gatherComplete(this.pc, this.gatherTimeout);
-      this.dc.send(JSON.stringify({ type: 'ICE_RESTART_OFFER', sdp: this.pc.localDescription.sdp }));
+      pc.restartIce();
+      await pc.setLocalDescription(await pc.createOffer({ iceRestart: true }));
+      if (this._stale(pc)) { console.log('[reconn] restart abandoned: peer was reset'); return; }
+      await gatherAndReport(pc, this.gatherTimeout, 'restart offer');
+      if (this._stale(pc)) { console.log('[reconn] restart abandoned: peer was reset'); return; }
+      this.dc.send(JSON.stringify({ type: 'ICE_RESTART_OFFER', sdp: pc.localDescription.sdp }));
     } catch (e) {
+      if (this._stale(pc)) { console.log('[reconn] restart abandoned: peer was reset'); return; }
       console.log('[reconn] ICE restart failed:', e.message);
       this._connectionDead();
     }
   }
 
   async _handleIceRestartMsg(msg) {
+    const pc = this.pc;
     try {
       if (msg.type === 'ICE_NUDGE' && this.isInviter) { this.tryIceRestart(); return; }
       if (msg.type === 'ICE_RESTART_OFFER' && !this.isInviter) {
         this._cancelDeadTimer();
         this.deadTimer = setTimeout(() => this._connectionDead(), RESTART_DEADLINE);
-        await this.pc.setRemoteDescription({ type: 'offer', sdp: String(msg.sdp || '') });
-        await this.pc.setLocalDescription(await this.pc.createAnswer());
-        await gatherComplete(this.pc, this.gatherTimeout);
-        this.dc.send(JSON.stringify({ type: 'ICE_RESTART_ANSWER', sdp: this.pc.localDescription.sdp }));
+        await pc.setRemoteDescription({ type: 'offer', sdp: String(msg.sdp || '') });
+        await pc.setLocalDescription(await pc.createAnswer());
+        if (this._stale(pc)) { console.log('[reconn] restart answer abandoned: peer was reset'); return; }
+        await gatherAndReport(pc, this.gatherTimeout, 'restart answer');
+        if (this._stale(pc)) { console.log('[reconn] restart answer abandoned: peer was reset'); return; }
+        this.dc.send(JSON.stringify({ type: 'ICE_RESTART_ANSWER', sdp: pc.localDescription.sdp }));
         return;
       }
       if (msg.type === 'ICE_RESTART_ANSWER' && this.isInviter) {
-        await this.pc.setRemoteDescription({ type: 'answer', sdp: String(msg.sdp || '') });
+        await pc.setRemoteDescription({ type: 'answer', sdp: String(msg.sdp || '') });
         return;
       }
     } catch (e) {
+      if (this._stale(pc)) { console.log('[reconn] restart negotiation abandoned: peer was reset'); return; }
       console.log('[reconn] restart negotiation failed:', e.message);
       this._connectionDead();
     }
