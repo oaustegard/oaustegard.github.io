@@ -1,0 +1,1345 @@
+<!DOCTYPE html>
+<!--
+    PDF to Webpage - read a PDF on your phone
+
+    Converts a PDF (uploaded file or URL) into a mobile-readable webpage:
+    - Text and formatting become real HTML: selectable, reflowing, dark-mode aware.
+      Font-size tiers turn into headings; font names drive bold/italic/mono;
+      baseline offsets become sub/superscripts; soft hyphenation is repaired;
+      two-column layouts are linearized; running headers/footers stripped.
+    - Embedded raster images are extracted (operator-list walk with CTM
+      tracking) and inlined as PNGs at their reading-order position.
+    - Formulas and figures that don't survive linearization to text (math-font
+      glyphs, private-use codepoints, 2D sub/superscript layouts, captioned
+      vector diagrams) are rasterized from a page render and inlined as images
+      with the extracted text as alt.
+    - "Download as standalone HTML" saves the result as one self-contained file.
+
+    URL API: ?url=https://arxiv.org/pdf/1706.03762 converts on load.
+    All processing happens in-browser via pdf.js. No data is sent to servers.
+
+    Multi-file source (with Cloudflare Worker CORS proxy and test suite):
+    https://github.com/oaustegard/claude-workspace/tree/main/pdf2page
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ai-disclosure" content="ai-generated">
+<title>PDF to Webpage — read a PDF on your phone</title>
+<meta name="description" content="Convert a PDF into a mobile-readable webpage, entirely in your browser. Text stays text; figures and formulas become images.">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<style id="reader-css">
+/* pdf2page — mobile-first reading typography */
+
+:root {
+  --bg: #ffffff;
+  --fg: #1a1c1e;
+  --muted: #5c6570;
+  --accent: #2456b3;
+  --accent-fg: #ffffff;
+  --border: #d8dde3;
+  --surface: #f4f6f8;
+  --error-bg: #fdecec;
+  --error-fg: #96271f;
+  --formula-bg: #fafbfc;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181b;
+    --fg: #e6e4e0;
+    --muted: #9aa3ad;
+    --accent: #7aa2e8;
+    --accent-fg: #10131a;
+    --border: #33383f;
+    --surface: #1e2126;
+    --error-bg: #3a1f1d;
+    --error-fg: #f0a9a2;
+    --formula-bg: #f4f4f2; /* formula crops are rasterized on white */
+  }
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans",
+               Helvetica, Arial, sans-serif;
+  font-size: 17px;
+  line-height: 1.65;
+}
+
+header#chrome, main, footer {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 0 1.1rem;
+}
+
+header#chrome { padding-top: 2rem; }
+
+.app-title {
+  font-size: 1.5rem;
+  margin: 0 0 0.25rem;
+  letter-spacing: -0.01em;
+}
+
+.tagline {
+  color: var(--muted);
+  font-size: 0.95rem;
+  margin: 0 0 1.25rem;
+}
+
+#url-form {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 0.9rem;
+}
+
+#url-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.65rem 0.8rem;
+  font-size: 1rem;
+  border: 1px solid var(--border);
+  border-radius: 0.5rem;
+  background: var(--bg);
+  color: var(--fg);
+}
+
+#url-input:focus-visible,
+#dropzone:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button {
+  padding: 0.65rem 1rem;
+  font-size: 1rem;
+  border: none;
+  border-radius: 0.5rem;
+  background: var(--accent);
+  color: var(--accent-fg);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+button:active { transform: translateY(1px); }
+
+#dropzone {
+  border: 1.5px dashed var(--border);
+  border-radius: 0.75rem;
+  background: var(--surface);
+  padding: 1.4rem 1rem;
+  text-align: center;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 120ms ease, background 120ms ease;
+}
+
+#dropzone.drag {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface));
+}
+
+#dropzone strong { color: var(--fg); }
+
+#status {
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin: 0.9rem 0 0.3rem;
+}
+
+progress { width: 100%; accent-color: var(--accent); }
+
+.error {
+  background: var(--error-bg);
+  color: var(--error-fg);
+  border-radius: 0.5rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.92rem;
+}
+
+#download-btn { margin: 0.6rem 0 0; font-size: 0.9rem; padding: 0.5rem 0.9rem; }
+
+/* collapse the input chrome once a document is rendered */
+body.has-output header#chrome { padding-top: 1rem; }
+body.has-output .tagline, body.has-output #dropzone { display: none; }
+body.has-output #url-form { margin-bottom: 0.4rem; }
+body.standalone header#chrome, body.standalone footer { display: none; }
+
+/* -------------------------------------------------- converted document */
+
+main { padding-bottom: 4rem; }
+
+#output { margin-top: 1.5rem; }
+
+.doc-meta {
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-transform: none;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0.75rem;
+}
+
+#output h1 { font-size: 1.65rem; line-height: 1.25; margin: 1.2em 0 0.5em; letter-spacing: -0.015em; }
+#output h2 { font-size: 1.35rem; line-height: 1.3; margin: 1.4em 0 0.45em; }
+#output h3 { font-size: 1.15rem; margin: 1.3em 0 0.4em; }
+#output h4, #output h5, #output h6 { font-size: 1.02rem; margin: 1.2em 0 0.35em; }
+
+#output p { margin: 0 0 0.9em; overflow-wrap: break-word; }
+
+#output ul { padding-left: 1.4rem; margin: 0 0 0.9em; }
+#output li { margin-bottom: 0.35em; }
+
+#output sup, #output sub { font-size: 0.72em; line-height: 0; }
+
+#output code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.88em;
+  background: var(--surface);
+  padding: 0.08em 0.3em;
+  border-radius: 0.25em;
+}
+
+#output figure {
+  margin: 1.4em 0;
+  text-align: center;
+}
+
+#output img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.25rem;
+}
+
+#output figure.page-image img {
+  border: 1px solid var(--border);
+  border-radius: 0.4rem;
+}
+
+.formula {
+  margin: 1em 0;
+  text-align: center;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  background: var(--formula-bg);
+  border-radius: 0.4rem;
+  padding: 0.5rem 0.6rem;
+}
+
+.formula img { max-width: none; }
+@media (max-width: 480px) {
+  .formula img { max-width: 100%; }
+}
+
+footer {
+  color: var(--muted);
+  font-size: 0.82rem;
+  padding-bottom: 2rem;
+}
+
+footer a { color: var(--accent); }
+</style>
+</head>
+<body>
+<header id="chrome">
+  <h1 class="app-title">pdf2page</h1>
+  <p class="tagline">Turn a PDF into a webpage you can actually read on a phone.
+     Text stays selectable text; figures and formulas become inline images.
+     Conversion runs entirely in your browser — the file never leaves your device.</p>
+
+  <form id="url-form">
+    <input id="url-input" type="url" placeholder="https://example.com/paper.pdf"
+           inputmode="url" autocomplete="off" spellcheck="false">
+    <button type="submit">Convert URL</button>
+  </form>
+
+  <div id="dropzone" role="button" tabindex="0" aria-label="Upload a PDF">
+    <strong>Drop a PDF here</strong> or tap to choose a file
+    <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
+  </div>
+
+  <p id="status" role="status"></p>
+  <progress id="progress" hidden></progress>
+  <p id="error" class="error" hidden></p>
+  <button id="download-btn" type="button" hidden>Download as standalone HTML</button>
+</header>
+
+<main>
+  <article id="output"></article>
+</main>
+
+<footer>
+  <p>Open source · powered by <a href="https://mozilla.github.io/pdf.js/">pdf.js</a> ·
+     tip: link directly with <code>?url=&lt;pdf-url&gt;</code> (URL fetching needs a CORS-friendly host; uploads always work)</p>
+</footer>
+
+<script type="module">
+/* pdf2page — client-side PDF → mobile-readable HTML converter.
+ *
+ * Pipeline per page:
+ *   1. getOperatorList()  — resolves fonts, finds image paint ops (with CTM tracking)
+ *   2. getTextContent()   — text items → lines → paragraphs/headings/lists
+ *   3. math/unmappable regions → rasterized crops from a cached page render
+ *   4. blocks assembled in reading order (2-column layouts detected and linearized)
+ *
+ * Everything runs in the browser; no server round-trips except fetching the PDF.
+ */
+
+import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.min.mjs';
+
+// Cross-origin workerSrc would silently fall back to pdf.js's main-thread
+// "fake worker"; a same-origin blob worker keeps parsing off the UI thread.
+try {
+  const workerBlob = await fetch('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.worker.min.mjs').then((r) => r.blob());
+  pdfjsLib.GlobalWorkerOptions.workerPort =
+    new Worker(URL.createObjectURL(workerBlob), { type: 'module' });
+} catch {
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.worker.min.mjs';
+}
+
+const $ = (sel) => document.querySelector(sel);
+
+/* ---------------------------------------------------------------- matrices */
+
+// PDF `cm` concatenation: result = a ∘ b (b applied first).
+function matMul(a, b) {
+  return [
+    a[0] * b[0] + a[2] * b[1],
+    a[1] * b[0] + a[3] * b[1],
+    a[0] * b[2] + a[2] * b[3],
+    a[1] * b[2] + a[3] * b[3],
+    a[0] * b[4] + a[2] * b[5] + a[4],
+    a[1] * b[4] + a[3] * b[5] + a[5],
+  ];
+}
+
+function applyPoint(m, x, y) {
+  return [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
+}
+
+// Bounding box (PDF user space) of the unit square under matrix m.
+function unitSquareBBox(m) {
+  const pts = [applyPoint(m, 0, 0), applyPoint(m, 1, 0), applyPoint(m, 0, 1), applyPoint(m, 1, 1)];
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const y0 = Math.min(...ys), y1 = Math.max(...ys);
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+}
+
+/* ------------------------------------------------------------- font names */
+
+// item.fontName is an internal id (g_d0_f1); the loaded font object in
+// commonObjs carries the real PostScript name (e.g. "BCDEEE+CMMI10").
+async function buildFontMap(page, textContent) {
+  const map = new Map();
+  const ids = new Set();
+  for (const item of textContent.items) if (item.fontName) ids.add(item.fontName);
+  for (const id of ids) {
+    try {
+      const font = await new Promise((resolve) => page.commonObjs.get(id, resolve));
+      map.set(id, font && font.name ? font.name : '');
+    } catch {
+      map.set(id, '');
+    }
+  }
+  return map;
+}
+
+const MATH_FONT_RE = /(CMMI|CMSY|CMEX|CMBSY|MSAM|MSBM|EUFM|EUSM|EUEX|RSFS|LASY|STMARY|WASY|MTMI|MTSY|MTEX|Math|Symbol|AdvP4)/i;
+const BOLD_RE = /(bold|black|heavy|semib|demib)/i;
+const ITALIC_RE = /(italic|oblique)/i;
+const MONO_RE = /(mono|courier|consol|typewriter|CMTT)/i;
+
+function isMathChar(code) {
+  return (
+    (code >= 0x2190 && code <= 0x22ff) || // arrows + math operators
+    (code >= 0x2a00 && code <= 0x2aff) ||
+    (code >= 0x27c0 && code <= 0x27ef) ||
+    (code >= 0x2980 && code <= 0x29ff) ||
+    (code >= 0x2070 && code <= 0x209f) || // super/subscript digits
+    (code >= 0x0370 && code <= 0x03ff) || // greek
+    (code >= 0x1d400 && code <= 0x1d7ff) // mathematical alphanumerics
+  );
+}
+
+function isUnmappableChar(code) {
+  return (code >= 0xe000 && code <= 0xf8ff) || code === 0xfffd;
+}
+
+function charStats(str) {
+  let math = 0, unmappable = 0, total = 0;
+  for (const ch of str) {
+    const code = ch.codePointAt(0);
+    if (ch.trim() === '') continue;
+    total++;
+    if (isMathChar(code)) math++;
+    if (isUnmappableChar(code)) unmappable++;
+  }
+  return { math, unmappable, total };
+}
+
+/* -------------------------------------------------------------- text lines */
+
+// Cluster text items into visual lines by baseline proximity.
+function buildLines(textContent, fontMap) {
+  const items = [];
+  for (const it of textContent.items) {
+    if (!it.str || !it.str.trim()) continue;
+    const t = it.transform;
+    const size = Math.hypot(t[2], t[3]) || Math.abs(t[3]) || 1;
+    const angle = Math.atan2(t[1], t[0]) * (180 / Math.PI);
+    if (Math.abs(angle) > 20 && Math.abs(Math.abs(angle) - 180) > 20) continue; // rotated decorations/watermarks
+    const fontName = fontMap.get(it.fontName) || '';
+    const stats = charStats(it.str);
+    items.push({
+      str: it.str.normalize('NFKC'),
+      x: t[4],
+      y: t[5],
+      w: it.width,
+      size,
+      fontName,
+      mathFont: MATH_FONT_RE.test(fontName),
+      bold: BOLD_RE.test(fontName),
+      italic: ITALIC_RE.test(fontName),
+      mono: MONO_RE.test(fontName),
+      stats,
+    });
+  }
+
+  items.sort((a, b) => b.y - a.y || a.x - b.x);
+
+  const lines = [];
+  for (const item of items) {
+    let target = null;
+    for (let i = lines.length - 1; i >= 0 && i >= lines.length - 6; i--) {
+      const line = lines[i];
+      const tol = Math.max(2.5, 0.45 * Math.max(item.size, line.mainSize));
+      if (Math.abs(item.y - line.y) <= tol) { target = line; break; }
+    }
+    if (!target) {
+      target = { items: [], y: item.y, mainSize: item.size };
+      lines.push(target);
+    }
+    target.items.push(item);
+    // dominant baseline: keep the baseline of the largest run
+    if (item.size > target.mainSize) { target.mainSize = item.size; target.y = item.y; }
+  }
+
+  for (const line of lines) {
+    line.items.sort((a, b) => a.x - b.x);
+    line.x0 = Math.min(...line.items.map((i) => i.x));
+    line.x1 = Math.max(...line.items.map((i) => i.x + i.w));
+    line.yTop = Math.max(...line.items.map((i) => i.y + i.size));
+    line.yBottom = Math.min(...line.items.map((i) => i.y - 0.3 * i.size));
+    line.text = joinItems(line.items, line.mainSize);
+    const agg = { math: 0, unmappable: 0, total: 0 };
+    let mathFontChars = 0;
+    for (const it of line.items) {
+      agg.math += it.stats.math;
+      agg.unmappable += it.stats.unmappable;
+      agg.total += it.stats.total;
+      if (it.mathFont) mathFontChars += it.stats.total;
+    }
+    line.mathFrac = agg.total ? (agg.math + agg.unmappable) / agg.total : 0;
+    line.mathFontFrac = agg.total ? mathFontChars / agg.total : 0;
+    line.unmappable = agg.unmappable > 0;
+    // multiple baselines inside one clustered line = 2D layout (sub/superscripts)
+    const baselines = new Set(line.items.map((i) => Math.round(i.y * 2)));
+    line.multiBaseline = baselines.size > 1;
+  }
+  lines.sort((a, b) => b.y - a.y || a.x0 - b.x0);
+  return lines;
+}
+
+function joinItems(items, mainSize) {
+  let out = '';
+  let prev = null;
+  for (const it of items) {
+    if (prev) {
+      const gap = it.x - (prev.x + prev.w);
+      if (gap > 0.12 * Math.min(it.size, prev.size) && !out.endsWith(' ') && !it.str.startsWith(' ')) {
+        out += ' ';
+      }
+    }
+    out += it.str;
+    prev = it;
+  }
+  return out.replace(/\s+/g, ' ').trim();
+}
+
+// A line is a formula when its glyphs are substantially math-font/unmappable,
+// or when math fonts combine with a 2D baseline layout (sub/superscripts in
+// equations don't survive linearization to a text string).
+function isFormulaLine(line) {
+  if (line.unmappable) return true;
+  if (line.mathFrac >= 0.4 && line.text.length < 200) return true;
+  if (line.mathFontFrac >= 0.25 && line.multiBaseline) return true;
+  if (line.mathFontFrac >= 0.6) return true;
+  // Display equations mix upright words (softmax, Concat) with math-font
+  // runs, diluting mathFontFrac — but 2D layout plus any real math-font
+  // presence on a shortish line is still an equation, not prose.
+  if (line.mathFontFrac >= 0.12 && line.multiBaseline && line.text.length < 100) return true;
+  return false;
+}
+
+/* ------------------------------------------------------------------ images */
+
+const IDENTITY = [1, 0, 0, 1, 0, 0];
+
+function collectImagePlacements(opList) {
+  const OPS = pdfjsLib.OPS;
+  const placements = [];
+  let ctm = IDENTITY.slice();
+  const stack = [];
+  for (let i = 0; i < opList.fnArray.length; i++) {
+    const fn = opList.fnArray[i];
+    const args = opList.argsArray[i];
+    switch (fn) {
+      case OPS.save:
+        stack.push(ctm.slice());
+        break;
+      case OPS.restore:
+        ctm = stack.pop() || IDENTITY.slice();
+        break;
+      case OPS.transform:
+        ctm = matMul(ctm, args);
+        break;
+      case OPS.paintImageXObject:
+        placements.push({ objId: args[0], rect: unitSquareBBox(ctm) });
+        break;
+      case OPS.paintInlineImageXObject:
+        placements.push({ imgData: args[0], rect: unitSquareBBox(ctm) });
+        break;
+      default:
+        break;
+    }
+  }
+  return placements;
+}
+
+function resolvePageObject(page, objId) {
+  return new Promise((resolve) => {
+    try {
+      page.objs.get(objId, resolve);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function rawImageToCanvas(img) {
+  const canvas = document.createElement('canvas');
+  canvas.width = img.width;
+  canvas.height = img.height;
+  const ctx = canvas.getContext('2d');
+  if (img.bitmap) {
+    ctx.drawImage(img.bitmap, 0, 0);
+    return canvas;
+  }
+  if (!img.data) return null;
+  const out = ctx.createImageData(img.width, img.height);
+  const dst = out.data;
+  const src = img.data;
+  const n = img.width * img.height;
+  if (img.kind === 3) { // RGBA_32BPP
+    dst.set(src.subarray(0, n * 4));
+  } else if (img.kind === 2) { // RGB_24BPP
+    for (let i = 0, j = 0; i < n; i++, j += 3) {
+      dst[i * 4] = src[j];
+      dst[i * 4 + 1] = src[j + 1];
+      dst[i * 4 + 2] = src[j + 2];
+      dst[i * 4 + 3] = 255;
+    }
+  } else if (img.kind === 1) { // GRAYSCALE_1BPP, packed bits
+    const rowBytes = (img.width + 7) >> 3;
+    for (let yy = 0; yy < img.height; yy++) {
+      for (let xx = 0; xx < img.width; xx++) {
+        const bit = (src[yy * rowBytes + (xx >> 3)] >> (7 - (xx & 7))) & 1;
+        const v = bit ? 255 : 0;
+        const o = (yy * img.width + xx) * 4;
+        dst[o] = dst[o + 1] = dst[o + 2] = v;
+        dst[o + 3] = 255;
+      }
+    }
+  } else {
+    return null;
+  }
+  ctx.putImageData(out, 0, 0);
+  return canvas;
+}
+
+/* ----------------------------------------------------- page raster + crops */
+
+// Lazily render the full page once; crops (formulas, unmappable regions) are
+// cut from this cached canvas.
+function makePageRaster(page) {
+  let cached = null;
+  return async function raster() {
+    if (cached) return cached;
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(3, Math.max(2, 1600 / base.width));
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    cached = { canvas, viewport, scale };
+    return cached;
+  };
+}
+
+async function cropRegion(rasterFn, x0, y0, x1, y1, pad = 3) {
+  const { canvas, viewport } = await rasterFn();
+  const [cx0, cy0] = viewport.convertToViewportPoint(x0 - pad, y1 + pad);
+  const [cx1, cy1] = viewport.convertToViewportPoint(x1 + pad, y0 - pad);
+  const sx = Math.max(0, Math.floor(Math.min(cx0, cx1)));
+  const sy = Math.max(0, Math.floor(Math.min(cy0, cy1)));
+  const sw = Math.min(canvas.width - sx, Math.ceil(Math.abs(cx1 - cx0)));
+  const sh = Math.min(canvas.height - sy, Math.ceil(Math.abs(cy1 - cy0)));
+  if (sw < 2 || sh < 2) return null;
+  const out = document.createElement('canvas');
+  out.width = sw;
+  out.height = sh;
+  out.getContext('2d').drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+  return { dataUrl: out.toDataURL('image/png'), w: sw, h: sh };
+}
+
+/* ------------------------------------------------------------ column layout */
+
+// Detect a two-column layout; returns a sort-key assigner that linearizes
+// reading order (full-width bands split the page into segments; within a
+// segment, left column reads before right).
+function makeReadingOrder(lines, pageWidth) {
+  const contentX0 = Math.min(...lines.map((l) => l.x0), pageWidth * 0.1);
+  const contentX1 = Math.max(...lines.map((l) => l.x1), pageWidth * 0.9);
+  const contentW = contentX1 - contentX0;
+
+  let bestGutter = null;
+  if (lines.length >= 12) {
+    let best = Infinity;
+    for (let t = 0.4; t <= 0.6; t += 0.02) {
+      const gx = contentX0 + contentW * t;
+      const crossing = lines.filter((l) => l.x0 < gx - 4 && l.x1 > gx + 4).length;
+      if (crossing < best) { best = crossing; bestGutter = gx; }
+    }
+    const leftCount = lines.filter((l) => l.x1 <= bestGutter).length;
+    const rightCount = lines.filter((l) => l.x0 >= bestGutter).length;
+    const ok = best <= Math.max(2, lines.length * 0.1) &&
+      leftCount >= lines.length * 0.25 && rightCount >= lines.length * 0.25;
+    if (!ok) bestGutter = null;
+  }
+
+  if (bestGutter === null) {
+    return (rect) => [0, 0, -rect.yTop, rect.x0];
+  }
+
+  const gutter = bestGutter;
+  const isFull = (rect) => rect.x0 < gutter - 4 && rect.x1 > gutter + 4;
+  // segment boundaries: y-tops of full-width rects
+  const boundaries = lines.filter(isFull).map((l) => l.yTop + 1).sort((a, b) => b - a);
+  const segmentOf = (yTop) => {
+    let seg = 0;
+    for (const b of boundaries) { if (yTop < b) seg++; }
+    return seg;
+  };
+  return (rect) => {
+    if (isFull(rect)) return [segmentOf(rect.yTop), 0.5, -rect.yTop, rect.x0];
+    const col = rect.x0 >= gutter ? 2 : 1;
+    return [segmentOf(rect.yTop), col, -rect.yTop, rect.x0];
+  };
+}
+
+function keyCompare(a, b) {
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] !== b[i]) return a[i] - b[i];
+  }
+  return 0;
+}
+
+/* ----------------------------------------------------------- line → inline HTML */
+
+function escapeHtml(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+// Render a line's items to inline HTML with bold/italic/mono and sub/superscripts.
+function lineToHtml(line) {
+  let html = '';
+  let prev = null;
+  for (const it of line.items) {
+    let text = escapeHtml(it.str.replace(/[-�]/g, ''));
+    if (!text) continue;
+    if (prev) {
+      const gap = it.x - (prev.x + prev.w);
+      if (gap > 0.12 * Math.min(it.size, prev.size) && !html.endsWith(' ')) html += ' ';
+    }
+    const dy = it.y - line.y;
+    let open = '', close = '';
+    if (dy > 0.25 * line.mainSize && it.size < 0.9 * line.mainSize) { open += '<sup>'; close = '</sup>' + close; }
+    else if (dy < -0.15 * line.mainSize && it.size < 0.9 * line.mainSize) { open += '<sub>'; close = '</sub>' + close; }
+    if (it.bold) { open += '<strong>'; close = '</strong>' + close; }
+    if (it.italic) { open += '<em>'; close = '</em>' + close; }
+    if (it.mono) { open += '<code>'; close = '</code>' + close; }
+    html += open + text + close;
+    prev = it;
+  }
+  return html.replace(/\s+/g, ' ').trim();
+}
+
+/* ------------------------------------------------------------- page convert */
+
+async function convertPage(page, pageIndex, onStatus) {
+  const opList = await page.getOperatorList();
+  const textContent = await page.getTextContent();
+  const fontMap = await buildFontMap(page, textContent);
+  const viewport = page.getViewport({ scale: 1 });
+  const raster = makePageRaster(page);
+
+  const lines = buildLines(textContent, fontMap);
+  const placements = collectImagePlacements(opList);
+  const blocks = [];
+
+  // ---- images
+  const pageArea = viewport.width * viewport.height;
+  let fullPageImage = null;
+  for (const p of placements) {
+    const { rect } = p;
+    if (rect.w < 18 || rect.h < 18) continue; // decorations, bullets
+    const area = rect.w * rect.h;
+    const img = p.imgData || (p.objId ? await resolvePageObject(page, p.objId) : null);
+    if (!img) continue;
+    const canvas = rawImageToCanvas(img);
+    if (!canvas) continue;
+    const block = {
+      type: 'image',
+      dataUrl: canvas.toDataURL('image/png'),
+      cssWidth: Math.round(rect.w),
+      rect: { x0: rect.x, x1: rect.x + rect.w, yTop: rect.y + rect.h, yBottom: rect.y },
+      page: pageIndex,
+    };
+    if (area > pageArea * 0.85) { fullPageImage = block; continue; }
+    blocks.push(block);
+  }
+
+  // ---- scanned/graphic page fallback: no usable text
+  const totalChars = lines.reduce((s, l) => s + l.text.length, 0);
+  if (totalChars < 12) {
+    if (fullPageImage) return [fullPageImage];
+    if (placements.length || opList.fnArray.length > 30) {
+      const crop = await cropRegion(raster, 0, 0, viewport.width, viewport.height, 0);
+      if (crop) {
+        return [{ type: 'pageimage', dataUrl: crop.dataUrl, page: pageIndex, alt: `Page ${pageIndex + 1}` }];
+      }
+    }
+    return [];
+  }
+  if (fullPageImage) blocks.push(fullPageImage); // text over a big image: keep both
+
+  // ---- formula regions: merge vertically-adjacent formula lines
+  const textLines = [];
+  const formulaRegions = [];
+  let current = null;
+  for (const line of lines) {
+    if (isFormulaLine(line)) {
+      if (current && current.yBottom - line.yTop < 1.4 * line.mainSize &&
+          !(line.x0 > current.x1 || line.x1 < current.x0)) {
+        current.x0 = Math.min(current.x0, line.x0);
+        current.x1 = Math.max(current.x1, line.x1);
+        current.yBottom = Math.min(current.yBottom, line.yBottom);
+        current.texts.push(line.text);
+      } else {
+        current = { x0: line.x0, x1: line.x1, yTop: line.yTop, yBottom: line.yBottom, texts: [line.text] };
+        formulaRegions.push(current);
+      }
+    } else {
+      current = null;
+      textLines.push(line);
+    }
+  }
+
+  onStatus?.(`page ${pageIndex + 1}: ${textLines.length} lines, ${formulaRegions.length} formula region(s)`);
+
+  // ---- vector figures: caption-anchored regions with dead space above.
+  // Vector-drawn diagrams paint no image XObjects; the tell is a Figure/Fig
+  // caption whose column has a large empty band (plus isolated label lines)
+  // above it. Rasterize that band, and drop text/formula fragments inside it.
+  const pageBody = bodyFontSize(textLines.map((l) => ({ line: l })));
+  const gaps = [];
+  const sortedByY = [...textLines].sort((a, b) => b.y - a.y);
+  for (let i = 1; i < sortedByY.length; i++) {
+    const g = sortedByY[i - 1].yBottom - sortedByY[i].yTop + sortedByY[i].mainSize;
+    if (g > 0 && g < pageBody * 3) gaps.push(g);
+  }
+  const leading = median(gaps) || pageBody * 1.35;
+  const figureRegions = [];
+  const swallowed = new Set();
+  const CAPTION_RE = /^(Figure|Fig\.?|Chart|Scheme)\s*\d+/i;
+  for (const cap of textLines) {
+    if (swallowed.has(cap) || !CAPTION_RE.test(cap.text)) continue;
+    let topY = cap.yTop + 2;
+    let x0 = cap.x0, x1 = cap.x1;
+    const localSwallow = [];
+    let extended = false;
+    for (let guard = 0; guard < 30; guard++) {
+      const above = textLines
+        .filter((l) => l !== cap && !swallowed.has(l) && !localSwallow.includes(l) &&
+          l.yBottom > topY - 1 && !(l.x1 < x0 - 25 || l.x0 > x1 + 25))
+        .sort((a, b) => a.yBottom - b.yBottom)[0];
+      if (!above) {
+        const pageTop = viewport.height * 0.92;
+        if (pageTop - topY > 3 * leading) { topY = pageTop; extended = true; }
+        break;
+      }
+      const gap = above.yBottom - topY;
+      if (gap > 3 * leading) { topY = above.yBottom - 4; extended = true; break; }
+      // absorb isolated short label lines (sub-captions inside the figure);
+      // never absorb headings or paragraph members
+      const above2 = textLines
+        .filter((l) => l !== above && l !== cap && !swallowed.has(l) && !localSwallow.includes(l) &&
+          l.yBottom > above.yTop && !(l.x1 < x0 - 25 || l.x0 > x1 + 25))
+        .sort((a, b) => a.yBottom - b.yBottom)[0];
+      const gapAbove = above2 ? above2.yBottom - above.yTop : Infinity;
+      const labelish = above.text.length < 60 && !/[.;:,]$/.test(above.text.trim()) &&
+        above.mainSize <= pageBody * 1.15;
+      if (labelish && gapAbove > 2 * leading) {
+        localSwallow.push(above);
+        topY = above.yTop + 2;
+        x0 = Math.min(x0, above.x0);
+        x1 = Math.max(x1, above.x1);
+        continue;
+      }
+      break;
+    }
+    const height = topY - cap.yTop;
+    if (height < 45 || (!extended && !localSwallow.length)) continue;
+    const region = { x0: x0 - 6, x1: x1 + 6, yTop: topY, yBottom: cap.yTop + 2 };
+    // a raster image already covering most of this band means the figure was
+    // extracted normally — don't double it
+    const regionArea = (region.x1 - region.x0) * (region.yTop - region.yBottom);
+    let coveredArea = 0;
+    for (const b of blocks) {
+      if (b.type !== 'image') continue;
+      const ox = Math.max(0, Math.min(region.x1, b.rect.x1) - Math.max(region.x0, b.rect.x0));
+      const oy = Math.max(0, Math.min(region.yTop, b.rect.yTop) - Math.max(region.yBottom, b.rect.yBottom));
+      coveredArea += ox * oy;
+    }
+    if (coveredArea > 0.35 * regionArea) continue;
+    localSwallow.forEach((l) => swallowed.add(l));
+    // any other line sitting mostly inside the band is figure innards
+    for (const l of textLines) {
+      if (l === cap || swallowed.has(l)) continue;
+      const midY = (l.yTop + l.yBottom) / 2;
+      const midX = (l.x0 + l.x1) / 2;
+      if (midY < region.yTop && midY > region.yBottom && midX > region.x0 && midX < region.x1) {
+        swallowed.add(l);
+        region.x0 = Math.min(region.x0, l.x0 - 4);
+        region.x1 = Math.max(region.x1, l.x1 + 4);
+      }
+    }
+    figureRegions.push(region);
+  }
+  for (const region of figureRegions) {
+    const crop = await cropRegion(raster, region.x0, region.yBottom, region.x1, region.yTop);
+    if (!crop) continue;
+    blocks.push({
+      type: 'image',
+      dataUrl: crop.dataUrl,
+      cssWidth: Math.round(region.x1 - region.x0),
+      alt: 'Figure',
+      rect: region,
+      page: pageIndex,
+    });
+  }
+  // drop swallowed text lines and any formula fragments inside figure bands
+  const insideFigure = (r) => figureRegions.some((f) =>
+    (r.yTop + r.yBottom) / 2 < f.yTop && (r.yTop + r.yBottom) / 2 > f.yBottom &&
+    (r.x0 + r.x1) / 2 > f.x0 && (r.x0 + r.x1) / 2 < f.x1);
+  for (let i = textLines.length - 1; i >= 0; i--) {
+    if (swallowed.has(textLines[i])) textLines.splice(i, 1);
+  }
+  for (let i = formulaRegions.length - 1; i >= 0; i--) {
+    const r = formulaRegions[i];
+    if (insideFigure({ x0: r.x0, x1: r.x1, yTop: r.yTop, yBottom: r.yBottom })) formulaRegions.splice(i, 1);
+  }
+
+  for (const region of formulaRegions) {
+    // orphan single-glyph crops (a stray subscript that failed to join its
+    // line) are noise, not formulas
+    if (region.x1 - region.x0 < 12 && region.texts.join('').trim().length <= 3) continue;
+    const crop = await cropRegion(raster, region.x0, region.yBottom, region.x1, region.yTop);
+    if (!crop) continue;
+    blocks.push({
+      type: 'formula',
+      dataUrl: crop.dataUrl,
+      cssWidth: Math.round(region.x1 - region.x0 + 6),
+      alt: region.texts.join(' ').slice(0, 500),
+      rect: { x0: region.x0, x1: region.x1, yTop: region.yTop, yBottom: region.yBottom },
+      page: pageIndex,
+    });
+  }
+
+  // ---- text lines → line blocks (paragraph assembly happens after ordering)
+  for (const line of textLines) {
+    blocks.push({
+      type: 'line',
+      line,
+      rect: { x0: line.x0, x1: line.x1, yTop: line.yTop, yBottom: line.yBottom },
+      page: pageIndex,
+    });
+  }
+
+  // ---- reading order
+  const order = makeReadingOrder(lines, viewport.width);
+  for (const b of blocks) {
+    b.sortKey = order(b.rect ?? { x0: 0, x1: viewport.width, yTop: viewport.height, yBottom: 0 });
+  }
+  blocks.sort((a, b) => keyCompare(a.sortKey, b.sortKey));
+  return blocks;
+}
+
+/* ----------------------------------------------- document-level assembly */
+
+const BULLET_RE = /^\s*([•◦▪·‣–—-]|\d{1,3}[.)]|[a-z][.)]|[ivx]{1,4}[.)])\s+/i;
+
+function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  return s[Math.floor(s.length / 2)];
+}
+
+// Weighted mode of font sizes = body text size.
+function bodyFontSize(lineBlocks) {
+  const tally = new Map();
+  for (const b of lineBlocks) {
+    const size = Math.round(b.line.mainSize * 2) / 2;
+    tally.set(size, (tally.get(size) || 0) + b.line.text.length);
+  }
+  let best = 0, bestSize = 12;
+  for (const [size, count] of tally) {
+    if (count > best) { best = count; bestSize = size; }
+  }
+  return bestSize;
+}
+
+// Strip running headers/footers and bare page numbers.
+function stripFurniture(pages, pageHeights) {
+  const numPages = pages.length;
+  if (numPages < 3) return;
+  const seen = new Map(); // normalized text+band → count
+  const keyOf = (b, pageIdx) => {
+    const h = pageHeights[pageIdx];
+    const frac = b.rect.yTop / h;
+    if (frac > 0.93) return 'top:' + b.line.text.replace(/\d+/g, '#');
+    if (frac < 0.07) return 'bottom:' + b.line.text.replace(/\d+/g, '#');
+    return null;
+  };
+  pages.forEach((blocks, pi) => {
+    for (const b of blocks) {
+      if (b.type !== 'line') continue;
+      const k = keyOf(b, pi);
+      if (k) seen.set(k, (seen.get(k) || 0) + 1);
+    }
+  });
+  pages.forEach((blocks, pi) => {
+    for (let i = blocks.length - 1; i >= 0; i--) {
+      const b = blocks[i];
+      if (b.type !== 'line') continue;
+      const k = keyOf(b, pi);
+      if (!k) continue;
+      const isRepeated = seen.get(k) >= Math.max(2, numPages * 0.5);
+      const isPageNo = /^(page\s+)?[\divxlc]{1,6}(\s+of\s+\d+)?$/i.test(b.line.text.trim());
+      if (isRepeated || isPageNo) blocks.splice(i, 1);
+    }
+  });
+}
+
+// Turn ordered line blocks into paragraphs / headings / list items.
+function assembleBlocks(pages) {
+  const all = pages.flat();
+  const lineBlocks = all.filter((b) => b.type === 'line');
+  const body = bodyFontSize(lineBlocks);
+  const leadings = [];
+  for (let i = 1; i < lineBlocks.length; i++) {
+    const prev = lineBlocks[i - 1], cur = lineBlocks[i];
+    if (prev.page === cur.page && prev.sortKey[0] === cur.sortKey[0] && prev.sortKey[1] === cur.sortKey[1]) {
+      const gap = prev.rect.yBottom - cur.rect.yTop + cur.line.mainSize;
+      if (gap > 0 && gap < body * 3) leadings.push(gap);
+    }
+  }
+  const leading = median(leadings) || body * 1.3;
+
+  // distinct heading size tiers above body
+  const headingSizes = [...new Set(
+    lineBlocks
+      .filter((b) => b.line.mainSize > body * 1.15 && b.line.text.length < 120)
+      .map((b) => Math.round(b.line.mainSize * 2) / 2)
+  )].sort((a, b) => b - a);
+  const tierOf = (size) => {
+    const r = Math.round(size * 2) / 2;
+    const idx = headingSizes.indexOf(r);
+    if (idx === -1) return 0;
+    return Math.min(idx + 1, 4); // 1 → h1 … capped
+  };
+
+  const out = [];
+  let para = null;
+  const flush = () => { if (para && para.html) out.push(para); para = null; };
+
+  let prevLine = null;
+  for (const b of all) {
+    if (b.type !== 'line') {
+      flush();
+      prevLine = null;
+      out.push(b);
+      continue;
+    }
+    const line = b.line;
+    const html = lineToHtml(line);
+    if (!html) continue;
+    const tier = tierOf(line.mainSize);
+    const allBold = line.items.every((i) => i.bold);
+    // Font-size tier wins over the bullet pattern: "1. Introduction" in a
+    // heading-sized font is a numbered section, not a list item.
+    const notSentence = !/[.,;:]$/.test(line.text.trim());
+    const isHeading = notSentence &&
+      (tier > 0 || (allBold && line.text.length < 90 && !BULLET_RE.test(line.text)));
+
+    if (isHeading) {
+      flush();
+      out.push({
+        type: 'heading',
+        level: tier > 0 ? tier : 4,
+        html,
+        page: b.page,
+        size: line.mainSize,
+      });
+      prevLine = null;
+      continue;
+    }
+
+    const isBullet = BULLET_RE.test(line.text);
+    let newPara = !para;
+    if (para && prevLine) {
+      const sameColumn = prevLine.page === b.page &&
+        prevLine.sortKey[0] === b.sortKey[0] && prevLine.sortKey[1] === b.sortKey[1];
+      if (sameColumn) {
+        const gap = prevLine.rect.yBottom - b.rect.yTop + line.mainSize;
+        const indent = b.rect.x0 - prevLine.rect.x0;
+        if (gap > leading * 1.55 || indent > line.mainSize * 1.2) newPara = true;
+      } else {
+        // column/page break: continue the paragraph only if it looks unfinished
+        const prevText = para.text || '';
+        const continues = !/[.!?:;"”)\]]$/.test(prevText.trim()) && /^[a-z(]/.test(line.text);
+        if (!continues) newPara = true;
+      }
+      if (isBullet || para.kind === 'li') newPara = true;
+    }
+
+    if (newPara) {
+      flush();
+      para = { type: 'para', kind: isBullet ? 'li' : 'p', html: '', text: '', page: b.page };
+    }
+    // De-hyphenate soft line breaks ("han-" + "dled" → "handled") but keep
+    // real compound hyphens: if the continuation's first word has its own
+    // hyphen or an internal capital ("to-German"), the hyphen is lexical.
+    const firstWord = line.text.split(/\s/, 1)[0] || '';
+    const softBreak = /^[a-zà-ÿ]+[.,;:!?)]*$/.test(firstWord);
+    if (para.html && para.html.endsWith('-') && softBreak) {
+      para.html = para.html.slice(0, -1);
+      para.text = para.text.slice(0, -1);
+    } else if (para.html) {
+      para.html += ' ';
+      para.text += ' ';
+    }
+    para.html += isBullet ? html.replace(BULLET_RE, '') : html;
+    para.text += line.text;
+    prevLine = b;
+  }
+  flush();
+
+  // The document title is the largest-font heading near the start (papers
+  // put license stamps and header notes first; the title is bigger, not
+  // first). Everything else keeps its size tier.
+  const early = out.slice(0, 25).filter((b) => b.type === 'heading');
+  if (early.length) {
+    const title = early.reduce((a, b) => (b.size > a.size ? b : a));
+    title.level = 1;
+    title.isTitle = true;
+  }
+
+  // Compact heading levels to consecutive tiers (e.g. {1, 4} → {1, 2}) so a
+  // doc whose sections landed deep in the size ranking still gets sane h2s.
+  const used = [...new Set(out.filter((b) => b.type === 'heading').map((b) => b.level))].sort((a, b) => a - b);
+  const remap = new Map(used.map((lv, i) => [lv, Math.min(i + 1, 6)]));
+  for (const b of out) if (b.type === 'heading') b.level = remap.get(b.level);
+  return out;
+}
+
+/* ------------------------------------------------------------- DOM output */
+
+function renderBlocks(blocks, container, meta) {
+  container.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  let list = null;
+  const closeList = () => { list = null; };
+
+  for (const b of blocks) {
+    if (b.type === 'para' && b.kind === 'li') {
+      if (!list) {
+        list = document.createElement('ul');
+        frag.appendChild(list);
+      }
+      const li = document.createElement('li');
+      li.innerHTML = b.html;
+      list.appendChild(li);
+      continue;
+    }
+    closeList();
+    if (b.type === 'heading') {
+      const h = document.createElement('h' + Math.min(6, Math.max(1, b.level)));
+      h.innerHTML = b.html;
+      frag.appendChild(h);
+    } else if (b.type === 'para') {
+      const p = document.createElement('p');
+      p.innerHTML = b.html;
+      frag.appendChild(p);
+    } else if (b.type === 'image') {
+      const fig = document.createElement('figure');
+      const img = document.createElement('img');
+      img.src = b.dataUrl;
+      img.alt = b.alt || 'Figure';
+      if (b.cssWidth) img.style.maxWidth = Math.min(b.cssWidth * 1.35, 720) + 'px';
+      fig.appendChild(img);
+      frag.appendChild(fig);
+    } else if (b.type === 'formula') {
+      const div = document.createElement('div');
+      div.className = 'formula';
+      const img = document.createElement('img');
+      img.src = b.dataUrl;
+      img.alt = b.alt || 'Formula';
+      if (b.cssWidth) img.style.maxWidth = Math.min(b.cssWidth * 1.25, 680) + 'px';
+      div.appendChild(img);
+      frag.appendChild(div);
+    } else if (b.type === 'pageimage') {
+      const fig = document.createElement('figure');
+      fig.className = 'page-image';
+      const img = document.createElement('img');
+      img.src = b.dataUrl;
+      img.alt = b.alt || 'Page image';
+      fig.appendChild(img);
+      frag.appendChild(fig);
+    }
+  }
+  container.appendChild(frag);
+
+  if (meta) {
+    const info = document.createElement('p');
+    info.className = 'doc-meta';
+    info.textContent = meta;
+    container.prepend(info);
+  }
+}
+
+/* ------------------------------------------------------------ orchestration */
+
+async function convertPdf(data, sourceName) {
+  const status = $('#status');
+  const progress = $('#progress');
+  const output = $('#output');
+  const say = (msg) => { status.textContent = msg; };
+
+  let doc;
+  try {
+    doc = await pdfjsLib.getDocument({ data, isEvalSupported: false }).promise;
+  } catch (err) {
+    if (err?.name === 'PasswordException') {
+      const pw = prompt('This PDF is password-protected. Password:');
+      if (!pw) throw new Error('Password required.');
+      doc = await pdfjsLib.getDocument({ data, password: pw, isEvalSupported: false }).promise;
+    } else {
+      throw err;
+    }
+  }
+
+  const pages = [];
+  const pageHeights = [];
+  for (let i = 1; i <= doc.numPages; i++) {
+    say(`Converting page ${i} / ${doc.numPages}…`);
+    progress.value = i - 1;
+    progress.max = doc.numPages;
+    const page = await doc.getPage(i);
+    pageHeights.push(page.getViewport({ scale: 1 }).height);
+    try {
+      pages.push(await convertPage(page, i - 1, null));
+    } catch (err) {
+      console.error(`page ${i} failed`, err);
+      pages.push([]);
+    }
+    page.cleanup();
+  }
+
+  stripFurniture(pages, pageHeights);
+  const blocks = assembleBlocks(pages);
+  // debug hook for tests: block inventory without the payloads
+  window.__blocks = blocks.map((b) => ({
+    type: b.type, page: b.page, level: b.level, rect: b.rect,
+    text: (b.text || b.alt || b.html || '').replace(/<[^>]+>/g, '').slice(0, 60),
+  }));
+
+  let title = '';
+  try {
+    const md = await doc.getMetadata();
+    title = md?.info?.Title || '';
+  } catch { /* metadata is optional */ }
+  if (!title) {
+    const h = blocks.find((b) => b.type === 'heading' && b.isTitle) ||
+      blocks.find((b) => b.type === 'heading');
+    title = h ? h.html.replace(/<[^>]+>/g, '') : (sourceName || 'Converted PDF');
+  }
+  document.title = title;
+
+  renderBlocks(blocks, output, `${sourceName || 'PDF'} · ${doc.numPages} page${doc.numPages > 1 ? 's' : ''}`);
+  progress.value = progress.max;
+  say(`Done — ${doc.numPages} pages converted.`);
+  document.body.classList.add('has-output');
+  $('#download-btn').hidden = false;
+  await doc.destroy();
+  return title;
+}
+
+/* --------------------------------------------------------------- fetching */
+
+async function fetchPdfBytes(url) {
+  const errors = [];
+  try {
+    const r = await fetch(url, { mode: 'cors' });
+    if (r.ok) {
+      const buf = await r.arrayBuffer();
+      if (looksLikePdf(buf)) return buf;
+      errors.push('direct fetch returned non-PDF content');
+    } else {
+      errors.push(`direct fetch: HTTP ${r.status}`);
+    }
+  } catch (e) {
+    errors.push('direct fetch blocked (CORS or network)');
+  }
+  try {
+    const r = await fetch('fetch?url=' + encodeURIComponent(url));
+    if (r.ok) {
+      const buf = await r.arrayBuffer();
+      if (looksLikePdf(buf)) return buf;
+      errors.push('proxy returned non-PDF content');
+    } else if (r.status === 404) {
+      errors.push('no fetch proxy on this host (deploy the Cloudflare Worker for URL fetching, or upload the file)');
+    } else {
+      errors.push(`proxy: HTTP ${r.status}`);
+    }
+  } catch (e) {
+    errors.push('proxy unreachable');
+  }
+  throw new Error('Could not fetch the PDF: ' + errors.join('; '));
+}
+
+function looksLikePdf(buf) {
+  const head = new Uint8Array(buf.slice(0, 1024));
+  const text = new TextDecoder('latin1').decode(head);
+  return text.includes('%PDF-');
+}
+
+/* ------------------------------------------------------------- download */
+
+function downloadStandalone(title) {
+  const article = $('#output').cloneNode(true);
+  Promise.resolve(document.getElementById('reader-css').textContent).then((cssText) => {
+    const html = `<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${escapeHtml(title || 'Converted PDF')}</title>
+<style>${cssText}</style></head>
+<body class="has-output standalone"><main><article id="output">${article.innerHTML}</article></main></body></html>`;
+    const blob = new Blob([html], { type: 'text/html' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (title || 'converted').replace(/[^\w\d-]+/g, '-').slice(0, 60) + '.html';
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  });
+}
+
+/* ------------------------------------------------------------------- wiring */
+
+let lastTitle = '';
+
+async function handle(dataPromise, sourceName) {
+  const status = $('#status');
+  $('#progress').hidden = false;
+  $('#error').hidden = true;
+  try {
+    const data = await dataPromise;
+    lastTitle = await convertPdf(new Uint8Array(data), sourceName);
+  } catch (err) {
+    console.error(err);
+    status.textContent = '';
+    const box = $('#error');
+    box.textContent = err.message || String(err);
+    box.hidden = false;
+  } finally {
+    $('#progress').hidden = true;
+  }
+}
+
+function init() {
+  const fileInput = $('#file-input');
+  const urlForm = $('#url-form');
+  const dropzone = $('#dropzone');
+
+  fileInput.addEventListener('change', () => {
+    const f = fileInput.files[0];
+    if (f) handle(f.arrayBuffer(), f.name);
+  });
+
+  urlForm.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const url = $('#url-input').value.trim();
+    if (!url) return;
+    const u = new URL(location.href);
+    u.searchParams.set('url', url);
+    history.replaceState(null, '', u);
+    handle(fetchPdfBytes(url), url.split('/').pop() || url);
+  });
+
+  ['dragover', 'dragenter'].forEach((ev) =>
+    dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('drag'); }));
+  ['dragleave', 'drop'].forEach((ev) =>
+    dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove('drag'); }));
+  dropzone.addEventListener('drop', (e) => {
+    const f = e.dataTransfer.files[0];
+    if (f) handle(f.arrayBuffer(), f.name);
+  });
+  dropzone.addEventListener('click', () => fileInput.click());
+
+  $('#download-btn').addEventListener('click', () => downloadStandalone(lastTitle));
+
+  const params = new URLSearchParams(location.search);
+  const url = params.get('url');
+  if (url) {
+    $('#url-input').value = url;
+    handle(fetchPdfBytes(url), url.split('/').pop() || url);
+  }
+}
+
+init();
+</script>
+</body>
+</html>
