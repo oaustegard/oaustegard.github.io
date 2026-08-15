@@ -35,6 +35,10 @@ place. All processing happens in-browser via
 - **URL**: paste a PDF URL, or link directly:
   `https://austegard.com/web-utilities/pdf-to-webpage?url=https://arxiv.org/pdf/1706.03762`
   (URL fetching requires the host to send CORS headers; uploads always work.)
+- **Any-host URLs**: the same app runs on Cloudflare with a fetch proxy at
+  <https://pdf2page.austegard.workers.dev> — no CORS constraint, and it
+  accepts path-style URLs:
+  `pdf2page.austegard.workers.dev/https://arxiv.org/pdf/1706.03762`.
 - **Download**: "Download as standalone HTML" saves a single self-contained
   file with CSS inlined and images as data URLs.
 
