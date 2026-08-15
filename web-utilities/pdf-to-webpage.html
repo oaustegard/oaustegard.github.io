@@ -1621,7 +1621,16 @@ function init() {
   pasteBtn.addEventListener('click', () => handle(readClipboardPdf(), 'Shared PDF'));
 
   const params = new URLSearchParams(location.search);
-  const url = params.get('url');
+  // Path-style deep link (/https://arxiv.org/pdf/xxx): once the service
+  // worker is installed it serves the app shell for every in-scope
+  // navigation, so the server-side 302 to ?url= never runs — the app must
+  // read the target out of its own path. Browsers may collapse "//" to "/".
+  const pathStyle = location.pathname.match(/^\/(https?):\/{1,2}(.+)/);
+  const url = params.get('url') ||
+    (pathStyle ? `${pathStyle[1]}://${pathStyle[2]}${location.search}` : null);
+  if (pathStyle && url) {
+    history.replaceState(null, '', new URL('./?url=' + encodeURIComponent(url), location.href));
+  }
   if (params.has('clipboard')) {
     pasteBtn.hidden = false;
   }

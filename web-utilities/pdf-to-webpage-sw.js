@@ -19,7 +19,7 @@ const SHARE_CACHE = 'pdf2page-share';
 const SHARE_ACTION = 'pdf-to-webpage-share';
 const APP_PAGE = 'pdf-to-webpage.html'; // page to land on after a share is stashed
 
-const SHELL_CACHE = 'pdf2page-shell-716aeb7964';
+const SHELL_CACHE = 'pdf2page-shell-027e69a6ab';
 const PRECACHE = [
   'pdf-to-webpage.html',
   'pdf-to-webpage.webmanifest',
@@ -57,6 +57,18 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (event.request.method !== 'GET') return;
+  // path-style deep links (/https://arxiv.org/pdf/xxx): redirect to ?url=
+  // just like the server would — serving the shell at that path would break
+  // every relative subresource URL beneath it
+  if (event.request.mode === 'navigate') {
+    const m = url.pathname.match(/^\/(https?):\/{1,2}(.+)/);
+    if (m) {
+      const target = `${m[1]}://${m[2]}${url.search}`;
+      const dest = new URL(APP_PAGE + '?url=' + encodeURIComponent(target), self.location.href);
+      event.respondWith(Response.redirect(dest.href, 302));
+      return;
+    }
+  }
   url.search = '';
   url.hash = '';
   // navigations resolve to the app page regardless of query params
