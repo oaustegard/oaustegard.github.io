@@ -1,0 +1,53 @@
+# PDF to Webpage
+
+Converts a PDF — uploaded, or fetched from a URL — into a webpage readable on
+a phone. Text and formatting become real HTML (selectable, reflowing,
+dark-mode aware); embedded pictures become inline images; formulas and
+figures that don't survive linearization to text are rasterized to images in
+place. All processing happens in-browser via
+[pdf.js](https://mozilla.github.io/pdf.js/); the PDF never leaves your device.
+
+## Usage
+
+- **Upload**: drop a PDF on the page or tap to choose a file.
+- **URL**: paste a PDF URL, or link directly:
+  `https://austegard.com/web-utilities/pdf-to-webpage?url=https://arxiv.org/pdf/1706.03762`
+  (URL fetching requires the host to send CORS headers; uploads always work.)
+- **Download**: "Download as standalone HTML" saves a single self-contained
+  file with CSS inlined and images as data URLs.
+
+## How it converts
+
+1. **Text** — pdf.js text items are clustered into lines by baseline, lines
+   into paragraphs by leading and indent gaps. Font-size tiers become heading
+   levels; font names drive `<strong>`/`<em>`/`<code>`; baseline offsets
+   within a line become `<sup>`/`<sub>`. Soft hyphenation is repaired while
+   compound hyphens ("English-to-German") survive. Two-column layouts are
+   detected via a gutter scan and linearized; running headers, footers, and
+   page numbers are stripped by cross-page repetition.
+2. **Images** — the page's operator list is walked with CTM tracking, so each
+   raster image gets its position and display size, re-encoded as an inline
+   PNG at the right point in the reading order.
+3. **Formulas** — lines dominated by math fonts (CMMI/CMSY/AMS/Symbol/…),
+   unmappable private-use glyphs, or 2D sub/superscript layouts are treated
+   as display equations and cropped from a cached page render, keeping the
+   extracted text as `alt`.
+4. **Vector figures** — a `Figure N` caption with a dead band above it marks
+   a diagram the image scan couldn't extract; the band is rasterized and
+   inserted in place (skipped when raster images already cover it).
+5. Pages with no extractable text (scans) fall back to a full-page image.
+
+## Limitations
+
+- Tables linearize to text lines — readable, not tabular.
+- Text inside uncaptioned vector figures can leak into the text flow.
+- Inline math in prose stays as Unicode with `<sup>`/`<sub>` — occasionally
+  lossy for radicals and stacked fractions.
+- Rotated text (watermarks) and stencil image masks are dropped.
+
+## Source
+
+Single-file build of
+[oaustegard/claude-workspace/pdf2page](https://github.com/oaustegard/claude-workspace/tree/main/pdf2page),
+which also has a Cloudflare Worker variant (CORS proxy for arbitrary PDF
+URLs) and the Playwright test suite.
