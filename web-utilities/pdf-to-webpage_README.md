@@ -61,11 +61,17 @@ place. All processing happens in-browser via
 4. **Vector figures** — a `Figure N` caption with a dead band above it marks
    a diagram the image scan couldn't extract; the band is rasterized and
    inserted in place (skipped when raster images already cover it).
-5. Pages with no extractable text (scans) fall back to a full-page image.
+5. **Tables** — lines whose text runs leave vertically aligned gutters
+   across ≥3 consecutive rows are rebuilt as real `<table>` markup in a
+   horizontally scrollable wrapper. Reference lists, author grids, and
+   prose look-alikes are rejected by content guards.
+6. Pages with no extractable text (scans) fall back to a full-page image.
 
 ## Limitations
 
-- Tables linearize to text lines — readable, not tabular.
+- Table reconstruction is whitespace-based: merged cells and multi-level
+  headers can collapse adjacent columns; math-heavy tables render as
+  formula crops.
 - Text inside uncaptioned vector figures can leak into the text flow.
 - Inline math in prose stays as Unicode with `<sup>`/`<sub>` — occasionally
   lossy for radicals and stacked fractions.

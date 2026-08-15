@@ -233,6 +233,30 @@ main { padding-bottom: 4rem; }
   border-radius: 0.4rem;
 }
 
+.table-wrap {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 1.2em 0;
+}
+
+#output table {
+  border-collapse: collapse;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+#output th, #output td {
+  padding: 0.35em 0.7em;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+#output th {
+  border-bottom: 2px solid var(--muted);
+  font-weight: 600;
+}
+
 .formula {
   margin: 1em 0;
   text-align: center;
@@ -902,8 +926,16 @@ async function convertPage(page, pageIndex, onStatus) {
     });
   }
 
+  // ---- tables: whitespace-aligned columns across consecutive rows
+  const order = makeReadingOrder(lines, viewport.width);
+  const { tables, consumed } = detectTables(textLines, order, leading);
+  for (const t of tables) {
+    blocks.push({ ...t, page: pageIndex });
+  }
+
   // ---- text lines → line blocks (paragraph assembly happens after ordering)
   for (const line of textLines) {
+    if (consumed.has(line)) continue;
     blocks.push({
       type: 'line',
       line,
@@ -911,14 +943,200 @@ async function convertPage(page, pageIndex, onStatus) {
       page: pageIndex,
     });
   }
-
-  // ---- reading order
-  const order = makeReadingOrder(lines, viewport.width);
   for (const b of blocks) {
     b.sortKey = order(b.rect ?? { x0: 0, x1: viewport.width, yTop: viewport.height, yBottom: 0 });
   }
   blocks.sort((a, b) => keyCompare(a.sortKey, b.sortKey));
   return blocks;
+}
+
+/* ----------------------------------------------------------------- tables */
+
+// Split a line's items into cell runs at gaps wider than word spacing.
+// LaTeX/Word column separation runs ~1em+; word gaps ~0.25em (worst-case
+// justified ~0.6em), so 0.75em separates the two populations.
+function cellRuns(line) {
+  const threshold = Math.max(6, 0.75 * line.mainSize);
+  const runs = [];
+  let cur = null;
+  let prev = null;
+  for (const it of line.items) {
+    const gap = prev ? it.x - (prev.x + prev.w) : 0;
+    if (!cur || gap > threshold) {
+      cur = { items: [it], x0: it.x, x1: it.x + it.w };
+      runs.push(cur);
+    } else {
+      cur.items.push(it);
+      cur.x1 = Math.max(cur.x1, it.x + it.w);
+    }
+    prev = it;
+  }
+  return runs;
+}
+
+// Whitespace-table detection ("stream mode"): consecutive lines whose cell
+// runs leave vertically aligned gutters clear across the run become a table.
+// Justified prose can't fake this — its wide gaps don't align across rows.
+function detectTables(textLines, orderKeyOf, leading) {
+  const groups = new Map();
+  for (const line of textLines) {
+    const k = orderKeyOf({ x0: line.x0, x1: line.x1, yTop: line.yTop, yBottom: line.yBottom });
+    const gk = k[0] + ':' + k[1];
+    if (!groups.has(gk)) groups.set(gk, []);
+    groups.get(gk).push(line);
+  }
+
+  const tables = [];
+  const consumed = new Set();
+  for (const lines of groups.values()) {
+    lines.sort((a, b) => b.y - a.y);
+    let i = 0;
+    while (i < lines.length) {
+      const run = [];
+      let interruptions = 0;
+      let j = i;
+      while (j < lines.length) {
+        const line = lines[j];
+        if (run.length) {
+          const vgap = run[run.length - 1].line.yBottom - line.yTop;
+          if (vgap > 2.5 * leading) break;
+        }
+        const cells = cellRuns(line);
+        if (cells.length >= 2) {
+          run.push({ line, cells });
+          interruptions = 0;
+          j++;
+        } else if (run.length && interruptions < 1 && line.text.length < 80) {
+          // one-line interruption: sub-header or spanning note inside the table
+          run.push({ line, cells, spanning: true });
+          interruptions++;
+          j++;
+        } else {
+          break;
+        }
+      }
+      while (run.length && run[run.length - 1].spanning) run.pop();
+      if (run.filter((r) => !r.spanning).length >= 3) {
+        const table = buildTable(run);
+        if (table) {
+          tables.push(table);
+          run.forEach((r) => consumed.add(r.line));
+          i = j;
+          continue;
+        }
+      }
+      i++;
+    }
+  }
+  return { tables, consumed };
+}
+
+function buildTable(run) {
+  const rows = run.filter((r) => !r.spanning);
+  const x0 = Math.min(...run.map((r) => r.line.x0));
+  const x1 = Math.max(...run.map((r) => r.line.x1));
+  if (x1 - x0 < 40) return null;
+
+  // project cell coverage onto 2pt bins; gutters are interior bands ≥5pt
+  // that almost no row's cells cross
+  const BIN = 2;
+  const nbins = Math.max(1, Math.ceil((x1 - x0) / BIN));
+  const cover = new Array(nbins).fill(0);
+  for (const r of rows) {
+    for (const c of r.cells) {
+      const b0 = Math.max(0, Math.floor((c.x0 - x0) / BIN));
+      const b1 = Math.min(nbins - 1, Math.floor((c.x1 - x0) / BIN));
+      for (let b = b0; b <= b1; b++) cover[b]++;
+    }
+  }
+  const maxCross = Math.max(0, Math.floor(rows.length * 0.2));
+  const gutters = [];
+  let start = null;
+  for (let b = 0; b <= nbins; b++) {
+    const clear = b < nbins && cover[b] <= maxCross;
+    if (clear && start === null) start = b;
+    if (!clear && start !== null) {
+      const w = (b - start) * BIN;
+      if (start > 0 && w >= 5) gutters.push({ x0: x0 + start * BIN, x1: x0 + b * BIN });
+      start = null;
+    }
+  }
+
+  if (!gutters.length) return null;
+  const bounds = [x0, ...gutters.map((g) => (g.x0 + g.x1) / 2), x1 + 1];
+  const columns = [];
+  for (let c = 0; c < bounds.length - 1; c++) columns.push({ x0: bounds[c], x1: bounds[c + 1] });
+  if (columns.length < 2) return null;
+
+  // reference-list rejection: exactly two columns where the first is
+  // citation markers and the second prose is a list, not a table
+  if (columns.length === 2) {
+    const firstCells = rows.map((r) => r.cells[0]).filter(Boolean);
+    const markerish = firstCells.filter((c) =>
+      /^\[?\d{1,3}\]?\.?$/.test(c.items.map((i) => i.str).join('').trim())).length;
+    const secondLong = rows.filter((r) => r.cells[1] &&
+      r.cells[1].items.map((i) => i.str).join('').length > 50).length;
+    if (markerish >= rows.length * 0.7 && secondLong >= rows.length * 0.5) return null;
+  }
+
+  // long-cell rejection: real table cells are compact. Author blocks and
+  // address grids are geometrically tabular but read better as prose.
+  const cellTexts = rows.flatMap((r) => r.cells.map((c) => c.items.map((i) => i.str).join('')));
+  const longCells = cellTexts.filter((t) => t.length > 60).length;
+  if (cellTexts.length && longCells / cellTexts.length > 0.3) return null;
+  // author/contact grids: emails mean this is a byline layout, not data
+  const emailish = cellTexts.filter((t) => /@/.test(t)).length;
+  if (cellTexts.length && emailish / cellTexts.length > 0.2) return null;
+
+  let merges = 0;
+  let assigned = 0;
+  const htmlRows = run.map((r) => {
+    if (r.spanning) {
+      return [{ html: lineToHtml(r.line), colspan: columns.length }];
+    }
+    const cells = columns.map(() => null);
+    for (const c of r.cells) {
+      let best = 0, bestOv = -Infinity;
+      columns.forEach((col, ci) => {
+        const ov = Math.min(c.x1, col.x1) - Math.max(c.x0, col.x0);
+        if (ov > bestOv) { bestOv = ov; best = ci; }
+      });
+      const html = lineToHtml({ items: c.items, y: r.line.y, mainSize: r.line.mainSize });
+      assigned++;
+      if (cells[best]) { cells[best].html += ' ' + html; merges++; }
+      else cells[best] = { html, colspan: 1 };
+    }
+    return cells.map((c) => c || { html: '', colspan: 1 });
+  });
+
+  // structure-mismatch rejection: pervasive merging means the rows have more
+  // runs than the gutter structure supports (author grids, address blocks) —
+  // the detected columns don't describe the content, so don't tableize it
+  if (assigned && merges / assigned > 0.15) return null;
+
+  // header heuristic: first full row is a header when its cells are
+  // non-numeric but the body is number-heavy, or when it's all bold
+  const firstFull = run.findIndex((r) => !r.spanning);
+  const bodyCells = rows.slice(1).flatMap((r) => r.cells);
+  const numeric = (c) => /^[\d.,%±×\-–\s]+$/.test(c.items.map((i) => i.str).join('').trim());
+  const bodyNumeric = bodyCells.length ? bodyCells.filter(numeric).length / bodyCells.length : 0;
+  const first = rows[0];
+  const headerRow = first && (
+    first.cells.every((c) => c.items.every((i) => i.bold)) ||
+    (bodyNumeric > 0.4 && !first.cells.some(numeric))
+  ) ? firstFull : -1;
+
+  return {
+    type: 'table',
+    rows: htmlRows,
+    headerRow,
+    rect: {
+      x0,
+      x1,
+      yTop: Math.max(...run.map((r) => r.line.yTop)),
+      yBottom: Math.min(...run.map((r) => r.line.yBottom)),
+    },
+  };
 }
 
 /* ----------------------------------------------- document-level assembly */
@@ -1144,6 +1362,22 @@ function renderBlocks(blocks, container, meta) {
       if (b.cssWidth) img.style.maxWidth = Math.min(b.cssWidth * 1.25, 680) + 'px';
       div.appendChild(img);
       frag.appendChild(div);
+    } else if (b.type === 'table') {
+      const wrap = document.createElement('div');
+      wrap.className = 'table-wrap';
+      const table = document.createElement('table');
+      b.rows.forEach((row, ri) => {
+        const tr = document.createElement('tr');
+        for (const cell of row) {
+          const el = document.createElement(ri === b.headerRow ? 'th' : 'td');
+          if (cell.colspan > 1) el.colSpan = cell.colspan;
+          el.innerHTML = cell.html;
+          tr.appendChild(el);
+        }
+        table.appendChild(tr);
+      });
+      wrap.appendChild(table);
+      frag.appendChild(wrap);
     } else if (b.type === 'pageimage') {
       const fig = document.createElement('figure');
       fig.className = 'page-image';
