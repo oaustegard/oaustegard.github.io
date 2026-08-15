@@ -5,9 +5,11 @@
     Converts a PDF (uploaded file, shared file, or URL) into a mobile-readable
     webpage: text/formatting become real HTML; embedded images inline as PNGs;
     formulas and captioned vector figures are rasterized in place. Includes a
-    standalone-HTML export. Installable as a PWA; on Android the installed app
-    is a Web Share Target, so PDFs can be shared straight into it (iOS does
-    not support share targets for web apps - use the ?url= link instead).
+    standalone-HTML export. Installable as a PWA with an offline-precached
+    shell; on Android the installed app is a Web Share Target, so PDFs can be
+    shared straight into it. iOS has no web share targets - there, a Shortcuts
+    share-sheet shortcut base64-encodes the PDF to the clipboard and opens
+    ?clipboard=1, where a paste button receives it (recipe in the README).
 
     URL API: ?url=https://arxiv.org/pdf/1706.03762 converts on load.
     Uploads accept any file; content is validated by %PDF magic bytes, so
@@ -167,6 +169,14 @@ progress { width: 100%; accent-color: var(--accent); }
 
 #download-btn { margin: 0.6rem 0 0; font-size: 0.9rem; padding: 0.5rem 0.9rem; }
 
+#paste-btn {
+  display: block;
+  width: 100%;
+  margin-top: 0.9rem;
+  padding: 0.9rem 1rem;
+  font-size: 1.05rem;
+}
+
 /* collapse the input chrome once a document is rendered */
 body.has-output header#chrome { padding-top: 1rem; }
 body.has-output .tagline, body.has-output #dropzone { display: none; }
@@ -267,6 +277,8 @@ footer a { color: var(--accent); }
          validated by %PDF magic bytes instead -->
     <input id="file-input" type="file" hidden>
   </div>
+
+  <button id="paste-btn" type="button" hidden>Tap to paste the shared PDF</button>
 
   <p id="status" role="status"></p>
   <progress id="progress" hidden></progress>
@@ -1258,6 +1270,28 @@ function looksLikePdf(buf) {
   return text.includes('%PDF-');
 }
 
+// iOS "Open in" path: Safari has no Web Share Target, so a Shortcuts
+// share-sheet shortcut base64-encodes the PDF to the clipboard and opens
+// this page with ?clipboard=1. Reading the clipboard needs a user gesture,
+// hence the visible paste button rather than an auto-read.
+async function readClipboardPdf() {
+  let text = '';
+  try {
+    text = await navigator.clipboard.readText();
+  } catch {
+    throw new Error('Clipboard read was blocked — tap the button again and allow paste.');
+  }
+  text = text.trim().replace(/^data:[^,]*;base64,/, '').replace(/\s+/g, '');
+  if (text.length > 70_000_000) throw new Error('Clipboard payload too large (over ~50 MB decoded).');
+  if (text.length < 100 || !/^[A-Za-z0-9+/=_-]+$/.test(text)) {
+    throw new Error('The clipboard does not hold a base64-encoded PDF — run the share Shortcut first.');
+  }
+  const bin = atob(text.replace(/-/g, '+').replace(/_/g, '/'));
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
+
 // Web Share Target handoff: sw.js answers the share-sheet POST by stashing
 // the file in the Cache API and redirecting here with ?share-target=file.
 async function retrieveSharedPdf() {
@@ -1349,8 +1383,14 @@ function init() {
 
   $('#download-btn').addEventListener('click', () => downloadStandalone(lastTitle));
 
+  const pasteBtn = $('#paste-btn');
+  pasteBtn.addEventListener('click', () => handle(readClipboardPdf(), 'Shared PDF'));
+
   const params = new URLSearchParams(location.search);
   const url = params.get('url');
+  if (params.has('clipboard')) {
+    pasteBtn.hidden = false;
+  }
   if (params.get('share-target') === 'file') {
     handle(retrieveSharedPdf(), 'Shared PDF');
   } else if (url) {
