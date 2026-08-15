@@ -19,16 +19,15 @@ place. All processing happens in-browser via
   share-sheet POST. iOS does not support share targets for web apps — the
   home-screen install still works there, but arrives without "Open in";
   use the clipboard Shortcut below (files) or the `?url=` link.
-- **iOS "Open in" via Shortcuts**: a web page can't be handed a Files path,
-  so the content moves through the clipboard. One-time setup in the
-  Shortcuts app:
-  1. New shortcut; in its settings enable **Show in Share Sheet**, input
-     types **PDFs** and **Files**.
-  2. Actions: **Base64 Encode** (Shortcut Input) → **Copy to Clipboard** →
-     **Open URLs**
-     `https://austegard.com/web-utilities/pdf-to-webpage.html?clipboard=1`.
-  3. Use: share a PDF from Files/Safari → the shortcut → the page opens with
-     a **Tap to paste the shared PDF** button → tap, allow paste, done.
+- **iOS "Open in" via Shortcuts**: two variants —
+  - *Direct POST (recommended)*: **Get Contents of URL**
+    (`https://pdf2page.austegard.workers.dev/share`, POST, Form body, one
+    File field named `pdf` = Shortcut Input) → **Open URLs** (the returned
+    one-time link). The file sits in KV for 10 minutes and expires.
+  - *Clipboard (serverless)*: **Base64 Encode** → **Copy to Clipboard** →
+    **Open URLs**
+    `https://austegard.com/web-utilities/pdf-to-webpage.html?clipboard=1`,
+    then tap **Tap to paste the shared PDF**.
 - **Offline**: the service worker precaches the page, manifest, and the CDN
   pdf.js pair, so after one visit the home-screen app loads and converts
   with no network. Only `?url=` fetching needs connectivity.

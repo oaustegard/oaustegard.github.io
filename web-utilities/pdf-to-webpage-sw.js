@@ -19,7 +19,7 @@ const SHARE_CACHE = 'pdf2page-share';
 const SHARE_ACTION = 'pdf-to-webpage-share';
 const APP_PAGE = 'pdf-to-webpage.html'; // page to land on after a share is stashed
 
-const SHELL_CACHE = 'pdf2page-shell-027e69a6ab';
+const SHELL_CACHE = 'pdf2page-shell-bb10b571be';
 const PRECACHE = [
   'pdf-to-webpage.html',
   'pdf-to-webpage.webmanifest',
