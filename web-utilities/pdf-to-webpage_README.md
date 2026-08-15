@@ -9,7 +9,17 @@ place. All processing happens in-browser via
 
 ## Usage
 
-- **Upload**: drop a PDF on the page or tap to choose a file.
+- **Upload**: drop a PDF on the page or tap to choose a file. Any file type is
+  accepted — arXiv and many download flows save PDFs with numeric or missing
+  extensions — and content is validated by `%PDF` magic bytes instead.
+- **Share into it (Android)**: install the page to the home screen (Chrome →
+  "Add to Home screen"); the installed app registers as a Web Share Target,
+  so "Share → PDF2Page" works from Files, Chrome, Drive, etc. A small service
+  worker (`pdf-to-webpage-sw.js`, scoped to this tool only) receives the
+  share-sheet POST. iOS does not support share targets for web apps — the
+  home-screen install still works there, but arrives without "Open in";
+  use the `?url=` link (or a Shortcuts share-sheet shortcut that opens
+  `…/pdf-to-webpage.html?url=<shared url>`).
 - **URL**: paste a PDF URL, or link directly:
   `https://austegard.com/web-utilities/pdf-to-webpage?url=https://arxiv.org/pdf/1706.03762`
   (URL fetching requires the host to send CORS headers; uploads always work.)
@@ -47,6 +57,8 @@ place. All processing happens in-browser via
 
 ## Source
 
+Built file — do not hand-edit. Regenerate with
+`python3 pdf2page/build-site-file.py <site-root>` from the workspace repo.
 Single-file build of
 [oaustegard/claude-workspace/pdf2page](https://github.com/oaustegard/claude-workspace/tree/main/pdf2page),
 which also has a Cloudflare Worker variant (CORS proxy for arbitrary PDF

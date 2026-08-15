@@ -2,24 +2,21 @@
 <!--
     PDF to Webpage - read a PDF on your phone
 
-    Converts a PDF (uploaded file or URL) into a mobile-readable webpage:
-    - Text and formatting become real HTML: selectable, reflowing, dark-mode aware.
-      Font-size tiers turn into headings; font names drive bold/italic/mono;
-      baseline offsets become sub/superscripts; soft hyphenation is repaired;
-      two-column layouts are linearized; running headers/footers stripped.
-    - Embedded raster images are extracted (operator-list walk with CTM
-      tracking) and inlined as PNGs at their reading-order position.
-    - Formulas and figures that don't survive linearization to text (math-font
-      glyphs, private-use codepoints, 2D sub/superscript layouts, captioned
-      vector diagrams) are rasterized from a page render and inlined as images
-      with the extracted text as alt.
-    - "Download as standalone HTML" saves the result as one self-contained file.
+    Converts a PDF (uploaded file, shared file, or URL) into a mobile-readable
+    webpage: text/formatting become real HTML; embedded images inline as PNGs;
+    formulas and captioned vector figures are rasterized in place. Includes a
+    standalone-HTML export. Installable as a PWA; on Android the installed app
+    is a Web Share Target, so PDFs can be shared straight into it (iOS does
+    not support share targets for web apps - use the ?url= link instead).
 
     URL API: ?url=https://arxiv.org/pdf/1706.03762 converts on load.
+    Uploads accept any file; content is validated by %PDF magic bytes, so
+    arXiv downloads with numeric extensions work.
     All processing happens in-browser via pdf.js. No data is sent to servers.
 
-    Multi-file source (with Cloudflare Worker CORS proxy and test suite):
+    BUILT FILE - do not hand-edit. Source of truth and build script:
     https://github.com/oaustegard/claude-workspace/tree/main/pdf2page
+    (python3 build-site-file.py <site-root> regenerates this + sw + manifest)
 -->
 <html lang="en">
 <head>
@@ -29,6 +26,9 @@
 <title>PDF to Webpage — read a PDF on your phone</title>
 <meta name="description" content="Convert a PDF into a mobile-readable webpage, entirely in your browser. Text stays text; figures and formulas become images.">
 <link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="manifest" href="pdf-to-webpage.webmanifest">
+<meta name="theme-color" content="#2456b3">
+<link rel="apple-touch-icon" href="/images/pdf-to-webpage-icon-180.png">
 <style id="reader-css">
 /* pdf2page — mobile-first reading typography */
 
@@ -262,7 +262,10 @@ footer a { color: var(--accent); }
 
   <div id="dropzone" role="button" tabindex="0" aria-label="Upload a PDF">
     <strong>Drop a PDF here</strong> or tap to choose a file
-    <input id="file-input" type="file" accept="application/pdf,.pdf" hidden>
+    <!-- no accept filter: arXiv & friends save PDFs with numeric/no
+         extensions, which an accept list would grey out; content is
+         validated by %PDF magic bytes instead -->
+    <input id="file-input" type="file" hidden>
   </div>
 
   <p id="status" role="status"></p>
@@ -294,8 +297,6 @@ footer a { color: var(--accent); }
 
 import * as pdfjsLib from 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.min.mjs';
 
-// Cross-origin workerSrc would silently fall back to pdf.js's main-thread
-// "fake worker"; a same-origin blob worker keeps parsing off the UI thread.
 try {
   const workerBlob = await fetch('https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/legacy/build/pdf.worker.min.mjs').then((r) => r.blob());
   pdfjsLib.GlobalWorkerOptions.workerPort =
@@ -1252,9 +1253,20 @@ async function fetchPdfBytes(url) {
 }
 
 function looksLikePdf(buf) {
-  const head = new Uint8Array(buf.slice(0, 1024));
-  const text = new TextDecoder('latin1').decode(head);
+  const bytes = buf instanceof Uint8Array ? buf : new Uint8Array(buf);
+  const text = new TextDecoder('latin1').decode(bytes.slice(0, 1024));
   return text.includes('%PDF-');
+}
+
+// Web Share Target handoff: sw.js answers the share-sheet POST by stashing
+// the file in the Cache API and redirecting here with ?share-target=file.
+async function retrieveSharedPdf() {
+  const cache = await caches.open('pdf2page-share');
+  const resp = await cache.match('shared-pdf');
+  if (!resp) throw new Error('No shared file found — try sharing it again.');
+  const buf = await resp.arrayBuffer();
+  await cache.delete('shared-pdf');
+  return buf;
 }
 
 /* ------------------------------------------------------------- download */
@@ -1287,6 +1299,12 @@ async function handle(dataPromise, sourceName) {
   $('#error').hidden = true;
   try {
     const data = await dataPromise;
+    // Validate by content, not filename: arXiv and many download flows save
+    // PDFs with numeric or missing extensions.
+    if (!looksLikePdf(data)) {
+      throw new Error('That file is not a PDF — no %PDF header in its content. ' +
+        '(Extensions don’t matter here; the content does.)');
+    }
     lastTitle = await convertPdf(new Uint8Array(data), sourceName);
   } catch (err) {
     console.error(err);
@@ -1333,13 +1351,19 @@ function init() {
 
   const params = new URLSearchParams(location.search);
   const url = params.get('url');
-  if (url) {
+  if (params.get('share-target') === 'file') {
+    handle(retrieveSharedPdf(), 'Shared PDF');
+  } else if (url) {
     $('#url-input').value = url;
     handle(fetchPdfBytes(url), url.split('/').pop() || url);
   }
 }
 
 init();
+</script>
+<script>
+if ('serviceWorker' in navigator)
+  navigator.serviceWorker.register('pdf-to-webpage-sw.js', { scope: 'pdf-to-webpage' });
 </script>
 </body>
 </html>
