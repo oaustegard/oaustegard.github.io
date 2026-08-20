@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Shell doc search — offline, in your browser</title>
+<meta name="description" content="Describe what you want to do; get the command-line utility that does it. 6,397 documentation pages, hybrid BM25 + neural retrieval, running entirely client-side.">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui,-apple-system,sans-serif; line-height:1.6; margin:0; padding:24px;
+         background:#fafafa; color:#333; }
+  .container { max-width:860px; margin:0 auto; background:#fff; padding:30px; border-radius:8px;
+               box-shadow:0 2px 10px rgba(0,0,0,.1); }
+  a.back { color:#2563eb; text-decoration:none; font-size:14px; }
+  h1 { margin:.2em 0 .1em; font-size:24px; }
+  .sub { color:#666; margin:0 0 20px; }
+  #status { border:1px solid #e2e8f0; background:#f8fafc; border-radius:8px; padding:12px 14px;
+            font:13px/1.5 ui-monospace,monospace; color:#475569; margin-bottom:18px; }
+  #status .bar { height:4px; background:#e2e8f0; border-radius:2px; margin-top:8px; overflow:hidden; }
+  #status .bar i { display:block; height:100%; width:0; background:#2563eb; transition:width .2s; }
+  .mode { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; font-weight:600;
+          vertical-align:1px; }
+  .mode.lexical { background:#fef3c7; color:#92400e; }
+  .mode.hybrid  { background:#dcfce7; color:#166534; }
+  .mode.loading { background:#e2e8f0; color:#475569; }
+  form { display:flex; gap:10px; margin:0 0 8px; }
+  input[type=search] { flex:1; padding:12px 14px; border:1px solid #d1d5db; border-radius:8px; font:inherit; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:12px 20px;
+           font:600 15px/1 inherit; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .examples { margin:0 0 22px; font-size:13px; color:#64748b; }
+  .examples button { background:none; border:1px solid #cbd5e1; color:#475569; border-radius:99px;
+                     padding:4px 11px; font:13px/1.3 inherit; margin:4px 6px 0 0; cursor:pointer; }
+  .examples button:hover { border-color:#2563eb; color:#2563eb; }
+  .hit { border:1px solid #e2e8f0; border-radius:8px; padding:14px 16px; margin-bottom:12px; }
+  .hit h3 { margin:0 0 2px; font:600 17px/1.3 ui-monospace,monospace; color:#111; }
+  .hit .cat { font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; }
+  .hit .summary { margin:6px 0 8px; }
+  .hit .intents { font-size:13px; color:#475569; margin:0 0 8px; }
+  .hit .intents b { color:#334155; font-weight:600; }
+  .hit details { font-size:13px; }
+  .hit summary { cursor:pointer; color:#2563eb; }
+  .hit pre { background:#f8fafc; border:1px solid #e2e8f0; border-radius:6px; padding:10px 12px;
+             overflow-x:auto; font:12px/1.55 ui-monospace,monospace; margin:8px 0 0; }
+  .timing { font:12px ui-monospace,monospace; color:#94a3b8; margin:14px 0 4px; }
+  footer { margin-top:28px; padding-top:18px; border-top:1px solid #e2e8f0; font-size:13px; color:#64748b; }
+  footer h2 { font-size:14px; color:#334155; margin:0 0 8px; }
+  footer table { border-collapse:collapse; margin:8px 0 14px; font-size:12.5px; }
+  footer td, footer th { padding:3px 14px 3px 0; text-align:left; }
+  footer th { color:#334155; font-weight:600; }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:.92em; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="/ai-tools/">&larr; AI tools</a>
+  <h1>Shell doc search <span id="mode" class="mode loading">loading</span></h1>
+  <p class="sub">Describe what you want to do. Get the command-line utility that does it.
+     6,397 documentation pages, searched entirely in your browser — no server, no API key,
+     nothing typed here leaves the page.</p>
+
+  <div id="status">initialising…<div class="bar"><i></i></div></div>
+
+  <form id="f" autocomplete="off">
+    <input type="search" id="q" placeholder="e.g. recover the password for a zip file I forgot" disabled>
+    <button id="go" disabled>Search</button>
+  </form>
+  <div class="examples">
+    Try:
+    <button data-q="recover the password for a zip file I forgot">recover a zip password</button>
+    <button data-q="find files bigger than 100 megabytes">find big files</button>
+    <button data-q="see which program is using a network port">what's using a port</button>
+    <button data-q="watch a log file as it grows">follow a log</button>
+    <button data-q="compare two files and show what changed">diff two files</button>
+  </div>
+
+  <div id="results"></div>
+
+  <footer>
+    <h2>What this is, and what it is not</h2>
+    <p>The corpus is 6,397 shell-utility documentation pages — <a href="https://github.com/tldr-pages/tldr">tldr-pages</a>
+       examples plus a thin slice of Ubuntu 24.04 man pages. Each page was rewritten by an LLM to add a
+       plain-language summary and the <em>goal-level phrasings</em> someone would type when they want that
+       tool without knowing its name. That rewrite is the whole trick: documentation is written in the
+       vocabulary of the tool, and requests arrive in the vocabulary of the goal. <code>fcrackzip</code>'s page
+       says "dictionary attack"; you type "recover the password".</p>
+
+    <h2>Measured</h2>
+    <table>
+      <tr><th>corpus / retriever</th><th>gold utility in the top 3</th></tr>
+      <tr><td>original pages, BM25 only</td><td>0.311</td></tr>
+      <tr><td>rewritten pages, BM25 only</td><td>0.427</td></tr>
+      <tr><td>rewritten pages, hybrid (this page, 1-bit codes)</td><td>0.439</td></tr>
+      <tr><td>rewritten pages, hybrid, full-precision server-side</td><td>0.494</td></tr>
+    </table>
+    <p>164 held-out requests whose wording came from a different model than wrote the corpus, over 132
+       distinct utilities. The lift also survives on 300 requests written by human annotators, so it is not
+       two language models agreeing with each other. Roughly two in five queries put the right tool in the
+       top three — useful for <em>finding</em> a utility, not a substitute for reading its actual page.</p>
+
+    <h2>Credits and licence</h2>
+    <p>Examples are reproduced verbatim from <a href="https://github.com/tldr-pages/tldr">tldr-pages</a>,
+       © the tldr-pages team and contributors, <a href="https://creativecommons.org/licenses/by/4.0/">CC-BY-4.0</a>;
+       man-page material carries each package's own licence. The generated summaries and phrasings are
+       unreviewed model output — a retrieval aid, not documentation to trust over the real page.
+       Index format <a href="https://github.com/oaustegard/remax_kb">remax_kb</a>; encoder
+       <a href="https://huggingface.co/MongoDB/mdbr-leaf-mt">MongoDB/mdbr-leaf-mt</a> (int8 ONNX, 23.9&nbsp;MB);
+       runtime <a href="https://onnxruntime.ai/docs/tutorials/web/">onnxruntime-web</a>.</p>
+  </footer>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
+<script type="module">
+import { ShellSearch } from "./shell-search/nlsh.js";
+
+const $ = s => document.querySelector(s);
+const statusEl = $("#status"), bar = statusEl.querySelector("i"), modeEl = $("#mode");
+const say = (msg, pct) => {
+  statusEl.childNodes[0].nodeValue = msg;
+  if (pct != null) bar.style.width = Math.min(100, pct) + "%";
+};
+const setMode = m => { modeEl.className = "mode " + m; modeEl.textContent = m; };
+const mb = n => (n / 1e6).toFixed(1) + " MB";
+
+const HF = "https://huggingface.co/MongoDB/mdbr-leaf-mt/resolve/" +
+           "1ed41b22ce166d66c24f88ebfc340e1f03adb20f/";
+
+const app = new ShellSearch();
+
+(async () => {
+  try {
+    say("fetching index…", 0);
+    const man = await app.loadIndex("./shell-search/shell.kbi", "./shell-search/shell.kbc/",
+      ({ got, total }) => say(`fetching index… ${mb(got)} / ${mb(total)}`, 100 * got / total));
+    setMode("lexical");
+    $("#q").disabled = false; $("#go").disabled = false; $("#q").focus();
+    say(`index ready — ${man.chunks.live_count.toLocaleString()} pages. Lexical search live; loading encoder…`, 100);
+
+    await app.loadEncoder({
+      ort,
+      // Pinned HF revision + per-file content; the encoder is 23.9 MB and is
+      // cached by the browser after the first visit.
+      modelUrl: HF + "onnx/model_quantized.onnx",
+      dataUrl: HF + "onnx/model_quantized.onnx_data",
+      tokenizerUrl: HF + "tokenizer.json",
+      // MUST be absolute: onnxruntime resolves a relative wasmPaths against the
+      // script's own URL, not the page's, and silently doubles the prefix.
+      wasmPaths: "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/",
+    }, ({ stage }) => say(stage === "tokenizer"
+        ? "index ready. Loading encoder (23.9 MB)…" : "ready — hybrid search", 100));
+    setMode("hybrid");
+    say(`ready — ${man.chunks.live_count.toLocaleString()} pages, hybrid lexical + neural, fully offline`, 100);
+  } catch (e) {
+    say("failed: " + e.message);
+    console.error(e);
+  }
+})();
+
+$("#f").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const q = $("#q").value.trim();
+  if (!q) return;
+  $("#go").disabled = true;
+  try {
+    const { results, mode, tEmbed, tSearch } = await app.search(q, { k: 8 });
+    render(q, results, mode, tEmbed, tSearch);
+  } catch (e) {
+    $("#results").innerHTML = `<p style="color:#b91c1c">search failed: ${esc(e.message)}</p>`;
+    console.error(e);
+  } finally { $("#go").disabled = false; }
+});
+
+document.querySelectorAll(".examples button").forEach(b =>
+  b.addEventListener("click", () => {
+    $("#q").value = b.dataset.q;
+    $("#f").dispatchEvent(new Event("submit"));
+  }));
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function render(q, results, mode, tEmbed, tSearch) {
+  if (!results.length) {
+    $("#results").innerHTML = `<p>Nothing matched “${esc(q)}”.</p>`;
+    return;
+  }
+  const timing = mode === "hybrid"
+    ? `${results.length} results · embed ${tEmbed.toFixed(0)} ms · search ${tSearch.toFixed(0)} ms · hybrid`
+    : `${results.length} results · search ${tSearch.toFixed(0)} ms · lexical only (encoder still loading)`;
+  $("#results").innerHTML = `<div class="timing">${timing}</div>` + results.map(r => `
+    <div class="hit">
+      <h3>${esc(r.utility)}</h3>
+      ${r.category ? `<div class="cat">${esc(r.category)}</div>` : ""}
+      ${r.summary ? `<div class="summary">${esc(r.summary)}</div>` : ""}
+      ${r.intents?.length ? `<div class="intents"><b>Use when you want to:</b> ${
+         r.intents.map(esc).join("; ")}</div>` : ""}
+      ${r.docs ? `<details><summary>Documented examples</summary><pre>${esc(r.docs)}</pre></details>` : ""}
+    </div>`).join("");
+}
+</script>
+</body>
+</html>
