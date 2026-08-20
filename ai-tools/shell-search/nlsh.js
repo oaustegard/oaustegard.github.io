@@ -12,8 +12,20 @@
 // dense arm is what closes the vocabulary gap on queries like "recover the
 // password", which no lexical index can reach.
 
-import { KBReader, defaultOverFetch } from "./kb-reader.js";
-import { WordPieceTokenizer } from "./wordpiece.js";
+// Cache coherence. GitHub Pages serves every file here with `max-age=600` and
+// no content hash in the name, so a freshly-revalidated shell-search.html can
+// pair with a still-cached older copy of this module — which is not a cosmetic
+// skew: the page then calls renderExamples(r.examples) against a result object
+// built by code that never set `examples` or `tldrUrl`, and silently renders
+// neither examples nor source links. That shipped.
+//
+// The page imports this file as `nlsh.js?v=N`, so `import.meta.url` carries the
+// version and it is propagated to this module's own imports. One constant in
+// the HTML therefore invalidates the whole graph, and the three files can never
+// be served as a mismatched set.
+const V = new URL(import.meta.url).search;
+const { KBReader, defaultOverFetch } = await import("./kb-reader.js" + V);
+const { WordPieceTokenizer } = await import("./wordpiece.js" + V);
 
 const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
 
