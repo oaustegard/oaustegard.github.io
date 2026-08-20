@@ -110,9 +110,15 @@
   </footer>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/ort.min.js"></script>
 <script type="module">
 import { ShellSearch } from "./shell-search/nlsh.js";
+
+// onnxruntime-web as an ES module rather than a global from a separate <script>.
+// The UMD bundle publishes `ort` through a top-level `var` in a classic script,
+// so any failure to load that tag surfaces later as a bare "ort is not defined"
+// with nothing to act on. Importing it here makes the dependency explicit and
+// its failure catchable.
+const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
 
 const $ = s => document.querySelector(s);
 const statusEl = $("#status"), bar = statusEl.querySelector("i"), modeEl = $("#mode");
@@ -137,6 +143,7 @@ const app = new ShellSearch();
     $("#q").disabled = false; $("#go").disabled = false; $("#q").focus();
     say(`index ready — ${man.chunks.live_count.toLocaleString()} pages. Lexical search live; loading encoder…`, 100);
 
+    const ort = await import(ORT_BASE + "ort.min.mjs");
     await app.loadEncoder({
       ort,
       // Pinned HF revision + per-file content; the encoder is 23.9 MB and is
@@ -152,8 +159,17 @@ const app = new ShellSearch();
     setMode("hybrid");
     say(`ready — ${man.chunks.live_count.toLocaleString()} pages, hybrid lexical + neural, fully offline`, 100);
   } catch (e) {
-    say("failed: " + e.message);
     console.error(e);
+    // Distinguish the two failures. Losing the encoder costs the dense arm and
+    // nothing else — lexical search over the same index still answers, so the
+    // page stays usable and says which mode it is in rather than "failed".
+    if (app.kb) {
+      setMode("lexical");
+      say("lexical search ready. Neural encoder unavailable (" + e.message +
+          ") — results use the lexical arm only.", 100);
+    } else {
+      say("could not load the index: " + e.message);
+    }
   }
 })();
 
@@ -188,7 +204,7 @@ function render(q, results, mode, tEmbed, tSearch) {
   }
   const timing = mode === "hybrid"
     ? `${results.length} results · embed ${tEmbed.toFixed(0)} ms · search ${tSearch.toFixed(0)} ms · hybrid`
-    : `${results.length} results · search ${tSearch.toFixed(0)} ms · lexical only (encoder still loading)`;
+    : `${results.length} results · search ${tSearch.toFixed(0)} ms · lexical only`;
   $("#results").innerHTML = `<div class="timing">${timing}</div>` + results.map(r => `
     <div class="hit">
       <h3>${esc(r.utility)}</h3>
