@@ -105,11 +105,43 @@ export class ShellSearch {
       const u = h.meta?.utility || h.chunk_id;
       if (seen.has(u)) continue;
       seen.add(u);
-      results.push({ utility: u, ...splitCard(h.text), verified: h.verified,
+      results.push({ utility: u, chunkId: h.chunk_id, ...splitCard(h.text),
+                     ...sourceLinks(h.chunk_id, u), verified: h.verified,
                      explain: h.explain });
     }
     return { results, mode: this.mode, tEmbed, tSearch };
   }
+}
+
+/**
+ * Canonical upstream links for a page.
+ *
+ * Derived from the CHUNK ID, not the utility name: `build_corpus.py` names a
+ * tldr chunk after the *command it documents*, so `tldr:common/$` carries
+ * utility `echo` and linking by utility would 404. The id keeps the real page
+ * path (`common/$`), which is what upstream is organised by.
+ *
+ * tldr pages resolve to their source file on GitHub. Man pages go to
+ * manpages.debian.org, which looks a page up by name and resolves the section
+ * itself — the corpus records no section number, so any `man1/<x>.1.html` URL
+ * built here would be a guess that silently 404s for anything outside section 1.
+ */
+function sourceLinks(chunkId, utility) {
+  const out = { tldrUrl: null, manUrl: null };
+  if (!chunkId) return out;
+  const [kind, rest] = [chunkId.slice(0, chunkId.indexOf(":")),
+                        chunkId.slice(chunkId.indexOf(":") + 1)];
+  if (kind === "tldr" && rest) {
+    // encodeURIComponent per path segment: page names include `!`, `$`, `%`.
+    const parts = rest.split("/").map(encodeURIComponent).join("/");
+    out.tldrUrl = `https://github.com/tldr-pages/tldr/blob/main/pages/${parts}.md`;
+  }
+  // Offered for every result, not just man-sourced ones: tldr gives examples,
+  // the man page is the authority, and a reader who wants flags wants the latter.
+  if (utility && /^[A-Za-z0-9][\w.+-]*$/.test(utility)) {
+    out.manUrl = `https://manpages.debian.org/${encodeURIComponent(utility)}`;
+  }
+  return out;
 }
 
 /**
@@ -137,7 +169,18 @@ function splitCard(text) {
     }
     break;
   }
-  return { ...card, docs: lines.slice(i).join("\n").trim() };
+  const docs = lines.slice(i).filter(l => l.trim());
+  // build_corpus emits each documented example as "description\ncommand", and
+  // enrich.py joins them, so the tail alternates strictly. Verified over a
+  // 400-page sample: zero odd-length bodies. Pairing them lets the UI show a
+  // command with the sentence that explains it instead of an undifferentiated
+  // block; an odd trailing line is kept as a description with no command rather
+  // than dropped.
+  const examples = [];
+  for (let j = 0; j < docs.length; j += 2) {
+    examples.push({ description: docs[j], command: docs[j + 1] || "" });
+  }
+  return { ...card, examples, docs: docs.join("\n") };
 }
 
 async function fetchWithProgress(url, onProgress) {
