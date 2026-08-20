@@ -81,12 +81,21 @@ export class ShellSearch {
     const tEmbed = performance.now() - t0;
 
     const t1 = performance.now();
-    // alpha=0.5 (weighted) rather than RRF: measured 0.480 vs 0.462
-    // gold-in-sources on this corpus, because RRF discards the score
-    // magnitudes that a two-arm fusion over unequal arms needs.
-    const hits = this.kb.search(query, qv, {
-      k, alpha: qv ? 0.5 : null, overFetch: defaultOverFetch(k),
-    });
+    // With an encoder: alpha=0.5 (weighted) rather than RRF — measured 0.480 vs
+    // 0.462 gold-in-sources on this corpus, because RRF discards the score
+    // magnitudes a two-arm fusion over unequal arms needs.
+    //
+    // Without one: a genuinely lexical-only pass. `KBReader.search()` always
+    // runs its dense leg and `_denseSearch(null)` throws inside
+    // `encodeQueryCode`, so there is no public way to ask for BM25 alone, and
+    // alpha=0 does not avoid it — the dense leg runs first and is only
+    // zero-WEIGHTED afterwards. Reaching for the private `_bm25Search` is the
+    // honest option and is safe against a vendored, version-pinned reader; it
+    // is the one place this file depends on kb-reader internals, and a
+    // lexical-only entry point upstream would remove it.
+    const hits = qv
+      ? this.kb.search(query, qv, { k, alpha: 0.5, overFetch: defaultOverFetch(k) })
+      : this.kb._bm25Search(query).slice(0, k).map(h => this.kb._withChunkId(h));
     const enriched = await this.kb.fetchChunks(hits);
     const tSearch = performance.now() - t1;
 
