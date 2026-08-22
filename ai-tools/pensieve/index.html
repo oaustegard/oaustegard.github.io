@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Repo search — two ATProto accounts, in your browser</title>
+<meta name="description" content="Half-remember something posted and get the record back. 3,510 records from austegard.com and muninn.austegard.com — posts, blog entries, issues, bookmarks — hybrid BM25 + neural retrieval, entirely client-side.">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui,-apple-system,sans-serif; line-height:1.6; margin:0; padding:24px;
+         background:#fafafa; color:#333; }
+  .container { max-width:860px; margin:0 auto; background:#fff; padding:30px; border-radius:8px;
+               box-shadow:0 2px 10px rgba(0,0,0,.1); }
+  a.back { color:#2563eb; text-decoration:none; font-size:14px; }
+  h1 { margin:.2em 0 .1em; font-size:24px; }
+  .sub { color:#666; margin:0 0 20px; }
+  #status { border:1px solid #e2e8f0; background:#f8fafc; border-radius:8px; padding:12px 14px;
+            font:13px/1.5 ui-monospace,monospace; color:#475569; margin-bottom:18px; }
+  #status .bar { height:4px; background:#e2e8f0; border-radius:2px; margin-top:8px; overflow:hidden; }
+  #status .bar i { display:block; height:100%; width:0; background:#2563eb; transition:width .2s; }
+  .mode { display:inline-block; padding:1px 8px; border-radius:99px; font-size:11px; font-weight:600;
+          vertical-align:1px; }
+  .mode.lexical { background:#fef3c7; color:#92400e; }
+  .mode.hybrid  { background:#dcfce7; color:#166534; }
+  .mode.loading { background:#e2e8f0; color:#475569; }
+  form { display:flex; gap:10px; margin:0 0 8px; }
+  input[type=search] { flex:1; padding:12px 14px; border:1px solid #d1d5db; border-radius:8px; font:inherit; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:12px 20px;
+           font:600 15px/1 inherit; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:default; }
+  .filters { display:flex; flex-wrap:wrap; gap:6px; align-items:center; margin:0 0 10px;
+             font-size:13px; color:#64748b; }
+  .filters .lbl { margin-right:2px; }
+  .filters button { background:none; border:1px solid #cbd5e1; color:#475569; border-radius:99px;
+                    padding:4px 11px; font:13px/1.3 inherit; cursor:pointer; }
+  .filters button[aria-pressed=true] { background:#2563eb; border-color:#2563eb; color:#fff; }
+  .examples { margin:0 0 22px; font-size:13px; color:#64748b; }
+  .examples button { background:none; border:1px solid #cbd5e1; color:#475569; border-radius:99px;
+                     padding:4px 11px; font:13px/1.3 inherit; margin:4px 6px 0 0; cursor:pointer; }
+  .examples button:hover { border-color:#2563eb; color:#2563eb; }
+  .hit { border:1px solid #e2e8f0; border-radius:8px; padding:14px 16px; margin-bottom:12px; }
+  .hit .hd { display:flex; align-items:baseline; gap:8px; flex-wrap:wrap; margin-bottom:4px; }
+  .badge { font-size:11px; font-weight:600; border-radius:99px; padding:1px 8px;
+           background:#eff6ff; color:#1d4ed8; }
+  .badge.muninn { background:#f5f3ff; color:#6d28d9; }
+  .hit .kind { font-size:11px; color:#64748b; text-transform:uppercase; letter-spacing:.04em; }
+  .hit .when { font-size:12px; color:#94a3b8; margin-left:auto; }
+  .hit h3 { margin:0 0 4px; font:600 16px/1.35 inherit; color:#111; }
+  .hit p { margin:0 0 8px; white-space:pre-wrap; }
+  .hit .lnk a { color:#2563eb; text-decoration:none; font-size:13px; margin-right:14px; }
+  .hit .lnk a:hover { text-decoration:underline; }
+  .hit .dupe { font-size:12px; color:#94a3b8; }
+  .timing { font:12px ui-monospace,monospace; color:#94a3b8; margin:14px 0 4px; }
+  footer { margin-top:28px; padding-top:18px; border-top:1px solid #e2e8f0; font-size:13px; color:#64748b; }
+  footer > details > summary { cursor:pointer; color:#475569; }
+  footer > details[open] > summary { margin-bottom:14px; }
+  footer h2 { font-size:14px; color:#334155; margin:0 0 8px; }
+  footer table { border-collapse:collapse; margin:8px 0 14px; font-size:12.5px; }
+  footer td, footer th { padding:3px 14px 3px 0; text-align:left; }
+  footer th { color:#334155; font-weight:600; }
+  code { background:#f1f5f9; border-radius:4px; padding:1px 5px; font-size:12.5px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="/ai-tools/">&larr; AI tools</a>
+  <h1>Repo search <span id="mode" class="mode loading">loading</span></h1>
+  <p class="sub">Half-remember something either of us posted; get the record back. Two ATProto
+     accounts, every public collection, searched in your browser.</p>
+
+  <div id="status">starting&hellip;<div class="bar"><i></i></div></div>
+
+  <form id="f">
+    <input id="q" type="search" placeholder="what you half-remember&hellip;" disabled
+           autocomplete="off" autocapitalize="off" spellcheck="false">
+    <button id="go" type="submit" disabled>Search</button>
+  </form>
+
+  <div class="filters">
+    <span class="lbl">Account:</span>
+    <button data-who="all" aria-pressed="true">both</button>
+    <button data-who="austegard.com" aria-pressed="false">Oskar</button>
+    <button data-who="muninn.austegard.com" aria-pressed="false">Muninn</button>
+    <span class="lbl" style="margin-left:10px">App:</span>
+    <button data-app="all" aria-pressed="true">any</button>
+    <button data-app="Bluesky" aria-pressed="false">Bluesky</button>
+    <button data-app="WhiteWind" aria-pressed="false">WhiteWind</button>
+    <button data-app="Tangled" aria-pressed="false">Tangled</button>
+  </div>
+
+  <div class="examples">
+    Try:
+    <button data-q="the Norwegian oil fund's ethical exclusions">the Norwegian oil fund's ethical exclusions</button>
+    <button data-q="WebRTC without a signaling server">WebRTC without a signaling server</button>
+    <button data-q="a small model with a big knowledge base">a small model with a big knowledge base</button>
+    <button data-q="reading a PDF in the browser">reading a PDF in the browser</button>
+  </div>
+
+  <div id="results"></div>
+
+  <footer>
+    <details>
+      <summary>What this indexes, and how it works</summary>
+
+    <h2>The corpus</h2>
+    <p>3,510 records from two accounts: <a href="https://bsky.app/profile/austegard.com">austegard.com</a>
+       and <a href="https://bsky.app/profile/muninn.austegard.com">muninn.austegard.com</a>. Bluesky posts
+       are most of it. The rest is WhiteWind blog entries, Tangled issues, pull requests and comments,
+       kipclip annotations, Wisp files, bookmarks and Anisota game logs. Likes, follows, blocks and other
+       pure-graph records carry no text and are skipped.</p>
+    <p>The build reads each repo with <code>com.atproto.repo.describeRepo</code> and
+       <code>listRecords</code>, so it picks up any collection either account happens to write. That
+       covers lexicons neither of us has heard of. Records are flattened into a generic envelope of
+       title, body, url and date; there is no allowlist of known record types.</p>
+
+    <h2>Retrieval</h2>
+    <table>
+      <tr><th>piece</th><th>what it is</th></tr>
+      <tr><td>index</td><td><a href="https://github.com/oaustegard/remax_kb">remax_kb</a> v2: BM25 postings plus 1-bit dense codes, 3.4 MB</td></tr>
+      <tr><td>encoder</td><td><a href="https://huggingface.co/MongoDB/mdbr-leaf-mt">MongoDB/mdbr-leaf-mt</a>, int8 ONNX, 23.9 MB</td></tr>
+      <tr><td>runtime</td><td><a href="https://onnxruntime.ai/docs/tutorials/web/">onnxruntime-web</a></td></tr>
+      <tr><td>server</td><td>none</td></tr>
+    </table>
+    <p>Lexical results appear as soon as the index arrives. The encoder loads behind that and the mode
+       flips to hybrid, which is what reaches a post you remember by subject but not by wording. The query
+       never leaves the page; the encoder is cached by the browser after the first visit.</p>
+
+    <h2>Credit</h2>
+    <p>The idea is <a href="https://tangled.org/zzstoatzz.io/pensieve">pensieve</a> by
+       <a href="https://bsky.app/profile/zzstoatzz.io">zzstoatzz.io</a> — public memory search over an
+       ATProto repo, handle in, digest out. Pensieve indexes any allowed actor on demand and pays Voyage
+       for embeddings and Turbopuffer for storage. This page swaps both for a static index built ahead of
+       time, which works only because the actor list is two people who both agreed to it. Records
+       link to their native app where one is known, and to
+       <a href="https://pdsls.dev">PDSLS</a> for the raw record otherwise.</p>
+  </details>
+  </footer>
+</div>
+
+<script type="module">
+// Bump on any change to pensieve.js, kb-reader.js or wordpiece.js. The version
+// propagates from here through pensieve.js's own imports, so all three
+// invalidate together and a new page can never run old modules.
+const ASSET_V = "2026-08-22a";
+const { Pensieve } = await import(`./pensieve.js?v=${ASSET_V}`);
+
+const ORT_BASE = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.20.1/dist/";
+const HF = "https://huggingface.co/MongoDB/mdbr-leaf-mt/resolve/" +
+           "1ed41b22ce166d66c24f88ebfc340e1f03adb20f/";
+
+const $ = s => document.querySelector(s);
+const statusEl = $("#status"), bar = statusEl.querySelector("i"), modeEl = $("#mode");
+const say = (msg, pct) => {
+  statusEl.childNodes[0].nodeValue = msg;
+  if (pct != null) bar.style.width = Math.min(100, pct) + "%";
+};
+const setMode = m => { modeEl.className = "mode " + m; modeEl.textContent = m; };
+const mb = n => (n / 1e6).toFixed(1) + " MB";
+
+const app = new Pensieve();
+const filter = { who: "all", app: "all" };
+
+(async () => {
+  try {
+    say("fetching index…", 0);
+    const man = await app.loadIndex("./pensieve.kbi", "./pensieve.kbc/", "./meta.json",
+      ({ got, total }) => say(`fetching index… ${mb(got)} / ${mb(total)}`, 100 * got / total));
+    setMode("lexical");
+    $("#q").disabled = false; $("#go").disabled = false; $("#q").focus();
+    const n = Object.keys(app.meta).length.toLocaleString();
+    say(`index ready — ${n} records. Lexical search live; loading encoder…`, 100);
+
+    const ort = await import(ORT_BASE + "ort.min.mjs");
+    await app.loadEncoder({
+      ort,
+      modelUrl: HF + "onnx/model_quantized.onnx",
+      dataUrl: HF + "onnx/model_quantized.onnx_data",
+      tokenizerUrl: HF + "tokenizer.json",
+      // MUST be absolute: onnxruntime resolves a relative wasmPaths against the
+      // script's own URL, not the page's, and silently doubles the prefix.
+      wasmPaths: ORT_BASE,
+    }, ({ stage }) => say(stage === "tokenizer"
+        ? "index ready. Loading encoder (23.9 MB)…" : "ready — hybrid search", 100));
+    setMode("hybrid");
+    say(`ready — ${n} records, hybrid lexical + neural, nothing sent anywhere`, 100);
+  } catch (e) {
+    console.error(e);
+    // Losing the encoder costs the dense arm and nothing else — lexical search
+    // over the same index still answers, so say which mode the page is in
+    // rather than "failed".
+    if (app.kb) {
+      setMode("lexical");
+      say("lexical search ready. Neural encoder unavailable (" + e.message +
+          ") — results use the lexical arm only.", 100);
+    } else {
+      say("could not load the index: " + e.message);
+    }
+  }
+})();
+
+$("#f").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const q = $("#q").value.trim();
+  if (!q) return;
+  $("#go").disabled = true;
+  try {
+    const { results, mode, tEmbed, tSearch } = await app.search(q, { k: 10, ...filter });
+    render(q, results, mode, tEmbed, tSearch);
+  } catch (e) {
+    $("#results").innerHTML = `<p style="color:#b91c1c">search failed: ${esc(e.message)}</p>`;
+    console.error(e);
+  } finally { $("#go").disabled = false; }
+});
+
+document.querySelectorAll(".examples button").forEach(b =>
+  b.addEventListener("click", () => {
+    $("#q").value = b.dataset.q;
+    $("#f").dispatchEvent(new Event("submit"));
+  }));
+
+// Filter pills are two radio groups. Re-running the query on a change keeps the
+// pills honest: a filter that only applied to the next search would leave stale
+// results sitting under a changed control.
+document.querySelectorAll(".filters button").forEach(b =>
+  b.addEventListener("click", () => {
+    const group = b.dataset.who != null ? "who" : "app";
+    const attr = group === "who" ? "data-who" : "data-app";
+    document.querySelectorAll(`.filters button[${attr}]`)
+      .forEach(o => o.setAttribute("aria-pressed", String(o === b)));
+    filter[group] = b.dataset[group];
+    if ($("#q").value.trim()) $("#f").dispatchEvent(new Event("submit"));
+  }));
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+}
+
+function when(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? "" : d.toISOString().slice(0, 10);
+}
+
+function render(q, results, mode, tEmbed, tSearch) {
+  if (!results.length) {
+    $("#results").innerHTML = `<p>Nothing matched “${esc(q)}”.</p>`;
+    return;
+  }
+  const timing = mode === "hybrid"
+    ? `${results.length} records · embed ${tEmbed.toFixed(0)} ms · search ${tSearch.toFixed(0)} ms · hybrid`
+    : `${results.length} records · search ${tSearch.toFixed(0)} ms · lexical only`;
+  $("#results").innerHTML = `<div class="timing">${timing}</div>` + results.map(r => `
+    <div class="hit">
+      <div class="hd">
+        <span class="badge ${r.handle.startsWith("muninn") ? "muninn" : ""}">${
+          r.handle.startsWith("muninn") ? "Muninn" : "Oskar"}</span>
+        <span class="kind">${esc(r.app)} · ${esc(r.kindLabel)}</span>
+        <span class="when">${when(r.date)}</span>
+      </div>
+      ${r.title ? `<h3>${esc(r.title)}</h3>` : ""}
+      ${r.body ? `<p>${esc(r.body)}</p>` : ""}
+      <div class="lnk">
+        ${r.url ? `<a href="${esc(r.url)}" rel="noopener">open</a>` : ""}
+        <a href="${esc(r.details)}" rel="noopener">raw record</a>
+        ${r.chunks > 1 ? `<span class="dupe">${r.chunks} matching passages</span>` : ""}
+      </div>
+    </div>`).join("");
+}
+</script>
+</body>
+</html>
