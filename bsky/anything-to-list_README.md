@@ -19,12 +19,22 @@ This tool accepts virtually any Bluesky URL, handle, hashtag, or search query as
 | Feed URL | Feed | Unique authors from recent feed posts |
 | `#hashtag` | Hashtag | Unique authors from posts using that hashtag |
 | Search query (bare text) | Search | Unique authors from matching posts |
-| `go.bsky.app/...` short links | Auto-resolved | Follows redirect, then classifies normally |
+| `go.bsky.app/...` and `bsky.app/...-short/...` links | Auto-resolved | Expanded via go.bsky.app, then classified normally |
 | `at://` URIs | AT-URI | Classified by collection type |
 | `did:plc:...` | DID | Treated as a profile |
 | Multi-line handles or DIDs | Bulk List | Each resolved individually |
 
-Short URLs (`go.bsky.app`) are resolved to their full form before classification.
+Short URLs are resolved to their full form before classification. Both
+`https://go.bsky.app/CODE` and `https://bsky.app/starter-pack-short/CODE` are
+accepted; they are expanded by asking `go.bsky.app` for JSON
+(`Accept: application/json` returns `{"url": "..."}`) rather than by following
+its redirect, which a browser cannot read because the redirect lands on
+`bsky.app` and `bsky.app` sends CORS headers only for its own origin.
+
+A `bsky.app` URL that matches none of the patterns above is now reported as an
+error. It used to fall through to the free-text search branch, which searched
+for the URL as a string and returned whoever had posted that link — a wrong
+result that looked like a working one.
 
 ## Features
 

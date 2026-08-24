@@ -109,21 +109,82 @@ export function getPublicAgent() {
 }
 
 /* Link Resolution */
+
+/*
+ * Bluesky short links: go.bsky.app/<code> and bsky.app/<kind>-short/<code>
+ * (e.g. starter-pack-short). Both are served by go.bsky.app.
+ *
+ * Following the redirect from the browser does not work. go.bsky.app answers
+ * with a 301 to bsky.app, and bsky.app only sends Access-Control-Allow-Origin
+ * for Origin https://bsky.app, so the cross-origin fetch fails on the second
+ * hop and response.url is never readable. go.bsky.app does answer
+ * `Accept: application/json` with {"url": "<expanded>"} and
+ * Access-Control-Allow-Origin: *, which is what this uses instead.
+ */
+const SHORT_LINK_RE =
+    /^(?:https?:\/\/)?(?:go\.bsky\.app\/|bsky\.app\/(?:[a-z]+-)*short\/)([A-Za-z0-9]+)\/?(?:[?#].*)?$/i;
+
+export function getShortLinkCode(url) {
+    const match = String(url || '').trim().match(SHORT_LINK_RE);
+    return match ? match[1] : null;
+}
+
 export async function resolveSkyLink(url) {
     if (!url) return url;
 
-    // Check if it's a go.bsky.app link
-    if (url.includes('go.bsky.app/')) {
-        try {
-            const response = await fetch(url, { method: 'GET', redirect: 'follow' });
-            return response.url;
-        } catch (err) {
-            console.warn('Failed to resolve go.bsky.app link:', err);
-            return url;
+    const code = getShortLinkCode(url);
+    if (!code) return url;
+
+    try {
+        const response = await fetch(`https://go.bsky.app/${code}`, {
+            headers: { Accept: 'application/json' }
+        });
+        if (!response.ok) throw new Error(`go.bsky.app returned ${response.status}`);
+        const data = await response.json();
+        return data.url || url;
+    } catch (err) {
+        console.warn('Failed to resolve Bluesky short link:', err);
+        return url;
+    }
+}
+
+/*
+ * Pull {actor, rkey} out of any starter pack reference. Accepts the three
+ * bsky.app URL shapes plus a raw AT-URI. Returns null for anything else.
+ * The actor may be a handle; the appview resolves handle authorities in
+ * AT-URIs, so no separate resolveHandle round trip is needed.
+ */
+const STARTER_PACK_RES = [
+    /^at:\/\/([^/]+)\/app\.bsky\.graph\.starterpack\/([^/?#]+)/i,
+    /bsky\.app\/start\/([^/?#]+)\/([^/?#]+)/i,
+    /bsky\.app\/starter-pack\/([^/?#]+)\/([^/?#]+)/i,
+    /bsky\.app\/profile\/([^/?#]+)\/starter-pack\/([^/?#]+)/i
+];
+
+export function parseStarterPackUrl(url) {
+    const value = String(url || '').trim();
+    for (const re of STARTER_PACK_RES) {
+        const match = value.match(re);
+        if (match) {
+            const actor = decodeURIComponent(match[1]);
+            const rkey = match[2];
+            return { actor, rkey, uri: `at://${actor}/app.bsky.graph.starterpack/${rkey}` };
         }
     }
+    return null;
+}
 
-    return url;
+/* Expand a short link if needed, then return the starter pack's AT-URI. */
+export async function resolveStarterPackUri(url) {
+    const expanded = await resolveSkyLink(url);
+    const parsed = parseStarterPackUrl(expanded);
+    if (!parsed) {
+        throw new Error(
+            'Not a recognized starter pack link. Expected something like ' +
+            'https://bsky.app/starter-pack/handle/rkey or https://bsky.app/starter-pack-short/CODE'
+        );
+    }
+    return parsed.uri;
 }
 
 /* Common API Helpers */
