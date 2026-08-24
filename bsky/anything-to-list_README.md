@@ -31,6 +31,9 @@ accepted; they are expanded by asking `go.bsky.app` for JSON
 its redirect, which a browser cannot read because the redirect lands on
 `bsky.app` and `bsky.app` sends CORS headers only for its own origin.
 
+A short link that cannot be expanded (network failure, unknown or expired code)
+reports that directly rather than falling through as an unrecognized URL.
+
 A `bsky.app` URL that matches none of the patterns above is now reported as an
 error. It used to fall through to the free-text search branch, which searched
 for the URL as a string and returned whoever had posted that link — a wrong
