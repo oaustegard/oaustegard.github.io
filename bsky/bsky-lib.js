@@ -122,30 +122,58 @@ export function getPublicAgent() {
  * Access-Control-Allow-Origin: *, which is what this uses instead.
  */
 const SHORT_LINK_RE =
-    /^(?:https?:\/\/)?(?:go\.bsky\.app\/|bsky\.app\/(?:[a-z]+-)*short\/)([A-Za-z0-9]+)\/?(?:[?#].*)?$/i;
+    /^(?:https?:\/\/)?(?:go\.bsky\.app\/|bsky\.app\/(?:[a-z]+-)*short\/)([A-Za-z0-9_-]+)\/?(?:[?#].*)?$/i;
 
 export function getShortLinkCode(url) {
     const match = String(url || '').trim().match(SHORT_LINK_RE);
     return match ? match[1] : null;
 }
 
+/*
+ * Returns the expanded URL. A URL that is not a short link is returned
+ * unchanged; a short link that cannot be expanded throws.
+ *
+ * Those two cases must not share a return value. Returning the input on a
+ * failed expansion is indistinguishable from "this was never a short link",
+ * and callers act on the difference: resolveStarterPackUri would go on to
+ * report "Not a recognized starter pack link" for a link it recognized fine
+ * but could not expand, sending the user to check their URL instead of
+ * retrying.
+ */
 export async function resolveSkyLink(url) {
     if (!url) return url;
 
     const code = getShortLinkCode(url);
     if (!code) return url;
 
+    let response;
     try {
-        const response = await fetch(`https://go.bsky.app/${code}`, {
+        response = await fetch(`https://go.bsky.app/${code}`, {
             headers: { Accept: 'application/json' }
         });
-        if (!response.ok) throw new Error(`go.bsky.app returned ${response.status}`);
-        const data = await response.json();
-        return data.url || url;
     } catch (err) {
-        console.warn('Failed to resolve Bluesky short link:', err);
-        return url;
+        console.warn('Failed to reach go.bsky.app:', err);
+        throw new Error(`Could not reach go.bsky.app to expand short link ${code}. Check your connection and try again.`);
     }
+
+    if (response.status === 404) {
+        throw new Error(`Bluesky does not know short link ${code}. Check that the link is correct and has not expired.`);
+    }
+    if (!response.ok) {
+        throw new Error(`go.bsky.app returned ${response.status} expanding short link ${code}.`);
+    }
+
+    let expanded;
+    try {
+        expanded = (await response.json()).url;
+    } catch (err) {
+        console.warn('go.bsky.app returned unparseable JSON:', err);
+        expanded = null;
+    }
+    if (!expanded) {
+        throw new Error(`go.bsky.app gave no target for short link ${code}.`);
+    }
+    return expanded;
 }
 
 /*

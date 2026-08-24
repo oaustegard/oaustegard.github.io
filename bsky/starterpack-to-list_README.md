@@ -37,6 +37,9 @@ This tool allows you to take a BlueSky starter pack and add all of its members t
   from a browser: it lands on `bsky.app`, which sends CORS headers only for
   Origin `https://bsky.app`, so the fetch fails and `response.url` is never
   readable.
+- A short link that cannot be expanded (network failure, unknown or expired
+  code) reports that directly, rather than being passed along unchanged and
+  reported as an unrecognized starter pack URL.
 - The starter pack is fetched by AT-URI built from the URL, rather than by
   listing the creator's packs and matching the rkey. Handle authorities in
   AT-URIs are resolved by the appview, so no separate handle lookup is needed.
