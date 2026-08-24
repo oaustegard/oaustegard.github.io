@@ -26,10 +26,14 @@ function stubFetch(handler) {
 }
 
 const jsonResponse = (body, status = 200) => ({
+    type: 'cors',
     ok: status >= 200 && status < 300,
     status,
     json: async () => body
 });
+
+/* What a cross-origin 3xx looks like under redirect:'manual' */
+const opaqueRedirect = () => ({ type: 'opaqueredirect', ok: false, status: 0 });
 
 test('getShortLinkCode recognizes both short-link hosts', () => {
     assert.equal(getShortLinkCode(`https://bsky.app/starter-pack-short/${CODE}`), CODE);
@@ -81,8 +85,34 @@ test('resolveSkyLink asks go.bsky.app for JSON rather than following the redirec
         assert.equal(stub.calls.length, 1);
         assert.equal(stub.calls[0].url, `https://go.bsky.app/${CODE}`);
         assert.equal(stub.calls[0].init.headers.Accept, 'application/json');
-        /* redirect:'follow' is what broke in the browser — it must not come back */
-        assert.equal(stub.calls[0].init.redirect, undefined);
+        /* go.bsky.app sends no Vary, so a 301 cached from a plain visit would
+           otherwise be replayed here and followed into bsky.app's CORS wall */
+        assert.equal(stub.calls[0].init.cache, 'no-store');
+        assert.equal(stub.calls[0].init.redirect, 'manual');
+    } finally { stub.restore(); }
+});
+
+test('resolveSkyLink retries under a fresh cache key when a stale redirect is served', async () => {
+    let n = 0;
+    const stub = stubFetch(() => (++n === 1 ? opaqueRedirect() : jsonResponse({ url: `${EXPANDED}?_cb=123` })));
+    try {
+        /* The cache-buster comes back attached, because go.bsky.app copies the
+           query string onto the target. It must not survive into the result. */
+        assert.equal(await resolveSkyLink(`https://go.bsky.app/${CODE}`), EXPANDED);
+        assert.equal(stub.calls.length, 2);
+        assert.equal(stub.calls[0].url, `https://go.bsky.app/${CODE}`);
+        assert.match(stub.calls[1].url, new RegExp(`^https://go\\.bsky\\.app/${CODE}\\?_cb=\\d+$`));
+    } finally { stub.restore(); }
+});
+
+test('resolveSkyLink reports a redirect that survives the retry', async () => {
+    const stub = stubFetch(() => opaqueRedirect());
+    try {
+        await assert.rejects(
+            () => resolveSkyLink(`https://go.bsky.app/${CODE}`),
+            /redirected instead of expanding/
+        );
+        assert.equal(stub.calls.length, 2);
     } finally { stub.restore(); }
 });
 
