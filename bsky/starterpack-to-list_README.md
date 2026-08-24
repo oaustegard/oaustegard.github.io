@@ -18,7 +18,10 @@ This tool allows you to take a BlueSky starter pack and add all of its members t
 ## Usage
 
 1. **Login**: Enter your BlueSky handle and an app password to log in.
-2. **Enter Starter Pack URL**: Paste the URL of the starter pack you want to convert.
+2. **Enter Starter Pack URL**: Paste the URL of the starter pack you want to convert. All four forms work:
+   `https://bsky.app/starter-pack/<handle>/<rkey>`, `https://bsky.app/start/<did>/<rkey>`,
+   the older `https://bsky.app/profile/<handle>/starter-pack/<rkey>`, and short links
+   (`https://bsky.app/starter-pack-short/<code>` or `https://go.bsky.app/<code>`).
 3. **Select Target List**: Choose an existing list from the dropdown or select "Create New List" and provide a name.
 4. **Convert**: Click the "Convert Pack to List" button to begin.
 5. **View Result**: The tool will confirm when the conversion is complete and provide a link to the new/updated list.
@@ -28,6 +31,15 @@ This tool allows you to take a BlueSky starter pack and add all of its members t
 - Built with vanilla JavaScript.
 - Uses the BlueSky API for authentication, fetching starter pack data, and managing lists.
 - All operations happen in your browser; no data is stored on a server.
+- Short links are expanded by requesting `https://go.bsky.app/<code>` with
+  `Accept: application/json`, which returns `{"url": "..."}` and
+  `Access-Control-Allow-Origin: *`. Following the redirect instead does not work
+  from a browser: it lands on `bsky.app`, which sends CORS headers only for
+  Origin `https://bsky.app`, so the fetch fails and `response.url` is never
+  readable.
+- The starter pack is fetched by AT-URI built from the URL, rather than by
+  listing the creator's packs and matching the rkey. Handle authorities in
+  AT-URIs are resolved by the appview, so no separate handle lookup is needed.
 
 ## Security and Privacy
 

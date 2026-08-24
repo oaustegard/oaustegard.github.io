@@ -441,7 +441,7 @@ import {
     getAgent, getAuthAgent, getPublicAgent,
     getLists, getListMembers, addMemberToList, createList,
     getStarterPack, getProfile,
-    resolveSkyLink
+    resolveSkyLink, getShortLinkCode, parseStarterPackUrl
 } from './bsky-lib.js';
 
 /* ─── State ─── */
@@ -480,17 +480,6 @@ function logLine(html) {
 
 /* ─── URL / Input Normalization ─── */
 
-/* Resolve go.bsky.app short links */
-async function resolveShortUrl(url) {
-    if (/go\.bsky\.app\//i.test(url)) {
-        try {
-            const r = await fetch(url, { redirect: 'follow' });
-            return r.url;
-        } catch { return url; }
-    }
-    return url;
-}
-
 /* Resolve handle → DID using public API */
 async function resolveHandle(handle) {
     handle = handle.replace(/^@/, '');
@@ -522,10 +511,13 @@ async function classify(raw) {
     raw = raw.trim();
     if (!raw) throw new Error('Please enter a source');
 
-    /* 1 ─ resolve short links */
+    /* 1 ─ expand short links: go.bsky.app/CODE and bsky.app/starter-pack-short/CODE */
     let url = raw;
-    if (/^https?:\/\/go\.bsky\.app\//i.test(raw)) {
-        url = await resolveShortUrl(raw);
+    if (getShortLinkCode(raw)) {
+        url = await resolveSkyLink(raw);
+        if (getShortLinkCode(url)) {
+            throw new Error('Could not expand that Bluesky short link. Open it in a browser and paste the full URL it lands on.');
+        }
     }
 
     /* 2 ─ bsky.app URLs */
@@ -540,11 +532,12 @@ async function classify(raw) {
             return { type: 'list', uri: `at://${did}/app.bsky.graph.list/${m[2]}` };
         }
 
-        /* Starter pack: starter-pack/{actor}/{rkey}  OR  profile/{actor}/starter-pack/{rkey} (old format) */
-        m = path.match(/^(?:starter-pack|profile)\/([^/]+)\/(?:starter-pack\/)?([\w]+)$/);
-        if (m && path.includes('starter-pack')) {
-            const did = m[1].startsWith('did:') ? m[1] : await resolveHandle(m[1]);
-            return { type: 'starterpack', uri: `at://${did}/app.bsky.graph.starterpack/${m[2]}` };
+        /* Starter pack: start/{actor}/{rkey}, starter-pack/{actor}/{rkey},
+           or profile/{actor}/starter-pack/{rkey} (old format) */
+        const pack = parseStarterPackUrl(url);
+        if (pack) {
+            const did = pack.actor.startsWith('did:') ? pack.actor : await resolveHandle(pack.actor);
+            return { type: 'starterpack', uri: `at://${did}/app.bsky.graph.starterpack/${pack.rkey}` };
         }
 
         /* Feed: profile/{actor}/feed/{feedName} */
@@ -603,7 +596,14 @@ async function classify(raw) {
         return { type: 'did_list', dids: lines.map(l => l.replace(/^@/, '')) };
     }
 
-    /* 8 ─ Fall back to search query */
+    /* 8 ─ A bsky.app URL that matched nothing above is a bug, not a search term.
+           Searching for the URL text returns whoever posted the link, which looks
+           like a wrong-but-plausible result. Say so instead. */
+    if (/^https?:\/\/(?:[\w-]+\.)*bsky\.app\//i.test(url)) {
+        throw new Error(`Unrecognized Bluesky URL: ${url}`);
+    }
+
+    /* 9 ─ Fall back to search query */
     return { type: 'search', query: raw };
 }
 

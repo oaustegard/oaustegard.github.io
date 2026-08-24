@@ -180,7 +180,7 @@
     <div id="packSection" class="input-section">
         <h2>Step 2: Convert Pack to List</h2>
         <div class="form-group">
-            <label>Starter Pack URL (or go.bsky.app short link):</label>
+            <label>Starter Pack URL (or short link):</label>
             <input type="text" id="packurl" placeholder="https://bsky.app/starter-pack/user.bsky.social/3l6stg6xfrc23" required>
         </div>
         
@@ -211,55 +211,13 @@
             getListMembers,
             createList,
             addMemberToList,
-            resolveSkyLink,
+            resolveStarterPackUri,
             getAuthAgent,
-            initializeLib,
-            getActorStarterPacks
+            initializeLib
         } from './bsky-lib.js';
 
         let selectedListUri = null;
         let listCreationMode = false;
-        const MAX_STARTERPACK_REDIRECTS = 2;
-
-        async function followRedirectUrl(url) {
-            if (!url) return url;
-            try {
-                const response = await fetch(url, { method: 'GET', redirect: 'follow' });
-                return response.url || url;
-            } catch (error) {
-                console.warn('Failed to follow redirect for starter pack URL:', error);
-                return url;
-            }
-        }
-
-        async function findStarterPackFromUrl(initialUrl) {
-            let packUrl = initialUrl;
-
-            for (let attempt = 0; attempt < MAX_STARTERPACK_REDIRECTS; attempt += 1) {
-                const packParts = packUrl.split('/');
-                const packId = packParts[packParts.length - 1];
-                const userHandle = packParts[packParts.length - 2];
-
-                const starterPacks = await getActorStarterPacks(userHandle);
-                const pack = starterPacks.find(p => {
-                    const parts = p.uri.split('/');
-                    return parts[parts.length - 1] === packId;
-                });
-
-                if (pack) {
-                    return { pack, packUrl };
-                }
-
-                const redirectedUrl = await followRedirectUrl(packUrl);
-                if (!redirectedUrl || redirectedUrl === packUrl) {
-                    break;
-                }
-
-                packUrl = redirectedUrl;
-            }
-
-            throw new Error('Starter Pack not found');
-        }
 
         function showStatus(message, isError = false) {
             const statusDiv = document.getElementById('status');
@@ -360,19 +318,16 @@
             btn.textContent = 'Converting...';
 
             try {
-                let packUrl = document.getElementById('packurl').value.trim();
+                const packUrl = document.getElementById('packurl').value.trim();
 
-                // Resolve short link if needed
+                // Expand go.bsky.app / starter-pack-short links, then parse out the AT-URI
                 updateProgress('Resolving URL...');
-                packUrl = await resolveSkyLink(packUrl);
+                const packUri = await resolveStarterPackUri(packUrl);
 
                 updateProgress('Loading starter pack info...');
 
                 const agent = getAuthAgent();
-                const { pack, packUrl: resolvedPackUrl } = await findStarterPackFromUrl(packUrl);
-                packUrl = resolvedPackUrl;
-
-                const packData = await getStarterPack(pack.uri);
+                const packData = await getStarterPack(packUri);
                 const members = await getListMembers(packData.list.uri);
 
                 let targetListUri;
