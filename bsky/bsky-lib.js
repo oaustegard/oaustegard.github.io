@@ -139,7 +139,34 @@ export function getShortLinkCode(url) {
  * report "Not a recognized starter pack link" for a link it recognized fine
  * but could not expand, sending the user to check their URL instead of
  * retrying.
+ *
+ * The cache handling is not optional. go.bsky.app content-negotiates on
+ * Accept -- text/html gets a 301 to bsky.app, application/json gets the target
+ * as JSON -- but sends no Vary header, with cache-control: max-age=604800. The
+ * browser's HTTP cache therefore keys on the URL alone, so a 301 cached from
+ * an earlier plain visit to the same short link (clicking it, or any page that
+ * fetched it with redirect:'follow') is replayed for this JSON request for a
+ * week. With the default redirect:'follow' that stale 301 is followed to
+ * bsky.app, which sends CORS headers only for its own origin, and the fetch
+ * rejects with a bare TypeError that reads as a network outage.
+ *
+ * So: cache:'no-store' to bypass the cache, redirect:'manual' so a redirect
+ * that arrives anyway becomes a readable opaqueredirect rather than a walk
+ * into the CORS wall, and one retry under a different cache key for browsers
+ * that serve the cached entry regardless.
  */
+function shortLinkRequest(code, cacheBuster) {
+    const url = `https://go.bsky.app/${code}` + (cacheBuster ? `?_cb=${cacheBuster}` : '');
+    return fetch(url, {
+        headers: { Accept: 'application/json' },
+        cache: 'no-store',
+        redirect: 'manual'
+    });
+}
+
+const isRedirect = (response) =>
+    response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400);
+
 export async function resolveSkyLink(url) {
     if (!url) return url;
 
@@ -148,14 +175,19 @@ export async function resolveSkyLink(url) {
 
     let response;
     try {
-        response = await fetch(`https://go.bsky.app/${code}`, {
-            headers: { Accept: 'application/json' }
-        });
+        response = await shortLinkRequest(code);
+        if (isRedirect(response)) {
+            /* Stale cached 301. Re-ask under a cache key nothing can have poisoned. */
+            response = await shortLinkRequest(code, Date.now());
+        }
     } catch (err) {
         console.warn('Failed to reach go.bsky.app:', err);
         throw new Error(`Could not reach go.bsky.app to expand short link ${code}. Check your connection and try again.`);
     }
 
+    if (isRedirect(response)) {
+        throw new Error(`go.bsky.app redirected instead of expanding short link ${code}. Reload the page to clear a stale cached redirect.`);
+    }
     if (response.status === 404) {
         throw new Error(`Bluesky does not know short link ${code}. Check that the link is correct and has not expired.`);
     }
@@ -173,7 +205,12 @@ export async function resolveSkyLink(url) {
     if (!expanded) {
         throw new Error(`go.bsky.app gave no target for short link ${code}.`);
     }
-    return expanded;
+    /* go.bsky.app copies the query string onto the target, so the cache-buster
+       comes back attached. Downstream parsers stop at '?', but leaving it on
+       would put it in error messages and anything built from the URL. The
+       request is built from the code alone, so ?_cb=<n> is the whole query and
+       the anchored match cannot eat a real parameter. */
+    return expanded.replace(/\?_cb=\d+$/, '');
 }
 
 /*

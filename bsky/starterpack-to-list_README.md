@@ -37,6 +37,13 @@ This tool allows you to take a BlueSky starter pack and add all of its members t
   from a browser: it lands on `bsky.app`, which sends CORS headers only for
   Origin `https://bsky.app`, so the fetch fails and `response.url` is never
   readable.
+- `go.bsky.app` content-negotiates on `Accept` but sends no `Vary` header, with
+  `cache-control: max-age=604800`. The browser's HTTP cache keys on the URL
+  alone, so a 301 cached from an earlier plain visit to the same short link is
+  replayed for the JSON request for a week, and following it lands on
+  `bsky.app` and its CORS wall. The request therefore uses `cache: 'no-store'`
+  and `redirect: 'manual'`, and retries once under a cache-busting query key if
+  a redirect arrives anyway.
 - A short link that cannot be expanded (network failure, unknown or expired
   code) reports that directly, rather than being passed along unchanged and
   reported as an unrecognized starter pack URL.

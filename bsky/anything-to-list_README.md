@@ -31,8 +31,14 @@ accepted; they are expanded by asking `go.bsky.app` for JSON
 its redirect, which a browser cannot read because the redirect lands on
 `bsky.app` and `bsky.app` sends CORS headers only for its own origin.
 
-A short link that cannot be expanded (network failure, unknown or expired code)
-reports that directly rather than falling through as an unrecognized URL.
+`go.bsky.app` sends no `Vary` header alongside its week-long `cache-control`,
+so the browser can replay a 301 cached from an earlier plain visit for the JSON
+request. The expansion uses `cache: 'no-store'` and `redirect: 'manual'` and
+retries once under a cache-busting query key to get past that.
+
+A short link that cannot be expanded (network failure, unknown or expired code,
+a redirect that survives the retry) reports that directly rather than falling
+through as an unrecognized URL.
 
 A `bsky.app` URL that matches none of the patterns above is now reported as an
 error. It used to fall through to the free-text search branch, which searched
