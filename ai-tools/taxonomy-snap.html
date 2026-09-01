@@ -102,14 +102,17 @@
        entire classifier. It never emits a category that is not in the list, because it only ever
        picks from the list.</p>
     <p>It is a <em>shortlister</em>, not an oracle. It puts the gold category first for roughly
-       45% of held-out queries and in the top three for 59%. Queries whose wording has nothing in
+       43% of held-out queries and in the top three for 59%. Quantising the encoder to int8
+       to make it a 33&nbsp;MB download costs about two points of acc@1 against fp32 and
+       almost nothing at acc@3 &mdash; the table below carries both. Queries whose wording has nothing in
        common with any label &mdash; <code>gurney slade 56</code>, a product name &mdash; have no
        reason to land anywhere near the right answer, and do not.</p>
 
     <h2>Measured</h2>
     <table>
       <tr><th>arm</th><th class="num">acc@1</th><th class="num">acc@3</th><th class="num">tokens sent</th></tr>
-      <tr><td>this page &mdash; snap the query directly</td><td class="num">0.455</td><td class="num">0.594</td><td class="num">0</td></tr>
+      <tr><td>this page &mdash; snap the query directly, int8</td><td class="num">0.434</td><td class="num">0.588</td><td class="num">0</td></tr>
+      <tr><td>the same encoder at fp32, off the page</td><td class="num">0.455</td><td class="num">0.594</td><td class="num">0</td></tr>
       <tr><td>a cheap model writes the label first, then snap</td><td class="num">0.571</td><td class="num">&mdash;</td><td class="num">6</td></tr>
       <tr><td>send all 860 labels, ask for a constrained choice</td><td class="num">0.701</td><td class="num">0.744</td><td class="num">5,265</td></tr>
     </table>
@@ -127,6 +130,17 @@
        while the right answer sits in that top ten 82.5% of the time. What a remote model contributes
        here is a prior over how taxonomies name things, and that is the first thing a shrinking model
        loses.</p>
+
+    <h2>One trap worth knowing about</h2>
+    <p>This page pins the encoder to the WASM backend. Running the same int8 weights through
+       transformers.js on <code>device: "webgpu"</code> returns a <em>collapsed</em> embedding
+       space &mdash; every pair of labels about 0.995 apart, so the ranking is noise &mdash; and
+       it does so silently, with no error and a plausible-looking result. The first version of
+       this page shipped that way and answered <code>Pillow</code> with
+       <em>Wedding, Drains, Fabric, Flags, Candles</em>. The weights are not at fault: the same
+       <code>model_quantized.onnx</code> matches fp32 PyTorch to three decimals under
+       onnxruntime. Hence the smoke test on load &mdash; the page holds its own gold labels, so
+       it checks that the index it just built can rank before it will show you anything.</p>
 
     <h2>Credits and licence</h2>
     <p>Queries, labels and relevance judgements from
@@ -189,18 +203,41 @@ $("load").onclick = async () => {
   $("load").disabled = true;
   mode("loading", "");
   try {
-    const gpu = !!navigator.gpu;
+    /* WASM, not WebGPU. transformers.js int8 on the WebGPU backend returns a
+       collapsed embedding space on this model — every pair ~0.995 cosine, so the
+       ranking is noise — and it does it silently rather than erroring. The same
+       weights on WASM/CPU are correct. Verified against fp32 PyTorch and against
+       onnxruntime on model_quantized.onnx; indexing 860 labels takes ~1s of compute.
+       If you re-enable WebGPU, keep the smoke test below and watch it. */
     say("Downloading gte-small (33 MB int8; your browser caches it after this)…");
     extractor = await pipeline("feature-extraction", "Xenova/gte-small", {
-      dtype: "q8", device: gpu ? "webgpu" : "wasm",
+      dtype: "q8", device: "wasm",
       progress_callback: p => { if (p.status === "progress" && p.total) prog(0.5 * p.loaded / p.total); },
     });
     say(`Embedding ${D.labels.length} labels…`);
     const t0 = performance.now();
     L = flatten(await embed(D.labels, f => prog(0.5 + 0.5 * f)));
     prog(1);
-    say(`${D.labels.length} labels indexed in ${((performance.now() - t0) / 1000).toFixed(1)}s, `
-        + `${DIM} dimensions each, on ${gpu ? "WebGPU" : "WASM"}.`);
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+
+    /* Smoke test. This page ships its own gold labels, so it can check that the
+       index it just built actually ranks — rather than showing plausible-looking
+       nonsense, which is exactly what shipped the first time. */
+    say("Checking the index…");
+    const N = 24;
+    const probe = await embed(D.queries.slice(0, N));
+    let hit = 0;
+    probe.forEach((v, i) => { if (rank(v, 3).some(r => r[0] === D.gold[i])) hit++; });
+    const acc = hit / N;
+    if (acc < 0.25) {
+      mode("broken", "err");
+      say(`Index failed its own smoke test — ${hit}/${N} of the first ${N} queries put `
+          + `the gold label in the top 3, against ~0.59 expected. Something in the `
+          + `embedding path is wrong; results are not shown.`);
+      return;
+    }
+    say(`${D.labels.length} labels indexed in ${secs}s, ${DIM} dimensions each. `
+        + `Smoke test ${hit}/${N} in the top 3.`);
     mode("ready", "ready");
     $("q").disabled = false; $("bench").disabled = false;
     $("load").textContent = "Loaded"; $("q").focus();
@@ -229,7 +266,7 @@ document.querySelectorAll(".examples button").forEach(b => {
 $("bench").onclick = async () => {
   $("bench").disabled = true;
   const arms = [
-    ["snap the query directly", D.queries, "0.455", "0.594"],
+    ["snap the query directly", D.queries, "0.434", "0.588"],
     ["written label, then snap", D.written, "0.571", null],
   ];
   const tbody = $("btab").querySelector("tbody");
