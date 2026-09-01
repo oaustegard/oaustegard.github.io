@@ -18,7 +18,8 @@ vocabulary with an embedder. The measurement said the embedder is carrying the p
 
 | arm | acc@1 | acc@3 | tokens sent |
 |---|---|---|---|
-| snap the query directly (this page) | 0.455 | 0.594 | 0 |
+| snap the query directly, int8 (this page) | 0.434 | 0.588 | 0 |
+| the same encoder at fp32, off the page | 0.455 | 0.594 | 0 |
 | a cheap model writes the label first, then snap | 0.571 | — | 6 |
 | send all 860 labels, ask for a constrained choice | 0.701 | 0.744 | 5,265 |
 
@@ -39,3 +40,20 @@ MIT. Encoder [Xenova/gte-small](https://huggingface.co/Xenova/gte-small), MIT. R
 
 Arms, artifacts and the reproduction script:
 [oaustegard/experiments/hypothetical-classification](https://github.com/oaustegard/experiments/tree/main/hypothetical-classification).
+
+## The WebGPU trap
+
+The page pins the encoder to the WASM backend. Running the same int8 weights through
+transformers.js on `device: "webgpu"` returns a collapsed embedding space — every pair of
+labels roughly 0.995 apart, so the ranking is noise — silently, with no error and a
+plausible-looking result. The first version shipped that way and answered `Pillow` with
+*Wedding, Drains, Fabric, Flags, Candles*.
+
+The weights are not at fault. The same `model_quantized.onnx` matches fp32 PyTorch to
+three decimals under onnxruntime, and the page's own JavaScript reproduces 0.434/0.588
+over all 468 queries when run on Node's CPU backend.
+
+Hence the smoke test on load: the page carries its own gold labels, so it checks that the
+index it just built can rank 24 held-out queries before it will show anything. It clears
+that gate at 15/24 against a 6/24 floor. A page that ships its own benchmark and only
+wires it to a button cannot notice it is broken.
