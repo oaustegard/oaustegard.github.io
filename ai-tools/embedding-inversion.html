@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Embedding inversion &mdash; what a 384-dim vector gives back</title>
+<meta name="description" content="1,000 sentences were embedded with bekko-embedding-v1-a8m and a small inverter tried to write them back from the vector alone, and from its 1-bit code. Browse every attempt, round by round.">
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: system-ui,-apple-system,sans-serif; line-height:1.6; margin:0; padding:24px;
+         background:#fafafa; color:#333; }
+  .container { max-width:960px; margin:0 auto; background:#fff; padding:30px; border-radius:8px;
+               box-shadow:0 2px 10px rgba(0,0,0,.1); }
+  a { color:#2563eb; }
+  a.back { text-decoration:none; font-size:14px; }
+  h1 { margin:.2em 0 .1em; font-size:24px; }
+  h2 { font-size:17px; margin:26px 0 8px; }
+  .sub { color:#666; margin:0 0 18px; }
+  form { display:flex; gap:10px; margin-top:16px; flex-wrap:wrap; }
+  input[type=search] { flex:1 1 320px; padding:11px 13px; font:16px inherit;
+                       border:1px solid #d1d5db; border-radius:8px; }
+  button { background:#2563eb; color:#fff; border:0; border-radius:8px; padding:11px 18px;
+           font:600 15px/1 inherit; cursor:pointer; }
+  .chips { margin-top:10px; font-size:13px; color:#64748b; }
+  .chips button { background:#f1f5f9; color:#334155; border:1px solid #e2e8f0;
+                  font:13px/1 inherit; padding:6px 11px; border-radius:20px; margin:4px 4px 0 0; }
+  .chips button.on { background:#dbeafe; border-color:#93c5fd; color:#1d4ed8; }
+  ol.list { list-style:none; margin:14px 0 0; padding:0; max-height:260px; overflow:auto;
+            border:1px solid #eef2f7; border-radius:8px; }
+  ol.list li { padding:8px 12px; border-top:1px solid #eef2f7; cursor:pointer; display:flex; gap:10px; }
+  ol.list li:first-child { border-top:0; }
+  ol.list li:hover { background:#f8fafc; }
+  ol.list li.sel { background:#eff6ff; }
+  ol.list .w { color:#94a3b8; font:12px ui-monospace,monospace; min-width:34px; }
+  ol.list .ok { font:11px ui-monospace,monospace; color:#15803d; background:#dcfce7; padding:1px 6px; border-radius:20px; }
+  .target { margin:22px 0 6px; padding:14px 16px; background:#f8fafc; border-left:4px solid #2563eb;
+            border-radius:6px; font-size:17px; }
+  .target small { display:block; color:#64748b; font-size:12px; margin-top:4px; }
+  .arms { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:12px; }
+  @media (max-width:720px) { .arms { grid-template-columns:1fr; } }
+  .arm h3 { font-size:14px; margin:0 0 6px; color:#0f172a; }
+  .arm h3 span { font:11px/1.6 ui-monospace,monospace; text-transform:uppercase; letter-spacing:.07em;
+                 padding:2px 9px; border-radius:20px; margin-left:6px; background:#f1f5f9; color:#64748b; }
+  .rounds { list-style:none; margin:0; padding:0; }
+  .rounds li { padding:7px 0; border-top:1px solid #eef2f7; display:grid;
+               grid-template-columns:34px 1fr auto; gap:8px; align-items:baseline; }
+  .rounds li:first-child { border-top:0; }
+  .rounds .r { color:#94a3b8; font:12px ui-monospace,monospace; }
+  .rounds .h { font-size:14px; }
+  .rounds .h.same { color:#94a3b8; }
+  .rounds .h.exact { color:#15803d; font-weight:600; }
+  .rounds .m { font:12px ui-monospace,monospace; color:#64748b; white-space:nowrap; }
+  .rounds li.nn { background:#fffbeb; margin:0 -6px 6px; padding:7px 6px; border-radius:6px; border-top:0; }
+  .rounds li.nn .r { color:#b45309; }
+  .final { margin-top:8px; font:13px ui-monospace,monospace; color:#475569; }
+  table { width:100%; border-collapse:collapse; font-size:14px; margin-top:10px; }
+  th,td { text-align:left; padding:7px 9px; border-bottom:1px solid #eef2f7; }
+  th { color:#64748b; font-size:12px; text-transform:uppercase; letter-spacing:.05em; }
+  td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
+  code { background:#f1f5f9; padding:1px 5px; border-radius:4px; font-size:13px; }
+  footer { margin-top:30px; color:#555; font-size:14px; }
+  footer summary { cursor:pointer; color:#2563eb; }
+  footer p { margin:.7em 0; }
+  #status { font:13px ui-monospace,monospace; color:#64748b; margin-top:8px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <a class="back" href="/ai-tools/">&larr; AI tools</a>
+  <h1>Embedding inversion</h1>
+  <p class="sub">1,000 short strings were embedded with
+     <a href="https://huggingface.co/hotchpotch/bekko-embedding-v1-a8m">bekko-embedding-v1-a8m</a>
+     and a small inverter tried to write each one back from its 384-dim vector alone, then from
+     the 384-bit sign code a 1-bit index keeps. Pick any target and read the six attempts, round
+     by round. Nothing runs here; these are the recorded outputs of one measured run.</p>
+
+  <form autocomplete="off" onsubmit="return false">
+    <input type="search" id="q" placeholder="search the 1,000 targets, e.g. medicare, Germany, batman">
+    <button id="rnd">Random</button>
+  </form>
+  <div class="chips">Length:
+    <button data-len="all" class="on">all</button>
+    <button data-len="0-6">&le; 6 words</button>
+    <button data-len="7-10">7&ndash;10</button>
+    <button data-len="11-16">11&ndash;16</button>
+    <button data-len="17-plus">17+</button>
+    &nbsp; <button data-exact="1">exact recoveries only</button>
+  </div>
+  <div id="status">Loading 1.2&nbsp;MB of results&hellip;</div>
+  <ol class="list" id="list"></ol>
+
+  <div id="view" hidden>
+    <div class="target"><span id="tgt"></span><small id="tmeta"></small></div>
+    <div class="arms">
+      <div class="arm">
+        <h3>From the float vector <span>float</span></h3>
+        <ol class="rounds" id="rf"></ol>
+        <div class="final" id="ff"></div>
+      </div>
+      <div class="arm">
+        <h3>From the 384-bit sign code <span>bin1</span></h3>
+        <ol class="rounds" id="rb"></ol>
+        <div class="final" id="fb"></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>The whole run</h2>
+  <p class="sub" style="margin-bottom:0">Test set of 1,000. <em>Exact</em> is case-insensitive exact match;
+     <em>F1</em> is bag-of-words token F1; <em>cosine</em> is what the verifier saw, and it is on a
+     different ruler in each arm (see below).</p>
+  <table id="head"><thead><tr><th></th><th colspan="3" style="text-align:center">float</th><th colspan="3" style="text-align:center">bin1</th></tr>
+    <tr><th>arm</th><th class="num">exact</th><th class="num">F1</th><th class="num">cosine</th>
+    <th class="num">exact</th><th class="num">F1</th><th class="num">cosine</th></tr></thead><tbody></tbody></table>
+
+  <table id="len"><thead><tr><th>target length</th><th class="num">n</th><th class="num">float exact</th><th class="num">float F1</th>
+    <th class="num">bin1 exact</th><th class="num">bin1 F1</th></tr></thead><tbody></tbody></table>
+
+  <footer>
+    <details>
+      <summary>How this was made, what the numbers mean, sources</summary>
+
+    <h2>What this is</h2>
+    <p>An inverter in the shape of <a href="https://arxiv.org/abs/2310.06816">vec2text</a>
+       (Morris et al., 2023): a t5-small decoder conditioned on the target vector writes a first
+       guess, then a second model reads the target, the guess, the guess's own embedding and the
+       difference between them, and writes a better guess. Each round the encoder re-embeds the
+       candidates and keeps whichever lands closest to the target. Five rounds. The
+       <em>nearest training string</em> row in each arm is the control: the closest of the 40,000
+       training strings by the same cosine, which is what memorisation alone would return.</p>
+    <p>The training budget was small on purpose: 40,000 pairs of questions and Wikipedia sentences,
+       three epochs plus one for the corrector, 7.4 hours on four CPU cores. vec2text reports 92%
+       exact recovery on 32-token inputs after five million pairs on a GPU. This run recovers the
+       exact string 2.4% of the time from the float vector and 0.9% from the sign code, never past
+       ten words, and lands on topic far more often than that. The outputs are not training
+       strings; the float arm's guesses sit 0.09 cosine closer to the target than any training
+       string does.</p>
+
+    <h2>Two rulers</h2>
+    <p>The float arm's cosine is between float vectors. The bin1 arm's is between two &plusmn;1 sign
+       vectors, which equals 1&nbsp;&minus;&nbsp;2&nbsp;&times; the fraction of disagreeing bits, so
+       0.385 means 69% of bits agree. To put both arms on one scale the final strings from both were
+       re-embedded in float space: bin1 0.529, float 0.635, against 0.546 and 0.515 for the two
+       nearest-training-string controls. And scored with the sign code, the float arm's strings
+       agree with the target on 71.8% of bits against 69.2% for the arm that was trained on the
+       code.</p>
+
+    <h2>Sources</h2>
+    <p>Run, code, pre-registration, error log and the per-item records this page reads:
+       <a href="https://github.com/oaustegard/experiments/tree/main/embedding-inversion">oaustegard/experiments/embedding-inversion</a>.
+       Encoder: <a href="https://huggingface.co/hotchpotch/bekko-embedding-v1-a8m">hotchpotch/bekko-embedding-v1-a8m</a>,
+       default int8 ONNX, mean-pooled. Strings: questions from
+       <a href="https://huggingface.co/datasets/sentence-transformers/natural-questions">Natural Questions</a>
+       and <a href="https://huggingface.co/datasets/sentence-transformers/msmarco">MS MARCO</a>, and
+       sentences split from the Natural Questions Wikipedia passages; licences per those dataset cards.
+       Inverter base: <a href="https://huggingface.co/google-t5/t5-small">t5-small</a>, Apache 2.0.</p>
+    </details>
+  </footer>
+</div>
+
+<script>
+(async function () {
+  const $ = id => document.getElementById(id);
+  const norm = s => s.toLowerCase().replace(/’/g, "'").split(/\s+/).filter(Boolean).join(' ');
+  const f1 = (a, b) => {
+    const ta = norm(a).split(' '), tb = norm(b).split(' ');
+    if (!ta.length || !tb.length) return 0;
+    const c = new Map(); for (const t of ta) c.set(t, (c.get(t) || 0) + 1);
+    let common = 0; for (const t of tb) { const n = c.get(t) || 0; if (n > 0) { common++; c.set(t, n - 1); } }
+    if (!common) return 0;
+    const p = common / tb.length, r = common / ta.length; return 2 * p * r / (p + r);
+  };
+  const bucket = w => w <= 6 ? '0-6' : w <= 10 ? '7-10' : w <= 16 ? '11-16' : '17-plus';
+  const fmt = x => x.toFixed(3);
+
+  let D;
+  try {
+    D = await (await fetch('embedding-inversion-results.json')).json();
+  } catch (e) { $('status').textContent = 'Could not load the results file: ' + e; return; }
+  const items = D.items.map((it, i) => ({ ...it, i,
+    exactF: norm(it.t) === norm(it.f.h[5]), exactB: norm(it.t) === norm(it.b.h[5]) }));
+
+  // headline + length tables straight from the run's own summary block
+  const rows = [['nearest training string (control)', 'nn_train'], ['zero-step, top beam', 'zero_top_beam'],
+    ['verifier picks among 4 beams (round 0)', 'round0'], ['round 1', 'round1'], ['round 2', 'round2'],
+    ['round 3', 'round3'], ['round 4', 'round4'], ['round 5', 'round5']];
+  $('head').tBodies[0].innerHTML = rows.map(([lab, k]) => {
+    const a = D.rounds.float[k], b = D.rounds.bin1[k];
+    return `<tr><td>${lab}</td><td class="num">${fmt(a.exact)}</td><td class="num">${fmt(a.token_f1)}</td><td class="num">${fmt(a.cosine)}</td>
+            <td class="num">${fmt(b.exact)}</td><td class="num">${fmt(b.token_f1)}</td><td class="num">${fmt(b.cosine)}</td></tr>`;
+  }).join('');
+  const lens = [['0-6', '≤ 6 words'], ['7-10', '7–10'], ['11-16', '11–16'], ['17-plus', '17+']];
+  $('len').tBodies[0].innerHTML = lens.map(([k, lab]) => {
+    const a = D.by_length.float[k], b = D.by_length.bin1[k];
+    return `<tr><td>${lab}</td><td class="num">${a.n}</td><td class="num">${fmt(a.exact)}</td><td class="num">${fmt(a.token_f1)}</td>
+            <td class="num">${fmt(b.exact)}</td><td class="num">${fmt(b.token_f1)}</td></tr>`;
+  }).join('');
+
+  let lenF = 'all', exactOnly = false, sel = -1, shown = [];
+  function filtered() {
+    const q = norm($('q').value);
+    return items.filter(it => (lenF === 'all' || bucket(it.w) === lenF) &&
+      (!exactOnly || it.exactF || it.exactB) && (!q || norm(it.t).includes(q)));
+  }
+  function renderList() {
+    shown = filtered();
+    $('status').textContent = `${shown.length} of ${items.length} targets`;
+    $('list').innerHTML = shown.slice(0, 200).map(it =>
+      `<li data-i="${it.i}" class="${it.i === sel ? 'sel' : ''}"><span class="w">${it.w}w</span><span>${esc(it.t)}</span>` +
+      (it.exactF || it.exactB ? `<span class="ok">exact ${it.exactF && it.exactB ? 'both' : it.exactF ? 'float' : 'bin1'}</span>` : '') + `</li>`).join('') +
+      (shown.length > 200 ? `<li><span class="w"></span><span style="color:#94a3b8">${shown.length - 200} more; narrow the search</span></li>` : '');
+  }
+  function esc(s) { return s.replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+  function renderArm(el, fin, it, arm, cosLabel) {
+    const a = it[arm]; const tgt = norm(it.t);
+    let html = `<li class="nn"><span class="r">NN</span><span class="h">${esc(a.nn)}</span><span class="m">F1 ${f1(it.t, a.nn).toFixed(2)}</span></li>`;
+    a.h.forEach((h, k) => {
+      const same = k > 0 && h === a.h[k - 1], ex = norm(h) === tgt;
+      html += `<li><span class="r">r${k}</span><span class="h ${ex ? 'exact' : same ? 'same' : ''}">${esc(h)}</span>` +
+              `<span class="m">${ex ? 'exact' : 'F1 ' + f1(it.t, h).toFixed(2)}</span></li>`;
+    });
+    el.innerHTML = html;
+    fin.textContent = `${cosLabel} ${fmt(a.c)}` + (a.cf !== undefined ? ` · float-space cosine ${fmt(a.cf)}` : '');
+  }
+  function show(i) {
+    sel = i; const it = items[i];
+    $('tgt').textContent = it.t;
+    $('tmeta').textContent = `${it.w} words · item ${i + 1} of 1,000`;
+    renderArm($('rf'), $('ff'), it, 'f', 'verifier cosine');
+    renderArm($('rb'), $('fb'), it, 'b', 'sign-code cosine');
+    $('view').hidden = false;
+    for (const li of $('list').children) li.classList.toggle('sel', +li.dataset.i === i);
+    if (location.hash !== '#' + (i + 1)) history.replaceState(null, '', '#' + (i + 1));
+  }
+  $('list').addEventListener('click', e => { const li = e.target.closest('li[data-i]'); if (li) show(+li.dataset.i); });
+  $('q').addEventListener('input', renderList);
+  $('rnd').addEventListener('click', () => { const s = filtered(); if (s.length) { show(s[Math.floor(Math.random() * s.length)].i); $('view').scrollIntoView({ behavior: 'smooth', block: 'start' }); } });
+  document.querySelectorAll('.chips button[data-len]').forEach(b => b.addEventListener('click', () => {
+    lenF = b.dataset.len; document.querySelectorAll('.chips button[data-len]').forEach(x => x.classList.toggle('on', x === b)); renderList(); }));
+  document.querySelector('.chips button[data-exact]').addEventListener('click', e => { exactOnly = !exactOnly; e.target.classList.toggle('on', exactOnly); renderList(); });
+
+  renderList();
+  const h = parseInt(location.hash.slice(1), 10);
+  show(h >= 1 && h <= items.length ? h - 1 : items.findIndex(it => it.t.startsWith('why do those who do not collect')) >= 0
+       ? items.findIndex(it => it.t.startsWith('why do those who do not collect')) : 0);
+})();
+</script>
+</body>
+</html>
