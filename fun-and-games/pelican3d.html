@@ -1,0 +1,632 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pelican, bicycle</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #a9d6f0; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #caption {
+    position: fixed; left: 18px; bottom: 14px;
+    font: italic 15px/1.3 "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    color: #23384a; opacity: 0.85; pointer-events: none; user-select: none;
+  }
+  #caption span { display: block; font-style: normal; font-size: 12px; opacity: 0.75; margin-top: 2px; }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+<div id="caption">Pelican, bicycle.<span>drag to look around · scroll to zoom</span></div>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+(function () {
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // ---------- renderer / scene / camera ----------
+  const canvas = document.getElementById('view');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.shadowMap.enabled = true;
+  renderer.shadowMap.type = THREE.PCFShadowMap;
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.0;
+
+  const scene = new THREE.Scene();
+  
+
+  const camera = new THREE.PerspectiveCamera(26, 1, 0.1, 120);
+  const target = V(0.05, 0.92, 0);
+  const orbit = { az: 0.2, el: 0.11, dist: 5.8, idle: 0 };
+  function placeCamera() {
+    camera.position.set(
+      target.x + orbit.dist * Math.cos(orbit.el) * Math.sin(orbit.az),
+      target.y + orbit.dist * Math.sin(orbit.el),
+      target.z + orbit.dist * Math.cos(orbit.el) * Math.cos(orbit.az));
+    camera.lookAt(target);
+  }
+
+  // ---------- materials ----------
+  const M = {
+    feather: new THREE.MeshStandardMaterial({ color: 0xf7f4ea, roughness: 0.75, metalness: 0 }),
+    featherDark: new THREE.MeshStandardMaterial({ color: 0x3a3a3a, roughness: 0.8 }),
+    beak: new THREE.MeshStandardMaterial({ color: 0xf1b43c, roughness: 0.45 }),
+    pouch: new THREE.MeshStandardMaterial({ color: 0xe98a45, roughness: 0.6 }),
+    leg: new THREE.MeshStandardMaterial({ color: 0xe0812a, roughness: 0.7 }),
+    eyeWhite: new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 }),
+    eye: new THREE.MeshStandardMaterial({ color: 0x1a1a1a, roughness: 0.2 }),
+    frame: new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.45, metalness: 0.15 }),
+    fender: new THREE.MeshStandardMaterial({ color: 0xf2d9a0, roughness: 0.6 }),
+    basket: new THREE.MeshStandardMaterial({ color: 0xc9a06a, roughness: 0.9 }),
+    hat: new THREE.MeshStandardMaterial({ color: 0xf1e3b8, roughness: 0.85 }),
+    ribbon: new THREE.MeshStandardMaterial({ color: 0xe98a7a, roughness: 0.7 }),
+    scarf: new THREE.MeshStandardMaterial({ color: 0xe98a7a, roughness: 0.75 }),
+    sand: new THREE.MeshStandardMaterial({ color: 0xf1cfb2, roughness: 1 }),
+    sea: new THREE.MeshStandardMaterial({ color: 0x2b98a1, roughness: 0.7 }),
+    foam: new THREE.MeshStandardMaterial({ color: 0xfaf3ea, roughness: 1 }),
+    palm: new THREE.MeshStandardMaterial({ color: 0xc98b5a, roughness: 0.9 }),
+    frond: new THREE.MeshStandardMaterial({ color: 0x3f8f4c, roughness: 0.9, side: THREE.DoubleSide }),
+    roof: new THREE.MeshStandardMaterial({ color: 0x4f6f56, roughness: 0.9 }),
+    hutTeal: new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.9 }),
+    hutCoral: new THREE.MeshStandardMaterial({ color: 0xe8846f, roughness: 0.9 }),
+    cream: new THREE.MeshStandardMaterial({ color: 0xf7ead2, roughness: 0.9 }),
+    balloonTeal: new THREE.MeshStandardMaterial({ color: 0x2a9d8f, roughness: 0.25, metalness: 0.05 }),
+    balloonCoral: new THREE.MeshStandardMaterial({ color: 0xe88a8a, roughness: 0.25, metalness: 0.05 }),
+    balloonCream: new THREE.MeshStandardMaterial({ color: 0xf3e4b5, roughness: 0.25, metalness: 0.05 }),
+    string: new THREE.MeshStandardMaterial({ color: 0xfaf3ea, roughness: 1 }),
+    petalPink: new THREE.MeshStandardMaterial({ color: 0xf2a0a0, roughness: 0.8 }),
+    petalWhite: new THREE.MeshStandardMaterial({ color: 0xfbf7ef, roughness: 0.8 }),
+    stamen: new THREE.MeshStandardMaterial({ color: 0xf6c95a, roughness: 0.8 }),
+    stem: new THREE.MeshStandardMaterial({ color: 0x5b9a4e, roughness: 0.9 }),
+    sail: new THREE.MeshStandardMaterial({ color: 0xfbf7ef, roughness: 0.9, side: THREE.DoubleSide }),
+    sailCoral: new THREE.MeshStandardMaterial({ color: 0xe8846f, roughness: 0.9, side: THREE.DoubleSide }),
+    chrome: new THREE.MeshStandardMaterial({ color: 0xd9dde1, roughness: 0.25, metalness: 0.85 }),
+    dark: new THREE.MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.6, metalness: 0.4 }),
+    tire: new THREE.MeshStandardMaterial({ color: 0x232323, roughness: 0.95 }),
+    saddle: new THREE.MeshStandardMaterial({ color: 0x6b4a34, roughness: 0.8 }),
+    grass: new THREE.MeshStandardMaterial({ color: 0x6fae5c, roughness: 1 }),
+    road: new THREE.MeshStandardMaterial({ color: 0x4b4b4b, roughness: 1 }),
+    paint: new THREE.MeshStandardMaterial({ color: 0xf3e6a3, roughness: 0.9 }),
+    hill: new THREE.MeshStandardMaterial({ color: 0x8fc47c, roughness: 1 }),
+    trunk: new THREE.MeshStandardMaterial({ color: 0x7b5a3a, roughness: 1 }),
+    leaf: new THREE.MeshStandardMaterial({ color: 0x4f9a48, roughness: 1 }),
+    cloud: new THREE.MeshStandardMaterial({ color: 0xfbeee3, roughness: 1 }),
+  };
+  for (const k in M) M[k].color.convertSRGBToLinear();
+
+  // ---------- helpers ----------
+  const Y = V(0, 1, 0);
+  function tube(a, b, r, mat, parent) {
+    const d = b.clone().sub(a), len = d.length();
+    const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 14), mat);
+    m.position.copy(a).add(b).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(Y, d.normalize());
+    m.castShadow = true; m.receiveShadow = true;
+    (parent || scene).add(m);
+    return m;
+  }
+  function sphere(pos, r, mat, scale, parent) {
+    const m = new THREE.Mesh(new THREE.SphereGeometry(r, 28, 20), mat);
+    m.position.copy(pos);
+    if (scale) m.scale.set(scale[0], scale[1], scale[2]);
+    m.castShadow = true; m.receiveShadow = true;
+    (parent || scene).add(m);
+    return m;
+  }
+  function box(pos, size, mat, parent) {
+    const m = new THREE.Mesh(new THREE.BoxGeometry(size[0], size[1], size[2]), mat);
+    m.position.copy(pos);
+    m.castShadow = true; m.receiveShadow = true;
+    (parent || scene).add(m);
+    return m;
+  }
+  function torus(pos, R, r, mat, arc, parent) {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(R, r, 12, 48, arc || Math.PI * 2), mat);
+    m.position.copy(pos);
+    m.castShadow = true; m.receiveShadow = true;
+    (parent || scene).add(m);
+    return m;
+  }
+
+  // ---------- lights & sky ----------
+  scene.add(new THREE.HemisphereLight(0xfff0e6, 0xe8c4a8, 0.95));
+  scene.add(new THREE.AmbientLight(0xffdcc8, 0.22));
+  const sun = new THREE.DirectionalLight(0xffe8d8, 0.8);
+  sun.position.set(-3, 6, 4.5);
+  sun.shadow.radius = 5;
+  sun.castShadow = true;
+  sun.shadow.mapSize.set(2048, 2048);
+  sun.shadow.camera.left = -3; sun.shadow.camera.right = 3;
+  sun.shadow.camera.top = 3; sun.shadow.camera.bottom = -3;
+  sun.shadow.camera.near = 1; sun.shadow.camera.far = 20;
+  sun.shadow.bias = -0.0015;
+  scene.add(sun);
+
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide, depthWrite: false, fog: false,
+    uniforms: { top: { value: new THREE.Color(0xe9b7a8) }, bottom: { value: new THREE.Color(0xf7dcc8) } },
+    vertexShader: 'varying float h; void main(){ h = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }',
+    fragmentShader: 'uniform vec3 top; uniform vec3 bottom; varying float h; void main(){ float t = smoothstep(0.02, 0.6, h); gl_FragColor = vec4(mix(bottom, top, t), 1.0); }',
+  });
+  scene.add(new THREE.Mesh(new THREE.SphereGeometry(48, 32, 16), skyMat));
+
+  // ---------- beach ----------
+  const ground = new THREE.Mesh(new THREE.PlaneGeometry(140, 140), M.sand);
+  ground.rotation.x = -Math.PI / 2; ground.receiveShadow = true; scene.add(ground);
+  const sea = new THREE.Mesh(new THREE.PlaneGeometry(140, 40), M.sea);
+  sea.rotation.x = -Math.PI / 2; sea.position.set(0, 0.012, -26); scene.add(sea);
+  const shoreline = new THREE.Mesh(new THREE.PlaneGeometry(140, 0.5), M.foam);
+  shoreline.rotation.x = -Math.PI / 2; shoreline.position.set(0, 0.014, -6.1); scene.add(shoreline);
+  const sunDisc = new THREE.Mesh(new THREE.CircleGeometry(5.5, 48), new THREE.MeshBasicMaterial({ color: 0xf3c7a6 }));
+  sunDisc.position.set(6.5, 6.8, -44); sunDisc.lookAt(0, 3, 0); scene.add(sunDisc);
+
+  const scrolling = [];                                   // [object, speed factor] — the beach streams past
+  const ROAD_LEN = 48;
+  let seed = 11;
+  const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  function stream(obj, f) { scrolling.push([obj, f]); }
+
+  // foam lines drawn across the water
+  for (let i = 0; i < 7; i++) {
+    const z0 = -7 - i * 2.4, pts = [];
+    for (let x = -ROAD_LEN / 2; x <= ROAD_LEN / 2; x += 1.2) pts.push(V(x, 0.02, z0 + 0.5 * Math.sin(x * 0.5 + i)));
+    const line = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 140, 0.07, 6, false), M.foam);
+    line.position.x = (rnd() - 0.5) * 4; scene.add(line); stream(line, 0.3);
+  }
+  // confetti on the sand
+  const confettiCols = [0xf2a7a7, 0xa9dcc9, 0xc9b8e6, 0xf6c95a, 0x2a9d8f, 0xe8846f].map(c => new THREE.MeshStandardMaterial({ color: c, roughness: 1 }));
+  confettiCols.forEach(m => m.color.convertSRGBToLinear());
+  for (let i = 0; i < 90; i++) {
+    const c = box(V(-ROAD_LEN / 2 + rnd() * ROAD_LEN, 0.004, -1.6 + rnd() * 4.5), [0.06, 0.005, 0.035], confettiCols[i % confettiCols.length]);
+    c.rotation.y = rnd() * Math.PI; c.castShadow = false; stream(c, 1);
+  }
+  // palms
+  function frondShape() {
+    const sh = new THREE.Shape();
+    sh.moveTo(0, 0);
+    for (let i = 1; i <= 9; i++) { const x = i / 9; sh.lineTo(x * 1.25, 0.15 * Math.sin(x * Math.PI) + (i % 2 ? 0.05 : 0)); }
+    sh.lineTo(1.25, 0);
+    for (let i = 9; i >= 1; i--) { const x = i / 9; sh.lineTo(x * 1.25, -0.15 * Math.sin(x * Math.PI) - (i % 2 ? 0.05 : 0)); }
+    sh.closePath(); return sh;
+  }
+  const frondGeo = new THREE.ExtrudeGeometry(frondShape(), { depth: 0.015, bevelEnabled: false });
+  function palm(x, z, h, lean) {
+    const g = new THREE.Group();
+    const trunk = new THREE.QuadraticBezierCurve3(V(0, 0, 0), V(lean * 0.4, h * 0.55, 0), V(lean, h, 0));
+    const t = new THREE.Mesh(new THREE.TubeGeometry(trunk, 16, 0.075, 10, false), M.palm);
+    t.castShadow = true; g.add(t);
+    const top = V(lean, h, 0);
+    for (let i = 0; i < 9; i++) {
+      const f = new THREE.Mesh(frondGeo, M.frond);
+      f.position.copy(top); f.rotation.y = (i / 9) * Math.PI * 2; f.rotateZ(-0.55 - 0.4 * (i % 3) / 2);
+      f.rotateX(Math.PI / 2 * (i % 2 ? 1 : -1) * 0.5); f.castShadow = true; g.add(f);
+    }
+    sphere(top, 0.13, M.palm, null, g);
+    g.position.set(x, 0, z); scene.add(g); stream(g, 1);
+  }
+  palm(-3.3, -3.5, 2.6, 0.4); palm(12, -4.2, 2.5, -0.35); palm(21, -3.4, 2.8, 0.3);
+  // beach huts
+  function hut(x, z, mat) {
+    const g = new THREE.Group();
+    const w = 0.95, h = 0.85, d = 0.8;
+    box(V(0, h / 2, 0), [w, h, d], mat, g);
+    const roofShape = new THREE.Shape(); roofShape.moveTo(-w / 2 - 0.08, 0); roofShape.lineTo(0, 0.45); roofShape.lineTo(w / 2 + 0.08, 0); roofShape.closePath();
+    const roof = new THREE.Mesh(new THREE.ExtrudeGeometry(roofShape, { depth: d + 0.16, bevelEnabled: false }), M.roof);
+    roof.position.set(0, h, -d / 2 - 0.08); roof.castShadow = true; g.add(roof);
+    for (let i = 0; i < 5; i++) box(V(-w / 2 + 0.12 + i * 0.18, h / 2, d / 2 + 0.004), [0.05, h - 0.06, 0.008], M.cream, g);
+    box(V(0.02, 0.26, d / 2 + 0.012), [0.24, 0.5, 0.012], M.cream, g);
+    box(V(0.02, 0.26, d / 2 + 0.02), [0.18, 0.44, 0.01], mat, g);
+    box(V(0, 0.02, 0), [w + 0.3, 0.04, d + 0.3], M.cream, g);
+    g.position.set(x, 0, z); scene.add(g); stream(g, 1);
+  }
+  hut(-2.9, -4.8, M.hutTeal); hut(-1.8, -4.6, M.hutCoral); hut(15, -4.7, M.hutCoral); hut(16.1, -4.5, M.hutTeal);
+  // bunting, hung high across the scene
+  const flagCols = [0xf2a7a7, 0xf7e3b0, 0xa9dcc9, 0xc9b8e6, 0xcfe3a6, 0xf5c69a, 0x8ecdd0, 0x2a9d8f]
+    .map(c => { const m = new THREE.MeshStandardMaterial({ color: c, roughness: 1, side: THREE.DoubleSide }); m.color.convertSRGBToLinear(); return m; });
+  const flagShape = new THREE.Shape(); flagShape.moveTo(-0.16, 0); flagShape.lineTo(0.16, 0); flagShape.lineTo(0, -0.32); flagShape.closePath();
+  const flagGeo = new THREE.ExtrudeGeometry(flagShape, { depth: 0.01, bevelEnabled: false });
+  function bunting(a, b, sag, n) {
+    const curve = new THREE.QuadraticBezierCurve3(a, a.clone().add(b).multiplyScalar(0.5).add(V(0, -sag, 0)), b);
+    scene.add(new THREE.Mesh(new THREE.TubeGeometry(curve, 40, 0.01, 6, false), M.string));
+    for (let i = 0; i < n; i++) {
+      const f = new THREE.Mesh(flagGeo, flagCols[i % flagCols.length]);
+      f.position.copy(curve.getPoint((i + 0.5) / n)); f.rotation.z = -curve.getTangent((i + 0.5) / n).y * 0.8; scene.add(f);
+    }
+  }
+  bunting(V(-7, 3.6, -7), V(3.5, 3.1, -7.2), 0.7, 16);
+  bunting(V(2.5, 3.2, -7.1), V(14, 3.8, -7), 0.7, 16);
+  // sailboat out on the water
+  const boat = new THREE.Group();
+  sphere(V(0, 0.02, 0), 0.5, M.hutCoral, [1.1, 0.28, 0.4], boat);
+  tube(V(0, 0, 0), V(0, 1.35, 0), 0.02, M.palm, boat);
+  const mainSail = new THREE.Shape(); mainSail.moveTo(0.03, 0.15); mainSail.lineTo(0.03, 1.3); mainSail.lineTo(-0.7, 0.15); mainSail.closePath();
+  const jib = new THREE.Shape(); jib.moveTo(-0.03, 0.15); jib.lineTo(-0.03, 1.1); jib.lineTo(0.55, 0.15); jib.closePath();
+  boat.add(new THREE.Mesh(new THREE.ExtrudeGeometry(mainSail, { depth: 0.01, bevelEnabled: false }), M.sailCoral));
+  boat.add(new THREE.Mesh(new THREE.ExtrudeGeometry(jib, { depth: 0.01, bevelEnabled: false }), M.sail));
+  boat.position.set(7, 0.02, -12); scene.add(boat); stream(boat, 0.12);
+  // a couple of flat clouds
+  function cloud(x, y, z, s) {
+    const g = new THREE.Group();
+    [[0, 0, 1], [0.9, 0.2, 1.25], [1.9, 0, 0.9], [1, -0.2, 0.8]].forEach(p => {
+      const m = sphere(V(p[0] * s, p[1] * s, 0), 0.55 * s * p[2], M.cloud, [1, 0.55, 1], g); m.castShadow = false;
+    });
+    g.position.set(x, y, z); scene.add(g);
+  }
+  cloud(-4, 6.2, -20, 1.4); cloud(21, 7.6, -24, 1.7);
+
+  // ---------- bicycle ----------
+  const R_WHEEL = 0.34;
+  const RH = V(-0.50, R_WHEEL, 0), FH = V(0.55, R_WHEEL, 0);
+  const BB = V(-0.05, 0.28, 0), SC = V(-0.22, 0.74, 0);
+  const U = V(-0.326, 0.946, 0);                                         // steering axis, 71° head angle
+  const HB = V(0.43, 0.55, 0), HT = HB.clone().add(U.clone().multiplyScalar(0.15));
+  const CROWN = HB.clone().sub(U.clone().multiplyScalar(0.03));
+  const STEM_TOP = HT.clone().add(U.clone().multiplyScalar(0.07));
+  const SP = V(-0.262, 0.853, 0), BAR = V(0.41, 0.80, 0);
+
+  const bike = new THREE.Group(); scene.add(bike);
+  for (const z of [-0.045, 0.045]) {
+    tube(V(RH.x, RH.y, z), V(BB.x, BB.y, z), 0.011, M.frame, bike);     // chainstays
+    tube(V(RH.x, RH.y, z), V(SC.x, SC.y, z), 0.010, M.frame, bike);     // seat stays
+  }
+  for (const z of [-0.05, 0.05]) {                                        // raked fork blades off the crown
+    const blade = new THREE.QuadraticBezierCurve3(
+      V(CROWN.x, CROWN.y, z),
+      V(CROWN.x - U.x * 0.16, CROWN.y - U.y * 0.16, z),
+      V(FH.x, FH.y, z));
+    const bm = new THREE.Mesh(new THREE.TubeGeometry(blade, 12, 0.011, 10, false), M.frame);
+    bm.castShadow = true; bike.add(bm);
+  }
+  const crown = box(CROWN, [0.034, 0.03, 0.125], M.frame, bike);
+  crown.quaternion.setFromUnitVectors(Y, U);
+  tube(BB, SC, 0.016, M.frame, bike);                                    // seat tube
+  tube(SC, HT, 0.016, M.frame, bike);                                    // top tube
+  tube(BB, HB.clone().add(U.clone().multiplyScalar(0.02)), 0.018, M.frame, bike); // down tube
+  tube(HB.clone().sub(U.clone().multiplyScalar(0.01)), HT.clone().add(U.clone().multiplyScalar(0.02)), 0.022, M.frame, bike); // head tube
+  tube(SC, SP, 0.011, M.chrome, bike);                                   // seat post
+  tube(HT, STEM_TOP, 0.013, M.chrome, bike);                             // steerer
+  tube(STEM_TOP, BAR, 0.012, M.chrome, bike);                            // stem
+  tube(V(BAR.x, BAR.y, -0.23), V(BAR.x, BAR.y, 0.23), 0.011, M.chrome, bike); // handlebar
+  for (const z of [-0.23, 0.23]) {                                        // grips, swept back
+    tube(V(BAR.x, BAR.y, z), V(BAR.x - 0.10, BAR.y - 0.01, z * 1.04), 0.011, M.chrome, bike);
+    tube(V(BAR.x - 0.04, BAR.y, z * 1.015), V(BAR.x - 0.12, BAR.y - 0.012, z * 1.045), 0.017, M.dark, bike);
+  }
+  sphere(BB, 0.03, M.dark, [1, 1, 1.4], bike);                            // bottom bracket shell
+  const saddle = sphere(V(SP.x - 0.02, SP.y + 0.025, 0), 0.12, M.saddle, [1.15, 0.28, 0.55], bike);
+  saddle.rotation.z = 0.08;
+
+  function wheel(pos) {
+    const g = new THREE.Group(); g.position.copy(pos); bike.add(g);
+    torus(V(0, 0, 0), R_WHEEL - 0.03, 0.032, M.tire, null, g);
+    torus(V(0, 0, 0), R_WHEEL - 0.06, 0.009, M.chrome, null, g);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.08, 16), M.chrome);
+    hub.rotation.x = Math.PI / 2; hub.castShadow = true; g.add(hub);
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2, s = i % 2 ? 0.03 : -0.03;
+      tube(V(0.02 * Math.cos(a + 0.5), 0.02 * Math.sin(a + 0.5), s),
+           V((R_WHEEL - 0.065) * Math.cos(a), (R_WHEEL - 0.065) * Math.sin(a), 0), 0.002, M.chrome, g);
+    }
+    return g;
+  }
+  const rearWheel = wheel(RH), frontWheel = wheel(FH);
+  function fender(hub, start, arc) {
+    const f = torus(hub, R_WHEEL + 0.012, 0.012, M.fender, arc, bike);
+    f.rotation.z = start; f.scale.z = 4.2;
+    return f;
+  }
+  fender(RH, 0.25, 3.3); fender(FH, -0.2, 2.75);
+  sphere(V(RH.x - R_WHEEL - 0.02, RH.y + 0.12, 0), 0.02, M.ribbon, null, bike);      // rear reflector
+  // wicker basket on the bars, with a few flowers in it
+  const basket = new THREE.Group(); basket.position.set(BAR.x + 0.16, BAR.y + 0.03, 0); bike.add(basket);
+  const bc = new THREE.Mesh(new THREE.CylinderGeometry(0.11, 0.09, 0.012, 24), M.basket); bc.position.y = -0.08; bc.castShadow = true; basket.add(bc);
+  for (let i = 0; i < 16; i++) {
+    const a = (i / 16) * Math.PI * 2;
+    tube(V(0.09 * Math.cos(a), -0.08, 0.09 * Math.sin(a)), V(0.115 * Math.cos(a), 0.08, 0.115 * Math.sin(a)), 0.005, M.basket, basket);
+  }
+  for (let k = 0; k < 4; k++) {
+    const r = 0.09 + 0.025 * k / 3, ring = torus(V(0, -0.075 + 0.05 * k, 0), r, 0.006, M.basket, null, basket); ring.rotation.x = Math.PI / 2;
+  }
+  tube(V(-0.16, -0.02, 0), V(-0.06, -0.06, 0), 0.007, M.chrome, basket);            // bracket to the stem
+  function flower(x, z, h, petal) {
+    tube(V(x, -0.06, z), V(x, h, z), 0.006, M.stem, basket);
+    sphere(V(x, h, z), 0.018, M.stamen, null, basket);
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      sphere(V(x + 0.03 * Math.cos(a), h, z + 0.03 * Math.sin(a)), 0.02, petal, [1, 0.45, 1], basket);
+    }
+  }
+  flower(0.02, 0.02, 0.19, M.petalPink); flower(-0.04, -0.03, 0.15, M.petalWhite); flower(0.04, -0.04, 0.14, M.petalPink);
+  const bell = sphere(V(BAR.x - 0.02, BAR.y + 0.03, 0.09), 0.024, M.chrome, [1, 0.8, 1], bike);
+  const cog = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.008, 24), M.dark);
+  cog.rotation.x = Math.PI / 2; cog.position.set(RH.x, RH.y, 0.07); bike.add(cog);
+
+  // crank: chainring + arms; pedals stay level via counter-rotation
+  const crank = new THREE.Group(); crank.position.copy(BB); bike.add(crank);
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.105, 0.105, 0.006, 40), M.dark);
+  ring.rotation.x = Math.PI / 2; ring.position.z = 0.07; ring.castShadow = true; crank.add(ring);
+  const ringHole = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.008, 40), M.chrome);
+  ringHole.rotation.x = Math.PI / 2; ringHole.position.z = 0.07; crank.add(ringHole);
+  const pedals = [];
+  for (const side of [1, -1]) {
+    const arm = new THREE.Group(); arm.rotation.z = side > 0 ? 0 : Math.PI; crank.add(arm);
+    box(V(0.085, 0, side * 0.09), [0.17, 0.02, 0.014], M.chrome, arm);
+    const axle = tube(V(0.16, 0, side * 0.09), V(0.16, 0, side * 0.145), 0.006, M.chrome, arm);
+    const pedal = new THREE.Group(); pedal.position.set(0.16, 0, side * 0.135); arm.add(pedal);
+    box(V(0, 0, 0), [0.09, 0.018, 0.06], M.dark, pedal);
+    pedals.push({ side, arm, pedal });
+  }
+  // chain: two runs plus wraps around cog and chainring
+  const CZ = 0.07, RC = 0.05, RR = 0.105;
+  tube(V(RH.x, RH.y + RC, CZ), V(BB.x, BB.y + RR, CZ), 0.005, M.dark, bike);   // top run
+  tube(V(RH.x, RH.y - RC, CZ), V(BB.x, BB.y - RR, CZ), 0.005, M.dark, bike);   // bottom run
+  torus(V(RH.x, RH.y, CZ), RC, 0.005, M.dark, Math.PI, bike).rotation.z = Math.PI / 2;
+  torus(V(BB.x, BB.y, CZ), RR, 0.005, M.dark, Math.PI, bike).rotation.z = -Math.PI / 2;
+
+  // ---------- pelican ----------
+  const pelican = new THREE.Group(); scene.add(pelican);
+  const bodyC = V(-0.17, 1.03, 0);
+  const body = sphere(bodyC, 0.31, M.feather, [1.18, 0.70, 0.80], pelican);
+  body.rotation.z = -0.24;
+  // tail: a flattened wedge rooted inside the body, with three feather ridges on top
+  const tailBase = V(-0.40, 1.09, 0), tailTip = V(-0.80, 1.25, 0);
+  const tailDir = tailTip.clone().sub(tailBase), tailLen = tailDir.length();
+  const tail = new THREE.Mesh(new THREE.ConeGeometry(0.10, tailLen, 8), M.feather);
+  tail.position.copy(tailBase).add(tailTip).multiplyScalar(0.5);
+  tail.quaternion.setFromUnitVectors(Y, tailDir.clone().normalize());
+  tail.scale.set(1, 1, 0.45); tail.castShadow = true; tail.receiveShadow = true; pelican.add(tail);
+  for (let i = -1; i <= 1; i++) {
+    const f = box(tailBase.clone().add(tailDir.clone().multiplyScalar(0.55)), [tailLen * 0.85, 0.012, 0.05], M.feather, pelican);
+    f.quaternion.setFromUnitVectors(V(1, 0, 0), tailDir.clone().normalize());
+    f.rotateY(i * 0.28); f.position.z = i * 0.03; f.position.y += 0.012;
+  }
+  // wings: extruded 2D profile, shoulder at origin, tip along +x, dark primaries at the tip
+  function wingShape(dark) {
+    const s = new THREE.Shape();
+    if (!dark) {
+      s.moveTo(0, 0.22);
+      s.quadraticCurveTo(0.48, 0.26, 1.0, 0.02);
+      s.lineTo(0.90, -0.12); s.lineTo(0.94, -0.03); s.lineTo(0.80, -0.16);
+      s.lineTo(0.86, -0.06); s.lineTo(0.70, -0.17);
+      s.quadraticCurveTo(0.42, -0.19, 0.06, -0.14);
+      s.quadraticCurveTo(-0.06, -0.05, 0, 0.22);
+    } else {
+      s.moveTo(0.66, 0.11);
+      s.lineTo(1.0, 0.02);
+      s.lineTo(0.90, -0.12); s.lineTo(0.94, -0.03); s.lineTo(0.80, -0.16);
+      s.lineTo(0.86, -0.06); s.lineTo(0.70, -0.17);
+      s.lineTo(0.62, -0.05);
+    }
+    return s;
+  }
+  function wing(side) {
+    const shoulder = V(-0.14, 1.16, side * 0.16), grip = V(BAR.x - 0.08, BAR.y + 0.04, side * 0.235);
+    const d = grip.clone().sub(shoulder), len = d.length();
+    // upper wing: an ellipsoid from shoulder to wrist, lying along the flank
+    const mid = shoulder.clone().add(grip).multiplyScalar(0.5);
+    const arm = sphere(mid, 1, M.feather, [len * 0.55, 0.11, 0.055], pelican);
+    arm.quaternion.setFromUnitVectors(V(1, 0, 0), d.clone().normalize());
+    arm.rotateX(side * 0.35);                               // tilt the flat face to follow the body's curve
+    // primaries: flat feathered profile from mid-wing to the grip
+    const g = new THREE.Group(); g.position.copy(shoulder); pelican.add(g);
+    g.quaternion.setFromUnitVectors(V(1, 0, 0), d.clone().normalize());
+    g.rotateX(side * 0.35);
+    const feathers = new THREE.Mesh(new THREE.ExtrudeGeometry(wingShape(false), { depth: 0.03, bevelEnabled: true, bevelThickness: 0.008, bevelSize: 0.008, bevelSegments: 2 }), M.feather);
+    feathers.scale.set(len, len * 0.75, 1); feathers.position.z = -0.015;
+    feathers.castShadow = true; feathers.receiveShadow = true; g.add(feathers);
+    const tips = new THREE.Mesh(new THREE.ExtrudeGeometry(wingShape(true), { depth: 0.032, bevelEnabled: false }), M.featherDark);
+    tips.scale.set(len, len * 0.75, 1); tips.position.z = -0.016; g.add(tips);
+    return g;
+  }
+  wing(1); wing(-1);
+  // covert rows: three stepped feather lobes over each wing, like the reference's stacked ridges
+  for (const side of [1, -1]) {
+    const shoulder = V(-0.14, 1.16, side * 0.16), grip = V(BAR.x - 0.08, BAR.y + 0.04, side * 0.235);
+    const d = grip.clone().sub(shoulder), n = d.clone().normalize();
+    for (let k = 0; k < 3; k++) {
+      const c = shoulder.clone().add(d.clone().multiplyScalar(0.22 + 0.2 * k)).add(V(0, 0.015, side * 0.03));
+      const lobe = sphere(c, 1, M.feather, [0.11 - 0.012 * k, 0.075 - 0.012 * k, 0.035], pelican);
+      lobe.quaternion.setFromUnitVectors(V(1, 0, 0), n); lobe.rotateX(side * 0.35);
+    }
+  }
+  // balloons tied to the tail
+  const balloons = new THREE.Group(); pelican.add(balloons);
+  const tailTie = V(-0.78, 1.24, 0);
+  [[-0.36, 0.42, 0.16, M.balloonTeal], [-0.20, 0.80, -0.12, M.balloonCoral], [-0.52, 0.76, 0.30, M.balloonCream]].forEach(([dx, dy, dz, mat], i) => {
+    const c = tailTie.clone().add(V(dx, dy, dz));
+    const b = sphere(c, 0.17, mat, [1, 1.22, 1], balloons); b.userData.base = c.clone(); b.userData.phase = i * 2.1;
+    const knot = sphere(c.clone().add(V(0, -0.215, 0)), 0.02, mat, [1, 0.7, 1], balloons);
+    const str = tube(tailTie, c.clone().add(V(0, -0.22, 0)), 0.004, M.string, balloons);
+    b.userData.knot = knot; b.userData.string = str; b.userData.tie = tailTie;
+  });
+
+  // neck + head ride in one group so the whole thing can bob
+  const headGroup = new THREE.Group(); pelican.add(headGroup);
+  const neckPts = [V(0.02, 1.10, 0), V(0.16, 1.28, 0), V(0.17, 1.46, 0), V(0.24, 1.60, 0), V(0.31, 1.70, 0)];
+  const neckCurve = new THREE.CatmullRomCurve3(neckPts);
+  const neck = new THREE.Mesh(new THREE.TubeGeometry(neckCurve, 40, 0.078, 16, false), M.feather);
+  neck.castShadow = true; neck.receiveShadow = true; headGroup.add(neck);
+  sphere(neckPts[0], 0.085, M.feather, null, headGroup);
+  const headC = V(0.34, 1.72, 0);
+  sphere(headC, 0.125, M.feather, [1.12, 1, 1], headGroup);
+  for (const [dx, dz, rz] of [[-0.04, 0, 0.9], [-0.08, 0.04, 1.2], [-0.08, -0.04, 1.2], [0.01, 0, 0.6]]) {   // crest
+    const c = tube(V(headC.x + dx, headC.y + 0.10, dz), V(headC.x + dx - 0.07 * Math.cos(rz), headC.y + 0.10 + 0.09 * Math.sin(rz), dz), 0.006, M.feather, headGroup);
+  }
+  // eyes, with a brow so it looks like it means it
+  for (const side of [1, -1]) {
+    sphere(V(headC.x + 0.06, headC.y + 0.035, side * 0.105), 0.028, M.eyeWhite, null, headGroup);
+    sphere(V(headC.x + 0.075, headC.y + 0.035, side * 0.118), 0.016, M.eye, null, headGroup);
+    const brow = box(V(headC.x + 0.055, headC.y + 0.075, side * 0.108), [0.07, 0.012, 0.012], M.featherDark, headGroup);
+    brow.rotation.z = -0.35; brow.rotation.y = side * -0.3;
+  }
+  // straw boater, tipped a little forward
+  const hat = new THREE.Group(); hat.position.set(headC.x - 0.01, headC.y + 0.105, 0); hat.rotation.z = -0.14; headGroup.add(hat);
+  const brim = new THREE.Mesh(new THREE.CylinderGeometry(0.205, 0.205, 0.012, 40), M.hat); brim.castShadow = true; hat.add(brim);
+  const hatCrown = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 0.07, 40), M.hat); hatCrown.position.y = 0.04; hatCrown.castShadow = true; hat.add(hatCrown);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.123, 0.123, 0.022, 40), M.ribbon); band.position.y = 0.02; hat.add(band);
+  // scarf knotted at the back of the neck, tails streaming behind
+  const scarfT = 0.22, scarfPos = neckCurve.getPoint(scarfT), scarfTan = neckCurve.getTangent(scarfT);
+  const scarf = torus(scarfPos, 0.082, 0.03, M.scarf, null, headGroup);
+  scarf.quaternion.setFromUnitVectors(V(0, 0, 1), scarfTan);
+  const knotPos = scarfPos.clone().add(V(-0.10, 0.0, 0.0));
+  sphere(knotPos, 0.038, M.scarf, [1, 0.8, 1], headGroup);
+  for (const [dy, dz, rz] of [[0.06, 0.02, 0.35], [-0.03, -0.03, -0.15]]) {
+    const tail = box(knotPos.clone().add(V(-0.17, dy, dz)), [0.30, 0.075, 0.02], M.scarf, headGroup);
+    tail.rotation.z = rz; tail.rotation.y = dz * 4;
+  }
+  // beak: both mandibles hinge at B0. The upper one is a lens-section wedge; the lower
+  // one is two bony rami with the pouch skin stretched between them, everything sharing
+  // the same half-width w(t) so the pouch is attached to the bill along its whole length.
+  function surface(fn, nu, nv, mat, closedV) {
+    const pos = [], idx = [], cols = closedV ? nv : nv + 1;
+    for (let i = 0; i <= nu; i++) for (let j = 0; j < cols; j++) { const q = fn(i / nu, j / nv); pos.push(q.x, q.y, q.z); }
+    for (let i = 0; i < nu; i++) for (let j = 0; j < nv; j++) {
+      const j2 = closedV ? (j + 1) % nv : j + 1;
+      const a = i * cols + j, b = (i + 1) * cols + j, c2 = i * cols + j2, d2 = (i + 1) * cols + j2;
+      idx.push(a, b, c2, b, d2, c2);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.setIndex(idx); g.computeVertexNormals();
+    const m = new THREE.Mesh(g, mat); m.castShadow = true; m.receiveShadow = true; headGroup.add(m);
+    return m;
+  }
+  const B0 = V(headC.x + 0.06, headC.y - 0.02, 0), BEAK_LEN = 0.64;
+  const aU = -0.05, aL = -0.12;                                   // bill slightly agape at the tip
+  const dirU = V(Math.cos(aU), Math.sin(aU), 0), dirL = V(Math.cos(aL), Math.sin(aL), 0);
+  const upU = V(-Math.sin(aU), Math.cos(aU), 0), downL = V(Math.sin(aL), -Math.cos(aL), 0);
+  const axisU = t => B0.clone().add(dirU.clone().multiplyScalar(BEAK_LEN * t));
+  const axisL = t => B0.clone().add(dirL.clone().multiplyScalar(BEAK_LEN * t));
+  const w = t => 0.052 * (1 - t) + 0.007;                          // half-width of the bill
+  M.beak.side = THREE.DoubleSide; M.pouch.side = THREE.DoubleSide;
+  surface((t, v) => {                                              // upper mandible
+    const phi = v * Math.PI * 2, top = 0.046 * (1 - t) + 0.005, bot = 0.010;
+    const sy = Math.sin(phi), y = sy > 0 ? top * sy : bot * sy;
+    return axisU(t).add(V(0, 0, w(t) * Math.cos(phi))).add(upU.clone().multiplyScalar(y));
+  }, 24, 20, M.beak, true);
+  const hook = new THREE.Mesh(new THREE.ConeGeometry(0.012, 0.03, 8), M.beak);
+  hook.position.copy(axisU(1)).add(V(0.004, -0.014, 0)); hook.rotation.z = Math.PI; headGroup.add(hook);
+  for (const side of [1, -1]) {                                    // rami of the lower mandible
+    const ramus = new THREE.CatmullRomCurve3([0, 0.25, 0.5, 0.75, 1].map(t => axisL(t).add(V(0, 0, side * w(t)))));
+    const rm = new THREE.Mesh(new THREE.TubeGeometry(ramus, 16, 0.009, 8, false), M.beak);
+    rm.castShadow = true; headGroup.add(rm);
+  }
+  surface((t, v) => {                                              // pouch skin between the rami
+    const tt = 0.02 + 0.95 * t, phi = v * Math.PI;
+    const depth = 0.20 * Math.pow(Math.sin(Math.PI * Math.pow(tt, 0.72)), 0.9);
+    const sag = 0.06 * Math.sin(Math.PI * tt);                     // bag leans back toward the throat
+    return axisL(tt)
+      .add(V(0, 0, w(tt) * Math.cos(phi)))
+      .add(downL.clone().multiplyScalar(depth * Math.sin(phi)))
+      .sub(dirL.clone().multiplyScalar(sag * Math.sin(phi)));
+  }, 28, 16, M.pouch, false);
+  // the fish it just caught, tail out through the gap at the tip
+  const fishMat = new THREE.MeshStandardMaterial({ color: 0x6fa8c9, roughness: 0.4, metalness: 0.2 });
+  const fishDir = V(1, -0.3, 0.3).normalize();
+  const fish = new THREE.Mesh(new THREE.ConeGeometry(0.032, 0.13, 3), fishMat);
+  fish.position.copy(axisL(0.84)).add(upU.clone().multiplyScalar(0.018)).add(fishDir.clone().multiplyScalar(0.045));
+  fish.quaternion.setFromUnitVectors(Y, fishDir);
+  fish.scale.set(1, 1, 0.45); fish.castShadow = true; headGroup.add(fish);
+
+  // legs: two-bone IK from hip to whatever the pedal is doing
+  const L1 = 0.31, L2 = 0.33;
+  const legs = [];
+  for (const p of pedals) {
+    const side = p.side;
+    const hip = V(-0.12, 0.90, side * 0.10);
+    const thigh = tube(V(0, 0, 0), V(0, 0.1, 0), 0.028, M.leg, pelican);
+    const shin = tube(V(0, 0, 0), V(0, 0.1, 0), 0.020, M.leg, pelican);
+    const knee = sphere(V(0, 0, 0), 0.028, M.leg, null, pelican);
+    // webbed foot: a flat fan that sits on the pedal
+    const fs = new THREE.Shape();
+    fs.moveTo(-0.03, 0); fs.lineTo(0.13, 0.05); fs.lineTo(0.10, 0.03); fs.lineTo(0.15, 0.0);
+    fs.lineTo(0.10, -0.03); fs.lineTo(0.13, -0.05); fs.lineTo(-0.03, 0);
+    const foot = new THREE.Mesh(new THREE.ExtrudeGeometry(fs, { depth: 0.012, bevelEnabled: false }), M.leg);
+    foot.rotation.x = -Math.PI / 2; foot.castShadow = true; pelican.add(foot);
+    const ankle = sphere(V(0, 0, 0), 0.022, M.leg, null, pelican);
+    legs.push({ hip, thigh, shin, knee, foot, ankle, pedal: p.pedal, side });
+  }
+  const tmpA = new THREE.Vector3(), tmpB = new THREE.Vector3();
+  function setTube(mesh, a, b) {
+    const d = tmpB.copy(b).sub(a), len = d.length();
+    mesh.position.copy(a).add(b).multiplyScalar(0.5);
+    mesh.scale.set(1, len / mesh.geometry.parameters.height, 1);
+    mesh.quaternion.setFromUnitVectors(Y, d.normalize());
+  }
+  function solveLegs() {
+    for (const L of legs) {
+      L.pedal.getWorldPosition(tmpA);
+      const foot = tmpA.clone(); foot.y += 0.012;
+      const hip = L.hip;
+      let dx = foot.x - hip.x, dy = foot.y - hip.y;
+      let d = Math.hypot(dx, dy);
+      const maxD = L1 + L2 - 0.01;
+      if (d > maxD) { dx *= maxD / d; dy *= maxD / d; d = maxD; }
+      const a = (L1 * L1 - L2 * L2 + d * d) / (2 * d);
+      const h = Math.sqrt(Math.max(0, L1 * L1 - a * a));
+      const ux = dx / d, uy = dy / d;
+      const kx = hip.x + ux * a + (-uy) * h * -1;           // knee bends forward (+x)
+      const ky = hip.y + uy * a + (ux) * h * -1;
+      const knee = V(kx, ky, hip.z);
+      const ankle = V(hip.x + dx, hip.y + dy, hip.z);
+      setTube(L.thigh, hip, knee); setTube(L.shin, knee, ankle);
+      L.knee.position.copy(knee); L.ankle.position.copy(ankle);
+      L.foot.position.set(ankle.x - 0.02, ankle.y - 0.002, hip.z + 0.02);
+    }
+  }
+
+  // ---------- interaction ----------
+  let dragging = false, lx = 0, ly = 0;
+  const onDown = (x, y) => { dragging = true; lx = x; ly = y; orbit.idle = 0; };
+  const onMove = (x, y) => {
+    if (!dragging) return;
+    orbit.az -= (x - lx) * 0.006; orbit.el = Math.min(1.2, Math.max(-0.05, orbit.el + (y - ly) * 0.006));
+    lx = x; ly = y; orbit.idle = 0;
+  };
+  canvas.addEventListener('pointerdown', e => { canvas.setPointerCapture(e.pointerId); onDown(e.clientX, e.clientY); });
+  canvas.addEventListener('pointermove', e => onMove(e.clientX, e.clientY));
+  canvas.addEventListener('pointerup', () => { dragging = false; });
+  canvas.addEventListener('wheel', e => { orbit.dist = Math.min(12, Math.max(2.5, orbit.dist * (1 + Math.sign(e.deltaY) * 0.08))); orbit.idle = 0; e.preventDefault(); }, { passive: false });
+
+  function resize() {
+    const w = canvas.clientWidth, h = canvas.clientHeight;
+    if (canvas.width !== Math.floor(w * renderer.getPixelRatio()) || canvas.height !== Math.floor(h * renderer.getPixelRatio())) {
+      renderer.setSize(w, h, false);
+      camera.aspect = w / h; camera.updateProjectionMatrix();
+    }
+  }
+
+  // ---------- animation ----------
+  const SPEED = 1.5;                       // m/s along +x
+  const CADENCE = 2.6;                     // crank rad/s
+  let last = performance.now(), t = 0;
+  function frame(now) {
+    const dt = Math.min(0.05, (now - last) / 1000); last = now; t += dt;
+    resize();
+    rearWheel.rotation.z -= SPEED / R_WHEEL * dt;
+    frontWheel.rotation.z = rearWheel.rotation.z;
+    crank.rotation.z -= CADENCE * dt;
+    for (const p of pedals) p.pedal.rotation.z = -crank.rotation.z - p.arm.rotation.z;
+    for (const [s, f] of scrolling) { s.position.x -= SPEED * f * dt; if (s.position.x < -ROAD_LEN / 2) s.position.x += ROAD_LEN; }
+    for (const b of balloons.children) if (b.userData.base) {
+      b.position.copy(b.userData.base).add(V(0.03 * Math.sin(t * 0.9 + b.userData.phase), 0.04 * Math.sin(t * 1.3 + b.userData.phase), 0.02 * Math.sin(t * 0.7 + b.userData.phase)));
+      b.userData.knot.position.copy(b.position).add(V(0, -0.215, 0));
+      setTube(b.userData.string, b.userData.tie, b.userData.knot.position);
+    }
+    const bob = Math.sin(-crank.rotation.z * 2);
+    pelican.position.y = 0.012 * bob;
+    headGroup.rotation.z = 0.035 * Math.sin(-crank.rotation.z * 2 + 0.8);
+    solveLegs();
+    if (!dragging && !reduceMotion) { orbit.idle += dt; if (orbit.idle > 3.5) orbit.az += 0.10 * dt; }
+    placeCamera();
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  placeCamera();
+  requestAnimationFrame(frame);
+  window.__pelican = { scene, camera, renderer, orbit, target, placeCamera };
+})();
+</script>
+</body>
+</html>
