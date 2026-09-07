@@ -21,7 +21,6 @@ export const MODEL_BASES = (() => {
     ? ['./model/'] : [];
   return local.concat([
     'https://huggingface.co/austegard/latent-calculator-web/resolve/main/',
-    'https://raw.githubusercontent.com/oaustegard/experiments/latent-calculator-weights/model/',
   ]);
 })();
 export const MODEL_BASE = MODEL_BASES[0];
