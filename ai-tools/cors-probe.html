@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Cross-origin fetch probe</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="stylesheet" href="/styles/style.css">
+<style>
+  table { border-collapse: collapse; width: 100%; margin: 1em 0; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #ddd; vertical-align: top; }
+  td.ok { color: #2a6f2a; font-weight: 600; } td.bad { color: #a33; font-weight: 600; }
+  input[type=text] { width: 100%; font-family: monospace; font-size: 13px; padding: 6px; }
+  pre { white-space: pre-wrap; font-size: 12px; background: #f6f6f4; padding: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; margin: 6px 0; }
+</style>
+</head>
+<body>
+<a href="/" class="back-link">Back to main site</a>
+<h1>Cross-origin fetch probe</h1>
+<p>Answers one question from inside a real browser: can a page on this origin fetch a
+file from a given host? Each URL gets three requests — a plain <code>GET</code>, a
+<code>HEAD</code>, and a <code>GET</code> with <code>Range: bytes=0-99</code> (sharded
+model loading needs ranges). The verdict comes from whether the browser let the page read the
+response, which is the CORS check; the headers column shows what the server exposed.</p>
+<p>Prefilled: two GitHub release assets on <code>oaustegard/experiments</code> (the question)
+and a Hugging Face file (the known-good control). Edit any URL and press Run.</p>
+
+<div id="urls"></div>
+<div class="row"><button id="run">Run</button> <span id="status"></span></div>
+<table id="out"><thead><tr><th>URL</th><th>GET</th><th>HEAD</th><th>Range</th><th>Headers exposed</th></tr></thead><tbody></tbody></table>
+<h2>Log</h2>
+<pre id="log"></pre>
+
+<script>
+const DEFAULTS = [
+  "https://github.com/oaustegard/experiments/releases/download/repo-index-model-v1/config.json",
+  "https://github.com/oaustegard/experiments/releases/download/repo-index-model-v1/model.onnx",
+  "https://huggingface.co/HuggingFaceTB/SmolLM2-135M/resolve/main/config.json",
+];
+const urlsDiv = document.getElementById("urls");
+DEFAULTS.forEach(u => {
+  const d = document.createElement("div"); d.className = "row";
+  d.innerHTML = '<input type="text" value="' + u.replace(/"/g, "&quot;") + '">';
+  urlsDiv.appendChild(d);
+});
+const log = (s) => { document.getElementById("log").textContent += s + "\n"; };
+
+async function probe(url, method, headers) {
+  const t0 = performance.now();
+  try {
+    const r = await fetch(url, { method, headers, mode: "cors", cache: "no-store" });
+    let len = "";
+    if (method !== "HEAD") { const b = await r.arrayBuffer(); len = b.byteLength + " B"; }
+    const exposed = [...r.headers.keys()].join(", ");
+    return { ok: true, text: r.status + " " + len + " " + Math.round(performance.now() - t0) + " ms", exposed };
+  } catch (e) {
+    return { ok: false, text: "blocked: " + (e.message || e), exposed: "" };
+  }
+}
+
+document.getElementById("run").onclick = async () => {
+  const tbody = document.querySelector("#out tbody"); tbody.innerHTML = "";
+  document.getElementById("log").textContent = "";
+  const urls = [...urlsDiv.querySelectorAll("input")].map(i => i.value.trim()).filter(Boolean);
+  document.getElementById("status").textContent = "running…";
+  for (const u of urls) {
+    const g = await probe(u, "GET", {});
+    const h = await probe(u, "HEAD", {});
+    const rg = await probe(u, "GET", { Range: "bytes=0-99" });
+    const tr = document.createElement("tr");
+    const cell = (p) => '<td class="' + (p.ok ? "ok" : "bad") + '">' + p.text + "</td>";
+    tr.innerHTML = "<td><code>" + u + "</code></td>" + cell(g) + cell(h) + cell(rg) +
+      "<td><small>" + (g.exposed || h.exposed || "—") + "</small></td>";
+    tbody.appendChild(tr);
+    log(u + "\n  GET " + g.text + "\n  HEAD " + h.text + "\n  Range " + rg.text);
+  }
+  document.getElementById("status").textContent = "done — origin " + location.origin;
+};
+</script>
+</body>
+</html>
