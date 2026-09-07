@@ -36,6 +36,50 @@ export function ensureOrt(base = ORT_BASE) {
   return ortPromise;
 }
 
+// Hugging Face answers resolve/main/<file> with a 302 marked `cache-control:
+// no-store`, and the signed CDN URL it points at changes every time, so the
+// HTTP cache never reuses a shard: every page load re-downloads 270-539 MB.
+// Cache Storage is keyed on the stable resolve/main URL, so it survives.
+export const STARTUP_CHECK_MS = 120000;
+
+class TimeoutError extends Error {}
+
+function withTimeout(p, ms, what) {
+  let t;
+  return Promise.race([
+    p.finally(() => clearTimeout(t)),
+    new Promise((_, rej) => {
+      t = setTimeout(() => rej(new TimeoutError(
+        `${what} did not finish in ${(ms / 1000).toFixed(0)}s`)), ms);
+    }),
+  ]);
+}
+
+export const WEIGHT_CACHE = 'latent-calculator-weights-v1';
+
+async function cacheGet(url) {
+  try {
+    if (typeof caches === 'undefined') return null;
+    const c = await caches.open(WEIGHT_CACHE);
+    const r = await c.match(url);
+    if (!r) return null;
+    return new Uint8Array(await r.arrayBuffer());
+  } catch { return null; }
+}
+
+async function cachePut(url, bytes) {
+  try {
+    if (typeof caches === 'undefined') return false;
+    const c = await caches.open(WEIGHT_CACHE);
+    await c.put(url, new Response(bytes));
+    return true;
+  } catch { return false; }   // quota, private mode, insecure origin
+}
+
+export async function clearWeightCache() {
+  try { return await caches.delete(WEIGHT_CACHE); } catch { return false; }
+}
+
 export const MODEL_BASES = (() => {
   const q = new URLSearchParams(location.search).get('model');
   if (q) return [q.endsWith('/') ? q : q + '/'];
@@ -213,18 +257,26 @@ export class LatentModel {
     this.expectedBytes = 0;
   }
 
-  progress(name, got, total, done) {
+  progress(name, got, total, done, suffix = '') {
     const mb = (x) => (x / 1e6).toFixed(0);
     const running = this.bytesFetched + (done ? 0 : got);
     const of = this.expectedBytes
       ? ` [${mb(running)}/${mb(this.expectedBytes)} MB]` : '';
-    this.log(done ? `  ${name} ${mb(got)} MB${of}`
+    this.log(done ? `  ${name} ${mb(got)} MB${of}${suffix}`
       : `  ${name} ${mb(got)}/${mb(total)} MB${of}`);
   }
 
   async fetchBytes(base, name) {
     if (this.bufCache.has(name)) return this.bufCache.get(name);
-    const r = await fetch(base + name);
+    const url = base + name;
+    const hit = await cacheGet(url);
+    if (hit) {
+      this.bufCache.set(name, hit);
+      this.bytesFetched += hit.length;
+      this.progress(name, hit.length, hit.length, true, ' (from cache)');
+      return hit;
+    }
+    const r = await fetch(url);
     if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
     const total = Number(r.headers.get('content-length')) || 0;
     let b;
@@ -252,6 +304,7 @@ export class LatentModel {
     this.bufCache.set(name, b);
     this.bytesFetched += b.length;
     this.progress(name, b.length, b.length, true);
+    await cachePut(url, b);
     return b;
   }
 
@@ -311,19 +364,10 @@ export class LatentModel {
       want = want.filter((e) => e !== 'webgpu');
       if (!want.length) want = ['wasm'];
     }
-    if (variant === 'auto') {
-      // fp16 is the WebGPU variant and fp32 the WASM one.  Handing WebGPU the
-      // 539 MB fp32 graph uploads it to the GPU once per optimization level
-      // before the WASM fallback is ever reached.
-      variant = (want[0] === 'webgpu' && this.meta.variants.fp16)
-        ? 'fp16' : 'fp32';
-      this.log(`variant auto -> ${variant} (backend order ${want.join(', ')})`);
+    const asked = variant;
+    if (asked === 'auto') {
+      this.log(`variant auto, backend order ${want.join(', ')}`);
     }
-    const v = this.meta.variants[variant];
-    if (!v) throw new Error('no such weight variant: ' + variant);
-    this.expectedBytes = variantBytes(this.meta, variant);
-    this.log(`downloading ~${(this.expectedBytes / 1e6).toFixed(0)} MB`
-      + ' (cached by the browser after the first load)');
     let lastErr = null;
     // onnxruntime-web 1.24's extended optimizers (SimplifiedLayerNormFusion)
     // reject the fp16 graph, so fall back a level at a time rather than
@@ -331,6 +375,17 @@ export class LatentModel {
     // retry costs no download.
     outer:
     for (const ep of want) {
+      // fp16 is the WebGPU variant and fp32 the WASM one.  Resolve per backend,
+      // not once up front: carrying fp16 onto the WASM fallback fails at every
+      // optimization level, because ORT's WASM build has no fp16 kernels.
+      variant = asked === 'auto'
+        ? ((ep === 'webgpu' && this.meta.variants.fp16) ? 'fp16' : 'fp32')
+        : asked;
+      const v = this.meta.variants[variant];
+      if (!v) throw new Error('no such weight variant: ' + variant);
+      this.expectedBytes = variantBytes(this.meta, variant);
+      this.log(`${ep}: ${variant}, ~`
+        + `${(this.expectedBytes / 1e6).toFixed(0)} MB`);
       for (const level of ['all', 'basic', 'disabled']) {
         try {
           const opts = { executionProviders: [ep],
@@ -348,15 +403,13 @@ export class LatentModel {
           // WebGPU did this on this site once; headless Chromium's WebGPU
           // returned empty strings here).  One known prompt through the latent
           // route decides whether this backend is trusted.
-          const chk = await this.answer('4567 + 89 =', 'regex');
+          const chk = await withTimeout(this.answer('4567 + 89 =', 'regex'),
+            STARTUP_CHECK_MS, `${ep} startup check`);
           const got = (chk.latent.text || '').trim();
           if (got !== '4656') {
             this.log(`backend ${ep} failed the startup check: latent '${got}' `
               + `for 4567 + 89 (expected 4656); trying the next backend`);
             this.backend = null;
-            // Keep the fetched variant on fallback: re-picking fp32 here would
-            // mean a second multi-hundred-MB download for a page that has
-            // already spent one.
             continue outer;
           }
           this.log(`backend ${ep} passed the startup check (4567 + 89 = ${got})`);
@@ -364,6 +417,8 @@ export class LatentModel {
         } catch (e) {
           lastErr = e;
           this.log(`backend ${ep} / optimization ${level} failed: ${e.message}`);
+          // A hang is not an optimizer problem, so do not walk the ladder.
+          if (e instanceof TimeoutError) { this.backend = null; continue outer; }
         }
       }
     }
@@ -610,7 +665,7 @@ function ui() {
     try {
       await model.init({ variant, backend });
       el('backend').textContent = 'backend: ' + model.backend;
-      el('variantBadge').textContent = 'weights: ' + variant;
+      el('variantBadge').textContent = 'weights: ' + model.variant;
       el('threadsBadge').textContent = 'wasm threads: ' + model.threads;
       log(`loaded in ${((performance.now() - t0) / 1000).toFixed(1)}s`);
       window.LC.loaded = true;
@@ -666,6 +721,15 @@ function ui() {
 
   el('load').onclick = load;
   el('run').onclick = run;
+  const clear = el('clearCache');
+  if (clear) {
+    clear.onclick = async () => {
+      const gone = await clearWeightCache();
+      model.bufCache.clear();
+      model.bytesFetched = 0;
+      log(gone ? 'cached weights deleted' : 'no cached weights to delete');
+    };
+  }
   el('prompt').onkeydown = (e) => {
     if (e.key === 'Enter' && !el('run').disabled) run();
   };
