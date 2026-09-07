@@ -14,6 +14,28 @@ import { BPETokenizer } from './bpe.js';
 // Where the weights live.  `?model=<url>` wins; otherwise the first base whose
 // meta.json answers.  Hugging Face and raw.githubusercontent both send
 // access-control-allow-origin: * and honour ranges; GitHub release assets do not.
+export const ORT_BASE = (typeof window !== 'undefined' && window.ORT_BASE)
+  || 'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.24.2/';
+
+// ORT ships as a classic script that defines a global.  Loading it with
+// document.write from the page is what Chrome warns about (parser-blocking
+// cross-site script); load it here instead and await it before first use.
+let ortPromise = null;
+export function ensureOrt(base = ORT_BASE) {
+  if (typeof globalThis.ort !== 'undefined') return Promise.resolve(globalThis.ort);
+  if (ortPromise) return ortPromise;
+  ortPromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = base + 'ort.min.js';
+    s.onload = () => (typeof globalThis.ort !== 'undefined'
+      ? resolve(globalThis.ort)
+      : reject(new Error('ort.min.js loaded but no ort global')));
+    s.onerror = () => reject(new Error('could not load ' + s.src));
+    document.head.appendChild(s);
+  });
+  return ortPromise;
+}
+
 export const MODEL_BASES = (() => {
   const q = new URLSearchParams(location.search).get('model');
   if (q) return [q.endsWith('/') ? q : q + '/'];
@@ -258,6 +280,12 @@ export class LatentModel {
   }
 
   async init({ base = null, variant = 'fp32', backend = 'auto' } = {}) {
+    if (typeof globalThis.ort === 'undefined') this.log('loading onnxruntime-web');
+    await ensureOrt();
+    // ORT resolves wasmPaths relative to ort.min.js, so make it absolute
+    if (typeof document !== 'undefined' && typeof location !== 'undefined') {
+      ort.env.wasm.wasmPaths = new URL(ORT_BASE, location.href).href;
+    }
     base = base || await pickBase(MODEL_BASES);
     this.base = base;
     this.meta = await (await fetch(base + 'meta.json')).json();
@@ -578,8 +606,6 @@ function ui() {
     el('backend').textContent = 'loading…';
     const variant = el('variant').value;
     const backend = el('backendSel').value;
-    // ORT resolves wasmPaths relative to ort.min.js, so make it absolute
-    ort.env.wasm.wasmPaths = new URL(window.ORT_BASE, location.href).href;
     const t0 = performance.now();
     try {
       await model.init({ variant, backend });
