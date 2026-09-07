@@ -35,6 +35,39 @@ async function pickBase(bases) {
   throw new Error('no model host answered: ' + bases.join(', '));
 }
 
+/** Bytes the page pulls for one variant, from meta.json's own manifest.
+ *  The tied embedding table is shared between the halves, so count it once. */
+export function variantBytes(meta, variant) {
+  const v = meta.variants[variant];
+  if (!v) return 0;
+  const seen = new Set();
+  let n = 0;
+  for (const half of [v.lower, v.upper]) {
+    n += half.model_bytes || 0;
+    for (const e of half.external || []) {
+      if (seen.has(e.location)) continue;
+      seen.add(e.location);
+      n += e.bytes || 0;
+    }
+  }
+  return n;
+}
+
+/** meta.json lists every variant export_onnx.py can emit, including ones that
+ *  were deliberately never uploaded (int8 costs 22 exact-match points).  HEAD
+ *  each variant's lower graph so the page offers only what the host serves. */
+export async function availableVariants(base, meta) {
+  const out = [];
+  for (const name of Object.keys(meta.variants)) {
+    try {
+      const r = await fetch(base + meta.variants[name].lower.model,
+        { method: 'HEAD' });
+      if (r.ok) out.push(name);
+    } catch (e) { /* unreachable counts as absent */ }
+  }
+  return out;
+}
+
 const MAX_NEW = 16;
 const N_OPERAND_SLOTS = 6;
 const N_RESULT_SLOTS = 12;
@@ -155,15 +188,48 @@ export class LatentModel {
     this.log = log;
     this.bufCache = new Map();      // the tied table is fetched once
     this.bytesFetched = 0;
+    this.expectedBytes = 0;
+  }
+
+  progress(name, got, total, done) {
+    const mb = (x) => (x / 1e6).toFixed(0);
+    const running = this.bytesFetched + (done ? 0 : got);
+    const of = this.expectedBytes
+      ? ` [${mb(running)}/${mb(this.expectedBytes)} MB]` : '';
+    this.log(done ? `  ${name} ${mb(got)} MB${of}`
+      : `  ${name} ${mb(got)}/${mb(total)} MB${of}`);
   }
 
   async fetchBytes(base, name) {
     if (this.bufCache.has(name)) return this.bufCache.get(name);
     const r = await fetch(base + name);
     if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`);
-    const b = new Uint8Array(await r.arrayBuffer());
+    const total = Number(r.headers.get('content-length')) || 0;
+    let b;
+    if (r.body && total > 8e6) {
+      // Read the big shards through the stream so the log moves while a 90 MB
+      // file is in flight.  A page that prints nothing for four minutes is
+      // indistinguishable from a page that has died.
+      const chunks = [];
+      const reader = r.body.getReader();
+      let got = 0;
+      let mark = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        got += value.length;
+        if (got - mark >= total / 4) { mark = got; this.progress(name, got, total, false); }
+      }
+      b = new Uint8Array(got);
+      let off = 0;
+      for (const c of chunks) { b.set(c, off); off += c.length; }
+    } else {
+      b = new Uint8Array(await r.arrayBuffer());
+    }
     this.bufCache.set(name, b);
     this.bytesFetched += b.length;
+    this.progress(name, b.length, b.length, true);
     return b;
   }
 
@@ -207,8 +273,6 @@ export class LatentModel {
     ort.env.logLevel = 'error';
     this.threads = ort.env.wasm.numThreads;
 
-    const v = this.meta.variants[variant];
-    if (!v) throw new Error('no such weight variant: ' + variant);
     let want = backend === 'auto'
       ? (navigator.gpu ? ['webgpu', 'wasm'] : ['wasm'])
       : [backend];
@@ -219,6 +283,19 @@ export class LatentModel {
       want = want.filter((e) => e !== 'webgpu');
       if (!want.length) want = ['wasm'];
     }
+    if (variant === 'auto') {
+      // fp16 is the WebGPU variant and fp32 the WASM one.  Handing WebGPU the
+      // 539 MB fp32 graph uploads it to the GPU once per optimization level
+      // before the WASM fallback is ever reached.
+      variant = (want[0] === 'webgpu' && this.meta.variants.fp16)
+        ? 'fp16' : 'fp32';
+      this.log(`variant auto -> ${variant} (backend order ${want.join(', ')})`);
+    }
+    const v = this.meta.variants[variant];
+    if (!v) throw new Error('no such weight variant: ' + variant);
+    this.expectedBytes = variantBytes(this.meta, variant);
+    this.log(`downloading ~${(this.expectedBytes / 1e6).toFixed(0)} MB`
+      + ' (cached by the browser after the first load)');
     let lastErr = null;
     // onnxruntime-web 1.24's extended optimizers (SimplifiedLayerNormFusion)
     // reject the fp16 graph, so fall back a level at a time rather than
@@ -249,6 +326,9 @@ export class LatentModel {
             this.log(`backend ${ep} failed the startup check: latent '${got}' `
               + `for 4567 + 89 (expected 4656); trying the next backend`);
             this.backend = null;
+            // Keep the fetched variant on fallback: re-picking fp32 here would
+            // mean a second multi-hundred-MB download for a page that has
+            // already spent one.
             continue outer;
           }
           this.log(`backend ${ep} passed the startup check (4567 + 89 = ${got})`);
@@ -451,6 +531,37 @@ function ui() {
   };
   const model = new LatentModel(log);
   window.LC = { model, loaded: false, last: null };
+
+  // meta.json advertises int8, which was never uploaded; a 404 four minutes
+  // into a load reads as a broken page.  Ask the host what it actually has.
+  (async () => {
+    try {
+      const base = await pickBase(MODEL_BASES);
+      const meta = await (await fetch(base + 'meta.json')).json();
+      const have = await availableVariants(base, meta);
+      const sel = el('variant');
+      sel.innerHTML = '';
+      const auto = document.createElement('option');
+      auto.value = 'auto';
+      auto.textContent = 'auto';
+      sel.appendChild(auto);
+      for (const name of have) {
+        const o = document.createElement('option');
+        o.value = name;
+        o.textContent = `${name} \u2014 ${(variantBytes(meta, name) / 1e6)
+          .toFixed(0)} MB` + (name === 'fp16' ? ' (WebGPU)' : '');
+        sel.appendChild(o);
+      }
+      sel.value = 'auto';
+      el('variantBadge').textContent = have.join(' / ') + ' available';
+      el('backend').textContent = navigator.gpu ? 'webgpu available' : 'wasm';
+      log(`weights: ${base}`);
+      log(`variants served: ${have.join(', ')}`);
+    } catch (e) {
+      log('could not read the weight manifest: ' + e.message);
+      el('backend').textContent = 'no model host';
+    }
+  })();
 
   el('examples').innerHTML = '';
   for (const ex of EXAMPLES) {
