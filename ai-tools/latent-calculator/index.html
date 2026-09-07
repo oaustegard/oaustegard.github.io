@@ -1,0 +1,126 @@
+<title>Latent calculator, in the browser</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: light dark; --fg:#151515; --dim:#666; --bg:#fbfbf9;
+          --line:#d8d6d0; --card:#fff; --ok:#1a7f37; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e6e1; --dim:#9a978f; --bg:#16171a; --line:#33353a;
+            --card:#1d1f23; --ok:#4ac26b; --bad:#f2836b; }
+  }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 2rem 1.2rem 5rem; }
+  h1 { font-size: 1.6rem; margin: 0 0 .3rem; font-weight: 600; }
+  p.sub { color: var(--dim); margin: 0 0 1.6rem; }
+  code, .mono, input, button, table { font-family: ui-monospace, SFMono-Regular,
+    "SF Mono", Menlo, Consolas, monospace; }
+  .panel { border:1px solid var(--line); background:var(--card);
+           border-radius:6px; padding:1rem 1.1rem; margin-bottom:1.2rem; }
+  .row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+  input[type=text] { flex:1 1 340px; padding:.5rem .6rem; font-size:.92rem;
+    border:1px solid var(--line); border-radius:4px; background:var(--bg);
+    color:var(--fg); }
+  button { padding:.5rem .9rem; font-size:.85rem; border:1px solid var(--line);
+    border-radius:4px; background:var(--card); color:var(--fg); cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.ex { font-size:.78rem; padding:.3rem .5rem; }
+  .examples { margin-top:.8rem; display:flex; gap:.4rem; flex-wrap:wrap; }
+  label { font-size:.85rem; color:var(--dim); }
+  select { font-size:.82rem; padding:.3rem; background:var(--bg);
+           color:var(--fg); border:1px solid var(--line); border-radius:4px; }
+  table { width:100%; border-collapse:collapse; font-size:.85rem;
+          margin-top:.4rem; }
+  th, td { text-align:left; padding:.45rem .5rem; border-bottom:1px solid var(--line);
+           vertical-align:top; }
+  th { color:var(--dim); font-weight:500; font-size:.78rem;
+       text-transform:uppercase; letter-spacing:.04em; }
+  td.num { text-align:right; white-space:nowrap; }
+  .out { font-weight:600; }
+  .ok { color:var(--ok); } .bad { color:var(--bad); }
+  .badge { display:inline-block; font-size:.75rem; padding:.15rem .45rem;
+           border:1px solid var(--line); border-radius:3px; color:var(--dim);
+           margin-right:.35rem; font-family:ui-monospace,monospace; }
+  #log { font-size:.75rem; color:var(--dim); white-space:pre-wrap;
+         max-height:9rem; overflow:auto; margin-top:.6rem; }
+  .scroll { overflow-x:auto; }
+  .note { font-size:.82rem; color:var(--dim); }
+  dl.q { margin:.6rem 0 0; font-size:.85rem; }
+  dl.q div { display:flex; gap:.6rem; }
+  dl.q dt { color:var(--dim); min-width:9rem; }
+  dl.q dd { margin:0; font-family:ui-monospace,monospace; }
+</style>
+
+<main>
+  <h1>Latent calculator, in the browser</h1>
+  <p class="sub">SmolLM2-135M, frozen, split after decoder layer 16. Three
+  routes to the same arithmetic answer &mdash; one of them passes no tokens in
+  either direction.</p>
+
+  <div class="panel">
+    <div class="row">
+      <span id="backend" class="badge">loading&hellip;</span>
+      <span id="variantBadge" class="badge"></span>
+      <span id="threadsBadge" class="badge"></span>
+    </div>
+    <div class="row" style="margin-top:.7rem">
+      <label>weights
+        <select id="variant">
+          <option value="fp32">fp32</option>
+          <option value="fp16">fp16 (WebGPU)</option>
+          <option value="int8">int8 (small WASM)</option>
+        </select>
+      </label>
+      <label>backend
+        <select id="backendSel">
+          <option value="auto">auto</option>
+          <option value="wasm">wasm</option>
+          <option value="webgpu">webgpu</option>
+        </select>
+      </label>
+      <label>query from
+        <select id="query">
+          <option value="learned">learned head (layer 16)</option>
+          <option value="regex">regex (prompt text)</option>
+        </select>
+      </label>
+      <button id="load">load model</button>
+    </div>
+    <div id="log"></div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <input type="text" id="prompt" value="4567 + 89 ="
+             placeholder="type an arithmetic prompt">
+      <button id="run" disabled>run</button>
+    </div>
+    <div class="examples" id="examples"></div>
+  </div>
+
+  <div class="panel" id="resultPanel" hidden>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>route</th><th>answer</th><th class="num">tokens</th>
+          <th class="num">ms</th><th>what crossed the boundary</th></tr></thead>
+        <tbody id="results"></tbody>
+      </table>
+    </div>
+    <dl class="q" id="qinfo"></dl>
+  </div>
+
+  <p class="note">The latent route reads the query out of layer 16 (or off the
+  prompt text, if you switch the source), runs a plain calculator in
+  JavaScript, and adds one encoder vector to the residual stream at every
+  answer position. The model never sees the result as text.</p>
+</main>
+
+<script>
+  // ORT: CDN by default; ?ort=local uses the vendored copy (offline tests).
+  window.ORT_BASE = new URLSearchParams(location.search).get('ort') === 'local'
+    ? './vendor/'
+    : 'https://cdnjs.cloudflare.com/ajax/libs/onnxruntime-web/1.24.2/';
+  document.write('<scr' + 'ipt src="' + window.ORT_BASE + 'ort.min.js"></scr'
+                 + 'ipt>');
+</script>
+<script type="module" src="./latent.js"></script>
