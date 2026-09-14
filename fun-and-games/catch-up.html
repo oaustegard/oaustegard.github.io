@@ -45,6 +45,15 @@
     background: #fff; border: 1px solid var(--line); border-radius: 999px; color: var(--olive);
   }
   .presets button:hover { background: var(--olive); color: #fff; border-color: var(--olive); }
+  .grid { margin: .8rem 0 1rem; }
+  .grid .row { margin-bottom: .6rem; gap: .5rem; }
+  .grid label { font-size: .9rem; }
+  .grid input[type="number"] { width: 5rem; font-size: .95rem; }
+  .hint { color: #6b7062; font-size: .82em; font-weight: 400; }
+  select, .unitsel {
+    font: inherit; font-size: .9rem; padding: .4rem; border: 1px solid var(--line);
+    border-radius: 5px; background: #fff; color: var(--ink); max-width: 11rem;
+  }
   .share { display: flex; align-items: center; gap: .6rem; margin: -.4rem 0 1rem; }
   .share button {
     font: inherit; font-size: .85rem; padding: .45rem .8rem; cursor: pointer;
@@ -128,12 +137,61 @@
 
 <details>
   <summary>What that costs in watts</summary>
-  <p>Flat road, no wind, 114 kg all-in, using the drag and rolling-resistance numbers fitted to Oskar's own power-meter rides (Crr 0.0097, CdA 0.336 m&sup2;). The fit is only trustworthy in the 16&ndash;20 mph band &mdash; well outside it, read these as a shape, not a number.</p>
+  <p>A steady-state estimate: rolling resistance, aerodynamic drag, and gravity if you give it a gradient. No wind, no accelerations. Every number below is editable &mdash; the defaults are a mid-pack road rider on a decent road bike.</p>
+
+  <div class="grid">
+    <div class="row">
+      <label for="mass">Rider + bike + everything</label>
+      <input type="number" id="mass" value="200" min="30" max="500" step="1">
+      <select id="massUnit" class="unitsel">
+        <option value="lb" selected>lb</option>
+        <option value="kg">kg</option>
+      </select>
+    </div>
+    <div class="row">
+      <label for="cda">Position <span class="hint">(frontal drag, CdA)</span></label>
+      <select id="cdaPreset">
+        <option value="0.40">Upright / tops</option>
+        <option value="0.36" selected>Hoods</option>
+        <option value="0.30">Drops</option>
+        <option value="0.26">Aero bars / TT</option>
+      </select>
+      <input type="number" id="cda" value="0.36" min="0.15" max="0.7" step="0.01">
+      <span class="unit">m&sup2;</span>
+    </div>
+    <div class="row">
+      <label for="crr">Surface &amp; tyres <span class="hint">(rolling, Crr)</span></label>
+      <select id="crrPreset">
+        <option value="0.0035">Fast tyres, smooth tarmac</option>
+        <option value="0.0050" selected>Typical road</option>
+        <option value="0.0080">Chipseal / rough</option>
+        <option value="0.0140">Gravel</option>
+      </select>
+      <input type="number" id="crr" value="0.005" min="0.002" max="0.03" step="0.0005">
+    </div>
+    <div class="row">
+      <label for="grade">Gradient</label>
+      <input type="number" id="grade" value="0" min="-15" max="20" step="0.1">
+      <span class="unit">%</span>
+    </div>
+    <div class="row">
+      <label for="rho">Air density <span class="hint">(1.225 at sea level and 15&deg;C; ~1.10 high and hot)</span></label>
+      <input type="number" id="rho" value="1.20" min="0.7" max="1.4" step="0.005">
+      <span class="unit">kg/m&sup3;</span>
+    </div>
+    <div class="row">
+      <label for="draft">Draft benefit in the group</label>
+      <input type="number" id="draft" value="30" min="0" max="50" step="1">
+      <span class="unit">%</span>
+    </div>
+  </div>
+
   <table id="wattTable">
-    <thead><tr><th></th><th>Speed</th><th>Watts</th></tr></thead>
+    <thead><tr><th></th><th>Speed</th><th>Watts</th><th>W/kg</th></tr></thead>
     <tbody></tbody>
   </table>
   <p id="draftNote"></p>
+  <p class="hint">Drag rises with the cube of speed, so these numbers are only as good as the CdA you feed them, and CdA is the hardest thing on this page to know about yourself. If you have power-meter data, fit your own: hold a steady speed on a flat road in still air and solve backwards.</p>
 </details>
 
 <details>
@@ -188,9 +246,23 @@
   }
   function fmtMi(d) { return (d < 10 ? d.toFixed(2) : d.toFixed(1)) + " mi"; }
 
+  function massKg() {
+    var w = parseFloat($("mass").value) || 0;
+    return $("massUnit").value === "kg" ? w : w * 0.45359237;
+  }
+
   function watts(v_mph, cda) {
-    var v = v_mph * 0.44704, m = 114.3, g = 9.8067, crr = 0.00973, rho = 1.20;
-    return (crr * m * g * v + 0.5 * rho * cda * v * v * v) / 0.976 / 1.05;
+    var v = v_mph * 0.44704,
+        m = massKg(),
+        g = 9.8067,
+        crr = parseFloat($("crr").value) || 0,
+        rho = parseFloat($("rho").value) || 0,
+        theta = Math.atan((parseFloat($("grade").value) || 0) / 100),
+        eff = 0.97;
+    var p = (crr * m * g * Math.cos(theta) * v
+             + 0.5 * rho * cda * v * v * v
+             + m * g * Math.sin(theta) * v) / eff;
+    return p;
   }
 
   function chart(N, M, tCatch, dCatch, lateH) {
@@ -228,20 +300,35 @@
     $("needTable").querySelector("tbody").innerHTML = body;
   }
 
-  function wattTable(N, M) {
-    var solo = watts(M, 0.3362), theirSolo = watts(N, 0.3362), inGroup = watts(N, 0.3362 * 0.7);
+  function wattTable(N, M, tCatch) {
+    var cda = parseFloat($("cda").value) || 0.36;
+    var draft = Math.min(0.5, Math.max(0, (parseFloat($("draft").value) || 0) / 100));
+    var m = massKg();
+    var solo = watts(M, cda), theirSolo = watts(N, cda), inGroup = watts(N, cda * (1 - draft));
     var rows = [
       ["You, chasing, alone", M, solo],
-      ["Them, in the paceline", N, inGroup],
+      ["Them, in the group", N, inGroup],
       ["You, once you're on", N, inGroup]
     ];
     $("wattTable").querySelector("tbody").innerHTML = rows.map(function (r) {
-      return "<tr><td>" + r[0] + "</td><td>" + r[1].toFixed(1) + " mph</td><td>" + Math.round(r[2]) + " W</td></tr>";
+      var w = Math.max(0, r[2]);
+      return "<tr><td>" + r[0] + "</td><td>" + r[1].toFixed(1) + " mph</td><td>" +
+        Math.round(w) + " W</td><td>" + (m > 0 ? (w / m).toFixed(2) : "\u2014") + "</td></tr>";
     }).join("");
-    var ratio = solo / inGroup;
-    $("draftNote").textContent = "Chasing solo costs about " + ratio.toFixed(1) +
-      "\u00d7 what sitting in costs at their pace, and " +
-      (solo / theirSolo).toFixed(2) + "\u00d7 what they would be paying if they were alone too.";
+
+    var note = "";
+    if (solo > 0 && inGroup > 0) {
+      note = "Chasing alone costs " + (solo / inGroup).toFixed(1) +
+        "\u00d7 what sitting in costs at their pace, and " +
+        (solo / theirSolo).toFixed(2) + "\u00d7 what they would be paying with no one to hide behind.";
+    } else {
+      note = "At this gradient the road is doing the work \u2014 you would be braking, not pedalling.";
+    }
+    if (tCatch && solo > 0) {
+      note += " The chase itself is about " + Math.round(solo * tCatch * 3.6) +
+        " kJ, " + fmtTime(tCatch) + " of it, before you have ridden a metre with the group.";
+    }
+    $("draftNote").textContent = note;
   }
 
   function render() {
@@ -253,8 +340,9 @@
     var gap = N * lateH;
     var ans = $("answer"), head = $("headline"), d1 = $("d1"), d2 = $("d2"), d3 = $("d3");
 
+    var tCatch = (lateMin > 0 && M > N) ? gap / (M - N) : null;
     needTable(N, lateH);
-    wattTable(N, M);
+    wattTable(N, M, tCatch);
 
     if (lateMin <= 0) {
       ans.className = "answer";
@@ -276,7 +364,6 @@
       return;
     }
 
-    var tCatch = gap / (M - N);
     var dCatch = M * tCatch;
 
     ans.className = "answer";
@@ -310,7 +397,24 @@
 
   // --- query-string sync: the whole form round-trips through the URL, so any
   // state you can see you can also paste into the group chat.
-  var FIELDS = [["group", groupSpeed], ["late", late], ["you", mySpeed], ["route", route]];
+  var FIELDS = [
+    ["group", groupSpeed, "18"],
+    ["late", late, "10"],
+    ["you", mySpeed, "22"],
+    ["route", route, ""],
+    ["mass", $("mass"), "200"],
+    ["unit", $("massUnit"), "lb"],
+    ["cda", $("cda"), "0.36"],
+    ["crr", $("crr"), "0.005"],
+    ["grade", $("grade"), "0"],
+    ["rho", $("rho"), "1.20"],
+    ["draft", $("draft"), "30"]
+  ];
+
+  // Position and surface pickers just write into the numeric field, so a rider
+  // who knows their own CdA can ignore them.
+  $("cdaPreset").addEventListener("change", function () { $("cda").value = this.value; update(); });
+  $("crrPreset").addEventListener("change", function () { $("crr").value = this.value; update(); });
 
   function readURL() {
     if (!window.URLSearchParams) return;
@@ -318,8 +422,9 @@
     FIELDS.forEach(function (f) {
       var raw = q.get(f[0]);
       if (raw === null || raw === "") return;
+      if (f[0] === "unit") { if (raw === "kg" || raw === "lb") f[1].value = raw; return; }
       var v = parseFloat(raw);
-      if (isFinite(v) && v >= 0) f[1].value = v;
+      if (isFinite(v) && v >= -100) f[1].value = v;
     });
   }
 
@@ -328,13 +433,14 @@
     var q = new URLSearchParams();
     FIELDS.forEach(function (f) {
       var v = String(f[1].value).trim();
-      if (v !== "") q.set(f[0], v);
+      // Defaults are omitted, so a link stays short and only carries what was changed.
+      if (v !== "" && parseFloat(v) !== parseFloat(f[2]) && v !== f[2]) q.set(f[0], v);
     });
     var s = q.toString();
     history.replaceState(null, "", s ? location.pathname + "?" + s : location.pathname);
   }
 
-  function update() { writeURL(); render(); }
+  function update() { writeURL(); syncPresets(); render(); }
 
   $("share").addEventListener("click", function () {
     writeURL();
@@ -357,9 +463,25 @@
     }
   });
 
-  FIELDS.forEach(function (f) { f[1].addEventListener("input", update); });
+  FIELDS.forEach(function (f) {
+    f[1].addEventListener("input", update);
+    f[1].addEventListener("change", update);
+  });
   readURL();
+  // An arriving link may set a CdA or Crr that matches no preset; keep the
+  // pickers honest rather than showing a label the number contradicts.
+  syncPresets();
   render();
+
+  function syncPresets() {
+    [["cdaPreset", "cda"], ["crrPreset", "crr"]].forEach(function (pair) {
+      var sel = $(pair[0]), val = parseFloat($(pair[1]).value), matched = false;
+      for (var i = 0; i < sel.options.length; i++) {
+        if (Math.abs(parseFloat(sel.options[i].value) - val) < 1e-9) { sel.selectedIndex = i; matched = true; }
+      }
+      if (!matched) sel.selectedIndex = -1;
+    });
+  }
 })();
 </script>
 </body>
