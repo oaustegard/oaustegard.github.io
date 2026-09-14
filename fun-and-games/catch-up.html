@@ -45,6 +45,13 @@
     background: #fff; border: 1px solid var(--line); border-radius: 999px; color: var(--olive);
   }
   .presets button:hover { background: var(--olive); color: #fff; border-color: var(--olive); }
+  .share { display: flex; align-items: center; gap: .6rem; margin: -.4rem 0 1rem; }
+  .share button {
+    font: inherit; font-size: .85rem; padding: .45rem .8rem; cursor: pointer;
+    background: var(--olive); color: #fff; border: none; border-radius: 5px;
+  }
+  .share button:hover { background: #4b5930; }
+  .share span { font-size: .85rem; color: var(--olive); }
   .answer { background: #fff; border: 1px solid var(--line); border-left: 5px solid var(--olive); border-radius: 8px; padding: 1rem 1.1rem; margin-bottom: 1rem; }
   .answer.bad { border-left-color: var(--red); }
   .big { font-size: 1.05rem; margin: 0 0 .5rem; }
@@ -105,6 +112,11 @@
   <svg id="chart" viewBox="0 0 640 240" role="img" aria-label="Distance versus time for both riders"></svg>
 </div>
 
+<p class="share">
+  <button type="button" id="share">Copy link to these numbers</button>
+  <span id="shareMsg"></span>
+</p>
+
 <details>
   <summary>What speed do I actually need?</summary>
   <p>Required cruise speed, assuming they hold the pace above and never soft-pedal:</p>
@@ -163,7 +175,7 @@
     var b = document.createElement("button");
     b.type = "button";
     b.textContent = p[0] + " \u00b7 " + p[1];
-    b.addEventListener("click", function () { groupSpeed.value = p[1]; render(); });
+    b.addEventListener("click", function () { groupSpeed.value = p[1]; update(); });
     $("presets").appendChild(b);
   });
 
@@ -296,9 +308,57 @@
     chart(N, M, tCatch, dCatch, lateH);
   }
 
-  [groupSpeed, late, mySpeed, route].forEach(function (el) {
-    el.addEventListener("input", render);
+  // --- query-string sync: the whole form round-trips through the URL, so any
+  // state you can see you can also paste into the group chat.
+  var FIELDS = [["group", groupSpeed], ["late", late], ["you", mySpeed], ["route", route]];
+
+  function readURL() {
+    if (!window.URLSearchParams) return;
+    var q = new URLSearchParams(location.search);
+    FIELDS.forEach(function (f) {
+      var raw = q.get(f[0]);
+      if (raw === null || raw === "") return;
+      var v = parseFloat(raw);
+      if (isFinite(v) && v >= 0) f[1].value = v;
+    });
+  }
+
+  function writeURL() {
+    if (!window.URLSearchParams || !history.replaceState) return;
+    var q = new URLSearchParams();
+    FIELDS.forEach(function (f) {
+      var v = String(f[1].value).trim();
+      if (v !== "") q.set(f[0], v);
+    });
+    var s = q.toString();
+    history.replaceState(null, "", s ? location.pathname + "?" + s : location.pathname);
+  }
+
+  function update() { writeURL(); render(); }
+
+  $("share").addEventListener("click", function () {
+    writeURL();
+    var url = location.href, msg = $("shareMsg");
+    function ok() {
+      msg.textContent = "Copied";
+      setTimeout(function () { msg.textContent = ""; }, 2500);
+    }
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(url).then(ok, fallback);
+    } else { fallback(); }
+    function fallback() {
+      var t = document.createElement("input");
+      t.value = url;
+      document.body.appendChild(t);
+      t.select();
+      try { document.execCommand("copy"); ok(); }
+      catch (e) { msg.textContent = "Copy from the address bar"; }
+      document.body.removeChild(t);
+    }
   });
+
+  FIELDS.forEach(function (f) { f[1].addEventListener("input", update); });
+  readURL();
   render();
 })();
 </script>
