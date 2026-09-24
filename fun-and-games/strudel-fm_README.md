@@ -12,11 +12,21 @@ A generative radio station. A small program writes the music four bars at a time
 - **Mood**: Dark (aeolian, phrygian), Deep (dorian), Bright (ionian, mixolydian, lydian). A new mood picks a new key.
 - **Cue**: Build & drop, Breakdown, New key, Surprise (another station).
 
-Every control rewrites the music from the next bar.
+Every control rewrites the music from the next bar, and keeps the current section running.
+
+## Preset links
+
+The address bar tracks the controls, and **Copy station link** copies it. Parameters left at the station's default are omitted:
+
+```
+strudel-fm.html?station=techno&bpm=130&mood=bright&energy=hype&key=fs-dorian
+```
+
+`station`: house, techno, lofi, ambient, synthwave, dub. `bpm`: 56–180. `mood`: dark, deep, bright. `energy`: chill, flow, hype. `key`: tonic (`s` for sharp, `b` for flat) and mode (ionian, dorian, phrygian, lydian, mixolydian, aeolian, or major/minor). Invalid values fall back to the defaults. Browsers need a click before playing sound, so a link loads the preset and waits for POWER.
 
 ## How the music is written
 
-- **Arc.** Sections follow a weighted chain (intro, groove, lift, build, drop, breakdown). A drop lasts at most two phrases, a build nearly always resolves into a drop, and energy tilts the weights.
+- **Arc.** Sections follow a weighted chain (intro, groove, lift, build, drop, breakdown). Each section runs a drawn number of four-bar phrases, 8 to 32 bars in all; a build always resolves into a drop; energy tilts the weights. A breakdown keeps a pad, a held bass, a sparse melody, offbeat hats and one clap per bar.
 - **Harmony.** Chords are the mode's own diatonic triads or sevenths, chained by functional-harmony weights; diminished chords are rarely chosen. A phrase that leads into a drop leans toward ending on the dominant. Progressions repeat for a few phrases before changing.
 - **Voicing.** Each chord takes the inversion with the least total movement from the previous one.
 - **Bass.** Style and energy pick a 16-step rhythm. Its notes are the chord's root, third, fifth, seventh or octave, plus a chromatic approach to the next chord's root.

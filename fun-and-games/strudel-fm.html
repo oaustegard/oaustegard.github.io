@@ -138,6 +138,7 @@ footer{color:var(--dim); font-size:13px}
       </div>
       <div class="group"><span class="lbl">Mood</span><div class="row" id="mood"></div>
         <span class="lbl" style="margin-top:6px">Cue</span><div class="row act" id="acts"></div>
+        <span class="lbl" style="margin-top:6px">Share</span><div class="row"><button class="key" id="share" title="Copies a link that opens this station, tempo, mood, energy and key">Copy station link</button></div>
       </div>
     </div>
     <div class="status" id="status" style="margin-top:12px; color:var(--engrave-soft)"></div>
@@ -155,7 +156,7 @@ footer{color:var(--dim); font-size:13px}
       <h2>How the station decides</h2>
       <p>No model picks anything here. Every four bars a small program writes the next phrase as Strudel code, and <a href="https://strudel.cc" target="_blank" rel="noopener">Strudel</a> plays it with real drum-machine and piano samples. The rules:</p>
       <ul class="rules">
-        <li><b>Arc.</b> Sections follow a weighted chain: intro → groove → lift → build → drop → breakdown, with limits (a drop lasts at most two phrases, a build always resolves). Energy tilts the weights.</li>
+        <li><b>Arc.</b> Sections follow a weighted chain: intro → groove → lift → build → drop → breakdown. Each section runs 8 to 32 bars, a build always resolves into a drop, and energy tilts the choice of what comes next. Even a breakdown keeps a pad, a held bass, a sparse melody and light percussion.</li>
         <li><b>Harmony.</b> The mood picks a mode (dark: aeolian or phrygian; deep: dorian; bright: ionian, mixolydian or lydian). Chords are the mode's own triads, chained with functional-harmony weights (V goes home, vi moves to IV or ii). A phrase leading into a drop ends on a dominant. Progressions repeat for a few phrases before changing.</li>
         <li><b>Voicing.</b> Each chord takes the inversion that moves the fewest semitones from the last one.</li>
         <li><b>Bass.</b> Style and energy pick a rhythm; the notes are the chord's root, fifth, octave, and a step toward the next root at the end of the bar.</li>
@@ -239,11 +240,13 @@ const STYLE_IDS = Object.keys(STYLES);
 // ================================================================ sections
 const SECTIONS = { intro:1, groove:2, lift:3, build:3, drop:4, breakdown:1 };
 const ARC = {
-  intro:{ groove:.7, lift:.3 }, groove:{ groove:.35, lift:.35, build:.2, breakdown:.1 }, lift:{ build:.45, groove:.25, lift:.15, breakdown:.15 },
-  build:{ drop:.9, lift:.1 }, drop:{ drop:.35, breakdown:.35, groove:.3 }, breakdown:{ build:.5, groove:.4, lift:.1 } };
-function nextSection(prev, run, tilt){
+  intro:{ groove:.7, lift:.3 }, groove:{ lift:.45, build:.35, breakdown:.2 }, lift:{ build:.7, groove:.15, breakdown:.15 },
+  build:{ drop:1 }, drop:{ breakdown:.5, groove:.5 }, breakdown:{ build:.55, groove:.45 } };
+// how many 4-bar phrases a section lasts once entered
+const DURATION = { intro:{ 2:1 }, groove:{ 4:.5, 6:.3, 8:.2 }, lift:{ 3:.6, 4:.4 }, build:{ 2:1 }, drop:{ 4:.6, 6:.4 }, breakdown:{ 3:.6, 4:.4 } };
+function nextSection(prev, tilt){
   const w = { ...ARC[prev] };
-  for (const k of Object.keys(w)){ w[k] *= Math.exp(tilt * (SECTIONS[k] - 2) * .45); if (k === prev && run >= (k === "drop" ? 2 : 3)) w[k] = 0; }
+  for (const k of Object.keys(w)) w[k] *= Math.exp(tilt * (SECTIONS[k] - 2) * .45);
   return wpick(w);
 }
 
@@ -286,7 +289,7 @@ function writeDrums(ctx){
     if (e >= 1) H(e >= 3 ? "xxxxxxxxxxxxxxxx" : "..x...x...x...x.");
     if (e >= 2) O("..x...x...x...x.");
     if (e >= 4) PC("x.x.x.x.x.x.x.x.");
-    if (ctx.section === "breakdown"){ K(""); H(e >= 1 ? "x.x.x.x.x.x.x.x." : ""); }
+    if (ctx.section === "breakdown"){ K(barInPhrase === 3 ? "x...x...x...x..." : ""); SN("............x..."); O(""); H("..x...x...x...x."); }
   } else if (style === "lofi"){
     if (e >= 1) K(chance(.5) ? "x.....x...x....." : "x.........x..x..");
     if (e >= 2) SN("....x.......x...");
@@ -340,8 +343,7 @@ const BASS_RHYTHM = {
 function writeBass(ctx){
   const { style, e, chord, next, flats } = ctx;
   if (e <= 0) return null;
-  if (ctx.section === "breakdown" && style !== "ambient" && chance(.6)) return null;
-  let r = BASS_RHYTHM[style][clamp(e - 1, 0, 3)].split("");
+  let r = (ctx.section === "breakdown" ? "R_______F_______" : BASS_RHYTHM[style][clamp(e - 1, 0, 3)]).split("");
   const rootM = placeNear(chord.root, 36);  // around C2
   const nextRoot = next ? placeNear(next.root, 36) : rootM;
   const toks = r.map((c, i) => {
@@ -369,11 +371,11 @@ function writeChords(ctx){
   if (style === "house"){
     if (e >= 3) return `note("${r("..x...x...x..x..")}").s("piano").gain(.7).room(.2)`;
     if (e === 2) return `note("${r("x.....x.........")}").s("piano").gain(.6).room(.3)`;
-    return `note("${r("x_______________")}").s("sawtooth").lpf(1100).attack(.4).release(1).gain(.3).room(.5)`;
+    return `note("${r("x_______________")}").s("sawtooth").lpf(1300).attack(.4).release(1).gain(.45).room(.5)`;
   }
   if (style === "techno"){
     if (e >= 3) return `note("${r("..x.....x.....x.")}").s("sawtooth").lpf(1200).decay(.15).sustain(0).delay(.5).delayfeedback(.55).room(.4).gain(.45)`;
-    return `note("${r("x_______________")}").s("supersaw").lpf(800).attack(.8).release(1).gain(.25).room(.6)`;
+    return `note("${r("x_______________")}").s("supersaw").lpf(1000).attack(.6).release(1).gain(.4).room(.6)`;
   }
   if (style === "lofi") return `note("${r(e >= 3 ? "x.....x...x....." : "x_______......x.")}").s("piano").lpf(2400).gain(.65).room(.35)`;
   if (style === "ambient") return `note("${r("x_______________")}").s("supersaw").lpf(sine.range(500,1800).slow(8)).attack(1.2).release(2).gain(.28).room(.9).size(.9)`;
@@ -393,10 +395,10 @@ function motif(len, density){ // rhythm positions + scale-degree walk
 }
 function writeLead(ctx){
   const { style, e, chord, key, flats, phrase, barInPhrase } = ctx;
-  if (e <= 1 && !(style === "ambient" && e === 1)) return null;
+  if (e <= 1 && style !== "ambient" && ctx.section !== "breakdown") return null;
   if (ctx.section === "build" && style !== "ambient") return writeArp(ctx);
   const sc = MODES[key.mode];
-  const M = phrase.motif || (phrase.motif = motif(16, style === "ambient" ? .15 : e >= 4 ? .55 : .35));
+  const M = phrase.motif || (phrase.motif = motif(16, style === "ambient" || ctx.section === "breakdown" ? .15 : e >= 4 ? .55 : .35));
   const answer = barInPhrase % 2 === 1;
   let deg = phrase.leadDeg ?? (phrase.leadDeg = 7 + (chance(.5) ? 2 : 4));
   const toks = Array(16).fill("~");
@@ -430,6 +432,7 @@ function writeTexture(ctx){
   const { style, section, barInPhrase, e } = ctx;
   if (section === "build" && barInPhrase >= 2) return `s("white*16").hpf(saw.range(${barInPhrase === 2 ? "400,3000" : "3000,9000"})).decay(.1).sustain(0).gain(saw.range(.05,.28))`;
   if (style === "lofi") return `s("white*16").degradeBy(.65).hpf(4500).decay(.02).sustain(0).gain(.12)`;
+  if (section === "breakdown") return `s("pink").lpf(sine.range(400,1400).slow(4)).attack(1).release(1.5).gain(.07).room(.6)`;
   if (style === "ambient") return `s("pink").lpf(sine.range(300,1200).slow(4)).attack(1.5).release(2).gain(.1)`;
   if (style === "dub" && barInPhrase === 3 && chance(.4)) return `note("${pick(["a5 e6", "e6 a5", "c6 g6"])}").s("sine").attack(.2).release(.3).gain(.22).delay(.6).delayfeedback(.6)`;
   return null;
@@ -438,6 +441,36 @@ function writeTexture(ctx){
 // ================================================================ the station
 const LAYERS = ["drums","bass","chords","lead","texture"];
 const station = { style:"house", bpm:STYLES.house.bpm, mood:"deep", energy:0, key:null, pending:[] };
+
+// ================================================================ shareable presets: ?station=techno&bpm=130&mood=dark&energy=hype&key=fs-dorian
+const ENERGY_NAME = { "-1":"chill", "0":"flow", "1":"hype" }, ENERGY_VAL = { chill:-1, flow:0, hype:1 };
+function keyParam(k){ return (k.flats ? FLAT : SHARP)[k.tonic].replace("#", "s") + "-" + k.mode; }
+function parseKey(str){
+  const m = /^([a-g])(s|#|b)?-(ionian|dorian|phrygian|lydian|mixolydian|aeolian|major|minor)$/i.exec((str || "").trim());
+  if (!m) return null;
+  const tonic = mod12("c d ef g a b".indexOf(m[1].toLowerCase()) + (m[2] && m[2].toLowerCase() === "b" ? -1 : m[2] ? 1 : 0));
+  const mode = { major:"ionian", minor:"aeolian" }[m[3].toLowerCase()] || m[3].toLowerCase();
+  const k = { tonic, mode }; k.flats = flatFor(k); return k;
+}
+function readURL(){
+  const q = new URLSearchParams(location.search);
+  const st = (q.get("station") || "").toLowerCase();
+  if (STYLES[st]){ station.style = st; station.bpm = STYLES[st].bpm; station.mood = STYLES[st].mood; }
+  const bpm = Math.round(+q.get("bpm")); if (bpm >= 56 && bpm <= 180) station.bpm = bpm;
+  const mood = (q.get("mood") || "").toLowerCase(); if (MOODS[mood]) station.mood = mood;
+  const en = ENERGY_VAL[(q.get("energy") || "").toLowerCase()]; if (en !== undefined) station.energy = en;
+  const k = parseKey(q.get("key")); if (k) station.key = k;
+}
+function writeURL(){
+  const q = new URLSearchParams(), st = STYLES[station.style];
+  if (station.style !== "house") q.set("station", station.style);
+  if (station.bpm !== st.bpm) q.set("bpm", station.bpm);
+  if (station.mood !== st.mood) q.set("mood", station.mood);
+  if (station.energy !== 0) q.set("energy", ENERGY_NAME[station.energy]);
+  if (station.key) q.set("key", keyParam(station.key));
+  try { history.replaceState(null, "", location.pathname + (q.toString() ? "?" + q.toString() : "")); } catch (e){}
+}
+readURL();
 const bars = new Map();   // cycle -> { code, pats, info }
 let phrases = [], lastPhrase = null, prevVoicing = null;
 
@@ -447,20 +480,22 @@ function flatFor(k){ // spell by the parallel major's key signature
   return [5,10,3,8,1].includes(majorTonic); }
 const keyLabel = k => pcLabel(k.tonic, k.flats) + " " + k.mode;
 
-function planPhrase(start){
-  const st = STYLES[station.style];
+// continuing = a control change cut the current phrase short; the section carries on where it was
+function planPhrase(start, continuing){
   const prev = lastPhrase;
-  let section, cue = station.pending.shift();
-  const run = prev ? (prev.runLen || 1) : 0;
-  if (cue === "drop") section = prev && prev.section === "build" ? "drop" : "build";
-  else if (cue === "breakdown") section = "breakdown";
-  else section = prev ? nextSection(prev.section, run, station.energy) : "intro";
+  let section, left, cue = station.pending.shift();
+  if (cue === "drop"){ section = prev && prev.section === "build" ? "drop" : "build"; left = section === "build" ? 0 : +wpick(DURATION.drop) - 1; }
+  else if (cue === "breakdown"){ section = "breakdown"; left = +wpick(DURATION.breakdown) - 1; }
+  else if (prev && (continuing || prev.left > 0)){ section = prev.section; left = continuing ? prev.left : prev.left - 1; }
+  else { section = prev ? nextSection(prev.section, station.energy) : "intro"; left = +wpick(DURATION[section]) - 1; }
   if (section === "build" && cue === "drop") station.pending.unshift("drop");
-  if (cue === "modulate" || !station.key) station.key = station.key ? modulate(station.key) : newKey(station.mood);
-  const e = clamp(SECTIONS[section] + station.energy, 0, 4);
-  const reuse = prev && prev.progKey === keyLabel(station.key) && section !== "drop" && chance(.65);
+  if (cue === "modulate" || !station.key){ station.key = station.key ? modulate(station.key) : newKey(station.mood); writeURL(); }
+  const e = clamp(SECTIONS[section] + station.energy, 1, 4);
+  const same = prev && prev.section === section;
+  const reuse = prev && prev.progKey === keyLabel(station.key) && chance(same ? .85 : .35);
   const prog = reuse ? prev.prog : progression(station.key, section === "build");
-  const ph = { start, section, e, prog, progKey:keyLabel(station.key), key:station.key, style:station.style, runLen: prev && prev.section === section ? run + 1 : 1, motif:null };
+  const ph = { start, section, left, e, prog, progKey:keyLabel(station.key), key:station.key, style:station.style,
+    motif: same && reuse && prev.style === station.style ? prev.motif : null, leadDeg: same ? prev.leadDeg : undefined };
   lastPhrase = ph; phrases.push(ph); if (phrases.length > 40) phrases.shift();
   return ph;
 }
@@ -542,7 +577,7 @@ function rewriteFromNextBar(){
   for (const k of [...bars.keys()]) if (k >= from) bars.delete(k);
   while (phrases.length && phrases[phrases.length - 1].start >= from) phrases.pop();
   lastPhrase = phrases[phrases.length - 1] || null; // the current phrase is cut short at `from`
-  const ph = planPhrase(from); writePhrase(ph);
+  const ph = planPhrase(from, true); writePhrase(ph);
   ensureAhead(); updateNext();
 }
 
@@ -553,7 +588,8 @@ async function power(){
   try {
     if (!repl){
       const ds = "https://raw.githubusercontent.com/felixroos/dough-samples/main/";
-      repl = await ST.initStrudel({ prebake: () => Promise.all([ST.samples(ds + "tidal-drum-machines.json"), ST.samples(ds + "piano.json")]) });
+      // sample banks register as they arrive; a slow network must not hold POWER hostage
+      repl = await ST.initStrudel({ prebake: () => Promise.race([Promise.all([ST.samples(ds + "tidal-drum-machines.json"), ST.samples(ds + "piano.json")]), new Promise(r => setTimeout(r, 15000))]) });
       await ST.getAudioContext().resume();
     }
   } catch (e){ status("Could not start Strudel: " + e.message, true); $("power").setAttribute("aria-pressed", "false"); return; }
@@ -599,7 +635,7 @@ function status(t, err){ const s = $("status"); s.textContent = t; s.style.color
 // ================================================================ controls
 function setStyle(id){
   station.style = id; station.bpm = STYLES[id].bpm; station.mood = STYLES[id].mood; station.key = newKey(station.mood);
-  paintControls(); if (running){ repl.setCps(station.bpm / 240); rewriteFromNextBar(); }
+  paintControls(); writeURL(); if (running){ repl.setCps(station.bpm / 240); rewriteFromNextBar(); }
 }
 function paintControls(){
   document.querySelectorAll("#presets .key").forEach(b => b.setAttribute("aria-pressed", String(b.dataset.id === station.style)));
@@ -610,20 +646,25 @@ function paintControls(){
 STYLE_IDS.forEach((id, i) => { const b = document.createElement("button"); b.className = "key"; b.dataset.id = id;
   b.innerHTML = `<span class="n">${i + 1} · ${STYLES[id].freq.toFixed(1)}</span>`; b.append(STYLES[id].name); b.title = STYLES[id].desc; b.onclick = () => setStyle(id); $("presets").append(b); });
 [["dark","Dark"],["deep","Deep"],["bright","Bright"]].forEach(([id, t]) => { const b = document.createElement("button"); b.className = "key"; b.dataset.id = id; b.textContent = t;
-  b.onclick = () => { station.mood = id; station.key = newKey(id); paintControls(); if (running) rewriteFromNextBar(); }; $("mood").append(b); });
+  b.onclick = () => { station.mood = id; station.key = newKey(id); paintControls(); writeURL(); if (running) rewriteFromNextBar(); }; $("mood").append(b); });
 [[-1,"Chill"],[0,"Flow"],[1,"Hype"]].forEach(([id, t]) => { const b = document.createElement("button"); b.className = "key"; b.dataset.id = id; b.textContent = t;
-  b.onclick = () => { station.energy = id; paintControls(); if (running) rewriteFromNextBar(); }; $("energy").append(b); });
+  b.onclick = () => { station.energy = id; paintControls(); writeURL(); if (running) rewriteFromNextBar(); }; $("energy").append(b); });
 [["drop","Build & drop"],["breakdown","Breakdown"],["modulate","New key"],["surprise","Surprise"]].forEach(([id, t]) => { const b = document.createElement("button"); b.className = "key"; b.textContent = t;
   b.onclick = () => { if (id === "surprise"){ setStyle(pick(STYLE_IDS.filter(s => s !== station.style))); return; } station.pending = [id]; if (running) rewriteFromNextBar(); else updateNext(); }; $("acts").append(b); });
-$("slower").onclick = () => { station.bpm = clamp(station.bpm - 4, 56, 180); paintControls(); if (repl && running) repl.setCps(station.bpm / 240); };
-$("faster").onclick = () => { station.bpm = clamp(station.bpm + 4, 56, 180); paintControls(); if (repl && running) repl.setCps(station.bpm / 240); };
+$("slower").onclick = () => { station.bpm = clamp(station.bpm - 4, 56, 180); paintControls(); writeURL(); if (repl && running) repl.setCps(station.bpm / 240); };
+$("faster").onclick = () => { station.bpm = clamp(station.bpm + 4, 56, 180); paintControls(); writeURL(); if (repl && running) repl.setCps(station.bpm / 240); };
 $("power").onclick = power;
+$("share").onclick = async () => {
+  writeURL(); const url = location.href;
+  try { await navigator.clipboard.writeText(url); status("Link copied: " + url); }
+  catch (e){ status("Copy this link: " + url); }
+};
 document.addEventListener("keydown", e => { if (e.target.tagName === "INPUT") return; const n = +e.key; if (n >= 1 && n <= 6) setStyle(STYLE_IDS[n - 1]); });
 
 // ================================================================ drawing: dial, meter, score
 const DPR = () => window.devicePixelRatio || 1;
 function fit(cv){ const r = cv.getBoundingClientRect(), d = DPR(); if (cv.width !== Math.round(r.width * d) || cv.height !== Math.round(r.height * d)){ cv.width = Math.round(r.width * d); cv.height = Math.round(r.height * d); } return [r.width, r.height]; }
-let needle = STYLES.house.freq, level = 0, peakHold = 0;
+let needle = STYLES[station.style].freq, level = 0, peakHold = 0;
 const HEX = { drums:"#ffb347", bass:"#ff7a59", chords:"#7fd4c1", lead:"#f7e38a", texture:"#b9a3ff" };
 function drawDial(){
   const cv = $("dial"), g = cv.getContext("2d"), [W, H] = fit(cv); g.setTransform(DPR(), 0, 0, DPR(), 0, 0);
@@ -688,6 +729,8 @@ function drawScore(){
 }
 function frame(){ drawDial(); drawMeter(); drawScore(); requestAnimationFrame(frame); }
 paintControls(); requestAnimationFrame(frame);
+{ const st = STYLES[station.style]; $("l-station").textContent = st.freq.toFixed(1) + " " + st.name; $("l-bpm").textContent = station.bpm + " BPM";
+  $("l-key").textContent = station.key ? keyLabel(station.key) : "–"; }
 window.__fm = { station, bars, get phrases(){ return phrases; }, compile, chordOn, progression, voiceLead, writePhrase, planPhrase, STYLES, newKey, get repl(){ return repl; } };
 })();
 </script>
