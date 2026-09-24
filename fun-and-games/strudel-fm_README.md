@@ -2,15 +2,20 @@
 
 A generative radio station. A small program writes the music four bars at a time as [Strudel](https://strudel.cc) code, and Strudel plays it with real drum-machine and piano samples.
 
+![Strudel FM](https://austegard.com/images/strudel-fm-og.png)
+
 **[Live](https://austegard.com/fun-and-games/strudel-fm.html)** | **[Source](https://github.com/oaustegard/oaustegard.github.io/blob/main/fun-and-games/strudel-fm.html)**
 
 ## Controls
 
-- **Station presets 1–6** (or keys 1–6): House 122, Techno 128, Lo-fi 84, Ambient 74, Synthwave 104, Dub 76 BPM.
+- **Station presets 1–7** (or keys 1–7): House 122, Techno 128, Lo-fi 84, Ambient 74, Synthwave 104, Dub 76 BPM, and Sleep 60 BPM.
 - **Tempo** ±4 BPM, from 56 to 180.
 - **Energy**: Chill, Flow, Hype. Shifts every section's energy by −1, 0 or +1 and tilts the arc toward calmer or bigger sections.
 - **Mood**: Dark (aeolian, phrygian), Deep (dorian), Bright (ionian, mixolydian, lydian). A new mood picks a new key.
-- **Cue**: Build & drop, Breakdown, New key, Surprise (another station).
+- **Cue**: Build & drop, Breakdown, New key, Surprise (another station), and More cowbell (each press adds a level; the fourth takes it away).
+- **Volume**: a fader, remembered in this browser.
+- **Sleep timer**: Off, 15, 30, 45, 60 or 90 minutes. In the last 30% (at most ten minutes) the energy drops to Chill, over the last 20% (at most four minutes) the volume fades, and then POWER switches off.
+- **Sleep station**: no drums and no builds or drops. Slow pads, a sine drone, sparse piano and soft rain; it starts a 45-minute sleep timer.
 
 Every control rewrites the music from the next bar, and keeps the current section running.
 
@@ -22,7 +27,7 @@ The address bar tracks the controls, and **Copy station link** copies it. Parame
 strudel-fm.html?station=techno&bpm=130&mood=bright&energy=hype&key=fs-dorian
 ```
 
-`station`: house, techno, lofi, ambient, synthwave, dub. `bpm`: 56–180. `mood`: dark, deep, bright. `energy`: chill, flow, hype. `key`: tonic (`s` for sharp, `b` for flat) and mode (ionian, dorian, phrygian, lydian, mixolydian, aeolian, or major/minor). Invalid values fall back to the defaults. Browsers need a click before playing sound, so a link loads the preset and waits for POWER.
+`station`: house, techno, lofi, ambient, synthwave, dub, sleep. `bpm`: 56–180. `mood`: dark, deep, bright. `energy`: chill, flow, hype. `key`: tonic (`s` for sharp, `b` for flat) and mode (ionian, dorian, phrygian, lydian, mixolydian, aeolian, or major/minor). `sleep`: timer minutes (0, 15, 30, 45, 60, 90). `cowbell`: 1–3. Invalid values fall back to the defaults. Browsers need a click before playing sound, so a link loads the preset and waits for POWER.
 
 ## How the music is written
 
@@ -31,7 +36,8 @@ strudel-fm.html?station=techno&bpm=130&mood=bright&energy=hype&key=fs-dorian
 - **Voicing.** Each chord takes the inversion with the least total movement from the previous one.
 - **Bass.** Style and energy pick a 16-step rhythm. Its notes are the chord's root, third, fifth, seventh or octave, plus a chromatic approach to the next chord's root.
 - **Melody.** One motif per phrase, answered by its inversion on alternate bars; on-beat notes snap to the nearest chord tone. The fourth bar ends on a held chord tone.
-- **Drums.** Layers enter with energy. The bar before a bigger section gets a snare roll or a tom fill.
+- **Chords.** Each style has a library of comping rhythms per energy level (sustained pads, stabs, offbeat pushes). A phrase picks one, and its fourth bar may switch to a sibling.
+- **Drums.** Layers enter with energy. Hats sit on the offbeat until energy 3, straight eighths with accents at 3, sixteenths only at the peak; half the phrases swap in a sibling hat pattern, and the fourth bar leaves the last beat open. The bar before a bigger section gets a snare roll or a tom fill.
 
 The page shows the code for the bar that is playing, with a link that opens it in strudel.cc.
 
