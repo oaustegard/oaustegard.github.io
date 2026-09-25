@@ -310,17 +310,21 @@ function drumLine(steps, sound){ // 16 booleans -> compact mini-notation, one gr
 const grid = str => str.replace(/\s/g, "").split("").map(c => c !== ".");
 const range16 = f => Array.from({ length:16 }, (_, i) => f(i));
 function placeNear(pc, target){ let m = target - 6 + mod12(pc - (target - 6)); return m; } // pitch of pc closest to target
-function voiceLead(pcs, prev, center){
+function voiceLead(pcs, prev, center, ninth){
+  // candidates: close position in every inversion, plus drop-2 spreads; for seventh chords also the rootless shell (3 5 7 9)
+  const forms = [];
+  for (let inv = 0; inv < pcs.length; inv++) forms.push(pcs.slice(inv).concat(pcs.slice(0, inv)));
+  if (pcs.length === 4 && ninth !== undefined && mod12(ninth - pcs[0]) === 2) forms.push([pcs[1], pcs[2], pcs[3], ninth], [pcs[3], pcs[1], pcs[2], ninth]);
   const cands = [];
-  for (let inv = 0; inv < pcs.length; inv++){
-    const order = pcs.slice(inv).concat(pcs.slice(0, inv));
-    for (const base of [center - 7, center - 5, center - 3, center]){
-      const v = []; let last = base - 1;
-      for (const pc of order){ let m = last + 1 + mod12(pc - (last + 1)); v.push(m); last = m; }
-      cands.push(v);
-    }
+  for (const order of forms) for (const base of [center - 7, center - 5, center - 3, center]){
+    const v = []; let last = base - 1;
+    for (const pc of order){ let m = last + 1 + mod12(pc - (last + 1)); v.push(m); last = m; }
+    cands.push(v);
+    if (v.length === 4){ const d2 = [v[2] - 12, v[0], v[1], v[3]].sort((a, b) => a - b); cands.push(d2); } // drop-2
   }
-  const cost = v => prev ? v.reduce((a, m, i) => a + Math.abs(m - (prev[i] ?? prev[prev.length - 1])), 0) + Math.abs(v[0] - center) * .3 : Math.abs(v[0] - center);
+  // no semitone or minor-ninth rubs inside the voicing, and no major seventh below middle C
+  const rough = v => { let r = 0; for (let i = 0; i < v.length; i++) for (let j = i + 1; j < v.length; j++){ const d = Math.abs(v[j] - v[i]); if (d === 1 || d === 13) r += 100; else if (d === 11 && Math.min(v[i], v[j]) < 60) r += 4; } return r; };
+  const cost = v => rough(v) + (prev ? v.reduce((a, m, i) => a + Math.abs(m - (prev[i] ?? prev[prev.length - 1])), 0) + Math.abs(v[0] - center) * .3 : Math.abs(v[0] - center));
   return cands.sort((a, b) => cost(a) - cost(b))[0];
 }
 
@@ -400,6 +404,7 @@ const BASS_RHYTHM = {
   synthwave: ["R_______________", "R.R.R.R.R.R.R.R.", "RORORORORORORORO", "RORORORORORORORO"],
   dub:       ["R.........R.....", "R.....R.F...S.A.", "R.R...R.F.R.S.A.", "R.R.R.R.R.R.R.R."],
   sleep:     ["R_______________", "R_______________", "R_______________", "R_______________"] };
+function stepToward(target, dir, key){ const sc = scaleOf(key); for (let d = 1; d <= 2; d++){ const x = target + dir * d; if (sc.includes(mod12(x))) return x; } return target + dir; }
 function writeBass(ctx){
   const { style, e, chord, next, flats } = ctx;
   if (e <= 0) return null;
@@ -412,8 +417,8 @@ function writeBass(ctx){
     if (c === "." ) return "~"; if (c === "_") return "_";
     let m = rootM;
     if (c === "O") m = rootM + 12; else if (c === "F") m = rootM + chord.iv[2]; else if (c === "T") m = rootM + chord.iv[1];
-    else if (c === "S") m = rootM + (chord.iv[3] ?? 10);
-    else if (c === "A") m = nextRoot + (nextRoot > rootM ? -1 : nextRoot < rootM ? 1 : 7) * (ctx.scaleStep || 1);
+    else if (c === "S") m = rootM + (chord.iv[3] ?? chordOn(ctx.key, chord.d, true).iv[3]); // the seventh the key provides
+    else if (c === "A") m = nextRoot === rootM ? rootM + chord.iv[2] : stepToward(nextRoot, nextRoot > rootM ? -1 : 1, ctx.key); // the scale step next to where the bass is going
     return nm(m, flats);
   });
   const snd = { house:`s("sawtooth").lpf(${600 + e * 180}).lpq(4).decay(.18).sustain(.3).gain(.8)`, techno:`s("sawtooth").lpf(${e >= 3 ? "sine.range(300,1400).slow(4)" : 500}).lpq(${e >= 4 ? 14 : 6}).decay(.12).sustain(.2).gain(.8)`,
@@ -446,7 +451,7 @@ function writeChords(ctx){
   const { style, e, chord, flats } = ctx;
   if (e <= 0) return null;
   const pcs = chord.iv.map(i => mod12(chord.root + i));
-  const v = voiceLead(pcs, ctx.prevVoicing, style === "dub" ? 62 : 57);
+  const v = voiceLead(pcs, ctx.prevVoicing, style === "dub" ? 62 : 57, mod12(ctx.key.tonic + MODES[ctx.key.mode][(chord.d + 1) % 7]));
   ctx.voicing = v;
   const c = "[" + v.map(m => nm(m, flats)).join(",") + "]";
   const r = (pat) => pat.split("").map(ch => ch === "x" ? c : ch === "_" ? "_" : "~").join(" ");
@@ -470,6 +475,14 @@ function motif(len, density){ // rhythm positions + scale-degree walk
   const steps = pos.map(() => wpick({ "-2":.12, "-1":.3, "0":.1, "1":.3, "2":.12, "3":.03, "-3":.03 }) | 0);
   return { pos, steps };
 }
+// nearest pitch to m that is in the key (and a chord tone, when one is given) and sits no semitone or minor ninth from a voicing note
+function clear(m, voicing, key, chord){
+  const sc = scaleOf(key), tones = chord ? chord.iv.map(iv => mod12(chord.root + iv)) : null;
+  const rubs = x => (voicing || []).some(v => { const d = Math.abs(x - v); return d === 1 || d === 13 || d === 25; });
+  for (const d of [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]){ const x = m + d;
+    if (sc.includes(mod12(x)) && (!tones || tones.includes(mod12(x))) && !rubs(x)) return x; }
+  return m;
+}
 function writeLead(ctx){
   const { style, e, chord, key, flats, phrase, barInPhrase } = ctx;
   if (e <= 1 && style !== "ambient" && style !== "sleep" && ctx.section !== "breakdown") return null;
@@ -482,17 +495,19 @@ function writeLead(ctx){
   M.pos.forEach((p, i) => {
     deg += (answer ? -M.steps[i] : M.steps[i]);
     deg = clamp(deg, 4, 13);
-    let midi = 60 + key.tonic + sc[((deg % 7) + 7) % 7] + 12 * Math.floor(deg / 7) - 12;
+    let midi = 60 + (key.tonic > 5 ? key.tonic - 12 : key.tonic) + sc[((deg % 7) + 7) % 7] + 12 * Math.floor(deg / 7) - (style === "dub" ? 12 : 0); // above the chord voicings; dub stays under its high skank
     if (p % 4 === 0){ // on the beat: snap to the nearest chord tone
       const tones = chord.iv.map(iv => mod12(chord.root + iv));
       let best = midi, bd = 99; for (let d = -3; d <= 3; d++) if (tones.includes(mod12(midi + d)) && Math.abs(d) < bd){ bd = Math.abs(d); best = midi + d; }
       midi = best;
     }
+    const hold = Math.min((M.pos[i + 1] ?? 16), p + 4) - p;
+    if (p % 4 === 0 || hold >= 2) midi = clear(midi, ctx.voicing, key, p % 4 === 0 ? chord : null);
     toks[p] = nm(midi, flats);
     for (let k = p + 1; k < (M.pos[i + 1] ?? 16) && k < p + 4; k++) toks[k] = "_";
   });
   if (barInPhrase === 3){ // cadence: end on a chord tone held
-    const root = placeNear(chord.root, 67); toks[12] = nm(root + (chance(.5) ? 0 : chord.iv[1]), flats); toks[13] = toks[14] = toks[15] = "_";
+    const root = placeNear(chord.root, style === "dub" ? 67 : 76); toks[12] = nm(clear(root + (chance(.5) ? 0 : chord.iv[1]), ctx.voicing, key, chord), flats); toks[13] = toks[14] = toks[15] = "_";
   }
   const snd = { house:`s("triangle").decay(.25).sustain(.4).delay(.3).delayfeedback(.35).room(.3).gain(.5)`, techno:`s("square").lpf(1800).lpq(6).decay(.12).sustain(.1).delay(.45).gain(.35)`,
     lofi:`s("piano").gain(.55).lpf(3000).room(.4)`, ambient:`s("sine").attack(.05).decay(.8).sustain(0).delay(.6).delayfeedback(.6).room(.8).gain(.45)`,
@@ -513,7 +528,7 @@ function writeTexture(ctx){
   if (style === "lofi") return `s("white*16").degradeBy(.65).hpf(4500).decay(.02).sustain(0).gain(.12)`;
   if (section === "breakdown") return `s("pink").lpf(sine.range(400,1400).slow(4)).attack(1).release(1.5).gain(.07).room(.6)`;
   if (style === "ambient") return `s("pink").lpf(sine.range(300,1200).slow(4)).attack(1.5).release(2).gain(.1)`;
-  if (style === "dub" && barInPhrase === 3 && chance(.4)) return `note("${pick(["a5 e6", "e6 a5", "c6 g6"])}").s("sine").attack(.2).release(.3).gain(.22).delay(.6).delayfeedback(.6)`;
+  if (style === "dub" && barInPhrase === 3 && chance(.4)){ const r = placeNear(ctx.chord.root, 81), f = r + ctx.chord.iv[2], n = x => nm(x, ctx.flats); return `note("${pick([`${n(r)} ${n(f)}`, `${n(f)} ${n(r)}`, `${n(r)} ${n(r + 12)}`])}").s("sine").attack(.2).release(.3).gain(.22).delay(.6).delayfeedback(.6)`; }
   return null;
 }
 

@@ -33,9 +33,9 @@ strudel-fm.html?station=techno&bpm=130&mood=bright&energy=hype&key=fs-dorian
 
 - **Arc.** Sections follow a weighted chain (intro, groove, lift, build, drop, breakdown). Each section runs a drawn number of four-bar phrases, 8 to 32 bars in all; a build always resolves into a drop; energy tilts the weights. A breakdown keeps a pad, a held bass, a sparse melody, offbeat hats and one clap per bar.
 - **Harmony.** Chords are the mode's own diatonic triads or sevenths, chained by functional-harmony weights; diminished chords are rarely chosen. A phrase that leads into a drop leans toward ending on the dominant. Progressions repeat for a few phrases before changing.
-- **Voicing.** Each chord takes the inversion with the least total movement from the previous one.
-- **Bass.** Style and energy pick a 16-step rhythm. Its notes are the chord's root, third, fifth, seventh or octave, plus a chromatic approach to the next chord's root.
-- **Melody.** One motif per phrase, answered by its inversion on alternate bars; on-beat notes snap to the nearest chord tone. The fourth bar ends on a held chord tone.
+- **Voicing.** Each chord takes the voicing with the least total movement from the previous one, chosen from close inversions, drop-2 spreads and, for seventh chords, the rootless 3-5-7-9 shell. Voicings with a semitone or minor-ninth rub are ruled out, which matters most for major sevenths: in close position the seventh would sit a semitone under the root.
+- **Bass.** Style and energy pick a 16-step rhythm. Its notes are the chord's root, third, fifth, seventh or octave, plus an approach from the scale step next to the next chord's root. Every bass note stays in the key.
+- **Melody.** One motif per phrase, answered by its inversion on alternate bars. It sits above the chord voicings (dub keeps it low, under the skank). On-beat notes snap to the nearest chord tone, and neither they nor notes held an eighth or longer may land a semitone or minor ninth from a voicing note. The fourth bar ends on a held chord tone.
 - **Chords.** Each style has a library of comping rhythms per energy level (sustained pads, stabs, offbeat pushes). A phrase picks one, and its fourth bar may switch to a sibling.
 - **Drums.** Layers enter with energy. Hats sit on the offbeat until energy 3, straight eighths with accents at 3, sixteenths only at the peak; half the phrases swap in a sibling hat pattern, and the fourth bar leaves the last beat open. The bar before a bigger section gets a snare roll or a tom fill.
 
