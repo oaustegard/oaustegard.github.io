@@ -186,7 +186,7 @@ footer{color:var(--dim); font-size:13px}
         <li><b>Harmony.</b> The mood picks a mode (dark: aeolian or phrygian; deep: dorian; bright: ionian, mixolydian or lydian). Chords are the mode's own triads, chained with functional-harmony weights (V goes home, vi moves to IV or ii). A phrase leading into a drop ends on a dominant. Progressions repeat for a few phrases before changing.</li>
         <li><b>Voicing.</b> Each chord takes the inversion that moves the fewest semitones from the last one.</li>
         <li><b>Bass.</b> Style and energy pick a rhythm; the notes are the chord's root, fifth, octave, and a step toward the next root at the end of the bar.</li>
-        <li><b>Melody.</b> A two-bar motif per phrase, answered and varied; on-beat notes snap to chord tones, off-beat notes walk the scale.</li>
+        <li><b>Melody.</b> The station keeps two tunes, each a two-bar motif: a hook and a contrasting line. The hook plays in grooves and drops and comes back plain every other phrase; in between it is ornamented, restated a third higher, or answered by the other line. Lifts carry the contrasting line and breakdowns strip the hook to its main notes. Tunes move mostly by step and turn back after a leap. Each bar of the tune is shifted along the scale to wherever its notes on the beat land on chord tones, and a phrase ends on a held chord tone. After a while the contrasting line becomes the new hook.</li>
         <li><b>Drums.</b> Layers enter with energy: kick, then backbeat, then hats on the offbeat. Straight eighths arrive at energy 3 and sixteenths only at the peak. The last bar before a bigger section gets a roll or a tom fill. More cowbell is on request.</li>
         <li><b>Sleep.</b> The Sleep station has no drums and never builds or drops: slow pads, a sine drone, sparse piano and soft rain at 60 BPM. It starts a 45-minute timer that calms the energy in the last stretch, fades out over the final minutes, and switches off.</li>
       </ul>
@@ -232,7 +232,7 @@ const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
 const SHARP = ["c","c#","d","d#","e","f","f#","g","g#","a","a#","b"], FLAT = ["c","db","d","eb","e","f","gb","g","ab","a","bb","b"];
 const MODES = { ionian:[0,2,4,5,7,9,11], dorian:[0,2,3,5,7,9,10], phrygian:[0,1,3,5,7,8,10], lydian:[0,2,4,6,7,9,11], mixolydian:[0,2,4,5,7,9,10], aeolian:[0,2,3,5,7,8,10] };
 const MOODS = { dark:{ aeolian:.6, phrygian:.4 }, deep:{ dorian:.65, aeolian:.35 }, bright:{ ionian:.5, mixolydian:.25, lydian:.25 } };
-const mod12 = x => ((x % 12) + 12) % 12;
+const mod12 = x => ((x % 12) + 12) % 12, mod7 = x => ((x % 7) + 7) % 7;
 const nm = (midi, flats) => (flats ? FLAT : SHARP)[mod12(midi)] + (Math.floor(midi / 12) - 1);
 function pcLabel(pc, flats){ const n = (flats ? FLAT : SHARP)[mod12(pc)]; return n[0].toUpperCase() + (n.length > 1 ? (n[1] === "#" ? "♯" : "♭") : ""); }
 function scaleOf(key){ return MODES[key.mode].map(x => mod12(key.tonic + x)); }
@@ -468,49 +468,134 @@ function writeChords(ctx){
   }
 }
 
-function motif(len, density){ // rhythm positions + scale-degree walk
-  const pos = [], strong = [0, 4, 8, 12];
-  for (let i = 0; i < len; i++) if (strong.includes(i % 16) ? chance(.55 + density * .3) : chance(density * .45)) pos.push(i);
-  if (!pos.length) pos.push(0);
-  const steps = pos.map(() => wpick({ "-2":.12, "-1":.3, "0":.1, "1":.3, "2":.12, "3":.03, "-3":.03 }) | 0);
-  return { pos, steps };
+// ---------------------------------------------------------------- melody
+// A tune is a two-bar motif: a rhythm built from one-beat cells and a contour in scale degrees.
+// The station keeps two (A, the hook, and B, a contrasting line) so the hook comes back across
+// sections; the degrees are relative to the key, so the tune survives a key change.
+const CELLS = {
+  house:     { "x___":2, "x_x_":3, "..x_":2.5, "x__x":2, "x_..":.8, "x_xx":1, "____":1.8, "....":.4 },
+  techno:    { "x_x_":2.5, "..x_":3, "x_..":1.5, "x__x":2, "xxx_":1, "x___":1, "____":.8, "....":.6 },
+  lofi:      { "x___":2.5, "x__x":2.5, "..x_":2, "x_x_":2, "xxx_":.6, "____":2.5, "....":.6 },
+  ambient:   { "x___":2, "x_x_":.5, "..x_":.6, "____":5, "....":2 },
+  synthwave: { "x_x_":3, "x___":2, "x__x":1.5, "..x_":1.2, "x_xx":1, "____":2.5, "....":.4 },
+  dub:       { "x___":2, "..x_":2.5, "x__x":1.5, "x_x_":1, "____":2.5, "....":2 },
+  sleep:     { "x___":1, "____":6, "....":3 } };
+function tuneRhythm(style){ // 32 steps -> [{pos, dur}]
+  for (let tries = 0; tries < 50; tries++){
+    let s = "";
+    for (let b = 0; b < 8; b++){
+      const w = { ...CELLS[style] }, last = s.slice(-1);
+      if (b === 0 || b === 4 || last === "." || last === ""){ delete w["____"]; } // nothing to hold (bars are separate patterns, so no ties over the bar line)
+      if (b === 0){ for (const k of Object.keys(w)) if (k[0] !== "x" && k !== "..x_") delete w[k]; }
+      if (b === 7){ s += last === "." || !w["____"] ? "...." : chance(.7) ? "____" : "...."; continue; } // the motif ends on a long note or a breath
+      s += wpick(w);
+    }
+    const notes = [];
+    for (let i = 0; i < 32; i++) if (s[i] === "x"){ let d = 1; while (i + d < 32 && s[i + d] === "_" && (i + d) % 16) d++; notes.push({ pos:i, dur:d }); }
+    const min = style === "sleep" ? 2 : style === "ambient" ? 3 : 5, max = style === "sleep" ? 4 : style === "ambient" ? 6 : 12;
+    if (notes.length >= min && notes.length <= max && notes.some(n => n.pos >= 16) && notes.some(n => n.pos < 16)) return notes;
+  }
+  return [{ pos:0, dur:8 }, { pos:8, dur:8 }, { pos:16, dur:8 }, { pos:24, dur:8 }];
 }
-// nearest pitch to m that is in the key (and a chord tone, when one is given) and sits no semitone or minor ninth from a voicing note
-function clear(m, voicing, key, chord){
-  const sc = scaleOf(key), tones = chord ? chord.iv.map(iv => mod12(chord.root + iv)) : null;
-  const rubs = x => (voicing || []).some(v => { const d = Math.abs(x - v); return d === 1 || d === 13 || d === 25; });
-  for (const d of [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]){ const x = m + d;
-    if (sc.includes(mod12(x)) && (!tones || tones.includes(mod12(x))) && !rubs(x)) return x; }
-  return m;
+function newTune(style){
+  const notes = tuneRhythm(style), shape = pick(["arch", "arch", "rise", "fall", "wave"]);
+  let rel = 0, prevIv = 0;
+  notes.forEach((n, i) => {
+    if (i > 0){
+      const t = i / (notes.length - 1);
+      const pull = shape === "arch" ? (t < .55 ? 1 : -1) : shape === "rise" ? (t < .8 ? 1 : -1) : shape === "fall" ? (t < .2 ? 1 : -1) : (i % 4 < 2 ? 1 : -1);
+      let iv;
+      if (Math.abs(prevIv) >= 2 && chance(.8)) iv = -Math.sign(prevIv);                   // a leap is recovered by a step the other way
+      else { const size = +wpick({ 0:.08, 1:.6, 2:.22, 3:.06, 4:.04 }); iv = (chance(.72) ? pull : -pull) * size; }
+      if (rel + iv < -4 || rel + iv > 5) iv = -iv; // turn back at the edge of the range rather than sticking to it
+      prevIv = iv; rel += iv;
+    }
+    n.rel = rel;
+  });
+  return { notes, start: 7 + pick([0, 2, 2, 4, 4, -1]), cadAt: pick([8, 8, 12]) };
+}
+let theme = null; // { style, A, B, age }
+// the tune for this phrase: groove and drop carry the hook, a lift the contrasting line, a breakdown the hook stripped back
+function tuneFor(ctx){
+  const { style, phrase:ph, section, e } = ctx;
+  if (!theme || theme.style !== style) theme = { style, A:newTune(style), B:newTune(style), age:0 };
+  if (ph.tune) return ph.tune;
+  if (ph.n === 0 && theme.age >= 10 && chance(.4)){ theme.A = theme.B; theme.B = newTune(style); theme.age = 0; } // the contrasting line becomes the new hook
+  const useB = section === "lift";
+  if (!useB) theme.age++;
+  // the hook comes back plain every other phrase; in between it is ornamented, restated a third higher, or answered by the other line
+  const variant = section === "breakdown" || e <= 1 ? "thin" : ph.n % 2 === 0 ? "plain" : wpick(e >= 3 ? { ornament:.45, high:.25, answer:.3 } : { ornament:.3, high:.3, answer:.4 });
+  return ph.tune = { M: useB ? theme.B : theme.A, other: useB ? theme.A : theme.B, variant };
+}
+function thinned(notes){ // keep the notes on the half-bar (or failing that, the beat), each held to the next
+  let keep = notes.filter(n => n.pos % 8 === 0);
+  if (!keep.length) keep = notes.filter(n => n.pos % 4 === 0);
+  if (!keep.length) keep = notes.slice(0, 1);
+  return keep.map((n, i) => ({ ...n, dur: Math.min(keep[i + 1] ? keep[i + 1].pos : 16, 16) - n.pos }));
 }
 function writeLead(ctx){
-  const { style, e, chord, key, flats, phrase, barInPhrase } = ctx;
-  if (e <= 1 && style !== "ambient" && style !== "sleep" && ctx.section !== "breakdown") return null;
+  const { style, e, chord, key, flats, phrase:ph, barInPhrase } = ctx;
+  if (ctx.section === "intro" && e <= 1 && style !== "ambient" && style !== "sleep") return null;
   if (ctx.section === "build" && style !== "ambient") return writeArp(ctx);
-  const sc = MODES[key.mode];
-  const M = phrase.motif || (phrase.motif = motif(16, style === "sleep" ? .08 : style === "ambient" || ctx.section === "breakdown" ? .15 : e >= 4 ? .55 : .35));
-  const answer = barInPhrase % 2 === 1;
-  let deg = phrase.leadDeg ?? (phrase.leadDeg = 7 + (chance(.5) ? 2 : 4));
-  const toks = Array(16).fill("~");
-  M.pos.forEach((p, i) => {
-    deg += (answer ? -M.steps[i] : M.steps[i]);
-    deg = clamp(deg, 4, 13);
-    let midi = 60 + (key.tonic > 5 ? key.tonic - 12 : key.tonic) + sc[((deg % 7) + 7) % 7] + 12 * Math.floor(deg / 7) - (style === "dub" ? 12 : 0); // above the chord voicings; dub stays under its high skank
-    if (p % 4 === 0){ // on the beat: snap to the nearest chord tone
-      const tones = chord.iv.map(iv => mod12(chord.root + iv));
-      let best = midi, bd = 99; for (let d = -3; d <= 3; d++) if (tones.includes(mod12(midi + d)) && Math.abs(d) < bd){ bd = Math.abs(d); best = midi + d; }
-      midi = best;
-    }
-    const hold = Math.min((M.pos[i + 1] ?? 16), p + 4) - p;
-    if (p % 4 === 0 || hold >= 2) midi = clear(midi, ctx.voicing, key, p % 4 === 0 ? chord : null);
-    toks[p] = nm(midi, flats);
-    for (let k = p + 1; k < (M.pos[i + 1] ?? 16) && k < p + 4; k++) toks[k] = "_";
-  });
-  if (barInPhrase === 3){ // cadence: end on a chord tone held
-    const root = placeNear(chord.root, style === "dub" ? 67 : 76); toks[12] = nm(clear(root + (chance(.5) ? 0 : chord.iv[1]), ctx.voicing, key, chord), flats); toks[13] = toks[14] = toks[15] = "_";
+  const sc = MODES[key.mode], lo = 60 + (key.tonic > 5 ? key.tonic - 12 : key.tonic) - (style === "dub" ? 12 : 0); // above the chord voicings; dub stays under its high skank
+  const pitch = D => lo + sc[mod7(D)] + 12 * Math.floor(D / 7);
+  const isTone = D => [0, 2, 4].concat(chord.iv.length > 3 ? [6] : []).includes(mod7(D - chord.d));
+  const rubs = D => (ctx.voicing || []).some(v => [1, 13, 25].includes(Math.abs(pitch(D) - v)));
+  const tune = tuneFor(ctx), variant = tune.variant, M = variant === "answer" && barInPhrase >= 2 ? tune.other : tune.M;
+  const half = barInPhrase % 2;
+  // transpose the bar's slice of the tune (diatonically) to where it fits the chord best: few non-chord tones on
+  // the beat, no rubs; the first bar of each half stays near the tune's home degree, the second near where the first put it
+  let notes = M.notes.filter(n => (n.pos >> 4) === half).map(n => ({ pos:n.pos & 15, dur:n.dur, rel:n.rel }));
+  const home = !half ? M.start - M.notes[0].rel + (variant === "high" ? (M.start > 9 ? -2 : 2) : 0) : ph.anchor;
+  let bestA = home, bestS = 1e9;
+  const reach = variant === "high" && !half ? 1 : 3;
+  for (let d = -reach; d <= reach; d++){ const a = home + d; let sc = Math.abs(d) * (half ? 1.5 : .8);
+    for (const n of notes){ const D = a + n.rel, strong = n.pos % 4 === 0 || n.dur >= 3;
+      if (strong && !isTone(D)) sc += n.pos % 8 === 0 ? 3 : 2; if ((strong || n.dur >= 2) && rubs(D)) sc += 4; if (D < 3 || D > 15) sc += 5; }
+    if (sc < bestS){ bestS = sc; bestA = a; } }
+  ph.anchor = bestA; notes.forEach(n => n.D = bestA + n.rel);
+  if (variant === "thin") notes = thinned(notes);
+  if (variant === "ornament"){ // a passing or neighbour note leading into the next note, where there is room
+    const out = [];
+    notes.forEach((n, i) => { const nx = notes[i + 1];
+      if (nx && nx.pos - n.pos >= 4 && n.dur >= 2){ const gap = nx.D - n.D, at = nx.pos - 2;
+        out.push({ ...n, dur:Math.min(n.dur, at - n.pos) }, { pos:at, dur:2, D:nx.D - (gap ? Math.sign(gap) : -1), orn:true }); return; }
+      out.push(n); });
+    notes = out;
   }
-  const snd = { house:`s("triangle").decay(.25).sustain(.4).delay(.3).delayfeedback(.35).room(.3).gain(.5)`, techno:`s("square").lpf(1800).lpq(6).decay(.12).sustain(.1).delay(.45).gain(.35)`,
-    lofi:`s("piano").gain(.55).lpf(3000).room(.4)`, ambient:`s("sine").attack(.05).decay(.8).sustain(0).delay(.6).delayfeedback(.6).room(.8).gain(.45)`,
+  // fit to the bar's chord: notes on the beat, held notes and notes reached by a leap are chord tones; nothing held rubs the voicing
+  let prev = barInPhrase ? ph.lastD ?? null : null;
+  for (const n of notes){
+    n.D = clamp(n.D, 3, 15);
+    const strong = n.pos % 4 === 0 || n.dur >= 3, leapIn = prev !== null && Math.abs(n.D - prev) >= 2;
+    if ((strong || leapIn) && !n.orn && !isTone(n.D)){
+      const up = n.D + 1, dn = n.D - 1, ok = x => isTone(x) && !rubs(x);
+      const dir = prev === null ? 0 : Math.sign(n.D - prev), pref = dir > 0 ? up : dir < 0 ? dn : (chance(.5) ? up : dn); // keep the line moving the way the tune goes
+      n.D = ok(pref) && pref !== prev ? pref : ok(up) && up !== prev ? up : ok(dn) && dn !== prev ? dn : ok(pref) ? pref : isTone(up) ? up : dn;
+    }
+    if ((strong || n.dur >= 2) && rubs(n.D)){
+      for (const d of [1, -1, 2, -2, 3, -3]) if ((isTone(n.D + d) || (!strong && !n.orn)) && !rubs(n.D + d)){ n.D += d; break; }
+    }
+    prev = n.D;
+  }
+  if (barInPhrase === 3){ // cadence: the phrase comes to rest on a held chord tone, the root when it is near
+    const at = notes.some(n => n.pos < M.cadAt) ? M.cadAt : 12;
+    notes = notes.filter(n => n.pos < at);
+    const from = notes.length ? notes[notes.length - 1].D : ph.lastD ?? M.start;
+    let best = null, bs = 99;
+    for (let D = from - 3; D <= from + 3; D++){ if (!isTone(D) || rubs(D)) continue;
+      const s = Math.abs(D - from) + (mod7(D - chord.d) === 0 ? 0 : mod7(D - chord.d) === 2 ? .6 : 1.2) + (D === from ? .9 : 0);
+      if (s < bs){ bs = s; best = D; } }
+    if (best !== null){ const l = notes[notes.length - 1];
+      if (l && l.D === best) l.dur = 16 - l.pos; // already there: hold it rather than strike it again
+      else { if (l) l.dur = Math.min(l.dur, at - l.pos); notes.push({ pos:at, dur:16 - at, D:best }); } }
+  }
+  if (!notes.length) return null;
+  ph.lastD = notes[notes.length - 1].D;
+  const toks = Array(16).fill("~");
+  for (const n of notes){ toks[n.pos] = nm(pitch(n.D), flats); for (let k = n.pos + 1; k < Math.min(16, n.pos + n.dur); k++) toks[k] = "_"; }
+  const snd = { house:`s("triangle").decay(.25).sustain(.4).delay(.3).delayfeedback(.35).room(.3).gain(.5)`, techno:`s("square").lpf(1800).lpq(6).decay(.15).sustain(.25).delay(.45).gain(.33)`,
+    lofi:`s("piano").gain(.55).lpf(3000).room(.4)`, ambient:`s("sine").attack(.05).decay(.8).sustain(.15).delay(.6).delayfeedback(.6).room(.8).gain(.45)`,
     synthwave:`s("supersaw").lpf(3200).attack(.02).release(.3).gain(.28).room(.35).delay(.25)`, dub:`s("triangle").attack(.03).release(.25).gain(.45).room(.3).delay(.35)`,
     sleep:`s("piano").gain(.32).lpf(1800).room(.85).size(.9).delay(.25).delayfeedback(.35)` }[style];
   return `note("${toks.join(" ")}").${snd}`;
@@ -596,7 +681,7 @@ function planPhrase(start, continuing){
   const reuse = prev && prev.progKey === keyLabel(station.key) && chance(same ? .85 : .35);
   const prog = reuse ? prev.prog : progression(station.key, section === "build");
   const ph = { start, section, left, e, prog, progKey:keyLabel(station.key), key:station.key, style:station.style,
-    motif: same && reuse && prev.style === station.style ? prev.motif : null, leadDeg: same ? prev.leadDeg : undefined };
+    n: same ? prev.n + 1 : 0 };
   lastPhrase = ph; phrases.push(ph); if (phrases.length > 40) phrases.shift();
   return ph;
 }
