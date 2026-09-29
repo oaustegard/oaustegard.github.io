@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="ai-disclosure" content="ai-generated">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#07080d">
+<meta name="description" content="An endless, seamless zoom into an Apollonian gasket or a Julia set, rendered live on your GPU.">
+<title>Fractal Dive</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<style>
+  html, body { margin: 0; height: 100%; background: #07080d; overflow: hidden; overscroll-behavior: none; }
+  body { font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: rgba(226, 232, 255, .72); -webkit-user-select: none; user-select: none; }
+  #gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: grab; }
+  #gl:active { cursor: grabbing; }
+  .chrome { position: fixed; z-index: 5; padding: 8px 12px; border-radius: 999px; background: rgba(7, 8, 13, .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  a.chrome, button.chrome { color: inherit; text-decoration: none; font: inherit; border: 0; cursor: pointer; letter-spacing: .02em; }
+  a.chrome:hover, button.chrome:hover { color: #fff; }
+  #back { top: max(14px, env(safe-area-inset-top)); left: 14px; }
+  #tr { position: fixed; z-index: 5; top: max(14px, env(safe-area-inset-top)); right: 14px; display: flex; gap: 8px; }
+  #tr .chrome { position: static; }
+  #depth { left: 14px; bottom: max(14px, env(safe-area-inset-bottom)); font-variant-numeric: tabular-nums; pointer-events: none; }
+  #depth b { color: #fff; font-weight: 600; }
+  #depth i { font-style: normal; opacity: .6; margin-left: .4em; }
+  #hint { left: 50%; bottom: max(64px, calc(env(safe-area-inset-bottom) + 50px)); transform: translateX(-50%); opacity: 0; transition: opacity .8s; white-space: nowrap; pointer-events: none; }
+  #hint.show { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { #hint { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<a id="back" class="chrome" href="./">&larr; Fun &amp; Games</a>
+<div id="tr"><button id="mode" class="chrome" type="button"></button><button id="home" class="chrome" type="button" title="Back to the start (H)">Reset</button></div>
+<div id="depth" class="chrome"></div>
+<div id="hint" class="chrome">Scroll or pinch to zoom &middot; drag to pan &middot; double-tap to dive</div>
+<script type="x-shader/x-fragment" id="apo-frag">#version 300 es
+precision highp float;
+/* Apollonian gasket, band model. Each pixel is folded into the fundamental strip and inverted in the
+   dual circles until it lands in a disk (C0 or the half-plane y<0) or its structure is below a pixel.
+   Along the way it carries: s = |dz/dp| (and the complex derivative J), and the image of the screen's
+   point at infinity (n/d), which together give the exact screen radius of the disk it lands in. */
+uniform vec2 uA, uB, uC, uD;   // camera z = (a q + b)/(c q + d) in device px, y down, centred
+uniform float uF;              // 1: q = conj(p)
+uniform vec2 uDet;             // det of the camera (unit modulus)
+uniform vec2 uRes;
+uniform float uLz, uDpr, uLogS;
+uniform vec3 uPal[7];
+out vec4 outColor;
+
+const int MAXIT = 240;
+const vec3 BG = vec3(0.027, 0.031, 0.051);
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+vec2 cdiv(vec2 a, vec2 b) { float q = dot(b, b); return vec2(a.x * b.x + a.y * b.y, a.y * b.x - a.x * b.y) / q; }
+vec2 cj(vec2 a) { return vec2(a.x, -a.y); }
+
+vec3 pal(float t) {
+  t = fract(t) * 7.0;
+  float i = floor(t), u = t - i;
+  u = u * u * (3.0 - 2.0 * u);
+  int k = int(i);
+  int k2 = k == 6 ? 0 : k + 1;
+  return mix(uPal[k], uPal[k2], u);
+}
+float hueFor(float rCss) { return 0.17 * (log2(max(rCss, 1e-30)) - uLz - uLogS) + 0.99; }
+vec3 dust(float h) { return pal(h) * 0.26 + pal(h + 0.12) * 0.10; }
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x - 0.5 * uRes.x, 0.5 * uRes.y - gl_FragCoord.y);
+  vec2 q = uF > 0.5 ? cj(p) : p;
+  vec2 den = cmul(uC, q) + uD;
+  vec2 z = cdiv(cmul(uA, q) + uB, den);
+  float s = 1.0 / dot(den, den);
+  vec2 J = cdiv(uDet, cmul(den, den));
+  float par = uF;
+  vec2 n = uA, d = uC;
+  int kind = 3;
+  for (int i = 0; i < MAXIT; i++) {
+    float k = floor((z.x + 1.0) * 0.5);
+    if (k != 0.0) { z.x -= 2.0 * k; n -= 2.0 * k * d; }
+    if (z.y > 1.0) {
+      z.y = 2.0 - z.y;
+      n = cj(n) + cmul(vec2(0.0, 2.0), cj(d)); d = cj(d);
+      J = cj(J); par = 1.0 - par;
+    }
+    if (z.y < 0.0) { kind = 1; break; }
+    if (z.x * z.x + (z.y - 1.0) * (z.y - 1.0) < 1.0) { kind = 0; break; }
+    if (s > 2.8) { kind = 2; break; }
+    float o = z.x >= 0.0 ? 1.0 : -1.0;
+    vec2 w = z - vec2(o, 0.0);
+    float r2 = dot(w, w);
+    z = vec2(o, 0.0) + w / r2;
+    s /= r2;
+    vec2 cw = cj(w);
+    J = -cdiv(cj(J), cmul(cw, cw)); par = 1.0 - par;
+    vec2 nn = o * cj(n), dd = cj(n) - o * cj(d);
+    float m = max(max(abs(nn.x), abs(nn.y)), max(abs(dd.x), abs(dd.y)));
+    n = nn / m; d = dd / m;
+  }
+
+  vec3 col;
+  if (kind <= 1) {
+    float Qz, Qh; vec2 Ns, Ds;
+    vec2 nd = cmul(n, cj(d));
+    if (kind == 0) {
+      Qz = dot(z, z) - 2.0 * z.y; Qh = dot(n, n) - 2.0 * nd.y;
+      Ds = cj(n - cmul(vec2(0.0, 1.0), d)); Ns = cmul(vec2(0.0, 1.0), Ds) + cj(d);
+    } else { Qz = 2.0 * z.y; Qh = 2.0 * nd.y; Ns = cj(n); Ds = cj(d); }
+    vec2 diff = cmul(z, d) - n;
+    float rs = dot(diff, diff) / (s * abs(Qh) + 1e-30);      // screen radius, device px
+    float sig = Qh >= 0.0 ? 1.0 : -1.0;
+    float t = Qz * sig / (s * rs);
+    float rho = sqrt(max(0.0, 1.0 + t));                     // |p - centre| / radius
+    float e = -Qz / (s * (1.0 + rho));                       // distance to the rim, device px
+    // direction from the circle's centre m: q - m = (z D* - N*)(z d - n) / (J (N* d - n D*)), with N*/D*
+    // the reflection of screen infinity's image n/d in the canonical circle
+    vec2 v = cdiv(cmul(cmul(z, Ds) - Ns, cmul(z, d) - n), cmul(J, cmul(Ns, d) - cmul(n, Ds)));
+    if (par > 0.5) v = cj(v);
+    vec2 nrm = v / max(length(v), 1e-30);
+    float rCss = rs / uDpr, eCss = e / uDpr;
+    float h = hueFor(rCss);
+    vec3 base = pal(h), film = pal(h + 0.13);
+    if (sig > 0.0) {
+      // bubble: dark tinted body, bright rim, soft inner glow, a highlight on the larger ones
+      vec3 body = base * (0.030 + 0.10 * pow(rho, 8.0) / (1.0 + rCss / 3000.0));
+      float line = exp(-eCss / 0.75);
+      float glow = exp(-eCss / (1.2 + 0.07 * rCss / (1.0 + rCss / 500.0)));
+      vec3 N = vec3(rho * nrm, sqrt(max(0.0, 1.0 - rho * rho)));
+      vec3 L = normalize(vec3(-0.45, -0.6, 0.66));
+      float spec = pow(max(0.0, dot(reflect(-L, N), vec3(0.0, 0.0, 1.0))), 48.0);
+      float big = smoothstep(6.0, 30.0, rCss);
+      col = body + film * glow * 0.42 + mix(film, vec3(1.0), 0.28) * line * 0.9
+          + vec3(0.9, 0.95, 1.0) * spec * 0.22 * big;
+      col = mix(dust(h), col, smoothstep(0.7, 3.2, rCss));
+    } else {
+      // outside the outermost circle
+      float line = exp(-eCss / 0.75);
+      float glow = exp(-eCss / (2.0 + 0.035 * rCss / (1.0 + rCss / 800.0)));
+      col = BG + mix(film, vec3(1.0), 0.25) * line * 0.8 + film * glow * 0.22;
+    }
+  } else {
+    col = dust(hueFor(0.35 / (s * uDpr)));
+  }
+  col = col / (1.0 + 0.3 * col) * 1.15;
+  float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+  outColor = vec4(col + dither / 255.0, 1.0);
+}</script>
+<script type="x-shader/x-fragment" id="jul-frag">#version 300 es
+precision highp float;
+/* Julia set f(z) = z^2 + c through a renormalised chart: pixel p sits at uC + uA p on level uM (the
+   chart already includes uM applications of f). The first steps run as perturbations of the chart
+   centre's orbit (uRef), because the pixel offsets are far below float precision next to |uC|; once
+   the offset has grown they continue directly. */
+uniform vec2 uC, uA, uJc;
+uniform vec2 uRef[64];
+uniform int uRefN, uPeriod;
+uniform vec2 uRes;
+uniform float uM, uLz, uDpr;
+uniform vec3 uPal[7];
+out vec4 outColor;
+
+const int MAXIT = 900;
+const vec3 BG = vec3(0.027, 0.031, 0.051);
+
+vec2 cmul(vec2 a, vec2 b) { return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x); }
+vec3 pal(float t) {
+  t = fract(t) * 7.0;
+  float i = floor(t), u = t - i;
+  u = u * u * (3.0 - 2.0 * u);
+  int k = int(i);
+  int k2 = k == 6 ? 0 : k + 1;
+  return mix(uPal[k], uPal[k2], u);
+}
+
+void main() {
+  vec2 p = vec2(gl_FragCoord.x - 0.5 * uRes.x, 0.5 * uRes.y - gl_FragCoord.y);
+  vec2 dl = cmul(uA, p), D = uA;
+  int n = 0;
+  for (int i = 0; i < 63; i++) {
+    if (i >= uRefN - 1) break;
+    vec2 Cn = uRef[i];
+    if (dot(dl, dl) > 1e-6 * max(dot(Cn, Cn), 1e-4)) break;
+    D = 2.0 * cmul(Cn + dl, D);
+    dl = 2.0 * cmul(Cn, dl) + cmul(dl, dl);
+    n++;
+  }
+  vec2 z = uRef[n] + dl, zs = z;
+  int state = 0;                         // 0 undecided, 1 escaped, 2 on the set, 3 captured
+  for (int i = 0; i < MAXIT; i++) {
+    float r2 = dot(z, z);
+    if (r2 > 1e6) { state = 1; break; }
+    if (dot(D, D) > 1e24) { state = 2; break; }
+    D = 2.0 * cmul(z, D);
+    z = cmul(z, z) + uJc;
+    n++;
+    if (uPeriod > 0 && n % uPeriod == 0) {
+      vec2 dd = z - zs;
+      if (dot(dd, dd) < 1e-9) { state = 3; break; }
+      zs = z;
+    }
+  }
+  vec3 col;
+  float lev = uM + float(n);
+  if (state == 1) {
+    float r = length(z);
+    float nu = lev + 1.0 - log2(log(r) / log(1000.0));
+    float de = r * log(r) / length(D) / uDpr;     // distance to the set, CSS px
+    float h = 0.013 * nu + 0.55;
+    vec3 c1 = pal(h), c2 = pal(h + 0.14);
+    float core = exp(-de / 0.8), halo = exp(-de / 7.0), wide = exp(-de / 60.0);
+    col = BG + c1 * (0.05 + 0.08 * wide) + c2 * halo * 0.5 + mix(c2, vec3(1.0), 0.45) * core * 0.85;
+  } else if (state == 2 || state == 0) {
+    float h = 0.013 * lev + 0.55;
+    col = BG + mix(pal(h + 0.14), vec3(1.0), 0.45) * 0.85 + pal(h + 0.14) * 0.5;
+  } else {
+    float h = 0.013 * lev + 0.55;
+    col = BG + pal(h + 0.4) * 0.035;
+  }
+  col = col / (1.0 + 0.3 * col) * 1.15;
+  float dither = fract(sin(dot(gl_FragCoord.xy, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+  outColor = vec4(col + dither / 255.0, 1.0);
+}</script>
+<script>/* Shared complex arithmetic, and the Bubbles camera geometry (doubles).
+ *
+ * Band model of the gasket: half-planes y<0 and y>2 plus unit circles centred (2n, 1). The pixel
+ * algorithm folds x into [-1,1), reflects y>1 to 2-y, stops in C0 (centre i, r 1) or y<0, otherwise
+ * inverts in the unit circle centred (sign x, 0). Every one of those maps is a symmetry of the gasket,
+ * so the camera (a Möbius or anti-Möbius map from screen to plane) can absorb any of them without the
+ * picture changing. Colours come only from exact screen-space circle geometry, so they do not change
+ * either. */
+'use strict';
+
+/* ---- complex helpers on [re, im] ---- */
+function cm(a, b) { return [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]]; }
+function ca(a, b) { return [a[0] + b[0], a[1] + b[1]]; }
+function cs(a, b) { return [a[0] - b[0], a[1] - b[1]]; }
+function cc(a) { return [a[0], -a[1]]; }
+function cr(a, k) { return [a[0] * k, a[1] * k]; }
+function cd(a, b) { var q = b[0] * b[0] + b[1] * b[1]; return [(a[0] * b[0] + a[1] * b[1]) / q, (a[1] * b[0] - a[0] * b[1]) / q]; }
+function cabs2(a) { return a[0] * a[0] + a[1] * a[1]; }
+
+/* ---- camera: z = (a q + b) / (c q + d), q = f ? conj(p) : p ---- */
+function mobApply(T, p) { var q = T.f ? cc(p) : p; return cd(ca(cm(T.a, q), T.b), ca(cm(T.c, q), T.d)); }
+/* |det| is kept at exactly 1 and its phase tracked (T.dp), so nothing ever recomputes ad - bc, which
+   cancels catastrophically when the entries are large. */
+function mobDet(T) { return T.dp; }
+function mobDeriv(T, p) { var q = T.f ? cc(p) : p; return 1 / cabs2(ca(cm(T.c, q), T.d)); }
+function mobInv(T, z) {
+  var q = cd(cs(cm(T.d, z), T.b), cs(T.a, cm(T.c, z)));
+  return T.f ? cc(q) : q;
+}
+function mobScale(T, s) { return { a: cr(T.a, s), b: cr(T.b, s), c: cr(T.c, s), d: cr(T.d, s), f: T.f, dp: T.dp }; }
+/* Build a camera from raw entries, computing the determinant once (only for well-conditioned input). */
+function mobMake(a, b, c, d, f) {
+  var det = cs(cm(a, d), cm(b, c)), m = Math.sqrt(cabs2(det)), s = 1 / Math.sqrt(m);
+  return { a: cr(a, s), b: cr(b, s), c: cr(c, s), d: cr(d, s), f: f, dp: cr(det, 1 / m) };
+}
+/* T <- T o (p -> k p + t), k real */
+function camAffine(T, k, t) {
+  var tt = T.f ? cc(t) : t, s = 1 / Math.sqrt(k);   // det scales by k (real, > 0)
+  return mobScale({ a: cr(T.a, k), b: ca(cm(T.a, tt), T.b), c: cr(T.c, k), d: ca(cm(T.c, tt), T.d), f: T.f, dp: T.dp }, s);
+}
+/* T <- op o T. op: ['t', tau] z+tau (tau real) ; ['r'] z -> conj z + 2i ; ['i', o] z -> o + 1/conj(z - o) */
+function camOp(T, op) {
+  if (op[0] === 't') {
+    var t = [op[1], 0];
+    return { a: ca(T.a, cm(t, T.c)), b: ca(T.b, cm(t, T.d)), c: T.c, d: T.d, f: T.f, dp: T.dp };
+  }
+  if (op[0] === 'r') {
+    var i2 = [0, 2];
+    return { a: ca(cc(T.a), cm(i2, cc(T.c))), b: ca(cc(T.b), cm(i2, cc(T.d))), c: cc(T.c), d: cc(T.d), f: 1 - T.f, dp: cc(T.dp) };
+  }
+  var o = op[1];
+  return { a: cr(cc(T.a), o), b: cr(cc(T.b), o), c: cs(cc(T.a), cr(cc(T.c), o)),
+    d: cs(cc(T.b), cr(cc(T.d), o)), f: 1 - T.f, dp: cr(cc(T.dp), -1) };
+}
+function opInverse(op) { return op[0] === 't' ? ['t', -op[1]] : op; }
+function pointOp(z, op) {
+  if (op[0] === 't') return [z[0] + op[1], z[1]];
+  if (op[0] === 'r') return [z[0], 2 - z[1]];
+  var w = [z[0] - op[1], z[1]], r2 = cabs2(w);
+  return [op[1] + w[0] / r2, w[1] / r2];
+}
+/* The next symmetry that canonicalises point z, or null if none magnifies it. */
+function nextOp(z) {
+  var x = z[0], y = z[1];
+  if (x < -1 || x >= 1) return ['t', -2 * Math.floor((x + 1) / 2)];
+  if (y > 1) return ['r'];
+  var o = x >= 0 ? 1 : -1, r2 = (x - o) * (x - o) + y * y;
+  if (r2 < 1 - 1e-12) return ['i', o];
+  return null;
+}
+
+/* ---- generalized circles in ACC coordinates {A, C, B:[re,im]}: A|z|^2 - 2Re(conj(B) z) + C = 0,
+   normalised |B|^2 - AC = 1; negative inside. A = curvature, B/A = centre. ---- */
+function accOp(v, op) {
+  if (op[0] === 't') { // map z -> z + t
+    var t = [op[1], 0];
+    return { A: v.A, B: ca(v.B, cr(t, v.A)), C: v.A * cabs2(t) + 2 * (v.B[0] * t[0] + v.B[1] * t[1]) + v.C };
+  }
+  if (op[0] === 'r') { // conj, then +2i
+    var w = { A: v.A, B: cc(v.B), C: v.C }, t2 = [0, 2];
+    return { A: w.A, B: ca(w.B, cr(t2, w.A)), C: w.A * 4 + 2 * (w.B[0] * t2[0] + w.B[1] * t2[1]) + w.C };
+  }
+  var o = op[1];
+  var u = accOp(v, ['t', -o]);
+  u = { A: u.C, B: u.B, C: u.A };
+  return accOp(u, ['t', o]);
+}
+function accAdd(vs, ws) { // linear combination: sum k_i v_i
+  var A = 0, C = 0, B = [0, 0];
+  for (var i = 0; i < vs.length; i++) { A += ws[i] * vs[i].A; C += ws[i] * vs[i].C; B = ca(B, cr(vs[i].B, ws[i])); }
+  return { A: A, B: B, C: C };
+}
+var L0 = { A: 0, B: [0, -1], C: 0 }, L2 = { A: 0, B: [0, 1], C: 4 };
+var C0 = { A: 1, B: [0, 1], C: 0 };
+function Cn(n) { return accOp(C0, ['t', 2 * n]); }
+
+</script>
+<script>/* Bubbles camera: screen (CSS px, centred, y down) -> band-model plane, kept well conditioned by
+ * absorbing gasket symmetries (renorm) and switching back to saved representations on the way out. */
+var APO = (function () {
+  'use strict';
+  var GOOD = 12, MAXSEQ = 4096;
+
+  function homeCamera(S) {
+    var P = function (k) { var t = -Math.PI / 2 + 2 * Math.PI * k / 3; return [Math.cos(t), Math.sin(t)]; };
+    var P1 = P(0), P2 = P(2), P3 = P(1);
+    var H1 = { a: cs(P3, P1), b: cr(cm(P2, cs(P3, P1)), -1), c: cs(P3, P2), d: cr(cm(P1, cs(P3, P2)), -1) };
+    var T = { a: ca(cr(H1.a, 2), cm([0, 2], H1.c)), b: ca(cr(H1.b, 2), cm([0, 2], H1.d)), c: H1.c, d: H1.d, f: 0 };
+    return mobMake(cr(T.a, 1 / S), T.b, cr(T.c, 1 / S), T.d, 0);
+  }
+
+  function State(S, Rv) {
+    this.S = S; this.Rv = Rv; this.home(S);
+  }
+  State.prototype.home = function (S) {
+    this.T = homeCamera(S || this.S); this.Lz = 0; this.quad = null;
+    this.snaps = [{ T: this.T, d: 0, s: 1, t: [0, 0] }];
+  };
+  State.prototype.rho = function (T) { return mobDeriv(T || this.T, [0, 0]) * this.Rv; };
+  State.prototype.applyOp = function (op) {
+    this.T = camOp(this.T, op);
+    if (this.quad) for (var i = 0; i < 4; i++) this.quad[i] = accOp(this.quad[i], op);
+  };
+  /* Conditioning of the camera on the screen disk: ||T||^2 with |det| = 1 and the disk scaled to
+     radius 1. It is a hyperbolic distance in disguise, it bounds the float32 error of evaluating T in
+     the shader (about 4e-8 * N * Rv pixels), and it is smallest when the view is about one canonical
+     unit across and near the origin. */
+  State.prototype.cond = function (T) {
+    T = T || this.T;
+    var R = this.Rv;
+    return (R * R * (cabs2(T.a) + cabs2(T.c)) + cabs2(T.b) + cabs2(T.d)) / R;
+  };
+  /* Screen-space camera moves. Every snapshot keeps the affine map from the current screen to its own
+     screen, so its representation of the current view can be rebuilt without going through T. */
+  State.prototype.screenAffine = function (k, t) {
+    this.T = camAffine(this.T, k, t);
+    for (var i = 0; i < this.snaps.length; i++) {
+      var S = this.snaps[i];
+      S.t = [S.s * t[0] + S.t[0], S.s * t[1] + S.t[1]]; S.s *= k;
+    }
+  };
+  State.prototype.zoom = function (dz, a) {
+    var k = Math.pow(2, -dz);
+    this.screenAffine(k, cr(a, 1 - k));
+    this.Lz += dz;
+  };
+  State.prototype.pan = function (dx, dy) { this.screenAffine(1, [-dx, -dy]); };
+  State.prototype.toScreen = function (z) { return mobInv(this.T, z); };
+  State.prototype.snapshot = function () {
+    var sn = this.snaps, last = sn[sn.length - 1];
+    var rec = { T: this.T, d: this.Lz, s: 1, t: [0, 0] };
+    if (last && last.d > 0 && Math.abs(last.d - this.Lz) < 0.5 && sn.length > 1) sn[sn.length - 1] = rec; else sn.push(rec);
+  };
+  /* Keep the camera well conditioned. Zooming in: follow the canonical chain of the view centre
+     (every step is a symmetry of the gasket, so the picture cannot change). Zooming out: switch back to
+     an earlier representation if one fits the current view better. */
+  State.prototype.renorm = function () {
+    var N0 = this.cond(), moved = 0;
+    if (N0 < GOOD) return 0;
+    var T = this.T, c = mobApply(T, [0, 0]), bestN = N0, bestK = 0, ops = [];
+    for (var k = 1; k <= MAXSEQ; k++) {
+      var op = nextOp(c);
+      if (!op) break;
+      T = camOp(T, op); ops.push(op); c = pointOp(c, op);
+      if (op[0] === 'i') { var Nk = this.cond(T); if (Nk < bestN) { bestN = Nk; bestK = k; } }
+    }
+    var sn = this.snaps, bestS = -1, bestSN = N0, bestST = null;
+    for (var i = 0; i < sn.length; i++) {
+      if (sn[i].s > 1e12 || sn[i].s < 1e-240) continue;
+      var T2 = camAffine(sn[i].T, sn[i].s, sn[i].t), n = this.cond(T2);
+      if (n < bestSN) { bestSN = n; bestS = i; bestST = T2; }
+    }
+    if (bestS >= 0 && bestSN < 0.9 * N0 && bestSN <= bestN) {
+      this.T = bestST; this.quad = null; moved = 1;
+    } else if (bestK && bestN < 0.9 * N0) {
+      for (var q = 0; q < bestK; q++) this.applyOp(ops[q]);
+      moved = bestK;
+      this.snapshot();
+    }
+    // forget representations of views deeper than this one
+    var Lz = this.Lz;
+    this.snaps = sn.filter(function (S, j) { return j === 0 || S.d <= Lz + 2; });
+    return moved;
+  };
+  /* ---- autopilot: a shrinking gap triangle (Descartes quadruple X, Y, Z | opposite O) ---- */
+  State.prototype.initQuad = function () {
+    var c = mobApply(this.T, [0, 0]), ops = [];
+    for (var g = 0; g < 64; g++) {
+      var op = null;
+      if (c[0] < -1 || c[0] >= 1) op = ['t', -2 * Math.floor((c[0] + 1) / 2)];
+      else if (c[1] > 1) op = ['r'];
+      if (!op) break;
+      c = pointOp(c, op); ops.push(op);
+    }
+    var q = c[0] >= 0 ? [L0, C0, Cn(1), L2] : [L0, C0, Cn(-1), L2];
+    for (var i = ops.length - 1; i >= 0; i--) {
+      var inv = opInverse(ops[i]);
+      q = q.map(function (v) { return accOp(v, inv); });
+    }
+    this.quad = q;
+  };
+  function incircle(X, Y, Z, O) { return accAdd([X, Y, Z, O], [2, 2, 2, -1]); }
+  State.prototype.target = function (rnd) {
+    if (!this.quad) this.initQuad();
+    var rho = this.rho(), c = mobApply(this.T, [0, 0]);
+    for (var g = 0; g < 40; g++) {
+      var q = this.quad, W = incircle(q[0], q[1], q[2], q[3]);
+      if (1 / W.A < 0.3 * rho) break;
+      // A keeps the pair the last step kept (heading into the same cusp); allow it only rarely so the
+      // dive keeps finding open regions instead of sliding down one tangency.
+      var subs = [[q[0], q[1], W, q[2]], [q[1], q[2], W, q[0]], [q[0], q[2], W, q[1]]];
+      var ws = subs.map(function (s, j) {
+        var I = incircle(s[0], s[1], s[2], s[3]), r = 1 / I.A, ctr = cr(I.B, 1 / I.A);
+        var dist = Math.sqrt(cabs2(cs(ctr, c)));
+        return (j === 0 ? 0.15 : 1) * Math.sqrt(r) * Math.exp(-dist / (2.5 * rho));
+      });
+      var tot = ws[0] + ws[1] + ws[2], u = rnd() * tot, pick = 0;
+      while (pick < 2 && u > ws[pick]) { u -= ws[pick]; pick++; }
+      this.quad = subs[pick];
+    }
+    var q2 = this.quad, W2 = incircle(q2[0], q2[1], q2[2], q2[3]);
+    return cr(W2.B, 1 / W2.A);
+  };
+  return { State: State, homeCamera: homeCamera };
+})();
+</script>
+<script>/* Julia camera: the view is a linear chart w = C + A p at "level" m, meaning it shows f^m of the true
+ * view (f(z) = z^2 + c). While the chart is small it is renormalised by applying f once more (the true
+ * view is tiny, so f is linear across it to far below a pixel); when it grows it steps back through the
+ * inverse branch it came from. Escape counts are offset by m, so the picture never changes when m does.
+ */
+var JUL = (function () {
+  'use strict';
+  var LO = 1e-5, HI = 1e-3;        // chart radius band (plane units)
+
+  function State(c, S, Rv) {
+    this.c = c; this.S = S; this.Rv = Rv; this.home(S);
+  }
+  State.prototype.home = function (S) {
+    this.S = S || this.S;
+    this.m = 0; this.C = [0, 0]; this.A = [1.35 / this.S, 0]; this.Lz = 0;
+    this.stack = []; this.tgt = null; this.tgtAt = -1;
+  };
+  State.prototype.viewR = function () { return Math.sqrt(cabs2(this.A)) * this.Rv; };
+  State.prototype.chart = function (p) { return ca(this.C, cm(this.A, p)); };
+  State.prototype.toScreen = function (w) { return cd(cs(w, this.C), this.A); };
+  State.prototype.screenAffine = function (k, t) {
+    this.C = ca(this.C, cm(this.A, t)); this.A = cr(this.A, k);
+    for (var i = 0; i < this.stack.length; i++) {
+      var r = this.stack[i];
+      r.C = ca(r.C, cm(r.A, t)); r.A = cr(r.A, k);
+    }
+  };
+  State.prototype.zoom = function (dz, a) {
+    var k = Math.pow(2, -dz);
+    this.screenAffine(k, cr(a, 1 - k));
+    this.Lz += dz;
+  };
+  State.prototype.pan = function (dx, dy) { this.screenAffine(1, [-dx, -dy]); };
+  State.prototype.canZoomIn = function () { return this.viewR() > 1e-11; };
+  function sqr(z) { return cm(z, z); }
+  State.prototype.renorm = function () {
+    var moved = 0, c = this.c;
+    // absorb: find the shortest run of steps that brings the chart back up to LO, staying away from
+    // the critical point; if there is none (an attracting basin), leave the chart alone
+    if (this.viewR() < LO) {
+      var z = this.C, r = this.viewR(), k = 0, ok = false;
+      for (; k < 64; k++) {
+        var az = Math.sqrt(cabs2(z));
+        if (az > 3 || az < 1e3 * r) break;
+        r *= 2 * az; z = ca(sqr(z), c);
+        if (r >= LO) { ok = true; k++; break; }
+      }
+      if (ok) for (var g = 0; g < k; g++) {
+        this.stack.push({ C: this.C.slice(), A: this.A.slice() });
+        this.A = cr(cm(this.C, this.A), 2);
+        this.C = ca(sqr(this.C), c);
+        if (this.tgt) this.tgt = ca(sqr(this.tgt), c);
+        this.m++; moved++;
+      }
+    }
+    for (var h = 0; h < 200; h++) {
+      if (this.viewR() <= HI || !this.stack.length) break;
+      var rec = this.stack.pop();
+      var s = csqrt(cs(this.C, c)), s2 = cr(s, -1);
+      var pick = cabs2(cs(s, rec.C)) <= cabs2(cs(s2, rec.C)) ? s : s2;
+      if (this.tgt) {
+        var t = csqrt(cs(this.tgt, c));
+        this.tgt = cabs2(cs(t, pick)) <= cabs2(cs(cr(t, -1), pick)) ? t : cr(t, -1);
+      }
+      this.A = cd(this.A, cr(pick, 2));
+      this.C = pick;
+      this.m--; moved++;
+    }
+    return moved;
+  };
+  /* Reference orbit of the chart centre for the shader's perturbation phase. */
+  State.prototype.refOrbit = function (n) {
+    var out = [], z = this.C.slice();
+    for (var i = 0; i < n; i++) {
+      out.push(z[0], z[1]);
+      if (cabs2(z) > 1e6) break;
+      z = ca(sqr(z), this.c);
+    }
+    return out;
+  };
+  /* Distance to the Julia set in CSS px from screen point p (Infinity for bounded orbits). */
+  State.prototype.distPx = function (p, maxit) {
+    var z = this.chart(p), D = this.A.slice(), c = this.c;
+    for (var i = 0; i < maxit; i++) {
+      var r2 = cabs2(z);
+      if (r2 > 1e6) { var r = Math.sqrt(r2); return r * Math.log(r) / Math.sqrt(cabs2(D)); }
+      if (cabs2(D) > 1e10) return 0;
+      D = cr(cm(z, D), 2); z = ca(sqr(z), c);
+    }
+    return Infinity;
+  };
+  /* Autopilot target: a point of the Julia set near the current one (plane coords of this level). */
+  State.prototype.target = function (rnd) {
+    var rv = this.Rv;                                   // view radius in CSS px
+    var base = this.tgt ? this.toScreen(this.tgt) : [0, 0];
+    if (Math.hypot(base[0], base[1]) > 0.8 * rv) base = [0, 0];
+    if (!this.tgt || this.Lz - this.tgtAt > 0.35) {
+      var best = null, bestD = Infinity, R = 0.3 * rv;
+      for (var k = 0; k < 40; k++) {
+        var a = rnd() * 6.2832, rr = R * Math.sqrt(rnd());
+        var p = [base[0] + rr * Math.cos(a), base[1] + rr * Math.sin(a)];
+        var d = this.distPx(p, 600) + 0.02 * Math.hypot(p[0], p[1]);
+        if (d < bestD) { bestD = d; best = p; }
+      }
+      if (best && isFinite(bestD)) { this.tgt = this.chart(best); this.tgtAt = this.Lz; }
+      else if (!this.tgt) this.tgt = this.C.slice();
+    }
+    return this.tgt;
+  };
+  function csqrt(z) {
+    var r = Math.sqrt(Math.sqrt(cabs2(z))), t = Math.atan2(z[1], z[0]) / 2;
+    return [r * Math.cos(t), r * Math.sin(t)];
+  }
+  return { State: State, csqrt: csqrt };
+})();
+</script>
+<script>/* Fractal Dive: WebGL renderer, input, autopilot. */
+(function () {
+  'use strict';
+  var params = new URLSearchParams(location.search);
+  var SPEED = parseFloat(params.get('speed')) || 0.4;       // autopilot, octaves per second
+  var canvas = document.getElementById('gl');
+  var gl = canvas.getContext('webgl2', { antialias: false, alpha: false, preserveDrawingBuffer: false, powerPreference: 'high-performance' });
+  var elDepth = document.getElementById('depth'), elHint = document.getElementById('hint');
+  if (!gl) { elHint.textContent = 'This needs WebGL2, which this browser does not offer.'; elHint.classList.add('show'); return; }
+
+  var PAL = ['#22d3ee', '#3b82f6', '#8b5cf6', '#d946ef', '#fb4b7b', '#fbbf24', '#34d399'].map(function (h) {
+    var v = parseInt(h.slice(1), 16);
+    return [((v >> 16) & 255) / 255, ((v >> 8) & 255) / 255, (v & 255) / 255];
+  });
+
+  /* ---------------- GL setup ---------------- */
+  function compile(type, src) {
+    var sh = gl.createShader(type);
+    gl.shaderSource(sh, src); gl.compileShader(sh);
+    if (!gl.getShaderParameter(sh, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(sh));
+    return sh;
+  }
+  function program(fragSrc) {
+    var pr = gl.createProgram();
+    gl.attachShader(pr, compile(gl.VERTEX_SHADER, '#version 300 es\nin vec2 pos;\nvoid main(){gl_Position=vec4(pos,0.0,1.0);}'));
+    gl.attachShader(pr, compile(gl.FRAGMENT_SHADER, fragSrc));
+    gl.bindAttribLocation(pr, 0, 'pos');
+    gl.linkProgram(pr);
+    if (!gl.getProgramParameter(pr, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(pr));
+    var u = {}, nu = gl.getProgramParameter(pr, gl.ACTIVE_UNIFORMS);
+    for (var i = 0; i < nu; i++) { var info = gl.getActiveUniform(pr, i), nm = info.name.replace(/\[0\]$/, ''); u[nm] = gl.getUniformLocation(pr, nm); }
+    return { pr: pr, u: u };
+  }
+  var vb = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, vb);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  var apoProg = program(document.getElementById('apo-frag').textContent);
+  var julProg = program(document.getElementById('jul-frag').textContent);
+
+  /* ---------------- sizing ---------------- */
+  var cssW = 1, cssH = 1, scale = Math.min(window.devicePixelRatio || 1, 2), maxScale = scale;
+  function fitScale() { return 0.46 * Math.min(cssW, cssH); }
+  function resize() {
+    cssW = canvas.clientWidth || window.innerWidth; cssH = canvas.clientHeight || window.innerHeight;
+    canvas.width = Math.max(1, Math.round(cssW * scale)); canvas.height = Math.max(1, Math.round(cssH * scale));
+    if (st) for (var key in scenes) scenes[key].st.Rv = 0.5 * Math.hypot(cssW, cssH);
+    dirty = true;
+  }
+  var st = null, dirty = true;
+  resize();
+  var jc = (params.get('c') || '').split(',').map(Number);
+  if (jc.length !== 2 || !isFinite(jc[0]) || !isFinite(jc[1])) jc = [0.3, 0.5];
+  var scenes = {
+    bubbles: { st: new APO.State(fitScale(), 0.5 * Math.hypot(cssW, cssH)), label: 'Bubbles' },
+    julia: { st: new JUL.State(jc, fitScale(), 0.5 * Math.hypot(cssW, cssH)), label: 'Julia', period: cyclePeriod(jc) }
+  };
+  var mode = params.get('f') === 'bubbles' ? 'bubbles' : 'julia';
+  st = scenes[mode].st;
+  window.addEventListener('resize', resize);
+  /* Period of the attracting cycle of z^2 + c, or 0 if the critical orbit escapes or never settles. */
+  function cyclePeriod(c) {
+    var z = [0, 0];
+    for (var i = 0; i < 20000; i++) { z = [z[0] * z[0] - z[1] * z[1] + c[0], 2 * z[0] * z[1] + c[1]]; if (z[0] * z[0] + z[1] * z[1] > 4) return 0; }
+    var z0 = z;
+    for (var p = 1; p < 64; p++) { z = [z[0] * z[0] - z[1] * z[1] + c[0], 2 * z[0] * z[1] + c[1]]; if (Math.hypot(z[0] - z0[0], z[1] - z0[1]) < 1e-9) return p; }
+    return 0;
+  }
+
+  /* ---------------- render ---------------- */
+  var refBuf = new Float32Array(128);
+  function draw() {
+    if (mode === 'julia') return drawJulia();
+    var P = apoProg, u = P.u;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(P.pr);
+    var Td = camAffine(st.T, 1 / (canvas.width / cssW), [0, 0]);
+    gl.uniform2f(u.uA, Td.a[0], Td.a[1]); gl.uniform2f(u.uB, Td.b[0], Td.b[1]);
+    gl.uniform2f(u.uC, Td.c[0], Td.c[1]); gl.uniform2f(u.uD, Td.d[0], Td.d[1]);
+    gl.uniform1f(u.uF, Td.f); gl.uniform2f(u.uDet, Td.dp[0], Td.dp[1]);
+    gl.uniform2f(u.uRes, canvas.width, canvas.height);
+    gl.uniform1f(u.uLz, st.Lz); gl.uniform1f(u.uDpr, canvas.width / cssW);
+    gl.uniform1f(u.uLogS, Math.log2(st.S));
+    gl.uniform3fv(u.uPal, new Float32Array([].concat.apply([], PAL)));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  function drawJulia() {
+    var P = julProg, u = P.u, dpr = canvas.width / cssW;
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.useProgram(P.pr);
+    gl.uniform2f(u.uC, st.C[0], st.C[1]);
+    gl.uniform2f(u.uA, st.A[0] / dpr, st.A[1] / dpr);
+    gl.uniform2f(u.uJc, st.c[0], st.c[1]);
+    var ref = st.refOrbit(64);
+    refBuf.fill(0); refBuf.set(ref);
+    gl.uniform2fv(u.uRef, refBuf);
+    gl.uniform1i(u.uRefN, ref.length / 2);
+    gl.uniform1i(u.uPeriod, scenes.julia.period);
+    gl.uniform2f(u.uRes, canvas.width, canvas.height);
+    gl.uniform1f(u.uM, st.m); gl.uniform1f(u.uLz, st.Lz); gl.uniform1f(u.uDpr, dpr);
+    gl.uniform3fv(u.uPal, new Float32Array([].concat.apply([], PAL)));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /* ---------------- camera motion ---------------- */
+  var LZ_MIN = -0.6;
+  var pend = { dz: 0, ax: 0, ay: 0, px: 0, py: 0 };
+  function zoomBy(dz, a) {
+    if (dz < 0 && st.Lz + dz < LZ_MIN) dz = Math.min(0, LZ_MIN - st.Lz);
+    if (dz > 0 && (mode === 'julia' ? !st.canZoomIn() : st.cond() > 1e12)) dz = 0;   // nothing more to resolve
+    if (dz) st.zoom(dz, a);
+    dirty = true;
+  }
+  function panBy(dx, dy) { st.pan(dx, dy); dirty = true; }
+  function rel(e) { var r = canvas.getBoundingClientRect(); return [e.clientX - r.left - cssW / 2, e.clientY - r.top - cssH / 2]; }
+
+  /* ---------------- autopilot ---------------- */
+  var auto = { on: false, rate: 0 };
+  var rng = Math.random;
+  function setAuto(on) {
+    if (on === auto.on) return;
+    auto.on = on; auto.rate = 0;
+    if (on) st.quad = null;
+    flash(on ? 'Diving · double-tap to stop' : 'Double-tap to dive');
+    dirty = true;
+  }
+
+  /* ---------------- input ---------------- */
+  var ptrs = new Map(), tapStart = null, lastTap = null, pinch = null;
+  function touched() { if (auto.on) setAuto(false); hideHint(); }
+  canvas.addEventListener('pointerdown', function (e) {
+    canvas.setPointerCapture(e.pointerId);
+    var p = rel(e);
+    ptrs.set(e.pointerId, p);
+    tapStart = ptrs.size === 1 ? { x: p[0], y: p[1], t: performance.now(), moved: false } : null;
+    if (ptrs.size === 2) {
+      var a = Array.from(ptrs.values());
+      pinch = { d: Math.hypot(a[0][0] - a[1][0], a[0][1] - a[1][1]) || 1, m: [(a[0][0] + a[1][0]) / 2, (a[0][1] + a[1][1]) / 2] };
+    }
+  });
+  canvas.addEventListener('pointermove', function (e) {
+    var q = ptrs.get(e.pointerId);
+    if (!q) return;
+    var p = rel(e);
+    if (ptrs.size === 1) {
+      if (tapStart && !tapStart.moved) {
+        if (Math.hypot(p[0] - tapStart.x, p[1] - tapStart.y) < 8) return;
+        tapStart.moved = true;
+      }
+      touched();
+      panBy(p[0] - q[0], p[1] - q[1]);
+      ptrs.set(e.pointerId, p);
+    } else if (ptrs.size === 2 && pinch) {
+      ptrs.set(e.pointerId, p);
+      var a = Array.from(ptrs.values());
+      var d = Math.hypot(a[0][0] - a[1][0], a[0][1] - a[1][1]) || 1, m = [(a[0][0] + a[1][0]) / 2, (a[0][1] + a[1][1]) / 2];
+      touched();
+      panBy(m[0] - pinch.m[0], m[1] - pinch.m[1]);
+      zoomBy(Math.log2(d / pinch.d), m);
+      pinch.d = d; pinch.m = m;
+    }
+  });
+  function up(e) {
+    if (!ptrs.has(e.pointerId)) return;
+    var wasOne = ptrs.size === 1;
+    ptrs.delete(e.pointerId);
+    pinch = null;
+    if (wasOne && tapStart && !tapStart.moved && performance.now() - tapStart.t < 350) {
+      var now = performance.now();
+      if (lastTap && now - lastTap.t < 450 && Math.hypot(tapStart.x - lastTap.x, tapStart.y - lastTap.y) < 50) {
+        lastTap = null; setAuto(!auto.on); hideHint();
+      } else lastTap = { x: tapStart.x, y: tapStart.y, t: now };
+    }
+    if (ptrs.size === 1) tapStart = { x: 0, y: 0, t: 0, moved: true };
+  }
+  canvas.addEventListener('pointerup', up);
+  canvas.addEventListener('pointercancel', up);
+  canvas.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    touched();
+    var dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    var p = rel(e);
+    pend.dz += -dy * 0.0018; pend.ax = p[0]; pend.ay = p[1];
+  }, { passive: false });
+  window.addEventListener('keydown', function (e) {
+    if (e.target && e.target.tagName === 'BUTTON' && (e.key === 'Enter' || e.code === 'Space')) return;
+    if (e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); setAuto(!auto.on); hideHint(); }
+    else if (e.key === '+' || e.key === '=') { touched(); pend.dz += 0.5; pend.ax = pend.ay = 0; }
+    else if (e.key === '-' || e.key === '_') { touched(); pend.dz -= 0.5; pend.ax = pend.ay = 0; }
+    else if (e.key === '0' || e.key === 'h' || e.key === 'Home') { goHome(); }
+    else if (e.key.indexOf('Arrow') === 0) {
+      touched(); var k = 60;
+      if (e.key === 'ArrowLeft') pend.px += k; else if (e.key === 'ArrowRight') pend.px -= k;
+      else if (e.key === 'ArrowUp') pend.py += k; else pend.py -= k;
+    }
+  });
+  function goHome() { setAuto(false); pend.dz = pend.px = pend.py = 0; st.S = fitScale(); st.home(fitScale()); dirty = true; }
+  document.getElementById('home').addEventListener('click', goHome);
+  var elMode = document.getElementById('mode');
+  function setMode(m) {
+    if (m !== mode) {
+      setAuto(false); pend.dz = pend.px = pend.py = 0;
+      mode = m; st = scenes[mode].st; if (window.__fd) window.__fd.st = st;
+      var url = new URL(location.href); url.searchParams.set('f', mode); history.replaceState(null, '', url);
+    }
+    elMode.textContent = mode === 'julia' ? 'Bubbles' : 'Julia';
+    elMode.title = 'Switch to ' + elMode.textContent;
+    dirty = true;
+  }
+  elMode.addEventListener('click', function () { setMode(mode === 'julia' ? 'bubbles' : 'julia'); });
+
+  /* ---------------- HUD ---------------- */
+  var flashTimer = 0;
+  function hideHint() { elHint.classList.remove('show'); }
+  function flash(msg) { elHint.textContent = msg; elHint.classList.add('show'); clearTimeout(flashTimer); flashTimer = setTimeout(hideHint, 2600); }
+  function depthText() {
+    var oct = st.Lz, l10 = oct * Math.LOG10E * Math.LN2;
+    var mag = l10 < 5 ? '×' + Math.pow(10, l10).toFixed(l10 < 2 ? 1 : 0) : '×10<sup>' + Math.floor(l10) + '</sup>';
+    return '<b>' + Math.max(0, oct).toFixed(1) + '</b> octaves deep <i>' + mag + '</i>';
+  }
+
+  /* ---------------- loop ---------------- */
+  var last = performance.now(), hudT = 0, ft = 16, slowFrames = 0, fastFrames = 0;
+  function tick(ts) {
+    requestAnimationFrame(tick);
+    var dt = Math.min(0.1, Math.max(0, (ts - last) / 1000)); last = ts;
+    if (auto.on) {
+      auto.rate += (SPEED - auto.rate) * (1 - Math.exp(-dt / 1.2));
+      var tz = st.target(rng), sp = st.toScreen(tz);
+      var a = 1 - Math.exp(-(auto.rate * dt / 0.3 + dt / 3));   // pan measured in octaves travelled
+      panBy(-sp[0] * a, -sp[1] * a);
+      zoomBy(auto.rate * dt, [0, 0]);
+    }
+    if (pend.dz || pend.px || pend.py) {
+      var b = 1 - Math.exp(-dt / 0.09);
+      var dz = pend.dz * b, px = pend.px * b, py = pend.py * b;
+      if (Math.abs(pend.dz) < 1e-4) dz = pend.dz;
+      pend.dz -= dz; pend.px -= px; pend.py -= py;
+      if (Math.abs(pend.px) < 0.05) { px += pend.px; pend.px = 0; }
+      if (Math.abs(pend.py) < 0.05) { py += pend.py; pend.py = 0; }
+      if (px || py) panBy(px, py);
+      if (dz) zoomBy(dz, [pend.ax, pend.ay]);
+    }
+    if (dirty) {
+      st.renorm();
+      draw();
+      dirty = false;
+      // adapt resolution to keep frames smooth while moving
+      ft = ft * 0.9 + (dt * 1000) * 0.1;
+      if (ft > 24 && scale > 0.5) { if (++slowFrames > 20) { scale = Math.max(0.5, scale * 0.85); resize(); slowFrames = 0; ft = 16; } } else slowFrames = 0;
+      if (ft < 13 && scale < maxScale) { if (++fastFrames > 90) { scale = Math.min(maxScale, scale * 1.15); resize(); fastFrames = 0; } } else fastFrames = 0;
+    }
+    if (ts - hudT > 100) { hudT = ts; elDepth.innerHTML = depthText(); }
+  }
+  requestAnimationFrame(tick);
+  setMode(mode);
+  elHint.classList.add('show');
+  setTimeout(function () { if (!auto.on) hideHint(); }, 7000);
+
+  window.__fd = {
+    st: st, setMode: function (m) { setMode(m); }, setAuto: setAuto, draw: function () { st.renorm(); draw(); },
+    info: function () { return { mode: mode, Lz: st.Lz, N: mode === 'julia' ? st.viewR() : st.cond(), m: st.m, snaps: st.snaps ? st.snaps.length : st.stack.length, auto: auto.on, scale: scale, w: canvas.width, h: canvas.height }; }
+  };
+})();
+</script>
+</body>
+</html>
