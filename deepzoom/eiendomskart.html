@@ -1,0 +1,649 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-generated">
+<meta name="description" content="Every registered property in Norway on one zoomable map: Kartverket cadastre over topographic, street, satellite or lidar base layers, all loaded in the browser from open services.">
+<title>Norway Property Map</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@6.1.1/build/openseadragon/openseadragon.min.js"></script>
+<style>
+:root{--bg:#f0f1eb;--ink:#23261d;--muted:#6b705f;--line:#c9ccbd;--accent:#5d6d3b;--hl:#d9480f;
+  --panel:rgba(248,249,244,.95);--shadow:0 4px 18px rgba(0,0,0,.18);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#16180f;--ink:#e6e8dc;--muted:#9aa08a;
+  --line:#3a3e30;--accent:#8a9a5b;--hl:#ff7a3d;--panel:rgba(26,28,19,.94);color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#16180f;--ink:#e6e8dc;--muted:#9aa08a;--line:#3a3e30;--accent:#8a9a5b;--hl:#ff7a3d;
+  --panel:rgba(26,28,19,.94);color-scheme:dark}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--ink);
+  font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
+#map{position:absolute;inset:0;background:#dfe3dc}
+@media (prefers-color-scheme:dark){#map{background:#1d2119}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);
+  backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
+button,input{font:inherit;color:inherit}
+
+/* search */
+#top{position:absolute;left:12px;top:12px;z-index:30;width:min(380px,calc(100vw - 80px))}
+#bar{display:flex;align-items:center;gap:8px;padding:6px 10px}
+#top h1{font-size:13px;font-weight:600;margin:0;white-space:nowrap}
+#top h1 a{color:inherit;text-decoration:none}
+#q{flex:1;min-width:0;border:0;background:transparent;padding:6px 2px;outline:none;font-size:15px}
+#results{list-style:none;margin:6px 0 0;padding:4px;max-height:50vh;overflow:auto;display:none}
+#results.open{display:block}
+#results li{padding:6px 8px;border-radius:6px;cursor:pointer;display:flex;gap:8px;align-items:baseline}
+#results li[aria-selected="true"],#results li:hover{background:color-mix(in srgb,var(--accent) 18%,transparent)}
+#results .k{font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em;min-width:58px}
+#results .s{color:var(--muted);font-size:12px;margin-left:auto;text-align:right}
+#results .msg{color:var(--muted);cursor:default}
+
+/* layers */
+#layers{position:absolute;right:12px;top:12px;z-index:25;width:250px;padding:10px 12px}
+#layers h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:2px 0 6px;font-weight:600}
+#layers h2+div{margin-bottom:10px}
+#layers label{display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer}
+#layers input[type=radio],#layers input[type=checkbox],#layers input[type=range]{accent-color:var(--accent)}
+#layers input[type=range]{width:100%;margin:2px 0 4px}
+#layers .note{font-size:11px;color:var(--muted);margin-left:auto}
+#layers .hint{font-size:12px;color:var(--muted);margin:2px 0 0}
+#layersToggle{display:none}
+#layers .x{display:none}
+
+/* property card */
+#info{position:absolute;left:12px;bottom:34px;z-index:25;width:min(360px,calc(100vw - 24px));padding:12px 14px;display:none;
+  max-height:calc(100vh - 140px);overflow:auto}
+#info.open{display:block}
+#info h2{margin:0 26px 2px 0;font-size:18px}
+#info .sub{color:var(--muted);margin-bottom:8px}
+#info dl{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0 0 10px}
+#info dt{color:var(--muted)}
+#info dd{margin:0}
+#info ul{margin:0;padding-left:18px}
+#info a{color:var(--accent)}
+#info .close{position:absolute;right:8px;top:6px;border:0;background:none;font-size:20px;cursor:pointer;color:var(--muted)}
+#info .also{font-size:12px;color:var(--muted);margin-top:8px}
+#info .also button{border:1px solid var(--line);background:none;border-radius:5px;padding:1px 6px;margin:2px 4px 0 0;cursor:pointer;font-size:12px}
+
+/* controls */
+#ctrl{position:absolute;right:12px;bottom:34px;z-index:20;display:flex;flex-direction:column;gap:6px}
+#ctrl button{width:38px;height:38px;border-radius:8px;border:1px solid var(--line);background:var(--panel);cursor:pointer;
+  font-size:18px;line-height:1;box-shadow:var(--shadow)}
+#ctrl button:hover,#ctrl button:focus-visible{border-color:var(--accent);outline:none}
+
+/* status line */
+#foot{position:absolute;left:0;right:0;bottom:0;z-index:15;display:flex;gap:12px;align-items:center;
+  padding:3px 10px;font-size:11px;color:var(--muted);background:var(--panel);border-top:1px solid var(--line)}
+#attrib{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#attrib a{color:inherit}
+#scale{display:flex;align-items:center;gap:6px}
+#scale i{display:block;height:6px;border:1.5px solid var(--ink);border-top:0}
+#coords{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* highlight */
+#hl{position:absolute;inset:0;pointer-events:none;z-index:5;overflow:visible}
+#hl path{fill:color-mix(in srgb,var(--hl) 16%,transparent);stroke:var(--hl);stroke-width:3;stroke-linejoin:round;fill-rule:evenodd}
+#hl path.other{fill:color-mix(in srgb,var(--hl) 8%,transparent);stroke-width:2;stroke-dasharray:6 4}
+#hl circle{fill:var(--hl);stroke:#fff;stroke-width:2}
+
+@media (max-width:640px){
+  #top{width:calc(100vw - 70px)}
+  #top h1{display:none}
+  #layersToggle{display:block;position:absolute;right:12px;top:12px;z-index:26;width:44px;height:44px;border-radius:10px;
+    border:1px solid var(--line);background:var(--panel);font-size:20px;box-shadow:var(--shadow);cursor:pointer}
+  #layers{display:none;top:64px;width:calc(100vw - 24px)}
+  #layers.open{display:block}
+  #layers .x{display:block;position:absolute;right:8px;top:4px;border:0;background:none;font-size:20px;color:var(--muted);cursor:pointer}
+  #info{bottom:28px;max-height:45vh}
+  #ctrl{bottom:auto;top:70px}
+  #info.open~#ctrl{display:none}
+  #coords{display:none}
+}
+</style>
+</head>
+<body>
+<div id="map" aria-label="Map"></div>
+<svg id="hl" aria-hidden="true"></svg>
+
+<div id="top">
+  <div id="bar" class="card">
+    <h1><a href="/deepzoom/" title="Deep Zoom index">Eiendomskart</a></h1>
+    <input id="q" type="search" autocomplete="off" spellcheck="false"
+      placeholder="Address, place, or 208/646" aria-label="Search address, place name, or gnr/bnr"
+      role="combobox" aria-controls="results" aria-expanded="false">
+  </div>
+  <ul id="results" class="card" role="listbox"></ul>
+</div>
+
+<button id="layersToggle" aria-controls="layers" aria-expanded="false" title="Layers">&#9776;</button>
+<div id="layers" class="card">
+  <button class="x" aria-label="Close layers">&times;</button>
+  <h2>Base map</h2>
+  <div id="bases"></div>
+  <h2>Overlays</h2>
+  <div id="overlays"></div>
+  <p class="hint" id="zoomHint">Zoom in to see property lines.</p>
+</div>
+
+<div id="info" class="card" aria-live="polite"></div>
+
+<div id="ctrl">
+  <button id="zin" title="Zoom in" aria-label="Zoom in">+</button>
+  <button id="zout" title="Zoom out" aria-label="Zoom out">&minus;</button>
+  <button id="locate" title="Go to my location" aria-label="Go to my location">&#9678;</button>
+  <button id="home" title="All of Norway" aria-label="Show all of Norway">&#8962;</button>
+</div>
+
+<div id="foot">
+  <div id="attrib"></div>
+  <div id="scale"><i></i><span></span></div>
+  <div id="coords"></div>
+</div>
+
+<script>
+(() => {
+  const OSD = OpenSeadragon;
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+  // ── Web Mercator ↔ OpenSeadragon viewport ───────────────────────────────
+  // Every layer is one square TiledImage of width 1 covering the whole Mercator world,
+  // so a viewport point is just a normalised Mercator coordinate (y down).
+  const R = 6378137, HALF = Math.PI * R, CIRC = 2 * HALF;
+  const toVp = (lon, lat) => {
+    const x = R * lon * Math.PI / 180, y = R * Math.log(Math.tan(Math.PI / 4 + lat * Math.PI / 360));
+    return new OSD.Point((x + HALF) / CIRC, (HALF - y) / CIRC);
+  };
+  const fromVp = (p) => [(p.x * CIRC - HALF) / R * 180 / Math.PI,
+    (2 * Math.atan(Math.exp((HALF - p.y * CIRC) / R)) - Math.PI / 2) * 180 / Math.PI];
+
+  // ── layer catalogue ─────────────────────────────────────────────────────
+  // XYZ sources are 256 px tiles: OSD level L shows the world at 2^L px, so slippy-map zoom z = L - 8.
+  // WMS sources are requested as 512 px tiles over the same pyramid: level L, 2^(L-9) tiles across.
+  const KV = "© <a href='https://www.kartverket.no/'>Kartverket</a>, CC BY 4.0";
+  const WMS = "https://wms.geonorge.no/skwms1/";
+  const xyz = (maxZ, url) => new OSD.TileSource({
+    width: 256 * 2 ** maxZ, height: 256 * 2 ** maxZ, tileSize: 256, tileOverlap: 0, minLevel: 8, maxLevel: 8 + maxZ,
+    getTileUrl: (L, x, y) => url(L - 8, x, y),
+  });
+  const wms = (service, layers, { minZ = 3, maxZ = 21, format = "image/png", transparent = true } = {}) => new OSD.TileSource({
+    width: 2 ** (8 + maxZ), height: 2 ** (8 + maxZ), tileSize: 512, tileOverlap: 0, minLevel: 8 + Math.max(minZ, 1), maxLevel: 8 + maxZ,
+    getTileUrl(L, x, y) {
+      const s = CIRC / 2 ** (L - 9), x0 = -HALF + x * s, y1 = HALF - y * s;
+      return `${WMS}${service}?SERVICE=WMS&VERSION=1.3.0&REQUEST=GetMap&LAYERS=${layers}&STYLES=&CRS=EPSG:3857` +
+        `&WIDTH=512&HEIGHT=512&FORMAT=${format}&TRANSPARENT=${transparent ? "TRUE" : "FALSE"}` +
+        `&BBOX=${x0.toFixed(2)},${(y1 - s).toFixed(2)},${(x0 + s).toFixed(2)},${y1.toFixed(2)}`;
+    },
+  });
+
+  const BASES = [
+    { id: "topo", name: "Topographic", note: "Kartverket", attr: KV,
+      src: () => xyz(18, (z, x, y) => `https://cache.kartverket.no/v1/wmts/1.0.0/topo/default/webmercator/${z}/${y}/${x}.png`) },
+    { id: "grey", name: "Topographic, grey", note: "Kartverket", attr: KV,
+      src: () => xyz(18, (z, x, y) => `https://cache.kartverket.no/v1/wmts/1.0.0/topograatone/default/webmercator/${z}/${y}/${x}.png`) },
+    { id: "osm", name: "Street", note: "OpenStreetMap", attr: "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors, ODbL",
+      src: () => xyz(19, (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`) },
+    { id: "sat", name: "Satellite", note: "Sentinel-2, 10 m",
+      attr: "<a href='https://s2maps.eu/'>Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2025), CC BY-NC-SA 4.0",
+      src: () => xyz(15, (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/${z}/${y}/${x}.jpg`) },
+    { id: "lidar", name: "Lidar surface", note: "buildings, trees", attr: `Surface model hillshade ${KV}`,
+      // PNG, not JPEG: outside lidar coverage the service paints PNG white and JPEG black.
+      src: () => wms("wms.hoyde-dom", "DOM:skyggerelieff", { transparent: false }) },
+    { id: "ok", name: "Economic map, 1st ed.", note: "historic", attr: `Økonomisk kartverk ${KV}`,
+      src: () => wms("wms.n5raster2", "n5raster_foerstegang", { format: "image/jpeg", transparent: false }) },
+  ];
+  // minZ: below this the layer is hidden (and not fetched); the service draws nothing there anyway.
+  const OVERLAYS = [
+    { id: "p", name: "Property boundaries", on: true, opacity: 1, minZ: 14, attr: `Matrikkelen ${KV}`,
+      src: () => wms("wms.matrikkelkart", "eiendomsgrense,hjelpelinje,grensepunkt,teig", { minZ: 13 }) },
+    { id: "b", name: "Buildings", on: false, opacity: .8, minZ: 14, attr: `Matrikkelen ${KV}`,
+      src: () => wms("wms.matrikkelkart", "bygninger", { minZ: 13 }) },
+    { id: "a", name: "Address points", on: false, opacity: 1, minZ: 16, attr: `Matrikkelen ${KV}`,
+      src: () => wms("wms.matrikkelkart", "adresse", { minZ: 15 }) },
+    { id: "s", name: "Hillshade", on: false, opacity: .35, minZ: 3, attr: `Terrain hillshade ${KV}`,
+      src: () => wms("wms.hoyde-dtm", "DTM:skyggerelieff", { format: "image/jpeg", transparent: false }) },
+  ];
+
+  // ── state from the URL hash: #z/lat/lon/base/overlays ─────────────────
+  const state = { base: "topo", on: new Set(OVERLAYS.filter((o) => o.on).map((o) => o.id)), view: null };
+  function readHash() {
+    const h = location.hash.slice(1).split("/");
+    state.view = h.length >= 3 && h.slice(0, 3).every((v) => isFinite(parseFloat(v))) ? h.slice(0, 3).map(Number) : null;
+    if (h[3] && BASES.some((b) => b.id === h[3])) state.base = h[3];
+    if (h.length >= 5) state.on = new Set(h[4].split("").filter((c) => OVERLAYS.some((o) => o.id === c)));
+  }
+  readHash();
+
+  // ── viewer ──────────────────────────────────────────────────────────────
+  const viewer = OSD({
+    element: $("map"),
+    crossOriginPolicy: "Anonymous",
+    showNavigationControl: false,
+    preserveViewport: true,
+    visibilityRatio: 0.2,
+    constrainDuringPan: false,
+    wrapHorizontal: false,
+    minZoomImageRatio: 0.5,
+    maxZoomPixelRatio: Infinity,
+    zoomPerScroll: 1.5,
+    zoomPerClick: 2,
+    animationTime: 0.7,
+    springStiffness: 8,
+    blendTime: 0.15,
+    imageLoaderLimit: 12,
+    maxImageCacheCount: 800,
+    gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true, flickEnabled: true, scrollToZoom: true },
+    gestureSettingsTouch: { clickToZoom: false, dblClickToZoom: true, pinchToZoom: true, flickEnabled: true },
+    gestureSettingsPen: { clickToZoom: false, dblClickToZoom: true },
+  });
+  const vp = () => viewer.viewport;
+  const MAX_Z = 21, MIN_Z = 3;
+  const zoomFor = (z) => 256 * 2 ** z / vp().getContainerSize().x;
+  const displayZ = (current = true) => Math.log2(vp().getZoom(current) * vp().getContainerSize().x / 256);
+  const clampZoom = () => { vp().maxZoomLevel = zoomFor(MAX_Z); vp().minZoomLevel = zoomFor(MIN_Z); };
+
+  function setView(lon, lat, z, immediately = false) {
+    vp().zoomTo(zoomFor(Math.min(z, MAX_Z)), null, immediately);
+    vp().panTo(toVp(lon, lat), immediately);
+  }
+  // Computed here rather than with viewport.fitBounds, which loses the centre when the zoom is clamped.
+  function fitLonLat(w, s, e, n, maxZ = 19, immediately = false) {
+    const a = toVp(w, n), b = toVp(e, s), size = vp().getContainerSize();
+    const worldPx = Math.min(size.x / Math.max(b.x - a.x, 1e-12), size.y / Math.max(b.y - a.y, 1e-12)) * 0.8;
+    const c = fromVp(new OSD.Point((a.x + b.x) / 2, (a.y + b.y) / 2));
+    setView(c[0], c[1], Math.min(Math.log2(worldPx / 256), maxZ), immediately);
+  }
+  const home = (immediately) => fitLonLat(4.6, 57.9, 31.1, 71.2, 19, immediately);
+
+  // Tiled images are created on first use. An item at opacity 0 fetches nothing (OSD's preload is off),
+  // so hidden layers cost no requests.
+  const items = new Map();
+  function ensureItem(layer) {
+    if (items.has(layer.id)) return Promise.resolve(items.get(layer.id));
+    const p = new Promise((resolve) => viewer.addTiledImage({
+      tileSource: layer.src(), x: 0, y: 0, width: 1, opacity: 0,
+      crossOriginPolicy: "Anonymous",
+      success: (e) => resolve(e.item),
+      error: () => resolve(null),
+    }));
+    items.set(layer.id, p);
+    return p;
+  }
+
+  async function applyLayers() {
+    for (const b of BASES) {
+      if (b.id !== state.base && !items.has(b.id)) continue;
+      const it = await ensureItem(b);
+      if (it) it.setOpacity(b.id === state.base ? 1 : 0);
+    }
+    const z = displayZ();
+    for (const o of OVERLAYS) {
+      if (!state.on.has(o.id) && !items.has(o.id)) continue;
+      const it = await ensureItem(o);
+      if (it) it.setOpacity(state.on.has(o.id) && z >= o.minZ ? o.opacity : 0);
+    }
+    // Stack order: bases in catalogue order, then overlays in catalogue order.
+    let i = 0;
+    for (const l of [...BASES, ...OVERLAYS]) {
+      if (!items.has(l.id)) continue;
+      const it = await items.get(l.id);
+      if (!it) continue;
+      if (viewer.world.getIndexOfItem(it) !== i) viewer.world.setItemIndex(it, i);
+      i++;
+    }
+    const p = OVERLAYS[0];
+    $("zoomHint").style.display = state.on.has(p.id) && z < p.minZ ? "" : "none";
+    attribution();
+    saveHash();
+  }
+
+  // Overlay visibility follows zoom; only touch OSD when a threshold is crossed. Checked every
+  // frame, because OSD's "zoom" event fires once when an animation starts, not as it progresses.
+  let lastBand = null;
+  function checkBands() {
+    const z = displayZ();
+    const band = OVERLAYS.map((o) => z >= o.minZ).join();
+    if (band !== lastBand) { lastBand = band; applyLayers(); }
+  }
+
+  function attribution() {
+    const parts = [BASES.find((b) => b.id === state.base).attr];
+    const z = displayZ();
+    for (const o of OVERLAYS) if (state.on.has(o.id) && z >= o.minZ && !parts.includes(o.attr)) parts.push(o.attr);
+    parts.push("Search: <a href='https://ws.geonorge.no/'>Geonorge</a>");
+    $("attrib").innerHTML = parts.join(" · ");
+  }
+
+  // ── layer panel ─────────────────────────────────────────────────────────
+  $("bases").innerHTML = BASES.map((b) => `<label><input type="radio" name="base" value="${b.id}"${b.id === state.base ? " checked" : ""}>` +
+    `${esc(b.name)}<span class="note">${esc(b.note)}</span></label>`).join("");
+  $("overlays").innerHTML = OVERLAYS.map((o) => `<label><input type="checkbox" value="${o.id}"${state.on.has(o.id) ? " checked" : ""}>` +
+    `${esc(o.name)}</label><input type="range" min="0.1" max="1" step="0.05" value="${o.opacity}" data-o="${o.id}" aria-label="${esc(o.name)} opacity"` +
+    `${state.on.has(o.id) ? "" : " hidden"}>`).join("");
+  $("bases").addEventListener("change", (e) => { state.base = e.target.value; applyLayers(); });
+  $("overlays").addEventListener("change", (e) => {
+    if (e.target.type !== "checkbox") return;
+    const id = e.target.value;
+    e.target.checked ? state.on.add(id) : state.on.delete(id);
+    document.querySelector(`[data-o="${id}"]`).hidden = !e.target.checked;
+    applyLayers();
+  });
+  $("overlays").addEventListener("input", (e) => {
+    const o = OVERLAYS.find((x) => x.id === e.target.dataset.o);
+    if (!o) return;
+    o.opacity = +e.target.value;
+    applyLayers();
+  });
+  const layersPanel = (open) => { $("layers").classList.toggle("open", open); $("layersToggle").setAttribute("aria-expanded", open); };
+  $("layersToggle").onclick = () => layersPanel(!$("layers").classList.contains("open"));
+  document.querySelector("#layers .x").onclick = () => layersPanel(false);
+
+  // ── controls, hash, scale, coordinates ─────────────────────────────────
+  $("zin").onclick = () => vp().zoomBy(2);
+  $("zout").onclick = () => vp().zoomBy(0.5);
+  $("home").onclick = () => home(false);
+  $("locate").onclick = () => {
+    if (!navigator.geolocation) return;
+    navigator.geolocation.getCurrentPosition(
+      (p) => { setView(p.coords.longitude, p.coords.latitude, 17); pin = [p.coords.longitude, p.coords.latitude]; drawHighlight(); },
+      (err) => { showInfo(`<p>Location unavailable: ${esc(err.message)}</p>`); }, { enableHighAccuracy: true, timeout: 10000 });
+  };
+
+  let hashTimer = 0;
+  function saveHash() {
+    clearTimeout(hashTimer);
+    hashTimer = setTimeout(() => {
+      if (!viewer.world.getItemCount()) return;
+      const [lon, lat] = fromVp(vp().getCenter(false));
+      const h = `#${displayZ(false).toFixed(2)}/${lat.toFixed(5)}/${lon.toFixed(5)}/${state.base}/${[...state.on].join("")}`;
+      if (h !== location.hash) history.replaceState(null, "", h);
+    }, 300);
+  }
+  viewer.addHandler("animation-finish", saveHash);
+
+  function scaleBar() {
+    const [, lat] = fromVp(vp().getCenter(true));
+    const mpp = CIRC * Math.cos(lat * Math.PI / 180) / (256 * 2 ** displayZ());
+    const target = mpp * 100, pow = 10 ** Math.floor(Math.log10(target));
+    const nice = [1, 2, 5, 10].map((k) => k * pow).filter((v) => v <= target).pop();
+    $("scale").querySelector("i").style.width = `${Math.round(nice / mpp)}px`;
+    $("scale").querySelector("span").textContent = nice >= 1000 ? `${nice / 1000} km` : `${nice} m`;
+  }
+  viewer.addHandler("update-viewport", () => { checkBands(); scaleBar(); drawHighlight(); });
+  viewer.addHandler("resize", clampZoom);
+
+  const fmt = (v, pos, neg) => `${Math.abs(v).toFixed(5)}°${v >= 0 ? pos : neg}`;
+  viewer.element.addEventListener("pointermove", (e) => {
+    if (!viewer.world.getItemCount()) return;
+    const r = viewer.element.getBoundingClientRect();
+    const [lon, lat] = fromVp(vp().viewerElementToViewportCoordinates(new OSD.Point(e.clientX - r.left, e.clientY - r.top)));
+    $("coords").textContent = `${fmt(lat, "N", "S")} ${fmt(lon, "E", "W")} · z${displayZ().toFixed(1)}`;
+  });
+
+  // ── Geonorge APIs (all CORS-open, no key) ─────────────────────────────
+  const API = "https://ws.geonorge.no";
+  const cache = new Map();
+  async function getJSON(url) {
+    if (cache.has(url)) return cache.get(url);
+    const p = fetch(url).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+    cache.set(url, p);
+    const v = await p;
+    if (v === null) cache.delete(url);
+    return v;
+  }
+  async function kommuneName(nr) {
+    const k = await getJSON(`${API}/kommuneinfo/v1/kommuner/${nr}`);
+    return k?.kommunenavnNorsk || k?.kommunenavn || null;
+  }
+
+  // ── highlight overlay (SVG over the OSD canvas, redrawn every frame) ──
+  let shapes = [], pin = null;
+  function polygonsOf(geom) {
+    if (!geom) return [];
+    if (geom.type === "Polygon") return [geom.coordinates];
+    if (geom.type === "MultiPolygon") return geom.coordinates;
+    return [];
+  }
+  function drawHighlight() {
+    const svg = $("hl");
+    if (!shapes.length && !pin) { if (svg.firstChild) svg.innerHTML = ""; return; }
+    const px = (lon, lat) => { const p = vp().pixelFromPoint(toVp(lon, lat), true); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`; };
+    let out = "";
+    for (const s of shapes) {
+      const d = s.polys.map((poly) => poly.map((ring) => "M" + ring.map(([lon, lat]) => px(lon, lat)).join("L") + "Z").join("")).join("");
+      out += `<path class="${s.main ? "" : "other"}" d="${d}"/>`;
+    }
+    if (pin) { const [x, y] = px(pin[0], pin[1]).split(","); out += `<circle cx="${x}" cy="${y}" r="6"/>`; }
+    svg.innerHTML = out;
+  }
+
+  // Planar area on a local equirectangular projection per ring: well under 0.1 % off at parcel size.
+  function ringArea(ring) {
+    const Rm = 6371008.8, lat0 = ring.reduce((s, c) => s + c[1], 0) / ring.length * Math.PI / 180;
+    const kx = Rm * Math.cos(lat0) * Math.PI / 180, ky = Rm * Math.PI / 180;
+    let a = 0;
+    for (let i = 0; i < ring.length - 1; i++) a += ring[i][0] * kx * ring[i + 1][1] * ky - ring[i + 1][0] * kx * ring[i][1] * ky;
+    return Math.abs(a) / 2;
+  }
+  const polyArea = (poly) => ringArea(poly[0]) - poly.slice(1).reduce((s, r) => s + ringArea(r), 0);
+  function bbox(polys) {
+    let w = 180, s = 90, e = -180, n = -90;
+    for (const poly of polys) for (const [lon, lat] of poly[0]) { w = Math.min(w, lon); e = Math.max(e, lon); s = Math.min(s, lat); n = Math.max(n, lat); }
+    return [w, s, e, n];
+  }
+  const nf = new Intl.NumberFormat("nb-NO", { maximumFractionDigits: 0 });
+  const area = (m2) => m2 >= 100000 ? `${(m2 / 1e6).toLocaleString("nb-NO", { maximumFractionDigits: 2 })} km² (${nf.format(m2 / 1000)} daa)`
+    : m2 >= 1000 ? `${nf.format(m2)} m² (${(m2 / 1000).toLocaleString("nb-NO", { maximumFractionDigits: 1 })} daa)` : `${nf.format(m2)} m²`;
+
+  // ── property card ───────────────────────────────────────────────────────
+  function showInfo(html) {
+    $("info").innerHTML = `<button class="close" aria-label="Close">&times;</button>${html}`;
+    $("info").classList.add("open");
+    $("info").querySelector(".close").onclick = clearSelection;
+  }
+  function clearSelection() { $("info").classList.remove("open"); shapes = []; pin = null; drawHighlight(); }
+  const matrikkelKey = (p) => `${p.kommunenummer}-${p.gardsnummer}/${p.bruksnummer}/${p.festenummer || 0}/${p.seksjonsnummer || 0}`;
+  const shortNr = (p) => `${p.gardsnummer}/${p.bruksnummer}${p.festenummer ? `/${p.festenummer}` : ""}${p.seksjonsnummer ? `${p.festenummer ? "" : "/0"}/${p.seksjonsnummer}` : ""}`;
+
+  let seq = 0;
+  async function selectProperty(p, { clickedTeig = null, fit = false, others = [] } = {}) {
+    const my = ++seq;
+    const q = `kommunenummer=${p.kommunenummer}&gardsnummer=${p.gardsnummer}&bruksnummer=${p.bruksnummer}&festenummer=${p.festenummer || 0}`;
+    showInfo(`<h2>${esc(shortNr(p))}</h2><div class="sub">Looking up…</div>`);
+    const [geo, adr, kname] = await Promise.all([
+      getJSON(`${API}/eiendom/v1/geokoding?${q}&omrade=true&utkoordsys=4258`),
+      getJSON(`${API}/adresser/v1/sok?${q}&treffPerSide=30&utkoordsys=4258`),
+      kommuneName(p.kommunenummer),
+    ]);
+    if (my !== seq) return;
+    const teiger = geo?.features?.length ? geo.features : (clickedTeig ? [clickedTeig] : []);
+    shapes = teiger.map((f) => ({ polys: polygonsOf(f.geometry), main: !clickedTeig || f.properties.lokalid === clickedTeig.properties.lokalid }));
+    if (!clickedTeig) shapes.forEach((s) => (s.main = true));
+    drawHighlight();
+
+    const total = teiger.reduce((s, f) => s + polygonsOf(f.geometry).reduce((a, poly) => a + polyArea(poly), 0), 0);
+    const props = teiger[0]?.properties || p;
+    const addresses = [...new Set((adr?.adresser || []).map((a) => a.adressetekst + (a.postnummer ? `, ${a.postnummer} ${a.poststed}` : "")))];
+    const see = `https://seeiendom.kartverket.no/eiendom/${p.kommunenummer}/${p.gardsnummer}/${p.bruksnummer}/${p.festenummer || 0}/${p.seksjonsnummer || 0}`;
+    const rows = [
+      ["Municipality", `${esc(kname || "")} (${esc(p.kommunenummer)})`],
+      ["Cadastral no.", `gnr ${p.gardsnummer}, bnr ${p.bruksnummer}${p.festenummer ? `, fnr ${p.festenummer}` : ""}${p.seksjonsnummer ? `, snr ${p.seksjonsnummer}` : ""}`],
+      teiger.length ? ["Area", `≈ ${area(total)}${teiger.length > 1 ? ` in ${teiger.length} parcels` : ""}`] : null,
+      props.nøyaktighetsklasseteig ? ["Boundary accuracy", esc(props.nøyaktighetsklasseteig)] : null,
+      props.oppdateringsdato ? ["Updated", esc(props.oppdateringsdato.slice(0, 10))] : null,
+      props.teigmedflerematrikkelenheter ? ["Note", "Parcel shared by several units"] : null,
+    ].filter(Boolean);
+    let html = `<h2>${esc(shortNr(p))}</h2><div class="sub">${esc(kname || p.kommunenummer)}</div>` +
+      `<dl>${rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
+    if (addresses.length) html += `<div class="sub" style="margin:0">Address${addresses.length > 1 ? "es" : ""}</div><ul>${addresses.slice(0, 12).map((a) => `<li>${esc(a)}</li>`).join("")}` +
+      `${addresses.length > 12 ? `<li>… ${addresses.length - 12} more</li>` : ""}</ul>`;
+    if (!teiger.length) html += `<p>No mapped parcel for this unit (it may be a section or lease without its own boundary).</p>`;
+    html += `<p><a href="${see}" target="_blank" rel="noopener">Open in SeEiendom</a> for owners, transfers and buildings.</p>`;
+    if (others.length) html += `<div class="also">Also at this point: ${others.map((o, i) => `<button data-i="${i}">${esc(shortNr(o.properties))}</button>`).join("")}</div>`;
+    showInfo(html);
+    $("info").querySelectorAll(".also button").forEach((b) => b.onclick = () => {
+      const o = others[+b.dataset.i];
+      selectProperty(o.properties, { clickedTeig: o, others: [clickedTeig, ...others.filter((x) => x !== o)].filter(Boolean) });
+    });
+    if (fit && teiger.length) {
+      const [w, s, e, n] = bbox(teiger.flatMap((f) => polygonsOf(f.geometry)));
+      fitLonLat(w, s, e, n, 19);
+      pin = total < 200 ? [(w + e) / 2, (s + n) / 2] : null;   // a parcel too small to see gets a marker
+      drawHighlight();
+    }
+  }
+
+  async function identify(lon, lat) {
+    const my = ++seq;
+    pin = null;
+    showInfo(`<div class="sub">Looking up property…</div>`);
+    const r = await getJSON(`${API}/eiendom/v1/punkt/omrader?nord=${lat.toFixed(7)}&ost=${lon.toFixed(7)}&koordsys=4258&radius=1&utkoordsys=4258`);
+    if (my !== seq) return;
+    const feats = r?.features || [];
+    if (!r) { showInfo(`<p>The property service did not answer. Try again.</p>`); return; }
+    if (!feats.length) {
+      shapes = []; pin = [lon, lat]; drawHighlight();
+      showInfo(`<p>No registered property at ${fmt(lat, "N", "S")} ${fmt(lon, "E", "W")}.</p>`);
+      return;
+    }
+    // Prefer the smallest parcel under the click (a lease inside a farm, not the farm).
+    feats.sort((a, b) => polygonsOf(a.geometry).reduce((s, p) => s + polyArea(p), 0) - polygonsOf(b.geometry).reduce((s, p) => s + polyArea(p), 0));
+    const [first, ...rest] = feats;
+    selectProperty(first.properties, { clickedTeig: first, others: rest });
+  }
+
+  // Single click identifies; wait out a possible double-click (which zooms).
+  let clickTimer = 0;
+  viewer.addHandler("canvas-click", (e) => {
+    if (!e.quick) return;
+    const [lon, lat] = fromVp(vp().pointFromPixel(e.position));
+    clearTimeout(clickTimer);
+    clickTimer = setTimeout(() => identify(lon, lat), 260);
+    closeResults();
+  });
+  viewer.addHandler("canvas-double-click", () => clearTimeout(clickTimer));
+
+  // ── search: addresses, place names, and gnr/bnr ───────────────────────
+  const q = $("q"), list = $("results");
+  let found = [], active = -1, searchSeq = 0, searchTimer = 0;
+  const CADASTRAL = /^(?:(.+?)[\s,:-]+)?(\d{1,5})\s*\/\s*(\d{1,5})(?:\s*\/\s*(\d{1,5}))?(?:\s*\/\s*(\d{1,5}))?$/;
+
+  async function kommuneFor(term) {
+    if (!term) {
+      const [lon, lat] = fromVp(vp().getCenter(false));
+      const k = await getJSON(`${API}/kommuneinfo/v1/punkt?nord=${lat.toFixed(6)}&ost=${lon.toFixed(6)}&koordsys=4258`);
+      return k ? { nr: k.kommunenummer, name: k.kommunenavn } : null;
+    }
+    if (/^\d{4}$/.test(term)) return { nr: term, name: await kommuneName(term) };
+    const k = await getJSON(`${API}/kommuneinfo/v1/sok?knavn=${encodeURIComponent(term)}`);
+    const hit = k?.kommuner?.[0];
+    return hit ? { nr: hit.kommunenummer, name: hit.kommunenavnNorsk || hit.kommunenavn } : null;
+  }
+
+  async function search(text) {
+    const my = ++searchSeq;
+    const m = text.match(CADASTRAL);
+    let out = [];
+    if (m) {
+      const k = await kommuneFor(m[1]?.trim());
+      if (my !== searchSeq) return;
+      if (k) {
+        const p = { kommunenummer: k.nr, gardsnummer: +m[2], bruksnummer: +m[3], festenummer: +(m[4] || 0), seksjonsnummer: +(m[5] || 0) };
+        const g = await getJSON(`${API}/eiendom/v1/geokoding?kommunenummer=${p.kommunenummer}&gardsnummer=${p.gardsnummer}&bruksnummer=${p.bruksnummer}&festenummer=${p.festenummer}&omrade=false&utkoordsys=4258`);
+        if (my !== searchSeq) return;
+        if (g?.features?.length) out.push({ kind: "Property", label: shortNr(p), sub: `${k.name || ""} ${k.nr}`, go: () => selectProperty(p, { fit: true }) });
+        else out.push({ kind: "", label: `No property ${shortNr(p)} in ${k.name || k.nr}`, msg: true });
+      } else out.push({ kind: "", label: `Unknown municipality “${m[1]}”`, msg: true });
+    } else {
+      const [a, s] = await Promise.all([
+        getJSON(`${API}/adresser/v1/sok?sok=${encodeURIComponent(text)}&fuzzy=true&treffPerSide=6&utkoordsys=4258`),
+        getJSON(`https://api.kartverket.no/stedsnavn/v1/navn?sok=${encodeURIComponent(text.replace(/\*+$/, "") + "*")}&treffPerSide=6&utkoordsys=4258`),
+      ]);
+      if (my !== searchSeq) return;
+      const addrs = [], places = [], seen = new Set();
+      for (const r of a?.adresser || []) {
+        const pt = r.representasjonspunkt;
+        addrs.push({ kind: "Address", label: r.adressetekst, sub: `${r.postnummer || ""} ${r.poststed || r.kommunenavn || ""}`.trim(),
+          go: () => {
+            setView(pt.lon, pt.lat, 18); pin = [pt.lon, pt.lat]; drawHighlight();
+            if (r.gardsnummer) selectProperty({ kommunenummer: r.kommunenummer, gardsnummer: r.gardsnummer, bruksnummer: r.bruksnummer, festenummer: r.festenummer || 0 });
+          } });
+      }
+      for (const n of s?.navn || []) {
+        const pt = n.representasjonspunkt, lon = pt["øst"], lat = pt.nord;
+        const kom = (n.kommuner || []).map((k) => k.kommunenavn).join(", ");
+        const key = n["skrivemåte"] + "|" + kom + "|" + n.navneobjekttype;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        places.push({ kind: n.navneobjekttype || "Place", label: n["skrivemåte"], sub: kom,
+          go: () => { setView(lon, lat, 15); pin = [lon, lat]; shapes = []; drawHighlight(); $("info").classList.remove("open"); } });
+      }
+      // An exact place-name match outranks fuzzy address hits ("Preikestolen" before "Preikestolvegen 133").
+      const exact = places.some((p) => p.label.toLowerCase() === text.toLowerCase());
+      out = exact ? [...places.slice(0, 5), ...addrs.slice(0, 4)] : [...addrs.slice(0, 5), ...places.slice(0, 4)];
+      if (!out.length) out.push({ label: "No matches", msg: true });
+    }
+    found = out; active = out.findIndex((r) => !r.msg);
+    renderResults();
+  }
+  function renderResults() {
+    list.innerHTML = found.map((r, i) => r.msg ? `<li class="msg">${esc(r.label)}</li>` :
+      `<li role="option" data-i="${i}" aria-selected="${i === active}"><span class="k">${esc(r.kind)}</span><span>${esc(r.label)}</span><span class="s">${esc(r.sub)}</span></li>`).join("");
+    list.classList.toggle("open", found.length > 0);
+    q.setAttribute("aria-expanded", found.length > 0);
+  }
+  function closeResults() { list.classList.remove("open"); q.setAttribute("aria-expanded", "false"); }
+  function pick(i) {
+    const r = found[i];
+    if (!r || r.msg) return;
+    closeResults(); q.blur(); layersPanel(false);
+    r.go();
+  }
+  q.addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    const t = q.value.trim();
+    if (t.length < 2) { found = []; renderResults(); return; }
+    searchTimer = setTimeout(() => search(t), 220);
+  });
+  q.addEventListener("keydown", (e) => {
+    const n = found.length;
+    if (e.key === "ArrowDown" && n) { e.preventDefault(); do active = (active + 1) % n; while (found[active].msg && found.some((r) => !r.msg)); renderResults(); }
+    else if (e.key === "ArrowUp" && n) { e.preventDefault(); do active = (active - 1 + n) % n; while (found[active].msg && found.some((r) => !r.msg)); renderResults(); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      clearTimeout(searchTimer);
+      if (active >= 0 && found.length) pick(active);
+      else if (q.value.trim().length >= 2) search(q.value.trim()).then(() => pick(active));
+    } else if (e.key === "Escape") closeResults();
+  });
+  q.addEventListener("focus", () => { if (found.length) renderResults(); });
+  list.addEventListener("mousedown", (e) => { const li = e.target.closest("li[data-i]"); if (li) { e.preventDefault(); pick(+li.dataset.i); } });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "/" && document.activeElement !== q) { e.preventDefault(); q.focus(); q.select(); }
+    if (e.key === "Escape" && document.activeElement !== q) clearSelection();
+  });
+
+  // ── start ───────────────────────────────────────────────────────────────
+  applyLayers().then(() => {
+    clampZoom();
+    if (state.view) setView(state.view[2], state.view[1], state.view[0], true);
+    else home(true);
+    lastBand = null;
+    checkBands();
+    scaleBar();
+  });
+  window.addEventListener("hashchange", () => {
+    readHash();
+    document.querySelectorAll("#bases input").forEach((i) => (i.checked = i.value === state.base));
+    document.querySelectorAll("#overlays input[type=checkbox]").forEach((i) => {
+      i.checked = state.on.has(i.value);
+      document.querySelector(`[data-o="${i.value}"]`).hidden = !i.checked;
+    });
+    if (state.view) setView(state.view[2], state.view[1], state.view[0]);
+    applyLayers();
+  });
+  window.__map = { viewer, setView, identify, displayZ, fromVp, toVp, state };
+})();
+</script>
+</body>
+</html>
