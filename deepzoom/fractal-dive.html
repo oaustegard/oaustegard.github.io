@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="ai-disclosure" content="ai-generated">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#07080d">
+<meta name="description" content="An endless zoom into a Sierpinski gasket or a field of living cells, rendered live in your browser.">
+<title>Fractal Dive</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<style>
+  html, body { margin: 0; height: 100%; background: #07080d; overflow: hidden; overscroll-behavior: none; }
+  body { font: 13px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; color: rgba(226, 232, 255, .72); -webkit-user-select: none; user-select: none; }
+  #viewer { position: fixed; inset: 0; background: #07080d; touch-action: none; cursor: grab; }
+  #viewer:active { cursor: grabbing; }
+  .chrome { position: fixed; z-index: 5; pointer-events: none; padding: 8px 12px; border-radius: 999px; background: rgba(7, 8, 13, .55); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+  #back { top: max(14px, env(safe-area-inset-top)); left: 14px; pointer-events: auto; color: inherit; text-decoration: none; letter-spacing: .02em; }
+  #back:hover { color: #fff; }
+  #mode { top: max(14px, env(safe-area-inset-top)); right: 14px; pointer-events: auto; font: inherit; color: inherit; border: 0; cursor: pointer; letter-spacing: .02em; }
+  #mode:hover { color: #fff; }
+  #depth { left: 14px; bottom: max(14px, env(safe-area-inset-bottom)); font-variant-numeric: tabular-nums; }
+  #depth b { color: #fff; font-weight: 600; }
+  #depth i { font-style: normal; opacity: .6; margin-left: .4em; }
+  #hint { left: 50%; bottom: max(64px, calc(env(safe-area-inset-bottom) + 50px)); transform: translateX(-50%); opacity: 0; transition: opacity .8s; white-space: nowrap; }
+  #hint.show { opacity: 1; }
+  @media (prefers-reduced-motion: reduce) { #hint { transition: none; } }
+</style>
+</head>
+<body>
+<div id="viewer"></div>
+<a id="back" class="chrome" href="./">&larr; Deep Zoom</a>
+<button id="mode" class="chrome" type="button"></button>
+<div id="depth" class="chrome"></div>
+<div id="hint" class="chrome">Scroll or pinch to zoom &middot; drag to pan &middot; double-tap to dive</div>
+<script src="https://cdn.jsdelivr.net/npm/openseadragon@6.1.1/build/openseadragon/openseadragon.min.js"></script>
+<script id="tilecore" type="text/plain">/* Tile renderer for the Sierpinski gasket. Pure functions, no DOM; runs in a worker or inline.
+ *
+ * Geometry. A point (x, y) in lattice coordinates is drawn at display position
+ * (x + y/2, y*sqrt(3)/2), so the unit cell's lower-left triangle is equilateral. The fractal is
+ * Pascal's triangle mod 2: a point is in the set when its binary digits never show (1,1) at the
+ * same position in x and y. Cell (a, b) at level k has size 2^-k; a and b are BigInt in the
+ * caller, so depth is unbounded. This file only sees a small precomputed table of the cells
+ * around the view (`fr`), each described by how far its enclosing hole triangle extends.
+ *
+ * Maximal holes are the down-triangles of the (0,0)-children: a point is in one when, scanning
+ * digit pairs from the top, the last (0,0) pair before the first (1,1) pair marks the cell A whose
+ * down-triangle {X + Y > 1} contains the point.
+ */
+var SQ32 = Math.sqrt(3) / 2;
+var PAL_STOPS = ['#22d3ee', '#3b82f6', '#8b5cf6', '#d946ef', '#fb4b7b', '#fbbf24', '#34d399'];
+var PAL_N = 2048;
+var PAL = (function () {
+  var st = PAL_STOPS.map(function (h) {
+    var n = parseInt(h.slice(1), 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  });
+  var out = new Float32Array(PAL_N * 3), n = st.length;
+  for (var i = 0; i < PAL_N; i++) {
+    var t = (i / PAL_N) * n, k = Math.floor(t), u = t - k;
+    u = u * u * (3 - 2 * u);
+    var a = st[k % n], b = st[(k + 1) % n];
+    for (var c = 0; c < 3; c++) out[i * 3 + c] = (a[c] + (b[c] - a[c]) * u) / 255;
+  }
+  return out;
+})();
+var PH = 0.071;      // palette phase per level
+var BG = [7 / 255, 8 / 255, 13 / 255];
+
+function smooth(a, b, x) { var t = (x - a) / (b - a); t = t < 0 ? 0 : t > 1 ? 1 : t; return t * t * (3 - 2 * t); }
+
+
+var OUT = new Float64Array(5);
+/* Classify a point in table cell `idx` (kind kd) at fractions (fx, fy). Scans up to M fractional
+   digit pairs. Returns 1 and fills out = [d0, d1, d2, sizeCells, level] when the point lies in a hole
+   triangle (d* are distances to its three edges in barycentric*size units), else 0. */
+function classify(fr, idx, kd, fx, fy, M, out) {
+  var D0 = fr.D0, D1 = fr.D1, D2 = fr.D2;
+  if (kd === 2) {
+    out[0] = D0[idx] - fy; out[1] = D1[idx] - fx; out[2] = D2[idx] + fx + fy;
+    out[3] = fr.SZ[idx]; out[4] = fr.LV[idx];
+    return 1;
+  }
+  var xx = fx, yy = fy, last = 0, xa = 0, ya = 0, sc = 1, scl = 1;
+  for (var m = 1; m <= M; m++) {
+    xx *= 2; yy *= 2; sc *= 0.5;
+    var bx = xx >= 1, by = yy >= 1;
+    if (bx) xx -= 1;
+    if (by) yy -= 1;
+    if (!bx && !by) { last = m; xa = xx; ya = yy; scl = sc; }
+    else if (bx && by) {
+      if (last > 0) {
+        out[0] = (1 - ya) * scl; out[1] = (1 - xa) * scl; out[2] = (xa + ya - 1) * scl;
+        out[3] = scl; out[4] = fr.k + last;
+      } else {
+        out[0] = D0[idx] - fy; out[1] = D1[idx] - fx; out[2] = D2[idx] + fx + fy;
+        out[3] = fr.SZ[idx]; out[4] = fr.LV[idx];
+      }
+      return 1;
+    }
+  }
+  return 0;
+}
+
+/* fr: {k, N, fcx, fcy, L, ci0, cj0, cnx, cny, kind, D0, D1, D2, LV, SZ}
+   kind: 0 void, 1 open cell (no (1,1) among its index bits), 2 hole cell.
+   D0,D1,D2,SZ describe the enclosing hole triangle A in frame-cell units, LV is A's level. */
+function renderTile(fr, level, tx, ty, ts, maxLevel) {
+  var scale = Math.pow(2, level - maxLevel);
+  var Wl = Math.ceil(fr.N * scale);
+  var cw = Math.min(ts, Wl - tx * ts), ch = Math.min(ts, Wl - ty * ts);
+  var invN = 1 / (fr.N * scale);
+  var pxD = fr.L * invN;                       // display units (frame cells) per canvas pixel
+  var dCx = fr.fcx + fr.fcy * 0.5, dCy = fr.fcy * SQ32;
+  var Lh = fr.L, k = fr.k;
+  var M = Math.max(1, Math.min(40, Math.floor(Math.log2(2 / pxD))));
+  var ci0 = fr.ci0, cj0 = fr.cj0, cnx = fr.cnx, cny = fr.cny;
+  var kind = fr.kind, D0 = fr.D0, D1 = fr.D1, D2 = fr.D2, LV = fr.LV, SZ = fr.SZ;
+  var buf = new Uint8ClampedArray(cw * ch * 4);
+  var invPx = SQ32 / pxD;                      // converts frame-cell distances to pixels
+  var invRef = SQ32 * fr.N / fr.L;             // same, in pixels of the finest level (keeps glow level-independent)
+  var p = 0;
+  for (var cy = 0; cy < ch; cy++) {
+    var v = (ty * ts + cy + 0.5) * invN;
+    var dy = dCy + (0.5 - v) * Lh;
+    var y = dy / SQ32;
+    for (var cx = 0; cx < cw; cx++) {
+      var u = (tx * ts + cx + 0.5) * invN;
+      var dx = dCx + (u - 0.5) * Lh;
+      var x = dx - y * 0.5;
+      var i = Math.floor(x), j = Math.floor(y);
+      var fx = x - i, fy = y - j;
+      var ii = i - ci0, jj = j - cj0;
+      var r = BG[0], g = BG[1], b = BG[2];
+      if (ii >= 0 && jj >= 0 && ii < cnx && jj < cny) {
+        var idx = ii * cny + jj, kd = kind[idx];
+        if (kd !== 0) {
+          var hole = classify(fr, idx, kd, fx, fy, M, OUT) === 1;
+          var d0 = OUT[0], d1 = OUT[1], d2 = OUT[2], sizeC = OUT[3], lvl = OUT[4];
+          var lo = 0, ph, pi, cr, cg, cb;
+          if (hole) {
+            var dmin = d0 < d1 ? d0 : d1; if (d2 < dmin) dmin = d2;
+            if (dmin < 0) dmin = 0;
+            var sizePx = sizeC * invPx, distPx = dmin * invPx;
+            var gw = 0.14 * sizeC * invRef; gw = gw < 2.5 ? 2.5 : gw > 90 ? 90 : gw;
+            var kk = Math.exp(-dmin * invRef / gw), line = Math.exp(-distPx * 0.85);
+            ph = lvl * PH + 0.10 * (1 - kk);
+            ph -= Math.floor(ph);
+            pi = ((ph * PAL_N) | 0) * 3;
+            var pr = PAL[pi], pg = PAL[pi + 1], pb = PAL[pi + 2];
+            var broad = 0.05 + 0.5 * kk * kk;
+            var lw = 0.95 * line;
+            cr = pr * broad + (pr * 0.55 + 0.45) * lw;
+            cg = pg * broad + (pg * 0.55 + 0.45) * lw;
+            cb = pb * broad + (pb * 0.55 + 0.45) * lw;
+            var w = smooth(2, 7, sizePx);
+            if (w < 1) {
+              var ph2 = (k + M) * PH + 0.05; ph2 -= Math.floor(ph2);
+              var qi = ((ph2 * PAL_N) | 0) * 3;
+              cr = PAL[qi] * 0.34 * (1 - w) + cr * w;
+              cg = PAL[qi + 1] * 0.34 * (1 - w) + cg * w;
+              cb = PAL[qi + 2] * 0.34 * (1 - w) + cb * w;
+            }
+          } else {
+            var ph3 = (k + M) * PH + 0.05; ph3 -= Math.floor(ph3);
+            var ri = ((ph3 * PAL_N) | 0) * 3;
+            cr = PAL[ri] * 0.34; cg = PAL[ri + 1] * 0.34; cb = PAL[ri + 2] * 0.34;
+          }
+          r += cr; g += cg; b += cb;
+        }
+      }
+      // soft knee tone map
+      r = r / (1 + 0.35 * r); g = g / (1 + 0.35 * g); b = b / (1 + 0.35 * b);
+      buf[p++] = r * 255 * 1.18; buf[p++] = g * 255 * 1.18; buf[p++] = b * 255 * 1.18; buf[p++] = 255;
+    }
+  }
+  return { w: cw, h: ch, data: buf };
+}
+
+if (typeof module !== 'undefined') module.exports = { renderTile: renderTile, classify: classify };
+</script>
+<script id="cellcore" type="text/plain">/* "Cells" fractal: layered, warped Worley cells. Every octave o has its own jittered grid whose
+ * feature points are hashed from the absolute cell index, so any view can be recomputed from the
+ * frame's low index bits (nxm, nym) alone. Detail is added as pixels allow and coarse octaves fade
+ * out, so the zoom is unbounded. Needs PAL, PAL_N, PH, BG, smooth from tilecore. */
+var M32 = 4294967296;
+function hash3(a, b, c) {
+  var h = Math.imul(a, 0x27d4eb2d) ^ Math.imul(b, 0x165667b1) ^ Math.imul(c, 0x9e3779b1);
+  h ^= h >>> 15; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
+  return h >>> 0;
+}
+/* absolute integer index (mod 2^32) at octave d>=0 of frame coordinate x, and fraction */
+var FRACV = 0;
+function absIdx(nm32, x, p) {
+  var t = x * p, fl = Math.floor(t);
+  FRACV = t - fl;
+  var v = ((nm32 * p) % M32 + fl) % M32;
+  return (v < 0 ? v + M32 : v) | 0;
+}
+var VN0 = 0, VN1 = 0;
+function vnoise(ax, ay, fx, fy, o) {
+  var sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  var a = hash3(ax, ay, o), b = hash3(ax + 1 | 0, ay, o), c = hash3(ax, ay + 1 | 0, o), d = hash3(ax + 1 | 0, ay + 1 | 0, o);
+  var w00 = (1 - sx) * (1 - sy), w10 = sx * (1 - sy), w01 = (1 - sx) * sy, w11 = sx * sy;
+  VN0 = ((a & 65535) * w00 + (b & 65535) * w10 + (c & 65535) * w01 + (d & 65535) * w11) / 65536;
+  VN1 = ((a >>> 16) * w00 + (b >>> 16) * w10 + (c >>> 16) * w01 + (d >>> 16) * w11) / 65536;
+}
+
+function renderCells(fr, level, tx, ty, ts, maxLevel) {
+  var scale = Math.pow(2, level - maxLevel);
+  var Wl = Math.ceil(fr.N * scale);
+  var cw = Math.min(ts, Wl - tx * ts), ch = Math.min(ts, Wl - ty * ts);
+  var invN = 1 / (fr.N * scale);
+  var pxD = fr.L * invN, pxRef = fr.L / fr.N, k = fr.k;
+  var nx = fr.nxm % M32, ny = fr.nym % M32;
+  var buf = new Uint8ClampedArray(cw * ch * 4);
+  // octaves in play
+  var d0 = 0, d1 = Math.floor(Math.log2(1 / (pxD * 2.4)));
+  if (d1 > 40) d1 = 40;
+  var nO = d1 - d0 + 1, W = new Float64Array(nO), PW = new Float64Array(nO), CP = new Float64Array(nO);
+  for (var q = 0; q < nO; q++) {
+    var d = d0 + q, p = Math.pow(2, d), cellPx = 1 / (p * pxD), cellRef = 1 / (p * pxRef);
+    PW[q] = p; CP[q] = cellPx;
+    W[q] = smooth(3, 34, cellPx) * (1 - smooth(110, 800, cellRef));
+  }
+  var pp = 0;
+  for (var cy = 0; cy < ch; cy++) {
+    var y = fr.fcy + ((ty * ts + cy + 0.5) * invN - 0.5) * fr.L;
+    for (var cx = 0; cx < cw; cx++) {
+      var x = fr.fcx + ((tx * ts + cx + 0.5) * invN - 0.5) * fr.L;
+      var r = BG[0], g = BG[1], b = BG[2];
+      for (var o = 0; o < nO; o++) {
+        var w = W[o];
+        if (w < 0.01) continue;
+        var dd = d0 + o, p2 = PW[o], cellPx2 = CP[o];
+        // warp by a coarser value noise
+        var pw = dd >= 2 ? PW[o - 2] : 1;
+        var wax = absIdx(nx, x, pw), wfx = FRACV, way = absIdx(ny, y, pw), wfy = FRACV;
+        vnoise(wax, way, wfx, wfy, dd * 7);
+        var ox = (VN0 - 0.5) * 2.6 / p2, oy = (VN1 - 0.5) * 2.6 / p2;
+        var ai = absIdx(nx, x + ox, p2), fu = FRACV, aj = absIdx(ny, y + oy, p2), fv = FRACV;
+        var f1 = 9, f2 = 9, h1 = 0;
+        for (var dj = -1; dj <= 1; dj++) for (var di = -1; di <= 1; di++) {
+          var ci = ai + di | 0, cj = aj + dj | 0;
+          var hv = hash3(ci, cj, dd * 2);
+          var ex = di + 0.12 + 0.76 * ((hv & 2047) / 2048) - fu, ey = dj + 0.12 + 0.76 * (((hv >>> 11) & 2047) / 2048) - fv;
+          var dist = Math.sqrt(ex * ex + ey * ey);
+          if (dist < f1) { f2 = f1; f1 = dist; h1 = (hv >>> 22) / 1024; }
+          else if (dist < f2) f2 = dist;
+        }
+        var edge = (f2 - f1) * 0.5;              // cell units to the border
+        var ePx = edge * cellPx2;
+        var ph = (k + dd) * 0.11 + h1 * 0.22; ph -= Math.floor(ph);
+        var pi = ((ph * PAL_N) | 0) * 3;
+        var pr = PAL[pi], pg = PAL[pi + 1], pb = PAL[pi + 2];
+        var line = Math.exp(-ePx * 1.0);
+        var glow = Math.exp(-ePx / (0.06 * cellPx2 + 2.5)) * 0.2;
+        var body = (0.01 + 0.1 * h1 * h1) * (1 - Math.min(1, f1 * 1.2));
+        var ww = w * (1 - 0.08 * o / nO);
+        r += ww * (pr * (glow + body) + (pr * 0.8 + 0.2) * line * 0.85);
+        g += ww * (pg * (glow + body) + (pg * 0.8 + 0.2) * line * 0.85);
+        b += ww * (pb * (glow + body) + (pb * 0.8 + 0.2) * line * 0.85);
+      }
+      r = r / (1 + 0.8 * r); g = g / (1 + 0.8 * g); b = b / (1 + 0.8 * b);
+      buf[pp++] = r * 255 * 1.5; buf[pp++] = g * 255 * 1.5; buf[pp++] = b * 255 * 1.5; buf[pp++] = 255;
+    }
+  }
+  return { w: cw, h: ch, data: buf };
+}
+if (typeof module !== 'undefined') module.exports = { renderCells: renderCells };
+</script>
+<script>/* Exact frame arithmetic for the gasket. Depth is unbounded because the cell a view sits
+ * in is a pair of BigInt indices, and everything the renderer needs near the view is reduced to
+ * a small table of doubles (see the tilecore script). */
+var S32 = Math.sqrt(3) / 2;
+
+function bitLen(v) {                       // v > 0n
+  var s = v.toString(16);
+  return (s.length - 1) * 4 + (32 - Math.clz32(parseInt(s[0], 16)));
+}
+
+/* Describe cell (a, b) at level k: the hole triangle A enclosing (or, for open cells, enclosing any
+   hole found below), measured in cells of this level. Returns null for cells outside the wedge. */
+function cellInfo(a, b, k) {
+  if (a < 0n || b < 0n) return null;
+  var z = a & b, o = a | b;
+  var p = z !== 0n ? bitLen(z) - 1 : -1;
+  var start = p + 1;
+  var t = start ? (o >> BigInt(start)) : o;
+  var iso = (t + 1n) & ~t;                 // lowest zero bit of t, isolated
+  var q = start + bitLen(iso) - 1;         // level distance to A
+  var two = 1n << BigInt(q), mask = two - 1n;
+  var la = a & mask, lb = b & mask;
+  return {
+    kind: z !== 0n ? 2 : 1,
+    D0: Number(two - lb), D1: Number(two - la), D2: Number(la + lb - two),
+    LV: k - q, SZ: q > 1023 ? Infinity : Math.pow(2, q), q: q
+  };
+}
+
+/* Table of the cells covering an item of display width L centred on local point (fcx, fcy). */
+function buildTable(F) {
+  var dCx = F.fcx + F.fcy * 0.5, dCy = F.fcy * S32, h = F.L / 2;
+  var ymin = (dCy - h) / S32, ymax = (dCy + h) / S32;
+  var xmin = (dCx - h) - ymax / 2, xmax = (dCx + h) - ymin / 2;
+  var ci0 = Math.floor(xmin) - 1, ci1 = Math.floor(xmax) + 1;
+  var cj0 = Math.floor(ymin) - 1, cj1 = Math.floor(ymax) + 1;
+  var cnx = ci1 - ci0 + 1, cny = cj1 - cj0 + 1, n = cnx * cny;
+  var kind = new Int8Array(n), D0 = new Float64Array(n), D1 = new Float64Array(n),
+      D2 = new Float64Array(n), LV = new Float64Array(n), SZ = new Float64Array(n);
+  for (var i = 0; i < cnx; i++) {
+    var a = F.NX + BigInt(ci0 + i);
+    for (var j = 0; j < cny; j++) {
+      var info = cellInfo(a, F.NY + BigInt(cj0 + j), F.k), idx = i * cny + j;
+      if (!info) continue;
+      kind[idx] = info.kind; D0[idx] = info.D0; D1[idx] = info.D1; D2[idx] = info.D2;
+      LV[idx] = info.LV; SZ[idx] = info.SZ;
+    }
+  }
+  return { ci0: ci0, cj0: cj0, cnx: cnx, cny: cny, kind: kind, D0: D0, D1: D1, D2: D2, LV: LV, SZ: SZ };
+}
+
+/* Move one cell index to level k+m around local coordinate c (a double, may lie outside [0,1)).
+   Returns [new index, fraction in the new cell]. Exact: only doubles with few significant bits are
+   combined with the BigInt index. */
+function rebaseIndex(N, c, m) {
+  if (m >= 0) {
+    var t = c * Math.pow(2, m), fl = Math.floor(t);
+    return [(N << BigInt(m)) + BigInt(fl), t - fl];
+  }
+  var s = -m, fl0 = Math.floor(c), base = N + BigInt(fl0);
+  var low = Number(base & ((1n << BigInt(s)) - 1n));
+  return [base >> BigInt(s), (low + (c - fl0)) / Math.pow(2, s)];
+}
+</script>
+<script>/* Fractal Dive: OpenSeadragon glue.
+ *
+ * The view is always inside one "frame": an OSD item whose pixels are rendered on demand by workers
+ * from an exact BigInt cell index and, for the gasket, a small neighbour table. When the zoom
+ * leaves [0.85, 2.6] (or the view drifts off-centre) a new frame is built at the current view centre,
+ * loaded underneath the old item, and swapped in when its tiles are ready. The camera is renormalised
+ * in the same tick, so the picture does not move. Old items, frames and tiles are dropped at each swap.
+ */
+(function () {
+  'use strict';
+  var NPX = 32768, ML = 15, TS = 256;      // item pixels, max OSD level, tile size
+  var VIS = 1.4;                            // cells visible across the viewport at zoom 1
+  var ITEM_W = 6, ITEM_X = 0.5 - ITEM_W / 2;
+  var ZMAX = 2.6, ZMIN = 0.85;
+  var params = new URLSearchParams(location.search);
+  var SPEED = parseFloat(params.get('speed')) || 0.42;   // autopilot, octaves per second
+  var container = document.getElementById('viewer');
+  var tcText = document.getElementById('tilecore').textContent + '\n' + document.getElementById('cellcore').textContent;
+  var mode = params.get('f') === 'cells' ? 'cells' : 'gasket';
+
+  /* ---------------- worker pool ---------------- */
+  var GLUE = [
+    'var FRS={};',
+    'onmessage=function(e){var m=e.data;',
+    ' if(m.t==="frame"){FRS[m.fr.id]=m.fr;return;}',
+    ' if(m.t==="drop"){for(var i=0;i<m.ids.length;i++)delete FRS[m.ids[i]];return;}',
+    ' var fr=FRS[m.fid];',
+    ' if(!fr){postMessage({j:m.j,miss:1});return;}',
+    ' var o=(fr.mode==="cells"?renderCells:renderTile)(fr,m.level,m.tx,m.ty,m.ts,m.ml);',
+    ' postMessage({j:m.j,w:o.w,h:o.h,data:o.data.buffer},[o.data.buffer]);};'
+  ].join('\n');
+
+  var pool = { workers: [], load: [], jobs: new Map(), jid: 0, local: null, frames: new Map() };
+
+  function finishJob(rec, w, h, buf) {
+    var cv = document.createElement('canvas');
+    cv.width = w; cv.height = h;
+    var ctx = cv.getContext('2d');
+    ctx.putImageData(new ImageData(new Uint8ClampedArray(buf), w, h), 0, 0);
+    try { rec.job.finish(ctx, null, 'context2d'); } catch (e) { /* item already destroyed */ }
+  }
+  function onResult(wi, e) {
+    var m = e.data;
+    pool.load[wi]--;
+    var rec = pool.jobs.get(m.j);
+    if (!rec) return;
+    pool.jobs.delete(m.j);
+    if (rec.cancelled) return;
+    if (m.miss) { try { rec.job.fail('frame dropped'); } catch (x) {} return; }
+    finishJob(rec, m.w, m.h, m.data);
+  }
+  function useLocal() {
+    pool.workers.forEach(function (w) { try { w.terminate(); } catch (e) {} });
+    pool.workers = []; pool.load = [];
+    var rt = new Function(tcText + '\nreturn [renderTile, renderCells];')();
+    pool.local = function (pub, l, x, y, ts, ml) { return (pub.mode === 'cells' ? rt[1] : rt[0])(pub, l, x, y, ts, ml); };
+  }
+  (function initPool() {
+    var n = Math.max(1, Math.min(6, (navigator.hardwareConcurrency || 4) - 1));
+    try {
+      var url = URL.createObjectURL(new Blob([tcText + '\n' + GLUE], { type: 'text/javascript' }));
+      for (var i = 0; i < n; i++) {
+        var w = new Worker(url);
+        w.onmessage = onResult.bind(null, i);
+        w.onerror = function () { if (!pool.local) useLocal(); };
+        pool.workers.push(w); pool.load.push(0);
+      }
+    } catch (e) { useLocal(); }
+  })();
+  function postAll(msg) { pool.workers.forEach(function (w) { w.postMessage(msg); }); }
+
+  function requestTile(rec, fr, level, tx, ty) {
+    var id = ++pool.jid;
+    pool.jobs.set(id, rec); rec.id = id;
+    if (pool.local) {
+      setTimeout(function () {
+        var r = pool.jobs.get(id);
+        if (!r) return;
+        pool.jobs.delete(id);
+        if (r.cancelled) return;
+        var o = pool.local(fr.pub, level, tx, ty, TS, ML);
+        finishJob(r, o.w, o.h, o.data.buffer);
+      }, 0);
+      return;
+    }
+    var best = 0;
+    for (var i = 1; i < pool.load.length; i++) if (pool.load[i] < pool.load[best]) best = i;
+    pool.load[best]++;
+    pool.workers[best].postMessage({ j: id, fid: fr.id, level: level, tx: tx, ty: ty, ts: TS, ml: ML });
+  }
+
+  /* ---------------- frames ---------------- */
+  var frameSeq = 0;
+  function makeFrame(k, NX, NY, fcx, fcy, md) {
+    var L = ITEM_W * VIS, id = ++frameSeq, pub;
+    if (md === 'cells') {
+      pub = { id: id, mode: md, k: k, N: NPX, fcx: fcx, fcy: fcy, L: L,
+        nxm: Number(BigInt.asUintN(52, NX)), nym: Number(BigInt.asUintN(52, NY)) };
+    } else {
+      var t = buildTable({ k: k, NX: NX, NY: NY, fcx: fcx, fcy: fcy, L: L });
+      pub = { id: id, mode: md, k: k, N: NPX, fcx: fcx, fcy: fcy, L: L,
+        ci0: t.ci0, cj0: t.cj0, cnx: t.cnx, cny: t.cny, kind: t.kind, D0: t.D0, D1: t.D1, D2: t.D2, LV: t.LV, SZ: t.SZ };
+    }
+    var fr = { id: id, mode: md, k: k, NX: NX, NY: NY, fcx: fcx, fcy: fcy, pub: pub };
+    pool.frames.set(id, fr);
+    postAll({ t: 'frame', fr: pub });
+    return fr;
+  }
+  /* Frame centred on world point c (in the world of frame fr), m octaves deeper. */
+  function deriveFrame(fr, c, m) {
+    var ax = (c.x - 0.5) * VIS, ay = (c.y - 0.5) * VIS;
+    var x, y;
+    if (fr.mode === 'cells') { x = fr.fcx + ax; y = fr.fcy + ay; }
+    else {
+      var dX = fr.fcx + fr.fcy / 2 + ax, dY = fr.fcy * S32 - ay;
+      y = dY / S32; x = dX - y / 2;
+    }
+    var rx = rebaseIndex(fr.NX, x, m), ry = rebaseIndex(fr.NY, y, m);
+    return makeFrame(fr.k + m, rx[0], ry[0], rx[1], ry[1], fr.mode);
+  }
+  function dropFrames(keep) {
+    var ids = [];
+    pool.frames.forEach(function (f, id) { if (keep.indexOf(id) < 0) ids.push(id); });
+    ids.forEach(function (id) { pool.frames.delete(id); });
+    if (ids.length) postAll({ t: 'drop', ids: ids });
+  }
+
+  /* ---------------- tile source ---------------- */
+  function FractalSource(fr) {
+    OpenSeadragon.TileSource.call(this, { width: NPX, height: NPX, tileSize: TS, tileOverlap: 0, minLevel: 0, maxLevel: ML });
+    this.fr = fr;
+  }
+  FractalSource.prototype = Object.create(OpenSeadragon.TileSource.prototype);
+  FractalSource.prototype.constructor = FractalSource;
+  FractalSource.prototype.getTileUrl = function (level, x, y) { return 'fz' + this.fr.id + '/' + level + '/' + x + '_' + y; };
+  FractalSource.prototype.equals = function (o) { return !!o && o.fr && o.fr.id === this.fr.id; };
+  FractalSource.prototype.hasTransparency = function () { return false; };
+  FractalSource.prototype.getTilePostData = function () { return null; };
+  FractalSource.prototype.downloadTileStart = function (job) {
+    var t = job.tile, rec = { job: job, cancelled: false, id: 0 };
+    job._fz = rec;
+    requestTile(rec, this.fr, t.level, t.x, t.y);
+  };
+  FractalSource.prototype.downloadTileAbort = function (job) {
+    var rec = job._fz;
+    if (rec) { rec.cancelled = true; pool.jobs.delete(rec.id); }
+  };
+
+  /* ---------------- viewer ---------------- */
+  var off = { scrollToZoom: false, clickToZoom: false, dblClickToZoom: false, dragToPan: false, pinchToZoom: false, flickEnabled: false };
+  var opts = {
+    element: container, prefixUrl: '', mouseNavEnabled: false,
+    showNavigationControl: false, showNavigator: false, showZoomControl: false, showHomeControl: false,
+    showFullPageControl: false, showRotationControl: false, showSequenceControl: false,
+    animationTime: 0, blendTime: 0.3, immediateRender: false,
+    minZoomLevel: 0.01, maxZoomLevel: 1e6, visibilityRatio: 0, constrainDuringPan: false,
+    maxImageCacheCount: 90, imageLoaderLimit: Math.max(4, pool.workers.length * 3), timeout: 120000,
+    gestureSettingsMouse: off, gestureSettingsTouch: off, gestureSettingsPen: off,
+    placeholderFillStyle: null, homeFillsViewer: false
+  };
+  if (params.get('drawer')) opts.drawer = params.get('drawer');
+  var viewer = OpenSeadragon(opts);
+  var Pt = OpenSeadragon.Point;
+
+  var cam = { cx: 0.5, cy: 0.5, lz: 0, tcx: 0.5, tcy: 0.5, tlz: 0 };
+  var cur = null, pend = null, swaps = 0;
+
+  function applyCam() {
+    var vp = viewer.viewport;
+    vp.zoomTo(Math.pow(2, cam.lz), null, true);
+    vp.panTo(new Pt(cam.cx, cam.cy), true);
+  }
+
+  function firstFrame() {
+    if (mode === 'cells') {
+      var seed = BigInt(Math.floor(Math.random() * 1e15)), seed2 = BigInt(Math.floor(Math.random() * 1e15));
+      return makeFrame(0, seed, seed2, 0.5, 0.5, 'cells');
+    }
+    return makeFrame(0, 0n, 0n, 0.25, 0.5, 'gasket');
+  }
+  function openFrame() {
+    var fr0 = firstFrame();
+    viewer.addTiledImage({
+      tileSource: new FractalSource(fr0), x: ITEM_X, y: ITEM_X, width: ITEM_W,
+      success: function (ev) {
+        cur = { fr: fr0, item: ev.item };
+        var s = size(), z = Math.min(VIS / 1.15, VIS * (s.h / s.w) / 1.04);
+        cam.lz = cam.tlz = mode === 'cells' ? 0 : Math.log2(Math.max(0.55, z));
+        cam.cx = cam.cy = cam.tcx = cam.tcy = 0.5;
+        applyCam();
+      }
+    });
+  }
+  openFrame();
+  function switchMode(md) {
+    if (md === mode) return;
+    mode = md;
+    setAuto(false);
+    if (pend) { if (pend.item) viewer.world.removeItem(pend.item); pend = null; }
+    if (cur) { viewer.world.removeItem(cur.item); cur = null; }
+    dropFrames([]);
+    var u = new URL(location.href); u.searchParams.set('f', md); history.replaceState(null, '', u);
+    document.body.dataset.mode = md; elMode.textContent = md === 'cells' ? 'Gasket' : 'Cells';
+    openFrame();
+    flash('Double-tap to dive');
+  }
+
+  function startRebase() {
+    if (pend || !cur) return;
+    var z = Math.pow(2, cam.lz);
+    var dev = Math.max(Math.abs(cam.cx - 0.5), Math.abs(cam.cy - 0.5));
+    var m = Math.round(Math.log2(z / 1.6));
+    if (cur.fr.mode === 'gasket' && cur.fr.k + m < 0) m = -cur.fr.k;
+    if (m === 0 && dev <= 0.8) return;
+    var c = { x: cam.cx, y: cam.cy }, s = Math.pow(2, -m);
+    var fr2 = deriveFrame(cur.fr, c, m);
+    var p = { fr: fr2, m: m, c: c, item: null, n: 0, t0: performance.now() };
+    pend = p;
+    viewer.addTiledImage({
+      tileSource: new FractalSource(fr2), index: 0, blendTime: 0,
+      x: c.x - ITEM_W * s / 2, y: c.y - ITEM_W * s / 2, width: ITEM_W * s,
+      success: function (ev) { p.item = ev.item; },
+      error: function () { if (pend === p) pend = null; }
+    });
+  }
+
+  function swap() {
+    var p = pend, old = cur, s = Math.pow(2, p.m);
+    p.item.setPosition(new Pt(ITEM_X, ITEM_X), true);
+    p.item.setWidth(ITEM_W, true);
+    p.item.blendTime = 0.3;
+    cam.cx = 0.5 + (cam.cx - p.c.x) * s; cam.cy = 0.5 + (cam.cy - p.c.y) * s;
+    cam.tcx = 0.5 + (cam.tcx - p.c.x) * s; cam.tcy = 0.5 + (cam.tcy - p.c.y) * s;
+    cam.lz -= p.m; cam.tlz -= p.m;
+    viewer.world.removeItem(old.item);
+    cur = { fr: p.fr, item: p.item };
+    pend = null; swaps++;
+    applyCam();
+    dropFrames([cur.fr.id]);
+  }
+
+  /* ---------------- autopilot ---------------- */
+  var auto = { on: false, rate: 0, T: null };
+  function extendT(T, n) {
+    for (var i = 0; i < n; i++) {
+      var r = Math.floor(Math.random() * 3);
+      T.X = (T.X << 1n) | (r === 1 ? 1n : 0n);
+      T.Y = (T.Y << 1n) | (r === 2 ? 1n : 0n);
+      T.k++;
+    }
+  }
+  function pickT(fr) {
+    var p = fr.pub, best = -1, bd = 1e18, ba = 0, bb = 0;
+    for (var i = 0; i < p.cnx; i++) for (var j = 0; j < p.cny; j++) {
+      if (p.kind[i * p.cny + j] !== 1) continue;
+      var a = p.ci0 + i, b = p.cj0 + j;
+      var dx = a + 0.5 - fr.fcx, dy = b + 0.5 - fr.fcy, d = dx * dx + dy * dy;
+      if (d < bd) { bd = d; ba = a; bb = b; best = 1; }
+    }
+    if (best < 0) return null;
+    var T = { k: fr.k, X: fr.NX + BigInt(ba), Y: fr.NY + BigInt(bb) };
+    extendT(T, 12);
+    return T;
+  }
+  /* World position (of the current frame) of the autopilot target. */
+  function targetWorld(fr) {
+    var T = auto.T;
+    if (T.k - fr.k < 10) extendT(T, 8);
+    var d = T.k - fr.k, sc = Math.pow(2, -d);
+    var tx = Number(T.X - (fr.NX << BigInt(d))) * sc + 0.2 * sc;
+    var ty = Number(T.Y - (fr.NY << BigInt(d))) * sc + 0.2 * sc;
+    var dX = tx + ty / 2, dY = ty * S32;
+    var cX = fr.fcx + fr.fcy / 2, cY = fr.fcy * S32;
+    return { x: 0.5 + (dX - cX) / VIS, y: 0.5 - (dY - cY) / VIS };
+  }
+  function setAuto(on) {
+    if (on === auto.on) return;
+    auto.on = on;
+    if (on) {
+      auto.T = cur ? (cur.fr.mode === 'cells' ? { drift: true } : pickT(cur.fr)) : null;
+      if (!auto.T) auto.on = false;
+      auto.ang = Math.random() * 6.28;
+      auto.rate = 0;
+      cam.tlz = cam.lz; cam.tcx = cam.cx; cam.tcy = cam.cy;
+    }
+    flash(auto.on ? 'Diving. Double-tap to stop' : 'Double-tap to dive');
+    document.body.classList.toggle('diving', auto.on);
+  }
+
+  /* ---------------- input ---------------- */
+  function size() { return { w: container.clientWidth || 1, h: container.clientHeight || 1 }; }
+  function worldAt(px, py, cx, cy, lz) {
+    var s = size(), z = Math.pow(2, lz);
+    return { x: cx + (px - s.w / 2) / (z * s.w), y: cy + (py - s.h / 2) / (z * s.w) };
+  }
+  function centerFor(pw, px, py, lz) {
+    var s = size(), z = Math.pow(2, lz);
+    return { x: pw.x - (px - s.w / 2) / (z * s.w), y: pw.y - (py - s.h / 2) / (z * s.w) };
+  }
+  function lzMin() { return cur && cur.fr.mode === 'gasket' && cur.fr.k === 0 ? Math.log2(0.55) : -30; }
+  function touched() { setAuto(false); hideHint(); }
+
+  var ptrs = new Map(), lastTap = null, tapStart = null, pinch = null;
+  function rel(e) { var r = container.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+  container.addEventListener('pointerdown', function (e) {
+    container.setPointerCapture(e.pointerId);
+    var p = rel(e);
+    ptrs.set(e.pointerId, { x: p.x, y: p.y });
+    tapStart = ptrs.size === 1 ? { x: p.x, y: p.y, t: performance.now(), moved: false } : null;
+    if (ptrs.size === 2) {
+      var a = Array.from(ptrs.values());
+      pinch = { d: Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1, mx: (a[0].x + a[1].x) / 2, my: (a[0].y + a[1].y) / 2 };
+    }
+  });
+  container.addEventListener('pointermove', function (e) {
+    var q = ptrs.get(e.pointerId);
+    if (!q) return;
+    var p = rel(e), s = size();
+    if (ptrs.size === 1) {
+      var dx = p.x - q.x, dy = p.y - q.y;
+      if (tapStart && Math.hypot(p.x - tapStart.x, p.y - tapStart.y) > 8) tapStart.moved = true;
+      if (tapStart && !tapStart.moved) { return; }
+      touched();
+      var z = Math.pow(2, cam.lz);
+      cam.cx -= dx / (z * s.w); cam.cy -= dy / (z * s.w);
+      cam.tcx -= dx / (z * s.w); cam.tcy -= dy / (z * s.w);
+      q.x = p.x; q.y = p.y;
+    } else if (ptrs.size === 2 && pinch) {
+      q.x = p.x; q.y = p.y;
+      var a = Array.from(ptrs.values());
+      var d = Math.hypot(a[0].x - a[1].x, a[0].y - a[1].y) || 1;
+      var mx = (a[0].x + a[1].x) / 2, my = (a[0].y + a[1].y) / 2;
+      touched();
+      var pw = worldAt(pinch.mx, pinch.my, cam.cx, cam.cy, cam.lz);
+      var lz = Math.max(lzMin(), cam.lz + Math.log2(d / pinch.d));
+      var c = centerFor(pw, mx, my, lz);
+      cam.lz = cam.tlz = lz; cam.cx = cam.tcx = c.x; cam.cy = cam.tcy = c.y;
+      pinch.d = d; pinch.mx = mx; pinch.my = my;
+    }
+  });
+  function up(e) {
+    if (!ptrs.has(e.pointerId)) return;
+    var wasOne = ptrs.size === 1;
+    ptrs.delete(e.pointerId);
+    pinch = null;
+    if (wasOne && tapStart && !tapStart.moved && performance.now() - tapStart.t < 350) {
+      var now = performance.now();
+      if (lastTap && now - lastTap.t < 450 && Math.hypot(tapStart.x - lastTap.x, tapStart.y - lastTap.y) < 50) {
+        lastTap = null; setAuto(!auto.on); hideHint();
+      } else lastTap = { x: tapStart.x, y: tapStart.y, t: now };
+    }
+    if (ptrs.size === 1) {                       // continue as a drag from the remaining finger
+      tapStart = { x: 0, y: 0, t: 0, moved: true };
+    }
+  }
+  container.addEventListener('pointerup', up);
+  container.addEventListener('pointercancel', up);
+  container.addEventListener('wheel', function (e) {
+    e.preventDefault();
+    touched();
+    var dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 400 : e.deltaY;
+    var p = rel(e);
+    var pw = worldAt(p.x, p.y, cam.tcx, cam.tcy, cam.tlz);
+    cam.tlz = Math.max(lzMin(), cam.tlz - dy * 0.0016);
+    var c = centerFor(pw, p.x, p.y, cam.tlz);
+    cam.tcx = c.x; cam.tcy = c.y;
+  }, { passive: false });
+  window.addEventListener('keydown', function (e) {
+    if (e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); setAuto(!auto.on); hideHint(); }
+  });
+
+  /* ---------------- HUD ---------------- */
+  var elDepth = document.getElementById('depth'), elHint = document.getElementById('hint'), elMode = document.getElementById('mode');
+  elMode.textContent = mode === 'cells' ? 'Gasket' : 'Cells';
+  document.body.dataset.mode = mode;
+  elMode.addEventListener('click', function () { switchMode(mode === 'cells' ? 'gasket' : 'cells'); });
+  elMode.addEventListener('pointerdown', function (e) { e.stopPropagation(); });
+  var hintTimer = 0, flashTimer = 0;
+  function hideHint() { elHint.classList.remove('show'); }
+  function flash(msg) {
+    elHint.textContent = msg; elHint.classList.add('show');
+    clearTimeout(flashTimer); flashTimer = setTimeout(hideHint, 2600);
+  }
+  function depthText() {
+    var oct = (cur ? cur.fr.k : 0) + cam.lz;
+    var l10 = oct * Math.LOG10E * Math.LN2;
+    var mag = l10 < 5 ? '×' + Math.pow(10, l10).toFixed(l10 < 2 ? 1 : 0)
+      : '×10<sup>' + Math.floor(l10) + '</sup>';
+    return '<b>' + oct.toFixed(1) + '</b> octaves deep <i>' + mag + '</i>';
+  }
+
+  /* ---------------- main loop ---------------- */
+  var last = performance.now(), hudT = 0;
+  function tick(ts) {
+    requestAnimationFrame(tick);
+    var dt = Math.min(0.1, Math.max(0, (ts - last) / 1000)); last = ts;
+    if (!cur) return;
+    if (auto.on) {
+      auto.rate += (SPEED - auto.rate) * (1 - Math.exp(-dt / 1.2));
+      cam.lz += auto.rate * dt; cam.tlz = cam.lz;
+      if (auto.T.drift) {
+        auto.ang += dt * 0.3;
+        var zz = Math.pow(2, cam.lz);
+        cam.cx += Math.cos(auto.ang) * 0.07 * dt / zz; cam.cy += Math.sin(auto.ang) * 0.07 * dt / zz;
+      } else {
+        var w = targetWorld(cur.fr), a = 1 - Math.exp(-dt / 0.5);
+        cam.cx += (w.x - cam.cx) * a; cam.cy += (w.y - cam.cy) * a;
+      }
+      cam.tcx = cam.cx; cam.tcy = cam.cy;
+    } else {
+      var b = 1 - Math.exp(-dt / 0.11);
+      cam.lz += (cam.tlz - cam.lz) * b;
+      cam.cx += (cam.tcx - cam.cx) * b; cam.cy += (cam.tcy - cam.cy) * b;
+    }
+    var lm = lzMin();
+    if (cam.lz < lm) cam.lz = lm;
+    if (cam.tlz < lm) cam.tlz = lm;
+    applyCam();
+
+    if (pend) {
+      var it = pend.item, waited = performance.now() - pend.t0;
+      var ready = it && ++pend.n > 3 && it._tilesLoading === 0 && !it._needsUpdate && it.getTilesToDraw().length > 0;
+      if (ready || (it && waited > 3500)) swap();
+    } else {
+      var z = Math.pow(2, cam.lz), dev = Math.max(Math.abs(cam.cx - 0.5), Math.abs(cam.cy - 0.5));
+      if (z >= ZMAX || (z < ZMIN && (cur.fr.mode === 'cells' || cur.fr.k > 0)) || dev > 0.8) startRebase();
+    }
+    if (ts - hudT > 90) { hudT = ts; elDepth.innerHTML = depthText(); }
+  }
+  requestAnimationFrame(tick);
+  hintTimer = setTimeout(function () { if (!auto.on) hideHint(); }, 7000);
+  elHint.classList.add('show');
+
+  /* test hook */
+  window.__fz = {
+    info: function () {
+      var m = performance.memory;
+      return { k: cur && cur.fr.k, lz: cam.lz, cx: cam.cx, cy: cam.cy, swaps: swaps, pending: !!pend,
+        items: viewer.world.getItemCount(), frames: pool.frames.size, jobs: pool.jobs.size,
+        workers: pool.workers.length, local: !!pool.local, auto: auto.on,
+        heap: m ? m.usedJSHeapSize : 0 };
+    },
+    setAuto: setAuto, cam: cam, viewer: viewer, pool: pool
+  };
+})();
+</script>
+</body>
+</html>
