@@ -5,7 +5,8 @@ An endless zoom into two fractals, drawn every frame by a WebGL2 fragment shader
 ## Controls
 
 - Scroll or pinch to zoom, drag to pan.
-- Double-tap, double-click or press Space to start the automatic dive. Any input, or another double-tap, stops it.
+- Double-tap, double-click or press Space to start the automatic dive. It picks a point on the fractal and zooms straight into it. Another double-tap eases it to a stop, and any other input stops it at once.
+- Triple-tap, triple-click or press Shift+Space to rise back out. It eases to a stop at the starting view.
 - Press H or click Reset to go back to the start.
 - `?speed=` sets the dive speed in octaves per second (default 0.4).
 - `?c=re,im` picks a different Julia parameter.

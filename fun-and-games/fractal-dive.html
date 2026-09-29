@@ -22,7 +22,7 @@
   #depth { left: 14px; bottom: max(14px, env(safe-area-inset-bottom)); font-variant-numeric: tabular-nums; pointer-events: none; }
   #depth b { color: #fff; font-weight: 600; }
   #depth i { font-style: normal; opacity: .6; margin-left: .4em; }
-  #hint { left: 50%; bottom: max(64px, calc(env(safe-area-inset-bottom) + 50px)); transform: translateX(-50%); opacity: 0; transition: opacity .8s; white-space: nowrap; pointer-events: none; }
+  #hint { left: 50%; bottom: max(64px, calc(env(safe-area-inset-bottom) + 50px)); transform: translateX(-50%); opacity: 0; transition: opacity .8s; width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box; text-align: center; border-radius: 16px; pointer-events: none; }
   #hint.show { opacity: 1; }
   @media (prefers-reduced-motion: reduce) { #hint { transition: none; } }
 </style>
@@ -32,7 +32,7 @@
 <a id="back" class="chrome" href="./">&larr; Fun &amp; Games</a>
 <div id="tr"><button id="mode" class="chrome" type="button"></button><button id="home" class="chrome" type="button" title="Back to the start (H)">Reset</button></div>
 <div id="depth" class="chrome"></div>
-<div id="hint" class="chrome">Scroll or pinch to zoom &middot; drag to pan &middot; double-tap to dive</div>
+<div id="hint" class="chrome">Scroll or pinch to zoom &middot; drag to pan &middot; double-tap to dive &middot; triple-tap to rise</div>
 <script type="x-shader/x-fragment" id="apo-frag">#version 300 es
 precision highp float;
 /* Apollonian gasket, band model. Each pixel is folded into the fundamental strip and inverted in the
@@ -425,9 +425,9 @@ var APO = (function () {
   State.prototype.target = function (rnd) {
     if (!this.quad) this.initQuad();
     var rho = this.rho(), c = mobApply(this.T, [0, 0]);
-    for (var g = 0; g < 40; g++) {
+    for (var g = 0; g < 80; g++) {
       var q = this.quad, W = incircle(q[0], q[1], q[2], q[3]);
-      if (1 / W.A < 0.3 * rho) break;
+      if (1 / W.A < 0.002 * rho) break;       // refined far below a pixel, so the target barely moves
       // A keeps the pair the last step kept (heading into the same cusp); allow it only rarely so the
       // dive keeps finding open regions instead of sliding down one tangency.
       var subs = [[q[0], q[1], W, q[2]], [q[1], q[2], W, q[0]], [q[0], q[2], W, q[1]]];
@@ -461,7 +461,7 @@ var JUL = (function () {
   State.prototype.home = function (S) {
     this.S = S || this.S;
     this.m = 0; this.C = [0, 0]; this.A = [1.35 / this.S, 0]; this.Lz = 0;
-    this.stack = []; this.tgt = null; this.tgtAt = -1;
+    this.stack = []; this.tgt = null;
   };
   State.prototype.viewR = function () { return Math.sqrt(cabs2(this.A)) * this.Rv; };
   State.prototype.chart = function (p) { return ca(this.C, cm(this.A, p)); };
@@ -537,21 +537,31 @@ var JUL = (function () {
     }
     return Infinity;
   };
-  /* Autopilot target: a point of the Julia set near the current one (plane coords of this level). */
+  /* Autopilot target: a point of the Julia set (plane coords of this level). It is picked once near
+     the centre, then only nudged back onto the set within a couple of pixels as the zoom reveals more
+     detail, so the camera never has to swerve. */
   State.prototype.target = function (rnd) {
-    var rv = this.Rv;                                   // view radius in CSS px
-    var base = this.tgt ? this.toScreen(this.tgt) : [0, 0];
-    if (Math.hypot(base[0], base[1]) > 0.8 * rv) base = [0, 0];
-    if (!this.tgt || this.Lz - this.tgtAt > 0.35) {
-      var best = null, bestD = Infinity, R = 0.3 * rv;
-      for (var k = 0; k < 40; k++) {
-        var a = rnd() * 6.2832, rr = R * Math.sqrt(rnd());
-        var p = [base[0] + rr * Math.cos(a), base[1] + rr * Math.sin(a)];
-        var d = this.distPx(p, 600) + 0.02 * Math.hypot(p[0], p[1]);
+    var rv = this.Rv, k, a, rr, p, d;
+    if (!this.tgt) {
+      var best = null, bestD = Infinity;
+      for (k = 0; k < 60; k++) {
+        a = rnd() * 6.2832; rr = 0.35 * rv * Math.sqrt(rnd());
+        p = [rr * Math.cos(a), rr * Math.sin(a)];
+        d = this.distPx(p, 800) + 0.01 * rr;
         if (d < bestD) { bestD = d; best = p; }
       }
-      if (best && isFinite(bestD)) { this.tgt = this.chart(best); this.tgtAt = this.Lz; }
-      else if (!this.tgt) this.tgt = this.C.slice();
+      this.tgt = best && isFinite(bestD) ? this.chart(best) : this.C.slice();
+    }
+    var s0 = this.toScreen(this.tgt), bd = this.distPx(s0, 800);
+    if (bd > 0.05) {
+      var bp = s0, R = Math.min(4, 2 * (isFinite(bd) ? bd : 4));
+      for (k = 0; k < 16; k++) {
+        a = rnd() * 6.2832; rr = R * Math.sqrt(rnd());
+        p = [s0[0] + rr * Math.cos(a), s0[1] + rr * Math.sin(a)];
+        d = this.distPx(p, 800);
+        if (d < bd) { bd = d; bp = p; }
+      }
+      this.tgt = this.chart(bp);
     }
     return this.tgt;
   };
@@ -681,19 +691,53 @@ var JUL = (function () {
   function rel(e) { var r = canvas.getBoundingClientRect(); return [e.clientX - r.left - cssW / 2, e.clientY - r.top - cssH / 2]; }
 
   /* ---------------- autopilot ---------------- */
-  var auto = { on: false, rate: 0 };
+  // dir: 1 dive, -1 rise, 0 off (the rate eases out). The camera zooms about the target, which is
+  // refined far below pixel scale, and a velocity-smoothed pan brings it to the centre.
+  var auto = { dir: 0, rate: 0 }, panV = [0, 0], panW = [0, 0];
   var rng = Math.random;
-  function setAuto(on) {
-    if (on === auto.on) return;
-    auto.on = on; auto.rate = 0;
-    if (on) st.quad = null;
-    flash(on ? 'Diving · double-tap to stop' : 'Double-tap to dive');
+  function setAuto(dir) {
+    if (dir === auto.dir) return;
+    if (dir === 1) { st.quad = null; st.tgt = null; }
+    auto.dir = dir;
+    flash(dir === 1 ? 'Diving · double-tap to stop' : dir === -1 ? 'Rising · double-tap to stop' : 'Stopped');
     dirty = true;
+  }
+  function haltAuto() { auto.dir = 0; auto.rate = 0; panV = [0, 0]; panW = [0, 0]; }
+  /* Screen position of the starting view's centre, when it is close enough to steer towards. */
+  function homeScreen() {
+    var p = null;
+    if (mode === 'julia') { if (st.m === 0) p = st.toScreen([0, 0]); }
+    else { var h = st.snaps[0]; if (h.s > 1e-9) p = [-h.t[0] / h.s, -h.t[1] / h.s]; }
+    return p && Math.hypot(p[0], p[1]) < 3 * st.Rv ? p : null;
+  }
+  function autoStep(dt) {
+    var want = auto.dir * SPEED;
+    auto.rate += (want - auto.rate) * (1 - Math.exp(-dt / 0.9));
+    if (!auto.dir && Math.abs(auto.rate) < 0.004) auto.rate = 0;
+    var desired = [0, 0], anchor = null;
+    if (auto.rate > 0) {
+      var sp = st.toScreen(st.target(rng));
+      if (Math.hypot(sp[0], sp[1]) < st.Rv) { anchor = sp; desired = [-sp[0] / 1.8, -sp[1] / 1.8]; }
+    } else if (auto.rate < 0) {
+      if (auto.dir === -1 && st.Lz < 0.9 * -auto.rate + 0.03) auto.dir = 0;   // ease out onto the starting scale
+      var hp = homeScreen();
+      if (hp) desired = [-hp[0] / 1.2, -hp[1] / 1.2];
+    }
+    // two cascaded low-passes: the pan velocity and its rate of change both stay continuous
+    var b = 1 - Math.exp(-dt / 0.45);
+    panW[0] += (desired[0] - panW[0]) * b; panW[1] += (desired[1] - panW[1]) * b;
+    panV[0] += (panW[0] - panV[0]) * b; panV[1] += (panW[1] - panV[1]) * b;
+    if (!auto.rate && Math.hypot(panV[0], panV[1]) < 0.5 && Math.hypot(panW[0], panW[1]) < 0.5) { panV = [0, 0]; panW = [0, 0]; }
+    if (panV[0] || panV[1]) {
+      panBy(panV[0] * dt, panV[1] * dt);
+      if (anchor) anchor = [anchor[0] + panV[0] * dt, anchor[1] + panV[1] * dt];
+    }
+    if (auto.rate) zoomBy(auto.rate * dt, anchor || [0, 0]);
   }
 
   /* ---------------- input ---------------- */
-  var ptrs = new Map(), tapStart = null, lastTap = null, pinch = null;
-  function touched() { if (auto.on) setAuto(false); hideHint(); }
+  var ptrs = new Map(), tapStart = null, pinch = null;
+  function touched() { if (auto.dir || auto.rate) haltAuto(); hideHint(); }
   canvas.addEventListener('pointerdown', function (e) {
     canvas.setPointerCapture(e.pointerId);
     var p = rel(e);
@@ -731,13 +775,20 @@ var JUL = (function () {
     var wasOne = ptrs.size === 1;
     ptrs.delete(e.pointerId);
     pinch = null;
-    if (wasOne && tapStart && !tapStart.moved && performance.now() - tapStart.t < 350) {
-      var now = performance.now();
-      if (lastTap && now - lastTap.t < 450 && Math.hypot(tapStart.x - lastTap.x, tapStart.y - lastTap.y) < 50) {
-        lastTap = null; setAuto(!auto.on); hideHint();
-      } else lastTap = { x: tapStart.x, y: tapStart.y, t: now };
-    }
+    if (wasOne && tapStart && !tapStart.moved && performance.now() - tapStart.t < 350) tap(tapStart.x, tapStart.y);
     if (ptrs.size === 1) tapStart = { x: 0, y: 0, t: 0, moved: true };
+  }
+  /* Taps: two within 450 ms start or stop the dive, three start the climb back out. The second tap
+     waits briefly to see whether a third follows. */
+  var taps = 0, lastTap = null, tapTimer = 0;
+  function tap(x, y) {
+    var now = performance.now();
+    if (taps && lastTap && now - lastTap.t < 450 && Math.hypot(x - lastTap.x, y - lastTap.y) < 50) taps++; else taps = 1;
+    lastTap = { x: x, y: y, t: now };
+    clearTimeout(tapTimer);
+    if (taps >= 3) { taps = 0; hideHint(); setAuto(-1); }
+    else if (taps === 2) tapTimer = setTimeout(function () { taps = 0; hideHint(); setAuto(auto.dir ? 0 : 1); }, 260);
+    else tapTimer = setTimeout(function () { taps = 0; }, 450);
   }
   canvas.addEventListener('pointerup', up);
   canvas.addEventListener('pointercancel', up);
@@ -750,7 +801,8 @@ var JUL = (function () {
   }, { passive: false });
   window.addEventListener('keydown', function (e) {
     if (e.target && e.target.tagName === 'BUTTON' && (e.key === 'Enter' || e.code === 'Space')) return;
-    if (e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); setAuto(!auto.on); hideHint(); }
+    if (e.code === 'Space' && e.shiftKey) { e.preventDefault(); setAuto(auto.dir === -1 ? 0 : -1); hideHint(); }
+    else if (e.code === 'Space' || e.key === 'Enter') { e.preventDefault(); setAuto(auto.dir ? 0 : 1); hideHint(); }
     else if (e.key === '+' || e.key === '=') { touched(); pend.dz += 0.5; pend.ax = pend.ay = 0; }
     else if (e.key === '-' || e.key === '_') { touched(); pend.dz -= 0.5; pend.ax = pend.ay = 0; }
     else if (e.key === '0' || e.key === 'h' || e.key === 'Home') { goHome(); }
@@ -760,12 +812,12 @@ var JUL = (function () {
       else if (e.key === 'ArrowUp') pend.py += k; else pend.py -= k;
     }
   });
-  function goHome() { setAuto(false); pend.dz = pend.px = pend.py = 0; st.S = fitScale(); st.home(fitScale()); dirty = true; }
+  function goHome() { haltAuto(); pend.dz = pend.px = pend.py = 0; st.S = fitScale(); st.home(fitScale()); dirty = true; }
   document.getElementById('home').addEventListener('click', goHome);
   var elMode = document.getElementById('mode');
   function setMode(m) {
     if (m !== mode) {
-      setAuto(false); pend.dz = pend.px = pend.py = 0;
+      haltAuto(); pend.dz = pend.px = pend.py = 0;
       mode = m; st = scenes[mode].st; if (window.__fd) window.__fd.st = st;
       var url = new URL(location.href); url.searchParams.set('f', mode); history.replaceState(null, '', url);
     }
@@ -790,13 +842,7 @@ var JUL = (function () {
   function tick(ts) {
     requestAnimationFrame(tick);
     var dt = Math.min(0.1, Math.max(0, (ts - last) / 1000)); last = ts;
-    if (auto.on) {
-      auto.rate += (SPEED - auto.rate) * (1 - Math.exp(-dt / 1.2));
-      var tz = st.target(rng), sp = st.toScreen(tz);
-      var a = 1 - Math.exp(-(auto.rate * dt / 0.3 + dt / 3));   // pan measured in octaves travelled
-      panBy(-sp[0] * a, -sp[1] * a);
-      zoomBy(auto.rate * dt, [0, 0]);
-    }
+    if (auto.dir || auto.rate || panV[0] || panV[1]) autoStep(dt);
     if (pend.dz || pend.px || pend.py) {
       var b = 1 - Math.exp(-dt / 0.09);
       var dz = pend.dz * b, px = pend.px * b, py = pend.py * b;
@@ -821,11 +867,11 @@ var JUL = (function () {
   requestAnimationFrame(tick);
   setMode(mode);
   elHint.classList.add('show');
-  setTimeout(function () { if (!auto.on) hideHint(); }, 7000);
+  setTimeout(function () { if (!auto.dir) hideHint(); }, 7000);
 
   window.__fd = {
-    st: st, setMode: function (m) { setMode(m); }, setAuto: setAuto, draw: function () { st.renorm(); draw(); },
-    info: function () { return { mode: mode, Lz: st.Lz, N: mode === 'julia' ? st.viewR() : st.cond(), m: st.m, snaps: st.snaps ? st.snaps.length : st.stack.length, auto: auto.on, scale: scale, w: canvas.width, h: canvas.height }; }
+    st: st, setMode: function (m) { setMode(m); }, setAuto: setAuto, auto: auto, panV: function () { return panV; }, draw: function () { st.renorm(); draw(); },
+    info: function () { return { mode: mode, Lz: st.Lz, N: mode === 'julia' ? st.viewR() : st.cond(), m: st.m, snaps: st.snaps ? st.snaps.length : st.stack.length, auto: auto.dir, rate: auto.rate, scale: scale, w: canvas.width, h: canvas.height }; }
   };
 })();
 </script>
