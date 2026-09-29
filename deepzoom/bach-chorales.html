@@ -1102,6 +1102,18 @@ background:var(--dz-panel);color:var(--dz-ink);font:16px/1 ui-sans-serif,system-
       try { await Promise.race([ctx.resume(), new Promise((r) => setTimeout(r, 1500))]); } catch (e) { /* reported below */ }
     }
     setTimeout(audioStatus, 600);
+    // A context can report "running" while the output device renders nothing: its clock stands
+    // still. Seen in desktop Chrome (2026-09-28) when the system audio output was unavailable.
+    const clock0 = ctx.currentTime;
+    setTimeout(() => {
+      if (!play || ctx.state !== "running") return;
+      if (ctx.currentTime - clock0 < 0.3) {
+        posEl.dataset.blocked = "1";
+        posEl.textContent = "No sound is reaching your speakers: the browser's audio clock is stopped. " +
+          "Check the output device, or restart the browser, then press Play again.";
+        window.__play.stalled = true;
+      }
+    }, 1500);
     const out = ctx.createGain(); out.gain.value = 1; out.connect(bus);
     const t0 = ctx.currentTime + 0.12;
     const [off, n] = c.n;
