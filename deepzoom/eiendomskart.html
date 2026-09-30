@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <meta name="ai-disclosure" content="ai-generated">
-<meta name="description" content="Every registered property in Norway on one zoomable map: Kartverket cadastre over topographic, street, satellite or lidar base layers, all loaded in the browser from open services.">
+<meta name="description" content="Every registered property in Norway on one zoomable map: Kartverket cadastre over topographic, street, aerial or satellite base maps with lidar and terrain relief blended on top, all loaded in the browser from open services.">
 <title>Norway Property Map</title>
 <link rel="icon" href="/favicon.ico" sizes="any">
 <script src="https://cdn.jsdelivr.net/npm/openseadragon@6.1.1/build/openseadragon/openseadragon.min.js"></script>
@@ -20,6 +20,7 @@ html,body{margin:0;height:100%;overflow:hidden;background:var(--bg);color:var(--
   font:14px/1.45 ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif}
 #map{position:absolute;inset:0;background:#dfe3dc}
 @media (prefers-color-scheme:dark){#map{background:#1d2119}}
+#map.paper{background:#fff}
 .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:var(--shadow);
   backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px)}
 button,input{font:inherit;color:inherit}
@@ -39,7 +40,7 @@ button,input{font:inherit;color:inherit}
 #results .msg{color:var(--muted);cursor:default}
 
 /* layers */
-#layers{position:absolute;right:12px;top:12px;z-index:25;width:250px;padding:10px 12px}
+#layers{position:absolute;right:12px;top:12px;z-index:25;width:250px;padding:10px 12px;max-height:calc(100% - 90px);overflow:auto}
 #layers h2{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:2px 0 6px;font-weight:600}
 #layers h2+div{margin-bottom:10px}
 #layers label{display:flex;align-items:center;gap:7px;padding:2px 0;cursor:pointer}
@@ -120,6 +121,8 @@ button,input{font:inherit;color:inherit}
   <button class="x" aria-label="Close layers">&times;</button>
   <h2>Base map</h2>
   <div id="bases"></div>
+  <h2>Relief</h2>
+  <div id="relief"></div>
   <h2>Overlays</h2>
   <div id="overlays"></div>
   <p class="hint" id="zoomHint">Zoom in to see property lines.</p>
@@ -183,26 +186,35 @@ button,input{font:inherit;color:inherit}
       src: () => xyz(18, (z, x, y) => `https://cache.kartverket.no/v1/wmts/1.0.0/topograatone/default/webmercator/${z}/${y}/${x}.png`) },
     { id: "osm", name: "Street", note: "OpenStreetMap", attr: "© <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors, ODbL",
       src: () => xyz(19, (z, x, y) => `https://tile.openstreetmap.org/${z}/${x}/${y}.png`) },
+    { id: "air", name: "Aerial", note: "Esri, 0.3–0.5 m",
+      attr: "Aerial imagery <a href='https://www.arcgis.com/home/item.html?id=10df2279f9684e4a9f6a7f08febac2a9'>Esri World Imagery</a>: Esri, Vantor, Earthstar Geographics",
+      // Capped at z18: outside cities z19 answers with a "Map data not yet available" placeholder.
+      src: () => xyz(18, (z, x, y) => `https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/${z}/${y}/${x}`) },
     { id: "sat", name: "Satellite", note: "Sentinel-2, 10 m",
       attr: "<a href='https://s2maps.eu/'>Sentinel-2 cloudless 2025</a> by EOX IT Services GmbH (contains modified Copernicus Sentinel data 2025), CC BY-NC-SA 4.0",
       src: () => xyz(15, (z, x, y) => `https://tiles.maps.eox.at/wmts/1.0.0/s2cloudless-2025_3857/default/g/${z}/${y}/${x}.jpg`) },
-    { id: "lidar", name: "Lidar surface", note: "buildings, trees", attr: `Surface model hillshade ${KV}`,
-      // PNG, not JPEG: outside lidar coverage the service paints PNG white and JPEG black.
-      src: () => wms("wms.hoyde-dom", "DOM:skyggerelieff", { transparent: false }) },
     { id: "ok", name: "Economic map, 1st ed.", note: "historic", attr: `Økonomisk kartverk ${KV}`,
       src: () => wms("wms.n5raster2", "n5raster_foerstegang", { format: "image/jpeg", transparent: false }) },
+    { id: "none", name: "None", note: "relief only", attr: null, src: null },
   ];
+  // Stack order, bottom up; the panel groups them by `group`.
   // minZ: below this the layer is hidden (and not fetched); the service draws nothing there anyway.
+  // Relief layers multiply into whatever is beneath, so the base map keeps its colours under the shading.
+  // They are requested as transparent PNG: outside coverage the services paint JPEG black, which multiply
+  // would turn into a black Sweden and a black sea.
   const OVERLAYS = [
+    { id: "s", group: "relief", name: "Terrain", note: "bare ground", on: false, opacity: .5, minZ: 3, blend: "multiply",
+      attr: `Terrain hillshade ${KV}`, src: () => wms("wms.hoyde-dtm", "DTM:skyggerelieff") },
+    { id: "l", group: "relief", name: "Lidar surface", note: "buildings, trees", on: false, opacity: .6, minZ: 3, blend: "multiply",
+      attr: `Surface model hillshade ${KV}`, src: () => wms("wms.hoyde-dom", "DOM:skyggerelieff") },
     { id: "p", name: "Property boundaries", on: true, opacity: 1, minZ: 14, attr: `Matrikkelen ${KV}`,
       src: () => wms("wms.matrikkelkart", "eiendomsgrense,hjelpelinje,grensepunkt,teig", { minZ: 13 }) },
     { id: "b", name: "Buildings", on: false, opacity: .8, minZ: 14, attr: `Matrikkelen ${KV}`,
       src: () => wms("wms.matrikkelkart", "bygninger", { minZ: 13 }) },
     { id: "a", name: "Address points", on: false, opacity: 1, minZ: 16, attr: `Matrikkelen ${KV}`,
       src: () => wms("wms.matrikkelkart", "adresse", { minZ: 15 }) },
-    { id: "s", name: "Hillshade", on: false, opacity: .35, minZ: 3, attr: `Terrain hillshade ${KV}`,
-      src: () => wms("wms.hoyde-dtm", "DTM:skyggerelieff", { format: "image/jpeg", transparent: false }) },
   ];
+  const PARCELS = OVERLAYS.find((o) => o.id === "p");
 
   // ── state from the URL hash: #z/lat/lon/base/overlays ─────────────────
   const state = { base: "topo", on: new Set(OVERLAYS.filter((o) => o.on).map((o) => o.id)), view: null };
@@ -211,6 +223,8 @@ button,input{font:inherit;color:inherit}
     state.view = h.length >= 3 && h.slice(0, 3).every((v) => isFinite(parseFloat(v))) ? h.slice(0, 3).map(Number) : null;
     if (h[3] && BASES.some((b) => b.id === h[3])) state.base = h[3];
     if (h.length >= 5) state.on = new Set(h[4].split("").filter((c) => OVERLAYS.some((o) => o.id === c)));
+    // Links from before lidar became a relief layer: #…/lidar/p meant the surface hillshade on its own.
+    if (h[3] === "lidar") { state.base = "none"; state.on.add("l"); }
   }
   readHash();
 
@@ -232,6 +246,9 @@ button,input{font:inherit;color:inherit}
     blendTime: 0.15,
     imageLoaderLimit: 12,
     maxImageCacheCount: 800,
+    // The height services time out now and then (504 after 30 s); one retry fills the hole.
+    tileRetryMax: 1,
+    tileRetryDelay: 1000,
     gestureSettingsMouse: { clickToZoom: false, dblClickToZoom: true, flickEnabled: true, scrollToZoom: true },
     gestureSettingsTouch: { clickToZoom: false, dblClickToZoom: true, pinchToZoom: true, flickEnabled: true },
     gestureSettingsPen: { clickToZoom: false, dblClickToZoom: true },
@@ -259,9 +276,11 @@ button,input{font:inherit;color:inherit}
   // so hidden layers cost no requests.
   const items = new Map();
   function ensureItem(layer) {
-    if (items.has(layer.id)) return Promise.resolve(items.get(layer.id));
+    if (items.has(layer.id)) return items.get(layer.id);
+    if (!layer.src) return Promise.resolve(null);
     const p = new Promise((resolve) => viewer.addTiledImage({
       tileSource: layer.src(), x: 0, y: 0, width: 1, opacity: 0,
+      compositeOperation: layer.blend || null,
       crossOriginPolicy: "Anonymous",
       success: (e) => resolve(e.item),
       error: () => resolve(null),
@@ -291,8 +310,8 @@ button,input{font:inherit;color:inherit}
       if (viewer.world.getIndexOfItem(it) !== i) viewer.world.setItemIndex(it, i);
       i++;
     }
-    const p = OVERLAYS[0];
-    $("zoomHint").style.display = state.on.has(p.id) && z < p.minZ ? "" : "none";
+    $("map").classList.toggle("paper", state.base === "none");
+    $("zoomHint").style.display = state.on.has(PARCELS.id) && z < PARCELS.minZ ? "" : "none";
     attribution();
     saveHash();
   }
@@ -307,7 +326,7 @@ button,input{font:inherit;color:inherit}
   }
 
   function attribution() {
-    const parts = [BASES.find((b) => b.id === state.base).attr];
+    const parts = [BASES.find((b) => b.id === state.base).attr].filter(Boolean);
     const z = displayZ();
     for (const o of OVERLAYS) if (state.on.has(o.id) && z >= o.minZ && !parts.includes(o.attr)) parts.push(o.attr);
     parts.push("Search: <a href='https://ws.geonorge.no/'>Geonorge</a>");
@@ -317,23 +336,29 @@ button,input{font:inherit;color:inherit}
   // ── layer panel ─────────────────────────────────────────────────────────
   $("bases").innerHTML = BASES.map((b) => `<label><input type="radio" name="base" value="${b.id}"${b.id === state.base ? " checked" : ""}>` +
     `${esc(b.name)}<span class="note">${esc(b.note)}</span></label>`).join("");
-  $("overlays").innerHTML = OVERLAYS.map((o) => `<label><input type="checkbox" value="${o.id}"${state.on.has(o.id) ? " checked" : ""}>` +
-    `${esc(o.name)}</label><input type="range" min="0.1" max="1" step="0.05" value="${o.opacity}" data-o="${o.id}" aria-label="${esc(o.name)} opacity"` +
+  const toggles = (group) => OVERLAYS.filter((o) => (o.group || "overlays") === group).map((o) =>
+    `<label><input type="checkbox" value="${o.id}"${state.on.has(o.id) ? " checked" : ""}>${esc(o.name)}` +
+    `${o.note ? `<span class="note">${esc(o.note)}</span>` : ""}</label>` +
+    `<input type="range" min="0.1" max="1" step="0.05" value="${o.opacity}" data-o="${o.id}" aria-label="${esc(o.name)} opacity"` +
     `${state.on.has(o.id) ? "" : " hidden"}>`).join("");
+  $("relief").innerHTML = toggles("relief");
+  $("overlays").innerHTML = toggles("overlays");
   $("bases").addEventListener("change", (e) => { state.base = e.target.value; applyLayers(); });
-  $("overlays").addEventListener("change", (e) => {
-    if (e.target.type !== "checkbox") return;
-    const id = e.target.value;
-    e.target.checked ? state.on.add(id) : state.on.delete(id);
-    document.querySelector(`[data-o="${id}"]`).hidden = !e.target.checked;
-    applyLayers();
-  });
-  $("overlays").addEventListener("input", (e) => {
-    const o = OVERLAYS.find((x) => x.id === e.target.dataset.o);
-    if (!o) return;
-    o.opacity = +e.target.value;
-    applyLayers();
-  });
+  for (const box of [$("relief"), $("overlays")]) {
+    box.addEventListener("change", (e) => {
+      if (e.target.type !== "checkbox") return;
+      const id = e.target.value;
+      e.target.checked ? state.on.add(id) : state.on.delete(id);
+      document.querySelector(`[data-o="${id}"]`).hidden = !e.target.checked;
+      applyLayers();
+    });
+    box.addEventListener("input", (e) => {
+      const o = OVERLAYS.find((x) => x.id === e.target.dataset.o);
+      if (!o) return;
+      o.opacity = +e.target.value;
+      applyLayers();
+    });
+  }
   const layersPanel = (open) => { $("layers").classList.toggle("open", open); $("layersToggle").setAttribute("aria-expanded", open); };
   $("layersToggle").onclick = () => layersPanel(!$("layers").classList.contains("open"));
   document.querySelector("#layers .x").onclick = () => layersPanel(false);
@@ -635,7 +660,7 @@ button,input{font:inherit;color:inherit}
   window.addEventListener("hashchange", () => {
     readHash();
     document.querySelectorAll("#bases input").forEach((i) => (i.checked = i.value === state.base));
-    document.querySelectorAll("#overlays input[type=checkbox]").forEach((i) => {
+    document.querySelectorAll("#relief input[type=checkbox], #overlays input[type=checkbox]").forEach((i) => {
       i.checked = state.on.has(i.value);
       document.querySelector(`[data-o="${i.value}"]`).hidden = !i.checked;
     });
