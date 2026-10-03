@@ -83,11 +83,11 @@ summary { cursor: pointer; font-weight: 600; width: fit-content; }
   <header>
     <a class="back" href="/fun-and-games/">← Fun &amp; Games</a>
     <h1>Video About Making Videos</h1>
-    <p class="sub">This page is the video. Every frame is HTML and CSS drawn by your browser, and the player sets the page's animation clock to each frame's timestamp, the same way the mp4 version was recorded.<span id="sndnote"></span></p>
+    <p class="sub">This page is the video. Every frame is HTML and CSS drawn by your browser, and the player sets the page's animation clock to each frame's timestamp, the same way the mp4 version was recorded.<span id="sndnote"></span><span id="litenote"></span></p>
   </header>
 
   <div class="stage" id="stage" role="group" aria-label="Video">
-    <div class="frame" id="frame"><iframe id="v" title="Video About Making Videos" name="v:live=1" tabindex="-1" loading="eager"></iframe></div>
+    <div class="frame" id="frame"></div>
     <button class="big" id="big" type="button" disabled aria-label="Play video"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4.5v15l13-7.5z"/></svg><span id="bigl">Loading</span><small id="bigt"></small></button>
   </div>
 
@@ -264,6 +264,10 @@ svg.pipes path { fill: none; stroke: var(--ink); stroke-width: 3; stroke-linecap
 .thumb iframe { transform: scale(.1953); }
 .thumb u { position: absolute; left: 6px; bottom: 6px; z-index: 3; background: var(--ink); color: var(--paper); font: 500 12px var(--mono); padding: 2px 6px; border-radius: 4px; text-decoration: none; }
 .thumb .tk2 { position: absolute; right: 6px; top: 6px; z-index: 3; width: 26px; height: 26px; border-radius: 50%; background: var(--card); border: 2px solid var(--ink); padding: 3px; }
+
+.lite #grain { display: none; }
+.lite .thumb, .lite #inset { background: var(--sage); }
+.ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 22px var(--sans); color: var(--ink); opacity: .55; }
 
 /* scene 5: meta */
 .k { position: absolute; font: 500 17px var(--mono); color: var(--dim); }
@@ -466,7 +470,7 @@ const TL = {"fps":30,"duration":74.619,"frames":2239,"voice":"bm_george","scenes
 const FPS = TL.fps, N = TL.frames, DUR = N / FPS;
 try { window.VSRC = window.VSRC || parent.VSRC; } catch (e) {}
 const Q = new URLSearchParams(/^v:/.test(window.name) ? window.name.slice(2) : location.search);
-const DEPTH = +(Q.get('d') || 0), KIND = Q.get('kind') || 'top', CAPTURE = Q.has('capture'), LIVE = Q.has('live');
+const DEPTH = +(Q.get('d') || 0), KIND = Q.get('kind') || 'top', CAPTURE = Q.has('capture'), LIVE = Q.has('live'), LITE = Q.has('lite');
 const $ = (s, r = document) => r.querySelector(s);
 const $$ = (s, r = document) => [...r.querySelectorAll(s)];
 const pad5 = n => String(Math.max(0, n)).padStart(5, '0');
@@ -616,13 +620,15 @@ $('#stat').classList.add('pw'); $('#stat').style.setProperty('--at', 'calc(' + S
 
 // nested copies of this page: six thumbnails and a recursive "previous frame" inset
 const kids = [];
+if (LITE) { document.documentElement.classList.add('lite'); $('.thl').textContent = 'six renders of this page (light mode: placeholders)'; }
+function holder(host, text) { const d = document.createElement('div'); d.className = 'ph'; d.textContent = text; host.appendChild(d); }
 function addKid(host, query, tfn) {
   const f = document.createElement('iframe'); f.name = 'v:' + query; f.srcdoc = window.VSRC; f.tabIndex = -1; host.appendChild(f);
   kids.push({ f, tfn, last: null });
 }
 const THUMB_T = [0, 1, 2, 3, 5, 6].map(i => Math.round((TL.scenes[i].start + TL.scenes[i].end) / 2 * 10) / 10);
-if (DEPTH === 0) $$('#s4 .thumb').forEach((cell, j) => { $('u', cell).textContent = 't = ' + THUMB_T[j].toFixed(1) + ' s'; addKid(cell, 'd=1&kind=thumb', () => THUMB_T[j]); });
-if (DEPTH === 0 || (KIND === 'meta' && DEPTH < 3)) addKid($('#inset'), `d=${DEPTH + 1}&kind=meta`, t => Math.max(0, t - 1 / FPS));
+if (DEPTH === 0) $$('#s4 .thumb').forEach((cell, j) => { $('u', cell).textContent = 't = ' + THUMB_T[j].toFixed(1) + ' s'; if (LITE) holder(cell, TL.scenes[[0, 1, 2, 3, 5, 6][j]].name); else addKid(cell, 'd=1&kind=thumb', () => THUMB_T[j]); });
+if (LITE) holder($('#inset'), 'previous frame'); else if (DEPTH === 0 || (KIND === 'meta' && DEPTH < 3)) addKid($('#inset'), `d=${DEPTH + 1}&kind=meta`, t => Math.max(0, t - 1 / FPS));
 
 function syncKids(t) {
   for (const k of kids) {
@@ -659,7 +665,18 @@ else { const loop = () => { readouts((document.timeline.currentTime / 1000) % DU
   const AUDIO_URI = "/images/video-about-making-videos-narration.mp3";
 
   const $ = s => document.querySelector(s);
-  const stage = $('#stage'), frameBox = $('#frame'), vf = $('#v'), big = $('#big'), pp = $('#pp'), seek = $('#seek');
+  // light mode: one copy of the video page, not ten (iOS kills tabs that use too much memory). Default on iPhone/iPad and after a load
+  // that never finished; ?lite=1 / ?lite=0 forces it.
+  const QS = new URLSearchParams(location.search), FLAG = 'vamv-loading';
+  const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let died = false; try { died = sessionStorage.getItem(FLAG) === '1'; sessionStorage.setItem(FLAG, '1'); } catch (e) {}
+  const clearFlag = () => { try { sessionStorage.removeItem(FLAG); } catch (e) {} };
+  addEventListener('pagehide', clearFlag);
+  const LITE = QS.has('lite') ? QS.get('lite') !== '0' : IOS || died;
+  // made here because the iframe's name (the page's settings) can't change once attached
+  const vf = document.createElement('iframe'); vf.id = 'v'; vf.title = 'Video About Making Videos'; vf.tabIndex = -1;
+  vf.name = 'v:live=1' + (LITE ? '&lite=1' : ''); $('#frame').appendChild(vf);
+  const stage = $('#stage'), frameBox = $('#frame'), big = $('#big'), pp = $('#pp'), seek = $('#seek');
   const cur = $('#cur'), muteB = $('#mute'), fsB = $('#fs'), chap = $('#chap');
   const fmt = s => { s = Math.max(0, Math.floor(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
   $('#dur').textContent = fmt(Math.round(DUR));
@@ -668,24 +685,25 @@ else { const loop = () => { readouts((document.timeline.currentTime / 1000) % DU
   let t = POSTER, playing = false, mode = 'idle', base = 0, wall0 = 0, lastF = -1;
   let ready = false, fresh = true, finished = false, curShown = '', segShown = -2;
 
-  // ---- audio -------------------------------------------------------------
+  // ---- audio ---
   const audio = new Audio(); audio.preload = 'auto'; audio.src = AUDIO_URI;
   let audioState = 'loading';                       // loading | ok | failed
   const sndnote = $('#sndnote'), narr = $('#narr');
+  if (LITE) { $('#litenote').textContent = ' Light mode is on, so the small previews inside the video are placeholders.'; }
   function audioKnown(ok) {
-    if (ok) { audioState = 'ok'; sndnote.textContent = ' Sound starts when you press play.'; narr.textContent = ' · narration by Kokoro, voice bm_george'; }
+    if (ok) { audioState = 'ok'; sndnote.textContent = playing ? '' : ' Sound starts when you press play.'; narr.textContent = ' · narration by Kokoro, voice bm_george'; }
     else { audioState = 'failed'; sndnote.textContent = ' This copy plays with captions only.'; narr.textContent = ''; muteB.hidden = true; }
   }
   audio.addEventListener('canplay', () => audioKnown(true));
   audio.addEventListener('error', () => audioKnown(false));
   audio.addEventListener('ended', () => { if (playing) finish(); });
 
-  // ---- fit the 1280x720 page into the stage -----------------------------------
+  // ---- fit the 1280x720 page into the stage ---
   const fit = () => { const k = Math.min(stage.clientWidth / 1280, stage.clientHeight / 720); frameBox.style.setProperty('--k', k > 0 ? k : 0.5); };
   new ResizeObserver(fit).observe(stage); fit();
   document.addEventListener('fullscreenchange', fit); document.addEventListener('webkitfullscreenchange', fit);
 
-  // ---- chapters ----------------------------------------------------------
+  // ---- chapters ---
   SCENES.forEach((sc, i) => {
     const b = document.createElement('button'); b.type = 'button'; b.style.setProperty('--len', (sc.end - sc.start).toFixed(3));
     b.innerHTML = sc.label + ' <span class="t">' + fmt(sc.start) + '</span>';
@@ -695,7 +713,7 @@ else { const loop = () => { readouts((document.timeline.currentTime / 1000) % DU
   });
   const chapBtns = [...chap.children];
 
-  // ---- drive the video page ---------------------------------------------------
+  // ---- drive the video page ---
   function show(tt) {
     if (!ready) return;
     const f = Math.max(0, Math.min(N - 1, Math.floor(tt * FPS + 1e-6)));
@@ -726,17 +744,17 @@ else { const loop = () => { readouts((document.timeline.currentTime / 1000) % DU
     show(t); ui(); requestAnimationFrame(tick);
   }
 
+  let playTok = 0;
   async function play() {
     if (!ready || playing) return;
     if (finished || t >= DUR - 0.9 || fresh) t = 0;
     fresh = false; finished = false; playing = true; mode = 'pending'; setButtons();
-    if (audioState === 'loading') {
-      await new Promise(r => { const done = () => r(); audio.addEventListener('canplay', done, { once: true }); audio.addEventListener('error', done, { once: true }); setTimeout(done, 1500); });
+    const my = ++playTok;
+    // play() must run inside the tap itself: iOS refuses it after any wait and never preloads before a tap
+    if (audioState !== 'failed') {
+      try { audio.currentTime = t; await audio.play(); if (playing && my === playTok) mode = 'audio'; return; } catch (e) { /* no audio, or interrupted: fall back to a silent clock */ }
     }
-    if (audioState === 'ok') {
-      try { audio.currentTime = t; await audio.play(); if (playing) { mode = 'audio'; } return; } catch (e) { /* blocked or interrupted: fall back to a silent clock */ }
-    }
-    if (playing) { mode = 'wall'; base = t; wall0 = performance.now(); }
+    if (playing && my === playTok) { mode = 'wall'; base = t; wall0 = performance.now(); }
   }
   function pause() { if (!playing) return; playing = false; mode = 'idle'; audio.pause(); setButtons(); }
   function finish() { playing = false; mode = 'idle'; audio.pause(); finished = true; t = Math.max(0, DUR - 0.85); setButtons(); }
@@ -782,7 +800,7 @@ else { const loop = () => { readouts((document.timeline.currentTime / 1000) % DU
     else if (e.key === 'm') muteB.click();
   });
 
-  // ---- start up: load the page, wait for fonts and nested copies, show the poster ----------
+  // ---- start up: load the page, wait for fonts and nested copies, show the poster ---
   vf.srcdoc = window.VSRC;
   const t0 = performance.now();
   let fontsOK = false, fontsAsked = false;
@@ -797,8 +815,8 @@ else { const loop = () => { readouts((document.timeline.currentTime / 1000) % DU
       }
       ok = !!(w.isReady && w.isReady() && fontsOK && d.fonts.status === 'loaded');
     } catch (e) { /* not loaded yet */ }
-    const audioSettled = audioState !== 'loading' || performance.now() - t0 > 4000;
-    if ((ok && audioSettled) || performance.now() - t0 > 9000) { ready = true; setButtons(); show(t); ui(); }
+    const audioSettled = audioState !== 'loading' || performance.now() - t0 > 1500;
+    if ((ok && audioSettled) || performance.now() - t0 > 9000) { ready = true; setButtons(); show(t); ui(); setTimeout(clearFlag, 2500); }
     else setTimeout(poll, 80);
   })();
   setButtons(); requestAnimationFrame(tick);
