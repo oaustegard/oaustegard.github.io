@@ -20,9 +20,15 @@ Keys: Space or K play and pause, Left and Right skip 5 seconds, F full screen, M
 - Fonts are Inter 5.3.0 (`@fontsource/inter`) and DejaVu Sans Mono 2.37.3 (`dejavu-fonts-ttf`), loaded from jsDelivr.
 - Drawing all of this live is heavier than playing a video file, so a slow phone may drop frames.
 
+## Light Mode
+
+The full page holds ten copies of the video page in memory: the one the player shows, six thumbnails, and a three-deep recursive inset. iPhone and iPad browsers (all WebKit) closed the tab on that, so on those devices the page loads one copy, skips the full-frame grain layer, and shows placeholders where the nested copies would be. Light mode also turns on after a load that never finished.
+
+Add `?lite=1` to the address to force it on, or `?lite=0` to force the full version.
+
 ## Narration
 
-The page looks for `/images/video-about-making-videos-narration.mp3` (75 seconds, mono, 96 kbps). Without it the page says so and plays captions only. Adding the file turns the sound on with no change to the page.
+The page looks for `/images/video-about-making-videos-narration.mp3` (75 seconds, mono, 96 kbps). Without it the page says so and plays captions only. Adding the file turns the sound on with no change to the page. Playback starts inside the tap on the play button, which iOS requires.
 
 ## Credits
 
