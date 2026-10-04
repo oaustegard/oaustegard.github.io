@@ -27,7 +27,7 @@
   function later() { if (window.requestIdleCallback) requestIdleCallback(map, { timeout: 800 }); else setTimeout(map, 50); }
   if (d.readyState === 'complete') later(); else addEventListener('load', later);
 
-  var MX = 1541, MY = 1019, W = 2800, H = 2000, N0 = 6719600, M = 2.5;
+  var MX = 1511, MY = 1041, W = 2800, H = 2000, N0 = 6719600, M = 2.5;
   var K = d.querySelectorAll('#km i'), pl = d.querySelector('#place .frame > div') || d.getElementById('place');
   var vw, vh, a, b, fx, raf = 0, ty = 0;
 
@@ -55,9 +55,9 @@
     if (still) { ty = new DOMMatrix(getComputedStyle(p).transform).m42; ticks(); return; }
     var r = pl ? pl.getBoundingClientRect() : null,
         smax = Math.max(1, d.documentElement.scrollHeight - vh),
-        sp = r ? clamp(r.top + (window.pageYOffset || 0) + r.height / 2 - vh / 2, 1, smax) : smax,
+        sp = r ? clamp(r.top + (window.pageYOffset || 0) + r.height * .5458 - vh / 2, 1, smax) : smax,
         tp = MY - vh / 2;
-    fx = r ? r.left + r.width / 2 : vw / 2;
+    fx = r ? r.left + r.width * .4367 : vw / 2;
     /* top of the window in plane px: a + b * scroll. Marker centred at sp; window stays inside the plane. */
     b = Math.min(.3, tp / sp, smax > sp ? (H - vh - tp) / (smax - sp) : .3);
     a = tp - b * sp;

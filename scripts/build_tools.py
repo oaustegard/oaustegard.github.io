@@ -31,7 +31,7 @@ Standard library only. Deterministic and idempotent.
 import json
 import re
 import sys
-from html import escape
+from html import escape, unescape
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote
@@ -283,7 +283,48 @@ def home_cards(model):
     return "\n" + "\n".join(out) + "\n"
 
 
-def hub_region(model):
+def blog_entries():
+    """Real posts (dated, not redirect stubs), newest first: title, description, href."""
+    out = []
+    for f in sorted((ROOT / "blog").glob("*.html")):
+        if f.name in ("index.html", "_template.html"):
+            continue
+        s = f.read_text(encoding="utf-8", errors="replace")
+        if re.search(r'http-equiv=["\']refresh', s, re.I):
+            continue
+        m = re.search(r'<meta name="article:published_time" content="([^"]+)"', s)
+        if not m:
+            continue
+        ti = re.search(r'<meta property="og:title" content="([^"]*)"', s) or re.search(r"<title>(.*?)</title>", s, re.S)
+        de = re.search(r'<meta name="description" content="([^"]*)"', s)
+        title = unescape(ti.group(1)).strip() if ti else f.stem
+        out.append((m.group(1), {"title": title, "blurb": unescape(de.group(1)).strip() if de else "",
+                                 "path": "/blog/" + f.name}))
+    return [e for _, e in sorted(out, key=lambda x: x[0], reverse=True)]
+
+
+def extra_sections(notes):
+    """Search-only groups: not counted as tools, hidden until a query matches them."""
+    groups = [("elsewhere", "Elsewhere", [{"title": e["title"], "blurb": e["blurb"], "path": e["href"]}
+                                         for e in notes.get("elsewhere", [])]),
+              ("blog", "Blog posts", blog_entries())]
+    lines = []
+    for slug, title, items in groups:
+        if not items:
+            continue
+        lines.append('<section class="hub-d hub-x" id="x-%s" data-slug="%s" aria-labelledby="h-x-%s" hidden>' % (slug, slug, slug))
+        lines.append('  <div class="hub-d__head"><h2 id="h-x-%s">%s</h2><p class="spot"><b>%d</b> <span>matches</span></p></div>' % (slug, esc(title), len(items)))
+        lines.append('  <ul class="place-list">')
+        for t in items:
+            ext = t["path"].startswith("http")
+            lines.append(place_li(t, "    ", ' data-kind="%s"' % ("link" if ext else "post")).replace(
+                'href="%s"' % esc_attr(href(t["path"])), 'href="%s"' % esc_attr(t["path"] if ext else href(t["path"]))))
+        lines.append("  </ul>")
+        lines.append("</section>")
+    return lines
+
+
+def hub_region(model, notes=None):
     ind = "    "
     lines = ['<nav class="jump" aria-label="Districts"><span class="kicker"><b lang="nb">Distrikter</b> &middot; Districts</span><ul>']
     for d in model:
@@ -303,6 +344,7 @@ def hub_region(model):
             inner.append(place_li(t, "    ", ' data-kind="%s"' % esc_attr(t["kind"])))
         inner.append("  </ul>")
         inner.append("</section>")
+    inner += extra_sections(notes or {})
     lines += ["  " + l for l in inner]
     lines.append("</div>")
     return "\n" + "\n".join(ind + l for l in lines) + "\n"
@@ -410,7 +452,7 @@ def main(argv):
     edit(ROOT / "index.html", home)
 
     def hub(text, label):
-        text = replace_region(text, "hub", hub_region(model), True, label)
+        text = replace_region(text, "hub", hub_region(model, notes), True, label)
         return replace_region(text, "total", str(total), True, label)
 
     edit(ROOT / "tools.html", hub)
