@@ -1,7 +1,7 @@
 # oaustegard.github.io
 ### The source code for austegard.com
 
-A personal site laid out like a survey sheet. The home page is a map of Flatøy, the island in Vestland, Norway where the family place Austegarden is, drawn from Kartverket open data. On it: about 80 small tools that run in the browser, a blog, and links to elsewhere. Plain HTML, CSS and a little JavaScript on GitHub Pages. No framework, no bundler, no server-side code, and no third-party requests on the home page.
+A personal site laid out like a survey sheet. The home page is a map of Flatøy, the island in Vestland, Norway where the family place Austegarden is, drawn from Kartverket open data. On it: more than 80 small tools, most of them running in the browser, a blog, and links to elsewhere. Plain HTML, CSS and a little JavaScript on GitHub Pages. No framework, no bundler, no server-side code, and no third-party requests on the home page.
 
 The design system is documented, with live examples, at [/style-guide.html](style-guide.html).
 

@@ -26,31 +26,16 @@ symbols/exports/references, and read only the line ranges you need.
 
 ## Dev Environment Tips
 
-This is a Jekyll-based static site published to GitHub Pages.
+This is a plain static site published to GitHub Pages. `.github/workflows/deploy.yml` copies the repo without running Jekyll, strips the front matter from `404.html` and writes `sitemap.xml`. The `Gemfile` and `_config.yml` still describe a Jekyll setup that the deploy does not use.
 
-- **Ruby Version**: The project uses **Ruby 3.3**, as specified in the `.github/workflows/main.yml` file.
-- **Setup**: To set up the development environment, run the following commands:
-  ```bash
-  # Install the correct Ruby version (if not already installed)
-  # rbenv install 3.1.2 (or similar)
-  # rbenv local 3.1.2
-
-  # Install dependencies using Bundler
-  bundle install
-  ```
-- **Verification**: To verify the setup, start the local development server:
-  ```bash
-  bundle exec jekyll serve
-  ```
-  The site should be available at `http://127.0.0.1:4000/`.
+- **Preview**: serve the repo root with any static file server, for example `python3 -m http.server 8000`, and open `http://127.0.0.1:8000/`.
+- **Regenerate listings**: `python3 scripts/build_site.py` (standard library only).
 
 ## Commands
 
-- **Build**: `bundle exec jekyll build`
-  - This command generates the static site in the `_site/` directory. It is the same command used in the GitHub Actions workflow.
-- **Dev Server**: `bundle exec jekyll serve`
-  - This command starts a local web server to preview changes.
-- **Lint**: There is no linting configuration in this repository.
+- **Build the generated files**: `python3 scripts/build_site.py`. `--check` writes nothing and exits 1 if a generated file is stale; `--dry-run` lists what would change.
+- **Preview**: `python3 -m http.server 8000` from the repo root.
+- **Lint**: there is no linting configuration in this repository.
 
 ## Testing Instructions
 
@@ -58,8 +43,8 @@ This is a Jekyll-based static site published to GitHub Pages.
   - Run tests: `npm test`
   - Run headed: `npm run test:headed`
   - Run UI mode: `npm run test:ui`
-- **Manual Verification**: Testing is also performed by running the site locally with `bundle exec jekyll serve` and manually verifying that pages render correctly and tools are functional.
-- **CI/CD**: The `.github/workflows/main.yml` workflow builds the site but does not run automated tests.
+- **Manual Verification**: serve the site locally and check that pages render and tools work.
+- **CI/CD**: the Build site and Deploy workflows do not run automated tests.
 
 ## Branch Preview Builds
 
@@ -102,7 +87,7 @@ The workflow typically takes 40–60 seconds. Open the workflow run's job summar
 The repository is organized into thematic subdirectories containing standalone web tools and pages.
 
 - `/`: The root contains top-level pages, configuration files, and miscellaneous assets.
-- `/_site/`: This directory contains the generated static site after running `bundle exec jekyll build`. **Do not edit files in this directory manually**, as they will be overwritten.
+- `/_site/`: a build output directory, if one exists. **Do not edit files in it**; they are overwritten.
 - `/ai-tools/`: A collection of web-based tools related to AI, such as log viewers and data processors.
 - `/bsky/`: Tools and utilities related to the BlueSky/AT Protocol social network.
   - **bsky-core.js**: Core utilities (16 exports) - dependency for other modules
@@ -134,8 +119,8 @@ The repository is organized into thematic subdirectories containing standalone w
 - **Do**: Follow the `tool-name.html` + `tool-name_README.md` pattern when creating new tools.
 - **Do**: Use hyphen-separated names for new files to maintain consistency.
 - **Don't**: Generate or commit `_MAP.md` code maps — they are retired in favor of dynamic tree-sitter parsing.
-- **Don't**: Edit any files in the `_site/` directory directly, as it is a build artifact.
-- **Don't**: Commit generated files like `sitemap.xml` to the repository. It is generated during the build process.
+- **Don't**: Edit any files in the `_site/` directory directly; it is a build output.
+- **Don't**: Commit `sitemap.xml` to the repository. The deploy generates it.
 - **Don't**: Edit a generated region by hand. Text between `<!--gen:NAME-->` and `<!--/gen:NAME-->`, `feed.xml`, `blog/index.html`, `tools.html` and `data/tools.json` are written by `python3 scripts/build_site.py`; change the source pages or `data/tool-notes.json` and run it (CI also runs it on `main` and commits the result).
 - **Do**: Run `python3 scripts/build_site.py --check` after adding, renaming or removing a tool page or a post; it exits 1 and lists what is stale.
 - **Do**: Keep `Kartdata © Kartverket (CC BY 4.0)` in the footer of every page with `data-sheet="band"` or `"full"`, and in any caption that shows map data. The map SVGs are Kartverket open data under CC BY 4.0, so this is a licence requirement. Regenerate them with `python3 scripts/map/build_flatoy.py`, never by hand.
@@ -151,6 +136,6 @@ The repository is organized into thematic subdirectories containing standalone w
 
 ## Additional Context
 
-- **Deployment**: The site is automatically built and deployed to GitHub Pages on every push to the `main` branch, as defined in `.github/workflows/main.yml`.
-- **Generated Sitemap**: The `sitemap.xml` file is generated automatically by the `jekyll-sitemap` plugin during the Jekyll build process. It is not stored in the repository but is available on the live site at `https://austegard.com/sitemap.xml`.
+- **Deployment**: pushes to `main` that touch posts, tool pages, the notes file or a generator run the Build site workflow (`.github/workflows/build-blog.yml`), which commits regenerated listings. `.github/workflows/deploy.yml` then publishes to GitHub Pages.
+- **Generated Sitemap**: `deploy.yml` writes `sitemap.xml` from the HTML files it finds. It is not stored in the repository but is on the live site at `https://austegard.com/sitemap.xml`. The 404 page uses it to find pages that moved.
 - **No JS/CSS Bundling**: The project does not use a modern asset pipeline (like Webpack or Vite). Scripts and styles are included directly in the HTML files.

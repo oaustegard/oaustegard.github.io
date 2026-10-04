@@ -232,13 +232,14 @@ def usable_summary(summary):
     return summary
 
 
-def entry_html(p, indent):
-    """One trail-log entry (SNIPPETS section 7), indented by `indent` spaces."""
+def entry_html(p, indent, level=3):
+    """One trail-log entry (SNIPPETS section 7), indented by `indent` spaces.
+    `level` is the heading level: 3 under an h2 (home page), 2 under the h1 (blog index)."""
     pad = " " * indent
     lines = [
         f'{pad}<li class="entry">',
         f'{pad}  <time datetime="{p["published"][:10]}">{long_date(p["published"])}</time>',
-        f'{pad}  <h3><a href="/blog/{p["filename"]}">{text(p["title"])}</a></h3>',
+        f'{pad}  <h{level}><a href="/blog/{p["filename"]}">{text(p["title"])}</a></h{level}>',
     ]
     summary = usable_summary(p["summary"])
     if summary:
@@ -251,7 +252,7 @@ def entry_html(p, indent):
 
 def generate_index(posts, config):
     """Generate blog/index.html: band page, trail log of every post, newest first."""
-    entries = "\n".join(entry_html(p, 6) for p in posts)
+    entries = "\n".join(entry_html(p, 6, 2) for p in posts)
 
     tail = []
     if config.get("sister_blog"):
@@ -263,6 +264,8 @@ def generate_index(posts, config):
         tail_html = '\n    <div class="tail">\n' + "\n".join(tail) + "\n    </div>"
 
     subtitle = text(config.get("subtitle", ""))
+    if config.get("lede_note"):
+        subtitle += " " + config["lede_note"]  # trusted markup from the config, like sister_blog
     title = text(config["index_title"])
     feed_title = escape(config["title"])
 

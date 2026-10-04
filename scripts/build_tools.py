@@ -194,6 +194,23 @@ def discover(district):
     return found
 
 
+BLURB_MAX = 92
+BLURB_FILLER = re.compile(r"^(various|assorted|miscellaneous|a collection|a set of|some)\b", re.I)
+
+
+def check_blurb(label, text, warn):
+    """House rule for blurbs (see _readme in tool-notes.json): one line, no final period,
+    no filler opening, at most BLURB_MAX characters."""
+    if not text:
+        return
+    if text.rstrip().endswith("."):
+        warn("blurb for %s ends with a period" % label)
+    if len(text) > BLURB_MAX:
+        warn("blurb for %s is %d characters (max %d)" % (label, len(text), BLURB_MAX))
+    if BLURB_FILLER.match(text):
+        warn("blurb for %s opens with a filler word" % label)
+
+
 def build_model(notes, warn):
     districts = sorted(notes["districts"], key=lambda d: (d.get("order", 999), d["key"]))
     known = notes.get("tools", {})
@@ -218,12 +235,15 @@ def build_model(notes, warn):
                     blurb = trim_blurb(page_desc) if page_desc else trim_blurb(readme_paragraph(readme))
                 featured = bool(note.get("featured"))
                 kind = note.get("kind") or "tool"
+            if note is not None:
+                check_blurb(e["path"], blurb, warn)
             tools.append({
                 "slug": e["stem"], "title": title, "blurb": blurb, "path": e["path"],
                 "kind": kind, "featured": featured, "district": d["key"],
                 "readme": ("/%s/%s" % (e["dir"], readme.relative_to(e["root_dir"]).as_posix())) if readme else None,
             })
         tools.sort(key=lambda t: (0 if t["featured"] else 1, sort_key(t["title"]), t["path"]))
+        check_blurb("district " + d["key"], d["blurb"], warn)
         model.append({
             "slug": d["key"], "title": d["title"], "blurb": d["blurb"], "path": d["index"],
             "places": int(d.get("cardPlaces", DEFAULT_PLACES)), "tools": tools,
@@ -249,7 +269,7 @@ def home_cards(model):
         places = ("\n" + " " * 10).join(
             '<li><a href="%s">%s</a></li>' % (esc_attr(href(t["path"])), esc(t["title"]))
             for t in d["tools"][: d["places"]])
-        more = "Open %s" % esc(d["path"]) if d["slug"] == "etc" else "All %d tools" % n
+        more = "All %d tools" % n
         out.append(
             '      <li class="district" data-slug="{slug}">\n'
             '        <div class="district__head"><h3>{title}</h3><p class="spot"><b>{n}</b> tools</p></div>\n'
@@ -302,7 +322,7 @@ def district_readmes_region(d):
     if not items:
         return "\n" + ind
     lines = ['<h2 id="h-readmes">Readmes</h2>',
-             '<p class="measure">Write-ups on GitHub, for the tools that have one.</p>',
+             '<p class="measure">README files on GitHub, for the tools that have one.</p>',
              '<ul class="t-list t-cols">']
     for t in items:
         lines.append('  <li><a class="ext" rel="noopener" href="%s">%s</a></li>' % (
