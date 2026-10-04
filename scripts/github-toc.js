@@ -65,40 +65,106 @@ class GitHubToc extends HTMLElement {
         );
     }
 
-    /* Render the basic structure */
-    render() {
-        this.shadowRoot.innerHTML = `
+    /* Styles live in one place so the error view keeps them too.
+       Colours come from the site's custom properties (inherited into the shadow
+       root); the fallbacks are system colours, so the list also reads correctly
+       on a page that does not define them, in light and in dark. */
+    styles() {
+        return `
             <style>
                 :host {
                     display: block;
-                    font-family: system-ui, -apple-system, sans-serif;
+                    font-family: var(--font-body, system-ui, -apple-system, sans-serif);
+                    color: var(--ink, CanvasText);
+                    --mark: var(--T, url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 12'%3E%3Cpath d='M0 0h10v3.200H6.600V12H3.400V3.200H0z'/%3E%3C/svg%3E"));
                 }
                 ul {
                     list-style: none;
                     padding: 0;
-                    margin: 0;
+                    margin: 1.25rem 0;
+                    border-top: 1px solid var(--ink, CanvasText);
+                }
+                ul:empty { border-top: 0; margin: 1.25rem 0; }
+                ul:empty::before {
+                    content: "Loading the list from GitHub\\2026";
+                    font: 400 .75rem/1.4 var(--font-mono, ui-monospace, monospace);
+                    color: var(--mute, GrayText);
                 }
                 li {
-                    margin: 0.5em 0;
+                    position: relative;
+                    margin: 0;
+                    padding: .7rem 0 .7rem 1.5rem;
+                    border-bottom: 1px solid var(--hair, rgba(128, 128, 128, .3));
+                }
+                li::before {
+                    content: "";
+                    position: absolute;
+                    left: 2px;
+                    top: 1.2em;
+                    width: 8px;
+                    height: 10px;
+                    background: var(--red, #a43a3a);
+                    -webkit-mask: var(--mark) center/contain no-repeat;
+                    mask: var(--mark) center/contain no-repeat;
+                }
+                li:hover::before, li:focus-within::before {
+                    background: var(--ink, CanvasText);
                 }
                 a {
-                    color: #0066cc;
+                    color: var(--ink, CanvasText);
+                    font-weight: 600;
+                    font-size: 1.0625rem;
                     text-decoration: none;
                 }
                 a:hover {
+                    color: var(--link-hover, #a43a3a);
                     text-decoration: underline;
+                    text-underline-offset: .2em;
+                }
+                a:focus-visible {
+                    outline: 2px solid var(--focus, #a43a3a);
+                    outline-offset: 3px;
+                    border-radius: 2px;
                 }
                 .readme-link {
-                    margin-left: 0.5em;
-                    font-variant: small-caps;
-                    font-size: 0.8em;
-                    opacity: 0.8;
+                    margin-left: .8em;
+                    font: 400 .75rem/1.4 var(--font-mono, ui-monospace, monospace);
+                    font-weight: 400;
+                    color: var(--mute, GrayText);
+                    text-decoration: none;
+                }
+                .readme-link:hover {
+                    color: var(--link-hover, #a43a3a);
+                    text-decoration: underline;
                 }
                 .error {
-                    color: #dc2626;
-                    padding: 1em;
+                    margin: 1.25rem 0;
+                    padding: .7rem 0 .7rem .9rem;
+                    border-left: 3px solid var(--red, #a43a3a);
+                    color: var(--ink-2, CanvasText);
+                    font-size: .9375rem;
+                    line-height: 1.5;
                 }
-            </style>
+                .error a {
+                    color: var(--link, LinkText);
+                    font-size: inherit;
+                    font-weight: 400;
+                    text-decoration: underline;
+                    text-decoration-thickness: 1px;
+                    text-underline-offset: .2em;
+                    text-decoration-color: var(--line, currentColor);
+                }
+                .error a:hover {
+                    color: var(--link-hover, #a43a3a);
+                    text-decoration-color: currentColor;
+                }
+            </style>`;
+    }
+
+    /* Render the basic structure */
+    render() {
+        this.shadowRoot.innerHTML = `
+            ${this.styles()}
             <ul id="toc-list"></ul>
         `;
     }
@@ -210,11 +276,16 @@ class GitHubToc extends HTMLElement {
         }
     }
 
-    /* Display error message */
+    /* Display error message, with a plain link to the repository when there is one */
     showError(message) {
+        const repoPath = this.getAttribute('repo-path') || '';
+        const link = /^https:\/\/github\.com\//.test(repoPath)
+            ? ` <a href="${repoPath.replace(/"/g, '&quot;')}">Open the repository on GitHub.</a>`
+            : '';
         this.shadowRoot.innerHTML = `
+            ${this.styles()}
             <div class="error">
-                ${message}
+                ${message}.${link}
             </div>
         `;
     }

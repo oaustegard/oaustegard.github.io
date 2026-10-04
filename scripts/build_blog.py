@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-build_blog.py — Generate feed.xml and blog/index.html from blog post meta tags.
+build_blog.py — Generate feed.xml, blog/index.html and the latest-posts region of
+index.html from blog post meta tags.
 
 Scans blog/*.html for <meta> tags defined in the template contract:
   - article:published_time (required for inclusion)
@@ -12,9 +13,15 @@ Scans blog/*.html for <meta> tags defined in the template contract:
 
 Skips: redirect stubs (http-equiv="refresh"), _template.html, index.html
 
+Generated regions of index.html sit between <!--gen:latest-posts--> and
+<!--/gen:latest-posts-->; everything outside the markers is left alone.
+
 Usage:
   python3 scripts/build_blog.py              # uses blog/_config.json
   python3 scripts/build_blog.py --dry-run    # print what would change, don't write
+  python3 scripts/build_blog.py --check      # write nothing; exit 1 and list stale files
+
+Standard library only (the CI step that runs it installs nothing).
 """
 
 import json
@@ -134,9 +141,9 @@ def extract_meta(filepath):
 
 # ── Feed generation ────────────────────────────────────────────────
 
-def generate_feed(posts, config):
-    """Generate Atom feed XML."""
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+def generate_feed(posts, config, updated=None):
+    """Generate Atom feed XML. `updated` defaults to the current time."""
+    now = updated or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     base = config["base_url"].rstrip("/")
     feed_url = f"{base}/feed.xml"
 
@@ -181,120 +188,157 @@ def generate_feed(posts, config):
     return "\n".join(lines)
 
 
+# ── HTML fragments ─────────────────────────────────────────────────
+
+HOME_REGION = "latest-posts"
+HOME_COUNT = 3
+
+SHEET_BAR = """<header class="sheet-bar">
+  <div class="in">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/"><b lang="nb">Kartblad</b> Flat&oslash;y</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">Blog</span></nav>
+    <p class="coords">60.537&deg; N 5.269&deg; E</p>
+  </div>
+</header>"""
+
+FOOTER = """<footer class="site-foot">
+  <div class="in">
+    <div class="foot-row">
+      <p><a href="/">austegard.com</a> &middot; <a href="/tools.html">Tools</a> &middot; <a href="/blog/">Blog</a> &middot; <a href="/feed.xml">Feed</a></p>
+      <p class="attrib">Kartdata &copy; Kartverket (CC BY 4.0)</p>
+    </div>
+  </div>
+</footer>"""
+
+
+def text(s):
+    """Escape for HTML text (quotes stay readable)."""
+    return escape(s, quote=False)
+
+
+def long_date(published):
+    """'2026-07-17T00:00:00Z' -> '17 July 2026' (no locale, no %-d)."""
+    d = datetime.fromisoformat(published.replace("Z", "+00:00"))
+    return f"{d.day} {d.strftime('%B')} {d.year}"
+
+
+def usable_summary(summary):
+    """Several posts have a description that is the start of the body with its tags
+    stripped and '...' appended (about 200 characters). That is not a summary; show
+    nothing instead. A real summary cut by this script is exactly 300 characters."""
+    if not summary:
+        return ""
+    if summary.endswith("...") and len(summary) < 300:
+        return ""
+    return summary
+
+
+def entry_html(p, indent):
+    """One trail-log entry (SNIPPETS section 7), indented by `indent` spaces."""
+    pad = " " * indent
+    lines = [
+        f'{pad}<li class="entry">',
+        f'{pad}  <time datetime="{p["published"][:10]}">{long_date(p["published"])}</time>',
+        f'{pad}  <h3><a href="/blog/{p["filename"]}">{text(p["title"])}</a></h3>',
+    ]
+    summary = usable_summary(p["summary"])
+    if summary:
+        lines.append(f"{pad}  <p>{text(summary)}</p>")
+    lines.append(f"{pad}</li>")
+    return "\n".join(lines)
+
+
 # ── Index generation ───────────────────────────────────────────────
 
 def generate_index(posts, config):
-    """Generate blog/index.html."""
-    base = config["base_url"].rstrip("/")
+    """Generate blog/index.html: band page, trail log of every post, newest first."""
+    entries = "\n".join(entry_html(p, 6) for p in posts)
 
-    # Build post list HTML
-    post_items = []
-    for p in posts:
-        date_obj = datetime.fromisoformat(p["published"].replace("Z", "+00:00"))
-        date_str = date_obj.strftime("%B %-d, %Y")
-        summary_html = ""
-        if p["summary"]:
-            summary_html = f'\n            <p class="post-desc">{escape(p["summary"])}</p>'
-        post_items.append(
-            f'        <li>\n'
-            f'            <a href="{p["filename"]}">{escape(p["title"])}</a>\n'
-            f'            <span class="post-date">{date_str}</span>'
-            f'{summary_html}\n'
-            f'        </li>'
-        )
-
-    post_list = "\n".join(post_items)
-
-    # Hero image block (muninn has one, austegard doesn't)
-    hero_html = ""
-    if config.get("hero_image"):
-        hero_html = (
-            f'    <img src="{config["hero_image"]}" '
-            f'alt="{escape(config.get("hero_alt", ""))}" class="blog-hero">\n'
-        )
-
-    # Sister blog link (austegard → muninn, or vice versa)
-    sister_html = ""
+    tail = []
     if config.get("sister_blog"):
-        s = config["sister_blog"]
-        sister_html = f'\n    <p class="sister-blog">{s["text"]}</p>'
-
-    # Provenance footer (austegard has one)
-    provenance_html = ""
+        tail.append(f'      <p class="sister-blog">{config["sister_blog"]["text"]}</p>')
     if config.get("provenance"):
-        provenance_html = f'\n    <p class="provenance">{config["provenance"]}</p>'
+        tail.append(f'      <p class="provenance">{config["provenance"]}</p>')
+    tail_html = ""
+    if tail:
+        tail_html = '\n    <div class="tail">\n' + "\n".join(tail) + "\n    </div>"
 
-    # Site footer (muninn has one)
-    footer_html = ""
-    if config.get("footer"):
-        footer_html = f"\n    {config['footer']}"
+    subtitle = text(config.get("subtitle", ""))
+    title = text(config["index_title"])
+    feed_title = escape(config["title"])
 
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{escape(config['index_title'])}</title>
-    <link rel="icon" href="/favicon.ico" sizes="any">
-    <link rel="stylesheet" href="/styles/style.css">
-    <link rel="stylesheet" href="/styles/blog.css">
-    <link rel="alternate" type="application/atom+xml" title="{escape(config['title'])}" href="/feed.xml">
-    <style>
-        .blog-hero {{
-            width: 100%;
-            height: auto;
-            margin-bottom: 1.5em;
-            border: 3px solid var(--rule, #d5cfc3);
-            box-shadow: 0 2px 12px rgba(43, 58, 103, 0.12);
-        }}
-        .blog-subtitle {{
-            color: var(--muted, #8b8577);
-            margin-bottom: 0.5em;
-        }}
-        .feed-link {{
-            font-size: 0.85em;
-            margin-bottom: 2em;
-            display: block;
-        }}
-        .feed-link a {{
-            color: var(--sage, #7a9e7e);
-        }}
-        .post-list {{ list-style: none; padding: 0; }}
-        .post-list li {{ margin-bottom: 1.5em; }}
-        .post-list a {{ font-size: 1.1em; font-weight: 600; }}
-        .post-date {{ display: block; font-size: 0.85em; color: var(--muted, #666); margin-top: 0.15em; }}
-        .post-desc {{ font-size: 0.95em; margin-top: 0.25em; }}
-        .provenance {{ font-size: 0.9em; color: var(--muted, #666); margin-top: 2em; }}
-        .sister-blog {{ font-size: 0.95em; margin-top: 2em; padding-top: 1em; border-top: 1px solid var(--rule, #ddd); }}
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>{title}</title>
+<meta name="description" content="{escape(config.get('subtitle', ''))}">
+<meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#f0f1eb" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#12140f" media="(prefers-color-scheme: dark)">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
+<link rel="manifest" href="/site.webmanifest">
+<link rel="preload" href="/fonts/fraunces-roman.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="/fonts/dm-sans.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/styles/style.css">
+<link rel="stylesheet" href="/styles/blog.css">
+<link rel="alternate" type="application/atom+xml" title="{feed_title}" href="/feed.xml">
 </head>
-<body>
-    <a href="/" class="back-link">Home</a>
-{hero_html}    <h1>{escape(config['index_heading'])}</h1>
-    <p class="blog-subtitle">{escape(config.get('subtitle', ''))}</p>
-    <span class="feed-link"><a href="/feed.xml">Atom feed</a></span>
+<body class="blog-index" data-sheet="band" style="--band-h:200px">
+<a class="skip" href="#main">Skip to the content</a>
+{SHEET_BAR}
+<main id="main">
+  <div class="in">
+    <header class="page-head">
+      <span class="plate-img" aria-hidden="true"></span>
+      <p class="kicker"><b lang="nb">Turlogg</b> &middot; Trail log</p>
+      <h1>{text(config['index_heading'])}</h1>
+      <p class="lede">{subtitle}</p>
+      <p class="feed-link"><a class="arr" href="/feed.xml">Atom feed</a></p>
+    </header>
 
-    <ul class="post-list">
-{post_list}
-    </ul>{sister_html}{provenance_html}{footer_html}
+    <ol class="trail">
+{entries}
+    </ol>{tail_html}
+  </div>
+</main>
+{FOOTER}
 </body>
 </html>
 """
 
 
+# ── Generated regions ──────────────────────────────────────────────
+
+def replace_region(src, name, inner):
+    """Replace everything between <!--gen:NAME--> and <!--/gen:NAME--> with `inner`
+    (on its own lines). Returns None when the marker pair is missing."""
+    pat = re.compile(r"(<!--gen:%s-->)(.*?)(<!--/gen:%s-->)" % (re.escape(name), re.escape(name)), re.S)
+    if not pat.search(src):
+        return None
+    return pat.sub(lambda m: m.group(1) + "\n" + inner + "\n" + m.group(3), src, count=1)
+
+
 # ── Main ───────────────────────────────────────────────────────────
 
 def main():
-    dry_run = "--dry-run" in sys.argv
+    args = set(sys.argv[1:])
+    dry_run = "--dry-run" in args
+    check = "--check" in args
+    unknown = args - {"--dry-run", "--check"}
+    if unknown:
+        print(f"ERROR: unknown option(s): {' '.join(sorted(unknown))}", file=sys.stderr)
+        sys.exit(2)
 
-    # Find config
-    root = Path(".")
+    root = Path(__file__).resolve().parent.parent
     config_path = root / "blog" / "_config.json"
     if not config_path.exists():
         print(f"ERROR: {config_path} not found", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(2)
 
-    with open(config_path) as f:
+    with open(config_path, encoding="utf-8") as f:
         config = json.load(f)
 
     # Scan blog posts
@@ -319,39 +363,66 @@ def main():
     if skipped:
         print(f"  Skipped: {', '.join(skipped[:10])}" + ("..." if len(skipped) > 10 else ""))
 
-    # Generate feed
-    feed_xml = generate_feed(posts, config)
+    outputs = {}  # path -> new content
+
+    # feed.xml: <updated> is the build time, so keep the old one while nothing else changes
     feed_path = root / "feed.xml"
+    old_feed = feed_path.read_text(encoding="utf-8") if feed_path.exists() else ""
+    old_updated = re.search(r"<updated>([^<]*)</updated>", old_feed)
+    feed_xml = generate_feed(posts, config, updated=old_updated.group(1) if old_updated else None)
+    if feed_xml != old_feed:
+        feed_xml = generate_feed(posts, config)
+    outputs[feed_path] = feed_xml
 
-    # Generate index
-    index_html = generate_index(posts, config)
-    index_path = blog_dir / "index.html"
+    outputs[blog_dir / "index.html"] = generate_index(posts, config)
 
-    if dry_run:
-        print(f"\n--- feed.xml ({len(feed_xml)} bytes) ---")
-        print(feed_xml[:800] + "\n...")
-        print(f"\n--- blog/index.html ({len(index_html)} bytes) ---")
-        print(index_html[:800] + "\n...")
-        return
+    # index.html: the latest-posts region only
+    home_path = root / "index.html"
+    home_src = home_path.read_text(encoding="utf-8")
+    region = "\n".join(entry_html(p, 6) for p in posts[:HOME_COUNT])
+    home_new = replace_region(home_src, HOME_REGION, region)
+    if home_new is None:
+        print(f"ERROR: <!--gen:{HOME_REGION}--> markers not found in {home_path}", file=sys.stderr)
+        sys.exit(2)
+    outputs[home_path] = home_new
 
-    # Write files
-    changed = []
-
-    for path, content in [(feed_path, feed_xml), (index_path, index_html)]:
+    stale = []
+    for path, content in outputs.items():
         old = path.read_text(encoding="utf-8") if path.exists() else ""
         if old != content:
-            path.write_text(content, encoding="utf-8")
-            changed.append(str(path))
-            print(f"  Updated: {path}")
-        else:
-            print(f"  Unchanged: {path}")
+            stale.append(path)
 
-    if changed:
-        print(f"\nChanged files: {', '.join(changed)}")
+    rel = lambda p: str(p.relative_to(root))
+
+    if check:
+        if stale:
+            print("Stale (run scripts/build_blog.py):")
+            for p in stale:
+                print(f"  {rel(p)}")
+            sys.exit(1)
+        print("All generated files are up to date.")
+        return
+
+    if dry_run:
+        for path, content in outputs.items():
+            state = "would change" if path in stale else "unchanged"
+            print(f"  {state}: {rel(path)} ({len(content)} bytes)")
+        for path in stale:
+            if path.name == "index.html" and path.parent == root:
+                print(f"\n--- {rel(path)}: {HOME_REGION} region ---\n{region}")
+        return
+
+    for path, content in outputs.items():
+        if path in stale:
+            path.write_text(content, encoding="utf-8")
+            print(f"  Updated: {rel(path)}")
+        else:
+            print(f"  Unchanged: {rel(path)}")
+
+    if stale:
+        print(f"\nChanged files: {', '.join(rel(p) for p in stale)}")
     else:
         print("\nNo changes needed.")
-
-    return changed
 
 
 if __name__ == "__main__":
