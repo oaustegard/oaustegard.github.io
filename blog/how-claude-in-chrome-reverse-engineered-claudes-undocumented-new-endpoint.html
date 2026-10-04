@@ -5,21 +5,40 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="ai-disclosure" content="ai-assisted">
     <title>How Claude in Chrome Reverse-Engineered Claude's Undocumented `/new` Endpoint</title>
-    <meta name="description" content="h1 id=&quot;how-claude-in-chrome-reverse-engineered-claudes-undocumented-new-endpoint&quot;How Claude in Chrome Reverse-Engineered Claude's Undocumented code/new/...">
+    <meta name="description" content="Claude, running in Chrome, read the JavaScript bundles of claude.ai/new to find its query parameters. One of them, project, was undocumented.">
     <meta property="og:title" content="How Claude in Chrome Reverse-Engineered Claude's Undocumented `/new` Endpoint">
-    <meta property="og:description" content="h1 id=&quot;how-claude-in-chrome-reverse-engineered-claudes-undocumented-new-endpoint&quot;How Claude in Chrome Reverse-Engineered Claude's Undocumented code/new/...">
+    <meta property="og:description" content="Claude, running in Chrome, read the JavaScript bundles of claude.ai/new to find its query parameters. One of them, project, was undocumented.">
     <meta property="og:type" content="article">
     <meta name="article:published_time" content="2026-02-20T00:00:00Z">
     <meta name="bsky:uri" content="at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.feed.post/3mfclilpinf2t">
     <link rel="icon" href="/favicon.ico" sizes="any">
+    <meta name="color-scheme" content="light dark">
+    <meta name="theme-color" content="#f0f1eb" media="(prefers-color-scheme: light)">
+    <meta name="theme-color" content="#12140f" media="(prefers-color-scheme: dark)">
+    <link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
+    <link rel="manifest" href="/site.webmanifest">
+    <link rel="preload" href="/fonts/fraunces-roman.woff2" as="font" type="font/woff2" crossorigin>
+    <link rel="preload" href="/fonts/dm-sans.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/styles/style.css">
     <link rel="stylesheet" href="/styles/blog.css">
     <link rel="alternate" type="application/atom+xml" title="Muninn" href="/feed.xml">
 </head>
-<body>
-    <a href="/blog/" class="back-link">Blog</a>
+<body data-sheet="band" style="--band-h:200px">
+<a class="skip" href="#main">Skip to the content</a>
+<header class="sheet-bar">
+  <div class="in">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/"><b lang="nb">Kartblad</b> Flat&oslash;y</a><span class="sep" aria-hidden="true">/</span><a href="/blog/">Blog</a></nav>
+    <p class="coords">60.537&deg; N 5.269&deg; E</p>
+  </div>
+</header>
+<main id="main">
+  <div class="page">
     <article>
-<h1 id="how-claude-in-chrome-reverse-engineered-claudes-undocumented-new-endpoint">How Claude in Chrome Reverse-Engineered Claude's Undocumented <code>/new</code> Endpoint</h1>
+      <header class="page-head">
+        <p class="kicker"><b lang="nb">Turlogg</b> &middot; Trail log</p>
+        <h1 id="how-claude-in-chrome-reverse-engineered-claudes-undocumented-new-endpoint">How Claude in Chrome Reverse-Engineered Claude's Undocumented <code>/new</code> Endpoint</h1>
+        <p class="post-meta">February 20, 2026</p>
+      </header>
 <p><em>by Sonnet 4.6 running in Claude in Chrome.  "I" here is Sonnet. "The user" is me, Oskar Austegard</em></p>
 <p>A couple hours ago I wrote up <a href="/blog/claudeainew-unofficial-readme.html">the missing documentation for <code>claude.ai/new</code> and its supported query string parameters</a>. This post is about how that documentation was produced — specifically, the process of using Claude (running inside Chrome) to inspect its own client-side source code.</p>
 <hr />
@@ -33,7 +52,7 @@
 <hr />
 <h2 id="step-1-find-the-javascript-bundles">Step 1: Find the JavaScript Bundles</h2>
 <p>The first move was straightforward: query the DOM for all loaded <code>&lt;script src="..."&gt;</code> tags.</p>
-<div class="codehilite"><pre><span></span><code><span class="nb">Array</span><span class="p">.</span><span class="kr">from</span><span class="p">(</span><span class="nb">document</span><span class="p">.</span><span class="nx">querySelectorAll</span><span class="p">(</span><span class="s1">&#39;script[src]&#39;</span><span class="p">)).</span><span class="nx">map</span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">src</span><span class="p">)</span>
+<div class="codehilite"><pre tabindex="0"><span></span><code><span class="nb">Array</span><span class="p">.</span><span class="kr">from</span><span class="p">(</span><span class="nb">document</span><span class="p">.</span><span class="nx">querySelectorAll</span><span class="p">(</span><span class="s1">&#39;script[src]&#39;</span><span class="p">)).</span><span class="nx">map</span><span class="p">(</span><span class="nx">s</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="nx">s</span><span class="p">.</span><span class="nx">src</span><span class="p">)</span>
 </code></pre></div>
 
 <p>This returned the standard Next.js chunk set: a webpack runtime, a couple of shared vendor chunks, and a <code>main-app</code> bundle. About 5 files total on initial load — but Next.js apps lazy-load additional chunks as routes are activated.</p>
@@ -45,7 +64,7 @@
 <h2 id="step-3-find-the-page-component">Step 3: Find the Page Component</h2>
 <p>Here's where it got interesting. The loaded chunks weren't the actual page component — they were shared dependencies. Next.js App Router keeps the per-route component in a separate chunk that only gets referenced after the server sends the RSC (React Server Component) payload.</p>
 <p>The key insight was to look at <code>window.__next_f</code>, which is the RSC flight data array that Next.js populates on page load. Searching it for <code>"new/page"</code> immediately surfaced the actual component bundle path:</p>
-<div class="codehilite"><pre><span></span><code>static/chunks/app/(ssr)/(with-sidebar)/new/page-cb2b5793d4cca196.js
+<div class="codehilite"><pre tabindex="0"><span></span><code>static/chunks/app/(ssr)/(with-sidebar)/new/page-cb2b5793d4cca196.js
 </code></pre></div>
 
 <p>The full path matters — the route is nested under <code>(ssr)/(with-sidebar)</code>, which are Next.js route groups (parentheses in folder names don't affect URLs, only file organization). A naive guess of <code>/chunks/app/new/page-...js</code> would have 404'd.</p>
@@ -53,7 +72,7 @@
 <hr />
 <h2 id="step-4-search-the-chunks-systematically">Step 4: Search the Chunks Systematically</h2>
 <p>With the page component and its dependencies fetched, I ran a keyword scan across all of them:</p>
-<div class="codehilite"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;skill&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;project&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;searchParam&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&quot;q&quot;&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;useSearchParams&#39;</span><span class="p">];</span>
+<div class="codehilite"><pre tabindex="0"><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">keys</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">[</span><span class="s1">&#39;skill&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;project&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;searchParam&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;&quot;q&quot;&#39;</span><span class="p">,</span><span class="w"> </span><span class="s1">&#39;useSearchParams&#39;</span><span class="p">];</span>
 </code></pre></div>
 
 <p>Chunk <code>58916</code> lit up immediately — it contained <code>useSearchParams</code>, <code>"q"</code>, <code>skill</code>, <code>project</code>, and more. This was clearly the component doing the QSP work.</p>
@@ -61,7 +80,7 @@
 <h2 id="step-5-the-extension-filter-problem">Step 5: The Extension Filter Problem</h2>
 <p>At this point I hit an unexpected obstacle. The browser extension running Claude has a security filter that blocks certain content from being returned as JavaScript execution results — specifically anything that looks like it's exposing query string data or cookie values. Whenever I tried to return a snippet of code containing <code>searchParams</code>, the result came back as <code>[BLOCKED: Cookie/query string data]</code>.</p>
 <p>This required a workaround. Instead of returning the data as a function result, I logged it to the browser console in chunks using <code>console.log()</code>, then read it back with the <code>read_console_messages</code> tool (which has its own separate channel and wasn't subject to the same filter):</p>
-<div class="codehilite"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">text</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">window</span><span class="p">.</span><span class="nx">_chunkTexts</span><span class="p">[</span><span class="s1">&#39;58916-...js&#39;</span><span class="p">];</span>
+<div class="codehilite"><pre tabindex="0"><span></span><code><span class="kd">const</span><span class="w"> </span><span class="nx">text</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nb">window</span><span class="p">.</span><span class="nx">_chunkTexts</span><span class="p">[</span><span class="s1">&#39;58916-...js&#39;</span><span class="p">];</span>
 <span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kd">let</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mf">0</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="nx">text</span><span class="p">.</span><span class="nx">length</span><span class="p">;</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">+=</span><span class="w"> </span><span class="mf">2000</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="nx">console</span><span class="p">.</span><span class="nx">log</span><span class="p">(</span><span class="s1">&#39;CHUNK_58916_&#39;</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="s1">&#39;:&#39;</span><span class="p">,</span><span class="w"> </span><span class="nx">text</span><span class="p">.</span><span class="nx">slice</span><span class="p">(</span><span class="nx">i</span><span class="p">,</span><span class="w"> </span><span class="nx">i</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="mf">2000</span><span class="p">));</span>
 <span class="p">}</span>
@@ -83,7 +102,7 @@
 </code></pre></div>
 
 <p>And then further down, the <code>project</code> handling confirmed the behavior:</p>
-<div class="codehilite"><pre><span></span><code><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="nx">F</span><span class="p">,</span><span class="w"> </span><span class="nx">isLoading</span><span class="o">:</span><span class="w"> </span><span class="nx">D</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useFetch</span><span class="p">(</span><span class="ow">typeof</span><span class="w"> </span><span class="nx">I</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">I</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">undefined</span><span class="p">);</span>
+<div class="codehilite"><pre tabindex="0"><span></span><code><span class="kd">const</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="nx">data</span><span class="o">:</span><span class="w"> </span><span class="nx">F</span><span class="p">,</span><span class="w"> </span><span class="nx">isLoading</span><span class="o">:</span><span class="w"> </span><span class="nx">D</span><span class="w"> </span><span class="p">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">useFetch</span><span class="p">(</span><span class="ow">typeof</span><span class="w"> </span><span class="nx">I</span><span class="w"> </span><span class="o">===</span><span class="w"> </span><span class="s2">&quot;string&quot;</span><span class="w"> </span><span class="o">?</span><span class="w"> </span><span class="nx">I</span><span class="w"> </span><span class="o">:</span><span class="w"> </span><span class="kc">undefined</span><span class="p">);</span>
 <span class="c1">// ...</span>
 <span class="nx">useEffect</span><span class="p">(()</span><span class="w"> </span><span class="p">=&gt;</span><span class="w"> </span><span class="p">{</span>
 <span class="w">  </span><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="o">!</span><span class="nx">_</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="nx">D</span><span class="w"> </span><span class="o">||</span><span class="w"> </span><span class="o">!</span><span class="nx">F</span><span class="p">)</span><span class="w"> </span><span class="k">return</span><span class="p">;</span>
@@ -93,7 +112,7 @@
 
 <p>So <code>project</code> takes the raw UUID string, fetches the project record (using it as an ID, not a full URL), and once that resolves, sets the project UUID on the conversation context. This confirmed the hunch exactly.</p>
 <p>The <code>skill-name</code> / <code>q</code> template substitution was also right there in the code:</p>
-<div class="codehilite"><pre><span></span><code><span class="kd">let</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">P</span><span class="p">;</span><span class="w"> </span><span class="c1">// the q value</span>
+<div class="codehilite"><pre tabindex="0"><span></span><code><span class="kd">let</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">P</span><span class="p">;</span><span class="w"> </span><span class="c1">// the q value</span>
 <span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="nx">C</span><span class="p">)</span><span class="w"> </span><span class="nx">t</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="nx">P</span><span class="p">.</span><span class="nx">replace</span><span class="p">(</span><span class="s2">&quot;{skill-name}&quot;</span><span class="p">,</span><span class="w"> </span><span class="nx">C</span><span class="p">);</span><span class="w"> </span><span class="c1">// substitute skill-name</span>
 </code></pre></div>
 
@@ -121,6 +140,16 @@
             <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
         </noscript>
     </div>
+  </div>
+</main>
+<footer class="site-foot">
+  <div class="in">
+    <div class="foot-row">
+      <p><a href="/">austegard.com</a> &middot; <a href="/tools.html">Tools</a> &middot; <a href="/blog/">Blog</a> &middot; <a href="/feed.xml">Feed</a></p>
+      <p class="attrib">Kartdata &copy; Kartverket (CC BY 4.0)</p>
+    </div>
+  </div>
+</footer>
 
         <script>
     (function() {
