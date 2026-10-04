@@ -1,0 +1,937 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta name="description" content="A Marauder's Map of everyone currently in orbit: real crew names, real station positions, footprints that update as you watch.">
+<title>Marauder's Map: Orbit Edition</title>
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=EB+Garamond:ital@0;1&family=IM+Fell+English:ital@0;1&family=IM+Fell+English+SC&family=Uncial+Antiqua&display=swap">
+<script src="https://cdn.jsdelivr.net/npm/satellite.js@6.0.1/dist/satellite.min.js" defer></script>
+<style>
+:root {
+  --ink: #2a1a0b;
+  --ink-soft: rgba(42, 26, 11, .62);
+  --blood: #7a1f12;
+  --paper: #e7d09c;
+  --paper-lite: #f1e1b8;
+  --paper-dark: #b98c4f;
+  --desk: #17110c;
+  --serif: "IM Fell English", "Iowan Old Style", Georgia, serif;
+  --body: "EB Garamond", "Iowan Old Style", Georgia, serif;
+  --sc: "IM Fell English SC", "IM Fell English", Georgia, serif;
+  --display: "Uncial Antiqua", "IM Fell English", Georgia, serif;
+  --grain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='360' height='360'%3E%3Cfilter id='f' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' seed='4' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 .42 0 0 0 0 .27 0 0 0 0 .1 0 0 0 .55 -.08'/%3E%3C/filter%3E%3Crect width='360' height='360' filter='url(%23f)'/%3E%3C/svg%3E");
+  --stain: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='900' height='700'%3E%3Cfilter id='f' x='0' y='0' width='100%25' height='100%25'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.006 .009' numOctaves='4' seed='11'/%3E%3CfeColorMatrix values='0 0 0 0 .5 0 0 0 0 .3 0 0 0 0 .1 0 0 0 .9 -.28'/%3E%3C/filter%3E%3Crect width='900' height='700' filter='url(%23f)'/%3E%3C/svg%3E");
+  --parchment: var(--grain), var(--stain),
+    radial-gradient(ellipse at 50% 38%, #f3e3b9 0%, #e6cd98 52%, #cfa66a 100%);
+}
+* { box-sizing: border-box; }
+html { color-scheme: dark; }
+body {
+  margin: 0;
+  background: radial-gradient(ellipse at 50% 0%, #2a1d12 0%, var(--desk) 62%) fixed;
+  color: #e9d9b5;
+  font: 18px/1.5 var(--body);
+  font-variant-numeric: lining-nums;
+  min-height: 100vh;
+}
+a { color: inherit; }
+.back {
+  display: inline-block; margin: 14px 16px 0; font: 15px var(--sc);
+  color: #cdb98d; text-decoration: none; letter-spacing: .04em;
+}
+.back:hover, .back:focus-visible { color: #f1e1b8; text-decoration: underline; }
+.desk { max-width: 1180px; margin: 0 auto; padding: 10px 16px 56px; }
+button { font: inherit; color: inherit; }
+button:focus-visible, a:focus-visible { outline: 2px solid var(--blood); outline-offset: 2px; }
+
+/* ---- the sheet ---- */
+.sheet {
+  position: relative; perspective: 1900px; overflow: hidden; color: var(--ink);
+  background: var(--parchment);
+  border-radius: 3px 9px 4px 12px / 10px 3px 12px 4px;
+  box-shadow: 0 30px 60px rgba(0,0,0,.55), inset 0 0 90px 18px rgba(96,52,14,.62), inset 0 0 7px 2px rgba(40,18,4,.85);
+}
+.sheet::after { /* the two creases */
+  content: ""; position: absolute; inset: 0; pointer-events: none; z-index: 2;
+  background:
+    linear-gradient(90deg, transparent 49.55%, rgba(80,45,15,.30) 49.85%, rgba(255,243,205,.34) 50.15%, transparent 50.5%),
+    linear-gradient(0deg, transparent 49.7%, rgba(80,45,15,.22) 50%, rgba(255,243,205,.26) 50.3%, transparent 50.6%);
+  mix-blend-mode: multiply;
+}
+.inner {
+  position: relative; padding: 22px 22px 18px;
+  visibility: hidden; opacity: 0;
+  transition: opacity 1.2s .5s ease, visibility 0s 1.8s;
+}
+.sheet[data-state="open"] .inner { visibility: visible; opacity: 1; transition: opacity 1.6s .55s ease, visibility 0s; }
+
+.door {
+  position: absolute; top: 0; bottom: 0; width: 50.2%; z-index: 5; background: var(--parchment);
+  backface-visibility: hidden; transition: transform 1.5s cubic-bezier(.6,.04,.25,1);
+  box-shadow: inset 0 0 90px 18px rgba(96,52,14,.62);
+}
+.door.l { left: 0; transform-origin: 0 50%; border-right: 1px solid rgba(60,30,8,.45); }
+.door.r { right: 0; transform-origin: 100% 50%; }
+.sheet[data-state="open"] .door.l { transform: rotateY(-114deg); }
+.sheet[data-state="open"] .door.r { transform: rotateY(114deg); }
+
+.prompt {
+  position: absolute; inset: 0; z-index: 6; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 18px;
+  transition: opacity .6s ease, visibility 0s .6s;
+}
+.sheet[data-state="open"] .prompt { opacity: 0; visibility: hidden; }
+.oath { margin: 0; font: italic clamp(22px, 4.4vw, 40px)/1.25 var(--serif); max-width: 22em; min-height: 2.5em; display: flex; align-items: center; }
+.oath .caret { display: inline-block; width: .06em; height: 1em; margin-left: .08em; background: var(--ink); vertical-align: -.1em; animation: blink 1s steps(1) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+.swear {
+  background: none; border: 1px solid var(--ink-soft); border-radius: 2px; padding: 8px 18px;
+  font: 17px var(--sc); letter-spacing: .06em; color: var(--ink); cursor: pointer;
+  box-shadow: 0 1px 0 rgba(255,243,205,.5);
+}
+.swear:hover { background: rgba(42,26,11,.08); }
+.sheet[data-state="swearing"] .swear, .sheet[data-state="closing"] .swear { visibility: hidden; }
+
+/* ---- banner ---- */
+.banner { text-align: center; padding: 2px 0 8px; }
+.banner p { margin: 0; font-family: var(--sc); letter-spacing: .08em; }
+.banner .msr { font-size: clamp(14px, 2.2vw, 18px); }
+.banner .purv { font-size: clamp(12px, 1.7vw, 14px); color: var(--ink-soft); }
+.banner .prsnt { font: italic 15px var(--body); color: var(--ink-soft); margin-top: 2px; letter-spacing: 0; }
+.banner h1 { margin: 4px 0 0; font: clamp(28px, 5.6vw, 52px)/1.05 var(--display); letter-spacing: .02em; color: var(--ink); text-shadow: 0 1px 0 rgba(255,243,205,.45); }
+
+/* ---- stage + hud ---- */
+.stage { position: relative; border: 1px solid rgba(42,26,11,.7); outline: 1px solid rgba(42,26,11,.35); outline-offset: 3px; margin: 14px 3px 4px; }
+.stage canvas { display: block; width: 100%; touch-action: manipulation; }
+.hud { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; padding: 12px 3px 2px; }
+.seg { display: inline-flex; border: 1px solid var(--ink-soft); border-radius: 2px; overflow: hidden; }
+.seg button { background: none; border: 0; border-right: 1px solid var(--ink-soft); padding: 5px 12px; font: 15px var(--sc); letter-spacing: .05em; cursor: pointer; }
+.seg button:last-child { border-right: 0; }
+.seg button[aria-checked="true"] { background: var(--ink); color: var(--paper-lite); }
+.seg button:not([aria-checked="true"]):hover { background: rgba(42,26,11,.09); }
+.mischief { margin-left: auto; background: none; border: 0; padding: 5px 2px; font: italic 16px var(--serif); text-decoration: underline; text-decoration-color: var(--ink-soft); text-underline-offset: 3px; cursor: pointer; }
+.mischief:hover { color: var(--blood); }
+.readout { flex-basis: 100%; margin: 0; font-size: 17px; line-height: 1.45; color: var(--ink); }
+.readout b { font-weight: 400; font-family: var(--sc); letter-spacing: .04em; }
+.prov { flex-basis: 100%; margin: 0; font-size: 14px; color: var(--ink-soft); }
+.prov .warn { color: var(--blood); }
+
+/* ---- notes: roll call and card ---- */
+.notes { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 22px; margin-top: 26px; align-items: start; }
+.notes[hidden] { display: none; }
+@media (max-width: 820px) { .notes { grid-template-columns: minmax(0, 1fr); } .notes .card { order: -1; } }
+.slip {
+  position: relative; color: var(--ink); padding: 18px 20px 20px; background: var(--parchment);
+  border-radius: 4px 7px 3px 9px / 7px 3px 8px 3px;
+  box-shadow: 0 14px 30px rgba(0,0,0,.45), inset 0 0 60px 8px rgba(96,52,14,.5), inset 0 0 5px 1px rgba(40,18,4,.8);
+}
+.slip h2 { margin: 0 0 4px; font: 22px/1.2 var(--display); }
+.slip h3 { margin: 18px 0 2px; font: 17px var(--sc); letter-spacing: .06em; }
+.slip h3:first-of-type { margin-top: 8px; }
+.slip .count { font: italic 15px var(--serif); letter-spacing: 0; color: var(--ink-soft); }
+.where { margin: 0 0 6px; font-size: 15px; color: var(--ink-soft); min-height: 1.5em; }
+.slip ul { list-style: none; margin: 0; padding: 0; }
+.who { display: grid; grid-template-columns: 1fr auto; gap: 0 12px; width: 100%; text-align: left; background: none; border: 0; border-bottom: 1px dotted rgba(42,26,11,.35); padding: 6px 4px; cursor: pointer; }
+.who:hover { background: rgba(42,26,11,.07); }
+.who .nm { font: italic 19px var(--serif); }
+.who .meta { font-size: 15px; color: var(--ink-soft); align-self: center; text-align: right; }
+.who[aria-pressed="true"] { background: rgba(122,31,18,.1); }
+.who[aria-pressed="true"] .nm { color: var(--blood); }
+.quiet { font: italic 17px var(--body); color: var(--ink-soft); font-style: italic; margin: 8px 0 0; }
+.card .head { display: flex; gap: 16px; align-items: flex-start; }
+.card .portrait { width: 96px; height: 96px; flex: none; object-fit: cover; border: 1px solid rgba(42,26,11,.6); outline: 1px solid rgba(42,26,11,.3); outline-offset: 2px; filter: grayscale(1) sepia(.85) contrast(1.15) brightness(.97); mix-blend-mode: multiply; background: rgba(42,26,11,.08); }
+.card .sub { margin: 0; font: 16px var(--sc); letter-spacing: .05em; color: var(--ink-soft); }
+.card dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; margin: 14px 0 0; font-size: 17px; }
+.card dt { color: var(--ink-soft); font-style: italic; }
+.card dd { margin: 0; }
+.card .bio { margin: 14px 0 0; font-size: 17px; }
+.card .flag { margin: 12px 0 0; font-style: italic; color: var(--blood); font-size: 16px; }
+
+/* ---- footer ---- */
+.fine { margin-top: 30px; color: #bfae88; font-size: 16.5px; }
+.fine summary { cursor: pointer; font-family: var(--sc); letter-spacing: .04em; font-size: 16px; color: #d6c498; }
+.fine h3 { margin: 18px 0 4px; font: 16px var(--sc); letter-spacing: .05em; color: #d6c498; }
+.fine p, .fine li { max-width: 74ch; }
+.fine table { border-collapse: collapse; margin: 6px 0; font-size: 14.5px; }
+.fine th, .fine td { text-align: left; padding: 3px 18px 3px 0; border-bottom: 1px solid rgba(214,196,152,.2); vertical-align: top; }
+.fine a { color: #e6d3a4; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .door, .inner, .prompt { transition-duration: .01s !important; transition-delay: 0s !important; }
+  .oath .caret { animation: none; }
+}
+@media (max-width: 560px) {
+  .inner { padding: 16px 12px 14px; }
+  .seg button { padding: 5px 11px; font-size: 14px; }
+  .seg .lg { display: none; }
+  .notes { gap: 16px; }
+}
+</style>
+</head>
+<body>
+<a class="back" href="/fun-and-games/">← Fun &amp; Games</a>
+<main class="desk">
+
+  <div class="sheet" id="sheet" data-state="folded">
+    <div class="door l"></div>
+    <div class="door r"></div>
+    <div class="prompt" id="prompt">
+      <p class="oath" id="oath" aria-live="polite">It seems to be a blank piece of old parchment.</p>
+      <button class="swear" id="swear" type="button">Tap it with your wand</button>
+    </div>
+
+    <div class="inner" id="inner">
+      <header class="banner">
+        <p class="msr">Messrs. Perigee, Apogee, Nadir &amp; Zenith</p>
+        <p class="purv">Purveyors of Aid to Wayward Orbiters</p>
+        <p class="prsnt">are proud to present</p>
+        <h1>The Orbital Map</h1>
+      </header>
+
+      <div class="stage" id="stage">
+        <canvas id="cv" role="img" aria-label="Parchment map of the world showing the two space stations and the footprints of the people aboard."></canvas>
+      </div>
+
+      <div class="hud">
+        <div class="seg" role="radiogroup" aria-label="View">
+          <button type="button" role="radio" data-mode="world" aria-checked="true"><span class="lg">Whole </span>world</button>
+          <button type="button" role="radio" data-mode="iss" aria-checked="false"><span class="lg">Follow the </span>ISS</button>
+          <button type="button" role="radio" data-mode="css" aria-checked="false"><span class="lg">Follow </span>Tiangong</button>
+        </div>
+        <button class="mischief" id="mischief" type="button">Mischief managed.</button>
+        <p class="readout" id="readout" aria-live="off">Inking in the names…</p>
+        <p class="prov" id="prov"></p>
+      </div>
+    </div>
+  </div>
+
+  <div class="notes" id="notes" hidden>
+    <section class="slip" aria-labelledby="roll-h">
+      <h2 id="roll-h">Roll call</h2>
+      <div id="roll"><p class="quiet">Fetching the register…</p></div>
+    </section>
+    <section class="slip card" id="card" aria-live="polite" aria-label="Selected person">
+      <p class="quiet">Choose a name from the register, or tap one on the map.</p>
+    </section>
+  </div>
+
+  <footer>
+    <details class="fine">
+      <summary>How this works, and how well — sources, licence, measured numbers</summary>
+
+      <h3>What this is, and what it is not</h3>
+      <p>Every name on the map is a person listed as currently in space by Launch Library 2. Each station's position is computed in your browser from its public orbital elements (SGP4, the standard model for this) and redrawn about twenty times a second. Footprints are placed along the last 94 minutes of each station's track and stay where they fell; the dotted line ahead is the next 94 minutes. The shaded night follows the real Sun.</p>
+      <ul>
+        <li>Everyone aboard a station is in the same place. The parallel lanes of footprints are decoration, so that eleven walkers can be told apart.</li>
+        <li>Which station someone is on is inferred from their agency: CNSA astronauts to Tiangong, everyone else to the ISS. Launch Library's expedition rosters lag launches by days, so they were not used. Anyone who launched in the last day is flagged, since they may still be on the way up.</li>
+        <li>"Overhead" means above 10° elevation from Austegarden (60.54° N, 5.27° E). It says nothing about whether the station is sunlit or visible.</li>
+        <li>This is a toy. Do not use it to schedule anything that matters.</li>
+      </ul>
+
+      <h3>Measured</h3>
+      <table>
+        <tr><th>ISS position vs wheretheiss.at, same instant</th><td>0.6 km mean, 0.7 km max over ten instants spanning 4.5 hours; altitude within 0.04 km. wheretheiss.at starts from the same public elements, so this checks the code, not the elements</td></tr>
+        <tr><th>Sub-solar point vs wheretheiss.at</th><td>Within 0.001° in latitude and longitude over the same ten instants</td></tr>
+        <tr><th>Orbital elements</th><td>Fetched at most every 3 hours (CelesTrak asks for two). Accuracy falls as elements age; the status line shows their age and turns red after a week</td></tr>
+        <tr><th>Crew list</th><td>Cached 6 hours (Launch Library allows 15 anonymous requests an hour); an embedded snapshot of 2026-10-04 is used if both the live call and the cache fail, and the page says so</td></tr>
+      </table>
+
+      <h3>Credits and licence</h3>
+      <p>Crew: <a href="https://thespacedevs.com/llapi">Launch Library 2</a> by The Space Devs. Orbital elements: <a href="https://celestrak.org">CelesTrak</a> (Dr. T.S. Kelso). Propagation: <a href="https://github.com/shashwatak/satellite-js">satellite.js</a> (MIT). Coastlines and borders: <a href="https://www.naturalearthdata.com">Natural Earth</a> (public domain) via <a href="https://github.com/topojson/world-atlas">world-atlas</a>. Cross-check: <a href="https://wheretheiss.at">Where is the ISS at?</a> Typefaces: IM Fell and Uncial Antiqua, from Google Fonts (SIL OFL). Page code: Apache-2.0, as the rest of this repository. Your browser talks to these services directly; nothing is sent to this site. The Marauder's Map belongs to the world of Harry Potter; this is an unaffiliated tribute.</p>
+    </details>
+  </footer>
+</main>
+
+<script>
+(() => {
+'use strict';
+
+/* ================= constants ================= */
+const SNAP = {"t":1791120426411,"crew":[{"id":573,"name":"Jessica Meir","ag":"NASA","nat":"American","last":"2026-02-13T10:15:56Z","tis":"P437DT5H50M21S","fl":2,"eva":6,"evat":"P1DT18H29M","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190924.jpeg","bio":"Jessica Ulrika Meir is Assistant Professor of Anesthesia at Harvard Medical School, Massachusetts General Hospital, Boston, following postdoctoral research in comparative physiology at the University of British Columbia.","nh":false},{"id":582,"name":"Jessica Watkins","ag":"NASA","nat":"American","last":"2026-10-01T15:10:06Z","tis":"P172DT22H39M20S","fl":2,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190244.jpeg","bio":"Jessica Andrea Watkins is an American geologist, former international rugby player, and a NASA astronaut of the class of 2017.","nh":false},{"id":638,"name":"Starman","ag":"SpX","nat":"Earthling","last":"2018-02-06T20:45:00Z","tis":"P3161DT4H2M31S","fl":1,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190247.jpeg","bio":"\"Starman\" is a mannequin dressed in a spacesuit occupying the driver's seat of Elon Musk's Tesla Roadster, launched to an heliocentric orbit on Falcon Heavy's inaugural launch.","nh":true},{"id":642,"name":"Joshua Kutryk","ag":"CSA","nat":"Canadian","last":"2026-10-01T15:10:06Z","tis":"P2DT9H37M26S","fl":1,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305185947.jpeg","bio":"Joshua Kutryk, a Royal Canadian Air Force lieutenant colonel, is from Beauvallon, Alberta. He has a bachelor’s degree in mechanical engineering, as well as master’s degrees in space studies, flight test engineering, and defense studies.","nh":false},{"id":649,"name":"Anna Kikina","ag":"RFSA","nat":"Russian","last":"2026-07-14T14:47:43Z","tis":"P238DT20H54S","fl":2,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305185904.jpeg","bio":"Anna Yuryevna Kikina is a Russian engineer and test cosmonaut, selected in 2012. Kikina is assigned to Crew-5 mission which is to launch in 2022. The seat was arranged as a part of exchange agreement between Roscosmos and NASA, allowing Russian cosmonaut to fly on US vehicle while American astronaut gets a seat on Soyuz.","nh":false},{"id":650,"name":"Pyotr Dubrov","ag":"RFSA","nat":"Russian","last":"2026-07-14T14:47:43Z","tis":"P436DT13H45M10S","fl":2,"eva":4,"evat":"P1DT5H49M","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305185922.jpeg","bio":"Dubrov was selected by Roscosmos as a cosmonaut on 8 October 2012, as one of eight cosmonauts selected as part of Roscosmos's 2012 selection group.\r\nIn 2020 he was assigned to the backup crew of Soyuz MS-17, backing up Russian cosmonaut Sergey Kud-Sverchkov as Flight Engineer on ISS Expedition 63/64","nh":false},{"id":710,"name":"Luke Delaney","ag":"NASA","nat":"American","last":"2026-10-01T15:10:06Z","tis":"P2DT9H37M46S","fl":1,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190723.jpeg","bio":"Luke Delaney is a retired US Marine Corps major who grew up in Debary, Florida. He holds a degree in mechanical engineering from University of North Florida and a master’s degree in aerospace engineering from the Naval Postgraduate School.","nh":false},{"id":712,"name":"Jack Hathaway","ag":"NASA","nat":"American","last":"2026-02-13T10:15:56Z","tis":"P232DT14H31M56S","fl":1,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190331.jpeg","bio":"Jack Hathaway is a US Navy commander from Connecticut. He earned bachelors’ degrees in physics and history from the U.S. Naval Academy and completed graduate studies at Cranfield University in England and the U.S. Naval War College.","nh":false},{"id":713,"name":"Anil Menon","ag":"NASA","nat":"American","last":"2026-07-14T14:47:43Z","tis":"P81DT10H10S","fl":1,"eva":3,"evat":"PT19H29M","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190559.jpeg","bio":"Anil Menon is a US Air Force lieutenant colonel from Minneapolis, Minnesota. He was SpaceX’s first flight surgeon, helping to launch the company’s first humans to space during NASA’s SpaceX Demo-2 mission and building a medical organization to support the human system during future missions.","nh":false},{"id":732,"name":"Andrei Fedyaev","ag":"RFSA","nat":"Russian","last":"2026-02-13T10:15:56Z","tis":"P418DT13H15M10S","fl":2,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305190412.jpeg","bio":"Andrei Valerievich Fedyaev (Андрей Валерьевич Федяев) is a Russian cosmonaut. He was a military pilot prior to retiring from Air Force in 2013, and was selected as a cosmonaut in 2012. \r\n\r\nISS-69 expedition will be Fedyaev's first spaceflight.","nh":false},{"id":747,"name":"Sophie Adenot","ag":"ESA","nat":"French","last":"2026-02-13T10:15:56Z","tis":"P232DT14H32M5S","fl":1,"eva":3,"evat":"PT19H42M","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305185354.jpeg","bio":"Between 2001 and 2003, Sophie studied engineering and graduated from ISAE-SUPAERO in Toulouse, France, where she specialised in spacecraft and aircraft flight dynamics.","nh":false},{"id":764,"name":"Zhu Yangzhu","ag":"CNSA","nat":"Chinese","last":"2026-05-24T15:08:36Z","tis":"P286DT8H20M20S","fl":2,"eva":2,"evat":"PT13H24M","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/255bauto255d__image_thumbnail_20240305185258.jpeg","bio":"Zhu Yangzhu is a Chinese pilot and astronaut selected as part of the Shenzhou program. He enlisted in the People's Liberation Army (PLA) in September 2005, and joined the Chinese Communist Party (CCP) in December 2006.","nh":false},{"id":915,"name":"Sergey Teteryatnikov","ag":"RFSA","nat":"Russian","last":"2026-10-01T15:10:06Z","tis":"P2DT9H38M28S","fl":1,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/sergey_teteryat_image_thumbnail_20260424073411.jpeg","bio":"Sergey Teteryatnikov graduated from the Naval Academy, St. Petersburg, Russia, in 2011 as an engineer specializing in ship power plant operations. Before his selection as a test cosmonaut, Teteryatnikov served in various naval engineering roles, including undersea vessels and specialized engine room operations.","nh":false},{"id":916,"name":"Zhang Zhiyuan","ag":"CNSA","nat":"Chinese","last":"2026-05-24T15:08:36Z","tis":"P132DT9H39M59S","fl":1,"eva":1,"evat":"PT5H29M","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/zhang_zhiyuan_o_image_thumbnail_20260524125922.png","bio":"Zhang Zhiyuan is a Chinese astronaut selected as part of the Shenzhou program. He enlisted in the People's Liberation Army (PLA) Air Force in September 2006, and joined the Chinese Communist Party (CCP) in March 2011. He was a pilot at the People's Liberation Army Air Force (PLAAF) prior to joining the astronaut corps.","nh":false},{"id":917,"name":"Lai Ka-ying","ag":"CNSA","nat":"Chinese","last":"2026-05-24T15:08:36Z","tis":"P132DT9H39M59S","fl":1,"eva":0,"evat":"P0D","img":"https://thespacedevs-prod.nyc3.digitaloceanspaces.com/media/images/lai_ka-ying_off_image_thumbnail_20260524130423.png","bio":"","nh":false}],"gp":[{"OBJECT_NAME":"ISS (ZARYA)","OBJECT_ID":"1998-067A","EPOCH":"2026-10-04T01:53:16.268928","MEAN_MOTION":15.48727366,"ECCENTRICITY":0.0006887,"INCLINATION":51.6316,"RA_OF_ASC_NODE":121.2001,"ARG_OF_PERICENTER":219.9512,"MEAN_ANOMALY":140.097,"EPHEMERIS_TYPE":0,"CLASSIFICATION_TYPE":"U","NORAD_CAT_ID":25544,"ELEMENT_SET_NO":999,"REV_AT_EPOCH":58863,"BSTAR":7.1811468e-05,"MEAN_MOTION_DOT":3.472e-05,"MEAN_MOTION_DDOT":0},{"OBJECT_NAME":"CSS (TIANHE)","OBJECT_ID":"2021-035A","EPOCH":"2026-10-04T07:12:38.144736","MEAN_MOTION":15.60283449,"ECCENTRICITY":0.00018591,"INCLINATION":41.47,"RA_OF_ASC_NODE":19.3688,"ARG_OF_PERICENTER":328.7847,"MEAN_ANOMALY":31.2881,"EPHEMERIS_TYPE":0,"CLASSIFICATION_TYPE":"U","NORAD_CAT_ID":48274,"ELEMENT_SET_NO":999,"REV_AT_EPOCH":31020,"BSTAR":0.00017451489,"MEAN_MOTION_DOT":0.00014363,"MEAN_MOTION_DDOT":0}]};
+const HOME = { name: 'Austegarden', lat: 60.5367, lon: 5.2680 };
+const MIN_EL = 10;                      // degrees, for "overhead"
+const STEP = 15000;                     // ms between footprints
+const TRAIL_MIN = 94;                   // one orbit, minutes
+const GP_URL = 'https://celestrak.org/NORAD/elements/gp.php?GROUP=stations&FORMAT=json';
+const CREW_URL = 'https://ll.thespacedevs.com/2.2.0/astronaut/?in_space=true&limit=40&format=json';
+const WORLD_URL = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+const GP_TTL = 3 * 3600e3, CREW_TTL = 6 * 3600e3;
+const RAD = Math.PI / 180, TAU = Math.PI * 2;
+const INK = '42,26,11', BLOOD = '122,31,18';
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const $ = s => document.querySelector(s);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const wrap = d => ((d + 540) % 360 + 360) % 360 - 180;
+const fmtLat = v => Math.abs(v).toFixed(1) + '°' + (v >= 0 ? 'N' : 'S');
+const fmtLon = v => Math.abs(v).toFixed(1) + '°' + (v >= 0 ? 'E' : 'W');
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const dayMs = 864e5;
+
+const STATIONS = [
+  { id: 'iss', norad: 25544, name: 'International Space Station', short: 'ISS', crew: [] },
+  { id: 'css', norad: 48274, name: 'Tiangong', short: 'Tiangong', crew: [] },
+];
+const byId = Object.fromEntries(STATIONS.map(s => [s.id, s]));
+
+const S = {
+  mode: innerWidth < 640 ? 'iss' : 'world',
+  sel: null,                 // selected person id
+  crew: [],                  // all people from the register
+  beyond: [],                // non-human travellers
+  world: null,
+  night: null, nightAt: 0,
+  gpMeta: null, crewMeta: null,
+  open: false,
+};
+
+/* ================= data loading ================= */
+async function cached(key, ttl, url, pick) {
+  let stale = null;
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const o = JSON.parse(raw);
+      stale = o;
+      if (Date.now() - o.t < ttl) return { data: o.d, t: o.t, src: 'cache' };
+    }
+  } catch (e) { /* storage blocked */ }
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout ? AbortSignal.timeout(9000) : undefined });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = pick(await r.json());
+    try { localStorage.setItem(key, JSON.stringify({ t: Date.now(), d })); } catch (e) { /* ignore */ }
+    return { data: d, t: Date.now(), src: 'live' };
+  } catch (e) {
+    if (stale) return { data: stale.d, t: stale.t, src: 'stale' };
+    return null;
+  }
+}
+
+const pickGP = arr => {
+  const out = STATIONS.map(s => arr.find(g => g.NORAD_CAT_ID === s.norad));
+  if (out.some(x => !x)) throw new Error('station missing');
+  return out;
+};
+const pickCrew = j => {
+  if (!j || !Array.isArray(j.results) || !j.results.length) throw new Error('empty crew');
+  return j.results.map(a => ({
+    id: a.id, name: a.name, ag: (a.agency && a.agency.abbrev) || '', nat: a.nationality || '',
+    last: a.last_flight, tis: a.time_in_space, fl: a.flights_count, eva: a.spacewalks_count, evat: a.eva_time,
+    img: a.profile_image_thumbnail || a.profile_image || '', bio: tidyBio(a.bio),
+    nh: !!(a.type && a.type.id === 6),
+  }));
+};
+function tidyBio(b) {
+  b = (b || '').trim();
+  if (b.length < 40) return '';
+  if (b.length <= 380) return b;
+  const cut = b.slice(0, 380), i = Math.max(cut.lastIndexOf('. '), cut.lastIndexOf('! '));
+  return i > 150 ? cut.slice(0, i + 1) : cut.replace(/\s+\S*$/, '') + '…';
+}
+
+/* topojson decode, coastline roughening, hit-testing */
+function decodeWorld(topo) {
+  const [sx, sy] = topo.transform.scale, [tx, ty] = topo.transform.translate;
+  const arcs = topo.arcs.map(a => { let x = 0, y = 0; return a.map(p => { x += p[0]; y += p[1]; return [x * sx + tx, y * sy + ty]; }); });
+  const ring = idxs => {
+    const out = [];
+    for (const i of idxs) {
+      const a = i < 0 ? arcs[~i].slice().reverse() : arcs[i];
+      for (let k = out.length ? 1 : 0; k < a.length; k++) out.push(a[k]);
+    }
+    return out;
+  };
+  const polys = g => g.type === 'Polygon' ? [g.arcs.map(ring)]
+    : g.type === 'MultiPolygon' ? g.arcs.map(p => p.map(ring)) : [];
+  const geoms = o => o.geometries ? o.geometries : [o];
+
+  const hash = (x, y) => { const h = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453; return (h - Math.floor(h)) * 2 - 1; };
+  const mid = (a, b) => {                       // order-independent so shared borders agree
+    if (a[0] > b[0] || (a[0] === b[0] && a[1] > b[1])) { const t = a; a = b; b = t; }
+    const dx = b[0] - a[0], dy = b[1] - a[1], n = hash((a[0] + b[0]) / 2, (a[1] + b[1]) / 2) * 0.07;
+    return [(a[0] + b[0]) / 2 - dy * n, (a[1] + b[1]) / 2 + dx * n];
+  };
+  const rough = (pts) => {
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], L = Math.hypot(b[0] - a[0], b[1] - a[1]);
+      if (L > 1.1 && L < 40) {
+        const m = mid(a, b);
+        if (L > 2.6) { out.push(mid(a, m), m, mid(m, b)); } else out.push(m);
+      }
+      out.push(b);
+    }
+    return out;
+  };
+  const unwrap = r => {
+    const out = [[r[0][0], r[0][1]]];
+    for (let i = 1; i < r.length; i++) {
+      let x = r[i][0]; const q = out[i - 1][0];
+      while (x - q > 180) x -= 360;
+      while (x - q < -180) x += 360;
+      out.push([x, r[i][1]]);
+    }
+    return out;
+  };
+  const draw = (path, pts, close, pole) => {
+    path.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < pts.length; i++) path.lineTo(pts[i][0], pts[i][1]);
+    if (pole) { path.lineTo(pts[pts.length - 1][0], pole); path.lineTo(pts[0][0], pole); }
+    if (close) path.closePath();
+  };
+  // rings that circle a pole (Antarctica) end a full turn from where they began
+  const poleOf = pts => Math.abs(pts[pts.length - 1][0] - pts[0][0]) > 300 ? (pts[0][1] < 0 ? -90 : 90) : 0;
+
+  const land = new Path2D(), coast = new Path2D(), borders = new Path2D();
+  for (const g of geoms(topo.objects.land)) for (const p of polys(g)) for (const r of p) {
+    const u = rough(unwrap(r)); draw(land, u, true, poleOf(u)); draw(coast, u, false, 0);
+  }
+  const countries = [];
+  for (const g of geoms(topo.objects.countries)) {
+    const ps = polys(g);
+    for (const p of ps) for (const r of p) draw(borders, rough(unwrap(r)), false, 0);
+    countries.push({ name: g.properties && g.properties.name, polys: ps.map(p => {
+      const rings = p.map(unwrap);
+      let x0 = 1e9, x1 = -1e9, y0 = 1e9, y1 = -1e9;
+      for (const q of rings[0]) { if (q[0] < x0) x0 = q[0]; if (q[0] > x1) x1 = q[0]; if (q[1] < y0) y0 = q[1]; if (q[1] > y1) y1 = q[1]; }
+      return { rings, box: [x0, y0, x1, y1] };
+    }) });
+  }
+  return { land, coast, borders, countries };
+}
+function inRing(lon, lat, r) {
+  let c = false;
+  for (let i = 0, j = r.length - 1; i < r.length; j = i++) {
+    const a = r[i], b = r[j];
+    if ((a[1] > lat) !== (b[1] > lat) && lon < (b[0] - a[0]) * (lat - a[1]) / (b[1] - a[1]) + a[0]) c = !c;
+  }
+  return c;
+}
+function countryAt(lon, lat) {
+  if (!S.world) return null;
+  for (const c of S.world.countries) for (const p of c.polys) for (const x of [lon, lon + 360]) {
+    const b = p.box;
+    if (x < b[0] || x > b[2] || lat < b[1] || lat > b[3]) continue;
+    if (!inRing(x, lat, p.rings[0])) continue;
+    let hole = false;
+    for (let i = 1; i < p.rings.length; i++) if (inRing(x, lat, p.rings[i])) { hole = true; break; }
+    if (!hole) return c.name;
+  }
+  return '';
+}
+
+/* ================= orbit ================= */
+function geo(rec, ms) {
+  const d = new Date(ms);
+  const pv = satellite.propagate(rec, d);
+  if (!pv || !pv.position || typeof pv.position === 'boolean') return null;
+  const g = satellite.eciToGeodetic(pv.position, satellite.gstime(d));
+  return { lat: satellite.degreesLat(g.latitude), lon: satellite.degreesLong(g.longitude), alt: g.height,
+           v: Math.hypot(pv.velocity.x, pv.velocity.y, pv.velocity.z) };
+}
+function tickPos(st, tk) {
+  let p = st.cache.get(tk);
+  if (p === undefined) { p = geo(st.rec, tk); st.cache.set(tk, p); }
+  return p;
+}
+function trimCache(st, now) {
+  if (st.cache.size < 2500) return;
+  const cut = now - 3 * 3600e3;
+  for (const k of st.cache.keys()) if (k < cut) st.cache.delete(k);
+}
+function nextPass(st, from) {
+  const obs = { latitude: HOME.lat * RAD, longitude: HOME.lon * RAD, height: 0.05 };
+  let inPass = false, rise = null, maxEl = 0;
+  for (let t = from; t <= from + 36 * 3600e3; t += 30000) {
+    const d = new Date(t), pv = satellite.propagate(st.rec, d);
+    if (!pv || !pv.position || typeof pv.position === 'boolean') continue;
+    const ecf = satellite.eciToEcf(pv.position, satellite.gstime(d));
+    const el = satellite.ecfToLookAngles(obs, ecf).elevation / RAD;
+    if (el >= MIN_EL) { if (!inPass) { inPass = true; rise = t; maxEl = el; } else maxEl = Math.max(maxEl, el); }
+    else if (inPass) return { rise, set: t, maxEl, now: rise === from };
+  }
+  return inPass ? { rise, set: null, maxEl, now: true } : null;
+}
+function haversine(a, b) {
+  const dLat = (b.lat - a.lat) * RAD, dLon = (b.lon - a.lon) * RAD;
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * RAD) * Math.cos(b.lat * RAD) * Math.sin(dLon / 2) ** 2;
+  return 12742 * Math.asin(Math.sqrt(h));
+}
+
+/* the Sun and the night */
+function sunPos(ms) {
+  const n = ms / 864e5 + 2440587.5 - 2451545.0;
+  const L = 280.460 + 0.9856474 * n, g = (357.528 + 0.9856003 * n) * RAD;
+  const lam = (L + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * RAD;
+  const eps = (23.439 - 0.0000004 * n) * RAD;
+  const dec = Math.asin(Math.sin(eps) * Math.sin(lam));
+  const ra = Math.atan2(Math.cos(eps) * Math.sin(lam), Math.cos(lam)) / RAD;
+  const gmst = 280.46061837 + 360.98564736629 * n;
+  return { dec, lat: dec / RAD, lon: wrap(ra - gmst) };
+}
+function nightPaths(ms) {
+  const s = sunPos(ms), A = Math.sin(s.dec);
+  const levels = [0, -2, -4, -6, -9, -12, -15, -18].map(h => Math.sin(h * RAD));
+  const paths = levels.map(() => new Path2D());
+  const D = 0.5, HP = Math.PI / 2;
+  for (let lon = -180; lon < 180; lon += D) {
+    const B = Math.cos(s.dec) * Math.cos((lon + D / 2 - s.lon) * RAD);
+    const R = Math.hypot(A, B), dlt = Math.atan2(B, A);
+    const f = p => A * Math.sin(p) + B * Math.cos(p);
+    levels.forEach((C, i) => {
+      const cuts = [], q = C / R;
+      if (R > 1e-9 && Math.abs(q) <= 1) {
+        const a = Math.asin(q);
+        for (const p0 of [a - dlt, Math.PI - a - dlt]) {
+          const p = ((p0 + Math.PI) % TAU + TAU) % TAU - Math.PI;
+          if (Math.abs(p) <= HP) cuts.push(p);
+        }
+      }
+      cuts.sort((x, y) => x - y);
+      const edges = [-HP, ...cuts, HP];
+      for (let k = 0; k < edges.length - 1; k++) {
+        const a = edges[k], b = edges[k + 1];
+        if (b - a < 1e-6) continue;
+        if (f((a + b) / 2) < C) paths[i].rect(lon, a / RAD, D + 0.03, (b - a) / RAD);
+      }
+    });
+  }
+  return { paths, sun: s };
+}
+
+/* ================= people ================= */
+const isoDays = iso => {
+  const m = /P(?:(\d+)D)?(?:T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?)?/.exec(iso || '');
+  return m ? (+m[1] || 0) + ((+m[2] || 0) + ((+m[3] || 0) + (+m[4] || 0) / 60) / 60) / 24 : null;
+};
+const stationOf = p => p.nh ? null : (p.ag === 'CNSA' ? 'css' : 'iss');
+const tripDay = (p, now) => { const t = Date.parse(p.last); return isNaN(t) ? null : Math.floor((now - t) / dayMs) + 1; };
+const launchedHoursAgo = (p, now) => { const t = Date.parse(p.last); return isNaN(t) ? null : (now - t) / 3600e3; };
+const personById = id => S.crew.find(p => p.id === id) || S.beyond.find(p => p.id === id);
+
+function assignCrew(list) {
+  const sorted = list.slice().sort((a, b) => a.name.localeCompare(b.name));
+  S.crew = sorted.filter(p => !p.nh);
+  S.beyond = sorted.filter(p => p.nh);
+  for (const st of STATIONS) st.crew = S.crew.filter(p => stationOf(p) === st.id);
+}
+
+/* ================= DOM: register and card ================= */
+function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
+
+function buildRoll() {
+  const root = $('#roll'); root.textContent = '';
+  const now = Date.now();
+  for (const st of STATIONS) {
+    const h = el('h3', null, st.name + ' ');
+    h.appendChild(el('span', 'count', st.crew.length ? st.crew.length + ' aboard' : 'nobody aboard'));
+    root.appendChild(h);
+    const wh = el('p', 'where'); wh.dataset.where = st.id; root.appendChild(wh);
+    const ul = el('ul');
+    for (const p of st.crew) {
+      const li = el('li'), b = el('button', 'who'); b.type = 'button'; b.dataset.pid = p.id; b.setAttribute('aria-pressed', 'false');
+      b.appendChild(el('span', 'nm', p.name));
+      const d = tripDay(p, now);
+      b.appendChild(el('span', 'meta', [p.ag, d ? 'day ' + d : ''].filter(Boolean).join(' · ')));
+      li.appendChild(b); ul.appendChild(li);
+    }
+    root.appendChild(ul);
+  }
+  if (S.beyond.length) {
+    root.appendChild(el('h3', null, 'Beyond the edge of the map'));
+    root.appendChild(el('p', 'quiet', 'The register lists travellers this parchment cannot follow.'));
+    const ul = el('ul');
+    for (const p of S.beyond) {
+      const li = el('li'), b = el('button', 'who'); b.type = 'button'; b.dataset.pid = p.id; b.setAttribute('aria-pressed', 'false');
+      b.appendChild(el('span', 'nm', p.name));
+      b.appendChild(el('span', 'meta', 'not on the map'));
+      li.appendChild(b); ul.appendChild(li);
+    }
+    root.appendChild(ul);
+  }
+}
+
+function select(id) {
+  S.sel = id;
+  document.querySelectorAll('.who').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.pid === id)));
+  const p = personById(id), card = $('#card'); card.textContent = '';
+  if (!p) { card.appendChild(el('p', 'quiet', 'Choose a name from the register, or tap one on the map.')); return; }
+  const now = Date.now(), head = el('div', 'head');
+  if (/^https:\/\//.test(p.img)) { const im = el('img', 'portrait'); im.src = p.img; im.alt = ''; im.referrerPolicy = 'no-referrer'; head.appendChild(im); }
+  const t = el('div'); t.appendChild(el('h2', null, p.name));
+  const st = byId[stationOf(p)];
+  t.appendChild(el('p', 'sub', [p.ag, p.nat, st ? st.short : ''].filter(Boolean).join(' · ')));
+  head.appendChild(t); card.appendChild(head);
+  const dl = el('dl');
+  const row = (k, v) => { if (v == null || v === '') return; dl.appendChild(el('dt', null, k)); dl.appendChild(el('dd', null, v)); };
+  const d = tripDay(p, now), when = new Date(p.last);
+  if (!p.nh) {
+    row('This trip', d ? 'day ' + d + ', since ' + (isNaN(when) ? '?' : when.toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' })) : '');
+    const tis = isoDays(p.tis); row('Career in space', tis != null ? (tis >= 2 ? Math.round(tis) + ' days' : tis.toFixed(1) + ' days') + ' over ' + p.fl + (p.fl === 1 ? ' flight' : ' flights') : '');
+    const ev = isoDays(p.evat); row('Spacewalks', p.eva ? p.eva + (ev ? ' (' + ev.toFixed(1) + ' days outside)' : '') : 'none yet');
+    const p0 = st && st.pos; if (p0) row('Right now', 'over ' + (countryAt(p0.lon, p0.lat) || 'open water') + ', ' + Math.round(p0.alt) + ' km up');
+  } else {
+    row('Status', 'mannequin; heliocentric orbit since ' + (isNaN(when) ? '2018' : when.getUTCFullYear()));
+  }
+  card.appendChild(dl);
+  if (p.bio) card.appendChild(el('p', 'bio', p.bio));
+  const hrs = launchedHoursAgo(p, now);
+  if (!p.nh && hrs != null && hrs < 20) card.appendChild(el('p', 'flag', 'Launched ' + Math.max(1, Math.round(hrs)) + ' h ago, so they may still be on the way up.'));
+}
+
+/* ================= canvas ================= */
+const cv = $('#cv'), ctx = cv.getContext('2d');
+let W = 0, H = 0, dpr = 1;
+const view = { cx: 0, cy: 0, sc: 3, ready: false };
+let labelRects = [];
+
+function resize() {
+  const w = Math.round($('#stage').getBoundingClientRect().width);
+  if (!w) return;
+  W = w; H = Math.round(clamp(W * 0.56, 300, 640));
+  dpr = Math.min(2, window.devicePixelRatio || 1);
+  cv.style.height = H + 'px'; cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  view.ready = false;
+}
+function targetView() {
+  const st = byId[S.mode];
+  if (S.mode === 'world' || !st || !st.pos) return { cx: 0, cy: 0, sc: W / 360 };
+  const sc = W / 64, half = H / 2 / sc;
+  return { cx: st.pos.lon + 0.10 * W / sc, cy: clamp(st.pos.lat, -90 + half, 90 - half), sc };
+}
+function stepView(dt) {
+  const t = targetView();
+  if (!view.ready || REDUCED) { Object.assign(view, t, { ready: true }); return; }
+  const k = 1 - Math.exp(-dt * 5);
+  view.cx = wrap(view.cx + wrap(t.cx - view.cx) * k);
+  view.cy += (t.cy - view.cy) * k;
+  view.sc = Math.exp(Math.log(view.sc) + (Math.log(t.sc) - Math.log(view.sc)) * k);
+}
+const px = (lon, lat) => [W / 2 + wrap(lon - view.cx) * view.sc, H / 2 - (lat - view.cy) * view.sc];
+const copies = margin => {
+  const half = W / 2 / view.sc, out = [];
+  for (let m = -1; m <= 1; m++) if (view.cx + half > -180 - margin + 360 * m && view.cx - half < 180 + margin + 360 * m) out.push(m);
+  return out;
+};
+function toDeg(m) { const sc = view.sc; ctx.setTransform(dpr * sc, 0, 0, -dpr * sc, dpr * (W / 2 - (view.cx - 360 * m) * sc), dpr * (H / 2 + view.cy * sc)); }
+const toPx = () => ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+const graticule = (() => {
+  const p = new Path2D();
+  for (let lon = -180; lon <= 180; lon += 30) { p.moveTo(lon, -90); p.lineTo(lon, 90); }
+  for (let lat = -60; lat <= 60; lat += 30) { p.moveTo(-180, lat); p.lineTo(180, lat); }
+  return p;
+})();
+const tropics = (() => {
+  const p = new Path2D();
+  for (const lat of [-66.56, -23.44, 23.44, 66.56]) { p.moveTo(-180, lat); p.lineTo(180, lat); }
+  return p;
+})();
+
+function drawBase(now) {
+  const sc = view.sc, line = w => w / sc;
+  if (!S.night || now - S.nightAt > 60000) { S.night = nightPaths(now); S.nightAt = now; }
+  for (const m of copies(0)) {
+    toDeg(m);
+    ctx.fillStyle = 'rgba(' + INK + ',.032)'; for (const np of S.night.paths) ctx.fill(np);
+    ctx.lineWidth = line(.7); ctx.strokeStyle = 'rgba(' + INK + ',.22)'; ctx.setLineDash([line(1.5), line(5)]); ctx.stroke(graticule);
+    ctx.setLineDash([line(7), line(5)]); ctx.strokeStyle = 'rgba(' + INK + ',.3)'; ctx.stroke(tropics); ctx.setLineDash([]);
+  }
+  if (S.world) for (const m of copies(22)) {
+    toDeg(m);
+    ctx.fillStyle = 'rgba(150,100,40,.17)'; ctx.fill(S.world.land, 'evenodd');
+    ctx.lineWidth = line(.6); ctx.strokeStyle = 'rgba(' + INK + ',.34)'; ctx.setLineDash([line(2.5), line(2.5)]); ctx.stroke(S.world.borders); ctx.setLineDash([]);
+    ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(' + INK + ',.88)'; ctx.lineWidth = line(1.25); ctx.stroke(S.world.coast);
+    ctx.save(); ctx.translate(line(.7), line(-.5)); ctx.strokeStyle = 'rgba(' + INK + ',.28)'; ctx.lineWidth = line(.8); ctx.stroke(S.world.coast); ctx.restore();
+  }
+  toPx();
+  // ocean names, spaced out the way a cartographer would
+  ctx.fillStyle = 'rgba(' + INK + ',.38)'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = '600 ' + clamp(view.sc * 3.2, 11, 22) + 'px "IM Fell English SC", Georgia, serif';
+  for (const [t, lon, lat] of [['Pacific Ocean', -140, 8], ['Pacific Ocean', 172, -12], ['Atlantic Ocean', -33, 14], ['Atlantic Ocean', -22, -28], ['Indian Ocean', 78, -24], ['Arctic Ocean', 0, 82], ['Southern Ocean', 40, -60]]) {
+    const [x, y] = px(lon, lat);
+    if (x > -120 && x < W + 120 && y > 10 && y < H - 10) ctx.fillText(t.toUpperCase().split('').join(' '), x, y);
+  }
+}
+
+function foot(x, y, ang, side, s, alpha, rgb, detail) {
+  const c = Math.cos(ang) * s, sn = Math.sin(ang) * s;
+  ctx.setTransform(dpr * c, dpr * sn, -dpr * sn, dpr * c, dpr * x, dpr * y);
+  ctx.globalAlpha = alpha; ctx.fillStyle = 'rgb(' + rgb + ')';
+  ctx.beginPath();
+  ctx.ellipse(-0.6, 0, 3.3, 1.7, 0, 0, TAU);
+  ctx.moveTo(-2.4, 0); ctx.ellipse(-3.7, 0, 1.3, 1.2, 0, 0, TAU);
+  if (detail) for (let i = 0; i < 5; i++) {
+    const r = i === 0 ? .62 : .42, tx = 3.7 + (2 - Math.abs(i - 2)) * .38, ty = (i - 2) * .72 * side;
+    ctx.moveTo(tx + r, ty); ctx.arc(tx, ty, r, 0, TAU);
+  }
+  ctx.fill();
+}
+
+const wcache = new Map();
+function textW(font, s) { const k = font + s; let w = wcache.get(k); if (w == null) { ctx.font = font; w = ctx.measureText(s).width; wcache.set(k, w); } return w; }
+
+function drawStation(st, now) {
+  const p = st.pos; if (!p || !st.rec) return;
+  const sc = view.sc, fs = clamp(.6 + sc / 38, .7, 1.3), crew = st.crew;
+  const laneGap = Math.max(5, 10 * fs);
+  const base = Math.floor(now / STEP) * STEP, ticks = Math.round(TRAIL_MIN * 60000 / STEP);
+  const [hx0, hy0] = px(p.lon, p.lat), absIdx0 = base / STEP;
+
+  // dotted road ahead
+  ctx.strokeStyle = 'rgba(' + INK + ',.4)'; ctx.lineWidth = 1.2 * Math.max(.8, fs); ctx.setLineDash([2, 6]); ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(hx0, hy0);
+  let prev = [hx0, hy0];
+  for (let i = 1; i <= ticks; i++) {
+    if ((absIdx0 + i) % 4) continue;
+    const q = tickPos(st, base + i * STEP); if (!q) { prev = null; continue; }
+    const [x, y] = px(q.lon, q.lat);
+    if (prev && Math.abs(x - prev[0]) < W * .6) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+    prev = [x, y];
+  }
+  ctx.stroke(); ctx.setLineDash([]); ctx.lineCap = 'butt';
+
+  // footprints
+  const a = tickPos(st, base), b = tickPos(st, base - STEP);
+  if (!a || !b) return;
+  const pxTick = Math.hypot(wrap(a.lon - b.lon) * sc, (a.lat - b.lat) * sc) || 1;
+  const m = Math.max(1, Math.ceil(12 * fs / pxTick));
+  const detail = fs > .78;
+  const absIdx = base / STEP;
+  const selLane = crew.findIndex(c => c.id === S.sel);
+  const dir = (newer, older) => Math.atan2(-(newer.lat - older.lat) * sc, wrap(newer.lon - older.lon) * sc);
+  for (let i = 0; i <= ticks; i++) {
+    const idx = absIdx - i; if (idx % m) continue;
+    const q = tickPos(st, base - i * STEP), nw = i ? tickPos(st, base - (i - 1) * STEP) : p, od = tickPos(st, base - (i + 1) * STEP);
+    if (!q || !nw || !od) continue;
+    const [x, y] = px(q.lon, q.lat);
+    if (x < -30 || x > W + 30 || y < -30 || y > H + 30) continue;
+    const ang = dir(nw, od), nx = -Math.sin(ang), ny = Math.cos(ang);
+    const age = i / ticks, al = .9 * Math.pow(1 - age, 1.4) + .05;
+    for (let j = 0; j < crew.length; j++) {
+      const off = (j - (crew.length - 1) / 2) * laneGap, side = ((idx + j) & 1) ? 1 : -1, w = side * .9 * fs;
+      const hot = j === selLane;
+      foot(x + nx * (off + w), y + ny * (off + w), ang, side, fs * (hot ? 1.14 : 1), hot ? Math.min(1, al * 1.2 + .12) : al, hot ? BLOOD : INK, detail);
+    }
+  }
+  ctx.globalAlpha = 1; toPx();
+
+  // live steps at the head
+  const ang0 = dir(p, b), nx0 = -Math.sin(ang0), ny0 = Math.cos(ang0);
+  const heads = crew.map((c, j) => {
+    const off = (j - (crew.length - 1) / 2) * laneGap;
+    return { c, j, x: hx0 + nx0 * off, y: hy0 + ny0 * off };
+  });
+  for (const h of heads) foot(h.x, h.y, ang0, ((Math.floor(now / STEP) + h.j) & 1) ? 1 : -1, fs * 1.08, 1, h.c.id === S.sel ? BLOOD : INK, detail);
+  ctx.globalAlpha = 1; toPx();
+
+  // station glyph
+  const g = fs * 1.15;
+  ctx.save(); ctx.translate(hx0, hy0); ctx.scale(g, g); ctx.strokeStyle = 'rgba(' + INK + ',.9)'; ctx.fillStyle = 'rgba(' + INK + ',.75)'; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(-9, 0); ctx.lineTo(9, 0); ctx.moveTo(0, -3); ctx.lineTo(0, 3); ctx.stroke();
+  for (const sx of [-8, -5, 5, 8]) ctx.fillRect(sx - 1.2, -5, 2.4, 10);
+  ctx.restore();
+
+  // names
+  const lh = clamp(13 + fs * 3, 15, 18), fpx = clamp(12 + fs * 2.2, 12.5, 15.5);
+  const fontN = 'italic ' + fpx + 'px "IM Fell English", Georgia, serif';
+  const collapsed = heads.length * lh > H * .62 || !heads.length;
+  const title = collapsed ? st.short + ' · ' + crew.length + ' aboard' : st.name;
+  const fontT = '600 ' + (fpx - .5) + 'px "IM Fell English SC", Georgia, serif';
+  const maxW = Math.max(textW(fontT, title), ...heads.map(h => collapsed ? 0 : textW(fontN, h.c.name)));
+  const goLeft = hx0 + 30 + maxW > W - 8 && hx0 - 30 - maxW > 8;
+  const lx = hx0 + (goLeft ? -26 : 26), al = goLeft ? 'right' : 'left';
+  const order = heads.slice().sort((p1, p2) => p1.y - p2.y);
+  const top = clamp(hy0 - (order.length * lh) / 2 - lh * .5, 22, Math.max(22, H - order.length * lh - 10));
+  const halo = (t, x, y) => { ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.lineWidth = 4.5; ctx.lineJoin = 'round'; ctx.strokeStyle = 'rgba(0,0,0,.85)'; ctx.strokeText(t, x, y); ctx.restore(); };
+  ctx.textAlign = al; ctx.textBaseline = 'alphabetic';
+  ctx.font = fontT; halo(title, lx, top - 6); ctx.fillStyle = 'rgba(' + INK + ',.92)'; ctx.fillText(title, lx, top - 6);
+  if (!collapsed) order.forEach((h, k) => {
+    const y = top + (k + .5) * lh + 4, hot = h.c.id === S.sel, name = h.c.name;
+    ctx.strokeStyle = 'rgba(' + (hot ? BLOOD : INK) + ',.45)'; ctx.lineWidth = .8;
+    ctx.beginPath(); ctx.moveTo(h.x + (goLeft ? -4 : 4), h.y); ctx.lineTo(lx + (goLeft ? 3 : -3), y - 4); ctx.stroke();
+    ctx.font = (hot ? '' : 'italic ') + (hot ? '600 ' : '') + fpx + 'px "IM Fell English", Georgia, serif';
+    const w = ctx.measureText(name).width;
+    halo(name, lx, y); ctx.fillStyle = 'rgba(' + (hot ? BLOOD : INK) + ',.95)'; ctx.fillText(name, lx, y);
+    if (hot) { ctx.fillRect(goLeft ? lx - w : lx, y + 2, w, 1); }
+    labelRects.push({ id: h.c.id, x: goLeft ? lx - w : lx, y: y - lh + 4, w, h: lh });
+  });
+}
+
+function drawHome() {
+  const [x, y] = px(HOME.lon, HOME.lat);
+  if (x < -20 || x > W + 20 || y < -20 || y > H + 20) return;
+  const s = clamp(view.sc / 9, .7, 1.4);
+  ctx.save(); ctx.translate(x, y); ctx.scale(s, s); ctx.fillStyle = 'rgba(' + BLOOD + ',.92)'; ctx.strokeStyle = 'rgba(' + BLOOD + ',.95)'; ctx.lineWidth = 1;
+  ctx.fillRect(-4, -7, 8, 7); ctx.fillRect(-5, -9, 2, 2); ctx.fillRect(-1, -9, 2, 2); ctx.fillRect(3, -9, 2, 2);
+  ctx.beginPath(); ctx.moveTo(0, -9); ctx.lineTo(0, -14); ctx.lineTo(4, -12.5); ctx.lineTo(0, -11); ctx.fill(); ctx.stroke();
+  ctx.restore();
+  ctx.font = 'italic ' + clamp(11 + s * 2, 12, 15) + 'px "IM Fell English", Georgia, serif'; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.save(); ctx.globalCompositeOperation = 'destination-out'; ctx.lineWidth = 4; ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.strokeText(HOME.name, x + 8 * s, y + 3); ctx.restore();
+  ctx.fillStyle = 'rgba(' + BLOOD + ',.95)'; ctx.fillText(HOME.name, x + 8 * s, y + 3);
+}
+
+function drawOrnament() {
+  // compass rose, bottom left
+  const r = clamp(W * .035, 16, 30), cx = r + 16, cy = H - r - 14;
+  ctx.save(); ctx.translate(cx, cy); ctx.strokeStyle = 'rgba(' + INK + ',.75)'; ctx.fillStyle = 'rgba(' + INK + ',.75)'; ctx.lineWidth = .9;
+  ctx.beginPath(); ctx.arc(0, 0, r * .62, 0, TAU); ctx.stroke();
+  for (let k = 0; k < 4; k++) {
+    ctx.rotate(Math.PI / 2);
+    ctx.beginPath(); ctx.moveTo(0, -r); ctx.lineTo(r * .16, -r * .16); ctx.lineTo(-r * .16, -r * .16); ctx.closePath(); k === 0 ? ctx.fill() : ctx.stroke();
+  }
+  ctx.rotate(Math.PI / 4);
+  for (let k = 0; k < 4; k++) { ctx.rotate(Math.PI / 2); ctx.beginPath(); ctx.moveTo(0, -r * .66); ctx.lineTo(r * .08, -r * .1); ctx.lineTo(-r * .08, -r * .1); ctx.closePath(); ctx.stroke(); }
+  ctx.restore();
+  ctx.font = '600 ' + clamp(r * .5, 10, 14) + 'px "IM Fell English SC", Georgia, serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillStyle = 'rgba(' + INK + ',.85)';
+  ctx.fillText('N', cx, cy - r - 2);
+  // inner frame
+  ctx.strokeStyle = 'rgba(' + INK + ',.5)'; ctx.lineWidth = .8; ctx.strokeRect(5.5, 5.5, W - 11, H - 11);
+}
+
+let lastT = 0, lastDraw = 0;
+function frame(ts) {
+  requestAnimationFrame(frame);
+  if (!S.open || !W) return;
+  const minGap = REDUCED ? 2000 : 45;
+  if (ts - lastDraw < minGap) return;
+  const dt = Math.min(.25, (ts - (lastT || ts)) / 1000); lastT = ts; lastDraw = ts;
+  const now = Date.now();
+  for (const st of STATIONS) { if (st.rec) { st.pos = geo(st.rec, now); trimCache(st, now); } }
+  stepView(dt);
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, cv.width, cv.height); toPx();
+  labelRects = [];
+  drawBase(now);
+  drawHome();
+  for (const st of STATIONS) drawStation(st, now);
+  ctx.globalAlpha = 1; drawOrnament();
+}
+
+/* ================= readouts ================= */
+const fmtDur = ms => { const m = Math.round(ms / 60000); return m >= 60 ? Math.floor(m / 60) + ' h ' + (m % 60) + ' min' : m + ' min'; };
+const fmtClock = d => d.toISOString().slice(11, 19);
+const ago = ms => { const h = ms / 3600e3; return h < 1 ? Math.round(h * 60) + ' min' : h < 48 ? h.toFixed(1) + ' h' : Math.round(h / 24) + ' days'; };
+
+function updateText() {
+  const now = Date.now();
+  for (const st of STATIONS) {
+    const p = st.pos, e = document.querySelector('[data-where="' + st.id + '"]');
+    if (!e) continue;
+    e.textContent = p ? 'Over ' + (countryAt(p.lon, p.lat) || 'open water') + ' · ' + fmtLat(p.lat) + ' ' + fmtLon(p.lon) + ' · ' + Math.round(p.alt) + ' km up · ' + Math.round(p.v * 3600).toLocaleString('en-US') + ' km/h'
+                 : 'Position unavailable.';
+    e.dataset.lat = p ? p.lat.toFixed(3) : ''; e.dataset.lon = p ? p.lon.toFixed(3) : '';
+  }
+  const bits = [];
+  for (const st of STATIONS) {
+    if (!st.pos || !st.rec) continue;
+    if (!st.pass || (st.pass.set && now > st.pass.set) || (st.pass.none && now - st.passAt > 3600e3)) { st.pass = nextPass(st, now) || { none: true }; st.passAt = now; }
+    const d = Math.round(haversine(HOME, st.pos)), ps = st.pass;
+    let s = st.short + ' is ' + d.toLocaleString('en-US') + ' km from ' + HOME.name;
+    if (!ps.none) s += (now >= ps.rise && (ps.set == null || now < ps.set)) ? ', overhead now' : ', next overhead in ' + fmtDur(ps.rise - now) + ' (peak ' + Math.round(ps.maxEl) + '°)';
+    bits.push(s);
+  }
+  $('#readout').textContent = fmtClock(new Date(now)) + ' UTC · ' + (bits.join('. ') || (S.noOrbit ? 'The orbit library did not load, so the map cannot move' : 'Waiting for the orbit data')) + '.';
+  const prov = [];
+  const gm = S.gpMeta, cm = S.crewMeta;
+  if (gm && S.gpEpoch) {
+    const ep = Date.parse(S.gpEpoch + 'Z');
+    prov.push('Orbital elements: epoch ' + S.gpEpoch.slice(0, 16).replace('T', ' ') + ' UTC (' + ago(now - ep) + ' old; ' + (gm.src === 'snapshot' ? 'embedded snapshot, live fetch failed' : gm.src === 'stale' ? 'cached, refresh failed' : 'CelesTrak') + ')');
+  }
+  if (cm) {
+    const how = cm.src === 'snapshot' ? 'embedded snapshot of ' + new Date(cm.t).toISOString().slice(0, 10) + ', live fetch failed'
+      : cm.src === 'live' ? 'Launch Library 2, just fetched'
+      : cm.src === 'stale' ? 'Launch Library 2, cached ' + ago(now - cm.t) + ' ago, refresh failed'
+      : 'Launch Library 2, cached ' + ago(now - cm.t) + ' ago';
+    prov.push('Crew: ' + how);
+  }
+  if (!S.world && S.worldTried) prov.push('Coastlines did not load');
+  const warn = (gm && gm.src !== 'live' && gm.src !== 'cache') || (cm && (cm.src === 'snapshot' || cm.src === 'stale')) || (!S.world && S.worldTried) || S.noOrbit || (S.gpEpoch && now - Date.parse(S.gpEpoch + 'Z') > 7 * dayMs);
+  const pe = $('#prov'); pe.textContent = prov.join(' · '); pe.classList.toggle('warn', !!warn);
+}
+
+/* ================= opening and closing ================= */
+const sheet = $('#sheet'), oath = $('#oath'), swear = $('#swear');
+async function typeInto(node, text, per) {
+  node.textContent = '';
+  const caret = el('span', 'caret'); node.appendChild(caret);
+  for (const ch of text) { caret.before(document.createTextNode(ch)); if (!REDUCED) await sleep(per); }
+  await sleep(REDUCED ? 0 : 700); caret.remove();
+}
+async function openMap() {
+  if (sheet.dataset.state !== 'folded') return;
+  sheet.dataset.state = 'swearing';
+  await typeInto(oath, 'I solemnly swear that I am up to no good.', 42);
+  sheet.dataset.state = 'open'; S.open = true; $('#notes').hidden = false; resize(); view.ready = false;
+  updateText();
+}
+async function closeMap() {
+  if (sheet.dataset.state !== 'open') return;
+  S.open = false; sheet.dataset.state = 'closing'; $('#notes').hidden = true;
+  oath.textContent = 'Mischief managed.';
+  await sleep(REDUCED ? 0 : 2100);
+  oath.textContent = 'It seems to be a blank piece of old parchment.';
+  sheet.dataset.state = 'folded';
+}
+swear.addEventListener('click', openMap);
+$('#mischief').addEventListener('click', closeMap);
+
+/* ================= wiring ================= */
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+  S.mode = b.dataset.mode;
+  document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-checked', String(x === b)));
+}));
+function syncSeg() { document.querySelectorAll('.seg button').forEach(x => x.setAttribute('aria-checked', String(x.dataset.mode === S.mode))); }
+$('#roll').addEventListener('click', e => { const b = e.target.closest('.who'); if (b) select(+b.dataset.pid === S.sel ? null : +b.dataset.pid); });
+function hit(e) {
+  const r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  return labelRects.find(l => x >= l.x - 4 && x <= l.x + l.w + 4 && y >= l.y && y <= l.y + l.h + 2);
+}
+cv.addEventListener('click', e => { const h = hit(e); if (h) select(h.id === S.sel ? null : h.id); });
+cv.addEventListener('pointermove', e => { cv.style.cursor = hit(e) ? 'pointer' : 'default'; });
+new ResizeObserver(resize).observe($('#stage'));
+if (location.hash === '#open') { swear.click(); }
+
+function setupStations(g) {
+  STATIONS.forEach((st, i) => { st.rec = satellite.json2satrec(g.data[i]); st.cache = new Map(); st.pos = null; st.pass = null; });
+  S.gpMeta = g; S.gpEpoch = g.data[0].EPOCH;
+}
+async function boot() {
+  syncSeg();
+  setInterval(() => { if (S.open) updateText(); }, 1000);
+  requestAnimationFrame(frame);
+  S.noOrbit = typeof satellite === 'undefined';
+
+  const worldP = (async () => {
+    for (let i = 0; i < 2 && !S.world; i++) {
+      try {
+        const r = await fetch(WORLD_URL, { signal: AbortSignal.timeout ? AbortSignal.timeout(12000) : undefined });
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        S.world = decodeWorld(await r.json());
+      } catch (e) { await sleep(1500); }
+    }
+    S.worldTried = true;
+  })();
+  const snapGP = { data: SNAP.gp, t: SNAP.t, src: 'snapshot' };
+  const gpP = cached('mm-gp-v1', GP_TTL, GP_URL, pickGP).then(r => r || snapGP).then(g => {
+    if (S.noOrbit) return;
+    try { setupStations(g); } catch (e) { setupStations(snapGP); }
+  });
+  const crewP = cached('mm-crew-v1', CREW_TTL, CREW_URL, pickCrew).then(r => r || { data: SNAP.crew, t: SNAP.t, src: 'snapshot' }).then(c => {
+    S.crewMeta = c; assignCrew(c.data); buildRoll(); updateText();
+  });
+  await Promise.all([gpP, crewP, worldP]);
+  updateText();
+}
+if (document.readyState === 'complete') boot(); else addEventListener('load', boot);
+})();
+</script>
+</body>
+</html>
