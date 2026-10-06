@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta name="description" content="Upscale a photo 2x to 4x in your browser with Real-ESRGAN on WebGPU. The image never leaves your device.">
+<title>Image Upscaler</title>
+<style>
+:root{
+  --bg:#f6f4ef;--surface:#fffefb;--border:#d9d4c8;--text:#1f1d19;--dim:#6b665b;
+  --accent:#2d4a8a;--accent-text:#fff;--err:#a3321f;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    --bg:#16151a;--surface:#1e1d24;--border:#34323d;--text:#ebe8e0;--dim:#9a96a6;
+    --accent:#8fa8e8;--accent-text:#12111a;--err:#f08a77;
+    color-scheme:dark;
+  }
+}
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;background:var(--bg);color:var(--text);
+  font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;
+  padding:24px 16px 48px}
+main{max-width:960px;margin:0 auto}
+h1{font-size:1.6rem;margin:0 0 4px;letter-spacing:-.01em}
+.sub{margin:0 0 20px;color:var(--dim)}
+.drop{border:2px dashed var(--border);border-radius:12px;background:var(--surface);
+  padding:28px 16px;text-align:center;cursor:pointer;transition:border-color .15s}
+.drop.over,.drop:focus-visible{border-color:var(--accent);outline:none}
+.drop strong{display:block;font-size:1.05rem}
+.drop span{color:var(--dim);font-size:.9rem}
+.row{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;margin:16px 0}
+fieldset{border:0;padding:0;margin:0;display:flex;gap:6px;align-items:center}
+legend{float:left;margin-right:8px;color:var(--dim);font-size:.9rem;padding:0}
+fieldset label{border:1px solid var(--border);border-radius:8px;padding:6px 14px;cursor:pointer;
+  background:var(--surface);user-select:none}
+fieldset input{position:absolute;opacity:0;pointer-events:none}
+fieldset input:checked+span{font-weight:600}
+fieldset label:has(input:checked){border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+fieldset label:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+button{font:inherit;border-radius:8px;padding:8px 18px;cursor:pointer;border:1px solid var(--border);
+  background:var(--surface);color:var(--text)}
+button.primary{background:var(--accent);color:var(--accent-text);border-color:var(--accent);font-weight:600}
+button:disabled{opacity:.45;cursor:default}
+button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+#status{min-height:1.5em;margin:4px 0;color:var(--dim);font-size:.92rem}
+#status.err{color:var(--err)}
+progress{width:100%;height:8px;accent-color:var(--accent);display:none;margin:6px 0}
+progress.on{display:block}
+.compare{position:relative;margin-top:16px;border:1px solid var(--border);border-radius:10px;
+  overflow:hidden;background:#000;touch-action:pan-y;display:none;user-select:none;-webkit-user-select:none}
+.compare.on{display:block}
+.compare canvas{display:block;width:100%;height:auto}
+.compare #cOrig{position:absolute;inset:0;width:100%;height:100%;
+  clip-path:inset(0 calc(100% - var(--split,50%)) 0 0)}
+.handle{position:absolute;top:0;bottom:0;left:var(--split,50%);width:44px;margin-left:-22px;cursor:ew-resize;
+  display:none;touch-action:none}
+.compare.on .handle{display:block}
+.handle::before{content:"";position:absolute;left:21px;top:0;bottom:0;width:2px;background:#fff;
+  box-shadow:0 0 0 1px rgba(0,0,0,.4)}
+.handle::after{content:"\2194";position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+  width:34px;height:34px;border-radius:50%;background:#fff;color:#111;display:grid;place-items:center;
+  box-shadow:0 1px 6px rgba(0,0,0,.5);font-size:18px;line-height:1}
+.handle:focus-visible{outline:none}
+.handle:focus-visible::after{outline:2px solid var(--accent);outline-offset:2px}
+.tag{position:absolute;top:8px;padding:2px 8px;border-radius:6px;background:rgba(0,0,0,.6);color:#fff;
+  font-size:.78rem;pointer-events:none}
+.tag.l{left:8px}.tag.r{right:8px}
+.actions{display:none;gap:12px;align-items:center;margin-top:12px;flex-wrap:wrap}
+.actions.on{display:flex}
+.meta{color:var(--dim);font-size:.9rem}
+details{margin-top:28px;color:var(--dim);font-size:.9rem}
+details summary{cursor:pointer}
+details p{margin:8px 0}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<main>
+<h1>Image Upscaler</h1>
+<p class="sub">Enlarge a small or soft photo 2&times; to 4&times; with a neural network that runs on your GPU. The image stays on your device.</p>
+
+<div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose an image">
+  <strong>Drop an image here, paste one, or click to choose</strong>
+  <span>JPEG, PNG or WebP, up to 2.5 megapixels</span>
+</div>
+<input type="file" id="file" accept="image/*" hidden>
+
+<div class="row">
+  <fieldset><legend>Scale</legend>
+    <label><input type="radio" name="scale" value="2"><span>2&times;</span></label>
+    <label><input type="radio" name="scale" value="3"><span>3&times;</span></label>
+    <label><input type="radio" name="scale" value="4" checked><span>4&times;</span></label>
+  </fieldset>
+  <button class="primary" id="go" disabled>Upscale</button>
+</div>
+<progress id="bar" max="1" value="0"></progress>
+<div id="status" role="status" aria-live="polite"></div>
+
+<div class="compare" id="compare">
+  <canvas id="cRes"></canvas>
+  <canvas id="cOrig"></canvas>
+  <span class="tag l">Original</span><span class="tag r">Upscaled</span>
+  <div class="handle" id="handle" tabindex="0" role="slider" aria-label="Compare original and upscaled"
+       aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
+</div>
+<div class="actions" id="actions">
+  <button id="save">Download PNG</button>
+  <span class="meta" id="meta"></span>
+</div>
+
+<details>
+  <summary>How it works</summary>
+  <p>The page downloads a 4.9&nbsp;MB model once, then runs it in tiles through
+  <a href="https://onnxruntime.ai/docs/tutorials/web/">ONNX Runtime Web</a>, on WebGPU when the browser has it and on the CPU otherwise.
+  The CPU path is slow: expect minutes for a megapixel. 2&times; and 3&times; are the 4&times; result scaled down.</p>
+  <p>Model: <code>realesr-general-x4v3</code> from <a href="https://github.com/xinntao/Real-ESRGAN">Real-ESRGAN</a>
+  (Wang et al., BSD-3-Clause), a small convolutional network trained on photos with noise and JPEG damage.
+  It sharpens and removes compression artifacts, and it invents plausible texture, so treat fine detail as a guess.</p>
+  <p><a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/web-utilities/upscaler_README.md">Notes and source</a></p>
+</details>
+</main>
+
+<script type="module">
+const ORT_VER = '1.30.0';
+const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
+const MODEL_URL = new URL('upscaler-model/realesr-general-x4v3.onnx', location.href).href;
+const S = 4, TILE = 128, PAD = 20, TS = TILE + 2 * PAD;
+const MAX_PIXELS = 2.5e6;
+
+const $ = id => document.getElementById(id);
+const drop = $('drop'), fileIn = $('file'), go = $('go'), bar = $('bar'), statusEl = $('status');
+const compare = $('compare'), cRes = $('cRes'), cOrig = $('cOrig'), handle = $('handle');
+const actions = $('actions'), meta = $('meta');
+
+let bitmap = null, baseName = 'image', ort = null, session = null, backend = null, busy = false;
+
+function say(msg, err = false) { statusEl.textContent = msg; statusEl.classList.toggle('err', err); }
+const tick = () => new Promise(r => setTimeout(r));
+
+async function loadFile(file) {
+  if (!file || !file.type.startsWith('image/')) { say('That file is not an image.', true); return; }
+  try {
+    const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    if (bmp.width * bmp.height > MAX_PIXELS) {
+      bmp.close();
+      say(`That image is larger than ${MAX_PIXELS / 1e6} megapixels. This tool is for small images; downscale it first.`, true);
+      return;
+    }
+    if (bitmap) bitmap.close();
+    bitmap = bmp;
+    baseName = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
+    cOrig.width = bmp.width; cOrig.height = bmp.height;
+    cOrig.getContext('2d').drawImage(bmp, 0, 0);
+    cRes.width = bmp.width; cRes.height = bmp.height;
+    cRes.getContext('2d').drawImage(bmp, 0, 0);
+    setSplit(100);
+    compare.classList.add('on');
+    actions.classList.remove('on');
+    go.disabled = false;
+    say(`${bmp.width} × ${bmp.height} px loaded.`);
+  } catch (e) {
+    say('Could not read that image.', true);
+  }
+}
+
+drop.addEventListener('click', () => fileIn.click());
+drop.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fileIn.click(); } });
+fileIn.addEventListener('change', () => loadFile(fileIn.files[0]));
+for (const t of ['dragenter', 'dragover']) addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); });
+for (const t of ['dragleave', 'drop']) addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); });
+addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
+addEventListener('paste', e => {
+  const f = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith('image/'));
+  if (f) loadFile(f);
+});
+
+// ---- before/after slider
+function setSplit(p) {
+  p = Math.max(0, Math.min(100, p));
+  compare.style.setProperty('--split', p + '%');
+  handle.setAttribute('aria-valuenow', Math.round(p));
+}
+let dragging = false;
+const fromEvent = e => { const r = compare.getBoundingClientRect(); setSplit((e.clientX - r.left) / r.width * 100); };
+handle.addEventListener('pointerdown', e => { dragging = true; handle.setPointerCapture(e.pointerId); e.preventDefault(); });
+handle.addEventListener('pointermove', e => { if (dragging) fromEvent(e); });
+handle.addEventListener('pointerup', () => { dragging = false; });
+compare.addEventListener('pointerdown', e => { if (e.target === handle) return; fromEvent(e); });
+handle.addEventListener('keydown', e => {
+  const cur = +handle.getAttribute('aria-valuenow');
+  if (e.key === 'ArrowLeft') setSplit(cur - 5);
+  else if (e.key === 'ArrowRight') setSplit(cur + 5);
+});
+
+// ---- model
+async function getSession() {
+  if (session) return session;
+  say('Loading runtime…');
+  ort = await import(ORT_BASE + 'ort.webgpu.min.mjs');
+  ort.env.wasm.wasmPaths = ORT_BASE;
+  say('Downloading model (4.9 MB)…');
+  const buf = new Uint8Array(await (await fetch(MODEL_URL)).arrayBuffer());
+  if (navigator.gpu) {
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (adapter) {
+        session = await ort.InferenceSession.create(buf, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all' });
+        backend = 'WebGPU';
+      }
+    } catch (e) { console.warn('WebGPU session failed, falling back to wasm', e); session = null; }
+  }
+  if (!session) {
+    session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+    backend = 'CPU (WASM)';
+  }
+  return session;
+}
+
+// ---- inference
+function readPixels(bmp) {
+  const c = new OffscreenCanvas(bmp.width, bmp.height);
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(bmp, 0, 0);
+  return ctx.getImageData(0, 0, bmp.width, bmp.height);
+}
+
+async function upscale4x(src, onProgress) {
+  const { width: w, height: h, data } = src;
+  const W = w * S, H = h * S;
+  const out = new Uint8ClampedArray(W * H * 4);
+  const plane = TS * TS;
+  const input = new Float32Array(3 * plane);
+  const nx = Math.ceil(w / TILE), ny = Math.ceil(h / TILE), total = nx * ny;
+  let done = 0;
+  for (let ty = 0; ty < ny; ty++) {
+    for (let tx = 0; tx < nx; tx++) {
+      const x0 = tx * TILE, y0 = ty * TILE;
+      const ox = x0 - PAD, oy = y0 - PAD;
+      for (let j = 0; j < TS; j++) {
+        const sy = Math.min(h - 1, Math.max(0, oy + j));
+        for (let i = 0; i < TS; i++) {
+          const sx = Math.min(w - 1, Math.max(0, ox + i));
+          const p = (sy * w + sx) * 4, q = j * TS + i;
+          input[q] = data[p] / 255;
+          input[plane + q] = data[p + 1] / 255;
+          input[2 * plane + q] = data[p + 2] / 255;
+        }
+      }
+      const res = await session.run({ input: new ort.Tensor('float32', input, [1, 3, TS, TS]) });
+      const o = res.output.data, OS = TS * S, oplane = OS * OS;
+      const x1 = Math.min(w, x0 + TILE), y1 = Math.min(h, y0 + TILE);
+      for (let Y = y0 * S; Y < y1 * S; Y++) {
+        const row = (Y - oy * S) * OS - ox * S;
+        for (let X = x0 * S; X < x1 * S; X++) {
+          const k = row + X, d = (Y * W + X) * 4;
+          out[d] = o[k] * 255 + .5;
+          out[d + 1] = o[oplane + k] * 255 + .5;
+          out[d + 2] = o[2 * oplane + k] * 255 + .5;
+          out[d + 3] = 255;
+        }
+      }
+      res.output.dispose?.();
+      onProgress(++done / total);
+      await tick();
+    }
+  }
+  return new ImageData(out, W, H);
+}
+
+function applyAlpha(img, bmp) {
+  // Real-ESRGAN takes RGB only: scale the alpha plane with the canvas filter and put it back.
+  const src = readPixels(bmp).data;
+  let has = false;
+  for (let i = 3; i < src.length; i += 4) if (src[i] !== 255) { has = true; break; }
+  if (!has) return;
+  const a = new OffscreenCanvas(bmp.width, bmp.height);
+  const actx = a.getContext('2d');
+  const ai = actx.createImageData(bmp.width, bmp.height);
+  for (let i = 0; i < src.length; i += 4) { ai.data[i] = ai.data[i + 1] = ai.data[i + 2] = src[i + 3]; ai.data[i + 3] = 255; }
+  actx.putImageData(ai, 0, 0);
+  const b = new OffscreenCanvas(img.width, img.height);
+  const bctx = b.getContext('2d', { willReadFrequently: true });
+  bctx.imageSmoothingQuality = 'high';
+  bctx.drawImage(a, 0, 0, img.width, img.height);
+  const up = bctx.getImageData(0, 0, img.width, img.height).data;
+  for (let i = 0; i < up.length; i += 4) img.data[i + 3] = up[i];
+}
+
+go.addEventListener('click', async () => {
+  if (busy || !bitmap) return;
+  busy = true; go.disabled = true; actions.classList.remove('on');
+  try {
+    await getSession();
+    const scale = +document.querySelector('input[name=scale]:checked').value;
+    const t0 = performance.now();
+    bar.classList.add('on'); bar.value = 0;
+    if (backend !== 'WebGPU') say('WebGPU is not available, so this runs on the CPU and will be slow…');
+    const img = await upscale4x(readPixels(bitmap), p => {
+      bar.value = p;
+      if (backend === 'WebGPU') say(`Upscaling on ${backend}… ${Math.round(p * 100)}%`);
+    });
+    applyAlpha(img, bitmap);
+    let outW = img.width, outH = img.height;
+    if (scale !== S) {
+      const full = new OffscreenCanvas(img.width, img.height);
+      full.getContext('2d').putImageData(img, 0, 0);
+      outW = Math.round(bitmap.width * scale); outH = Math.round(bitmap.height * scale);
+      cRes.width = outW; cRes.height = outH;
+      const ctx = cRes.getContext('2d');
+      ctx.imageSmoothingQuality = 'high';
+      ctx.clearRect(0, 0, outW, outH);
+      ctx.drawImage(full, 0, 0, outW, outH);
+    } else {
+      cRes.width = outW; cRes.height = outH;
+      cRes.getContext('2d').putImageData(img, 0, 0);
+    }
+    setSplit(50);
+    const secs = ((performance.now() - t0) / 1000).toFixed(1);
+    meta.textContent = `${bitmap.width} × ${bitmap.height} → ${outW} × ${outH} px · ${backend} · ${secs} s`;
+    actions.classList.add('on');
+    say('Done. Drag the handle to compare.');
+  } catch (e) {
+    console.error(e);
+    say('Upscaling failed: ' + (e && e.message ? e.message : e), true);
+  } finally {
+    bar.classList.remove('on'); busy = false; go.disabled = false;
+  }
+});
+
+$('save').addEventListener('click', () => {
+  cRes.toBlob(blob => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `${baseName}-x${document.querySelector('input[name=scale]:checked').value}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+  }, 'image/png');
+});
+
+window.__upscaler = { get backend() { return backend; } };
+</script>
+</body>
+</html>
