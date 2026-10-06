@@ -75,6 +75,10 @@ progress.on{display:block}
 details{margin-top:28px;color:var(--dim);font-size:.9rem}
 details summary{cursor:pointer}
 details p{margin:8px 0}
+[hidden]{display:none!important}
+.resume{display:flex;flex-wrap:wrap;gap:8px 12px;align-items:center;border:1px solid var(--accent);
+  border-radius:10px;padding:10px 14px;margin-bottom:12px;background:var(--surface)}
+.resume span{flex:1 1 220px}
 a{color:var(--accent)}
 </style>
 </head>
@@ -82,6 +86,12 @@ a{color:var(--accent)}
 <main>
 <h1>Image Upscaler</h1>
 <p class="sub">Enlarge a small or soft photo 2&times; to 4&times; with a neural network that runs on your GPU. The image stays on your device.</p>
+
+<div class="resume" id="resume" hidden>
+  <span id="resumeText"></span>
+  <button class="primary" id="resumeGo">Resume</button>
+  <button id="resumeNo">Discard</button>
+</div>
 
 <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose an image">
   <strong>Drop an image here, paste one, or click to choose</strong>
@@ -128,45 +138,84 @@ a{color:var(--accent)}
 const ORT_VER = '1.30.0';
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
 const MODEL_URL = new URL('upscaler-model/realesr-general-x4v3.onnx', location.href).href;
-const S = 4, TILE = 128, PAD = 20, TS = TILE + 2 * PAD;
-// Output lives in one canvas. iOS Safari refuses canvases above 16.7M pixels, and every browser pays
-// 4 bytes per pixel, so the cap is on output pixels rather than input size.
-const MAX_OUT = (matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 1) ? 16e6 : 36e6;
+const S = 4, JOB_VER = 1, PREVIEW_W = 2048;
+// Phones get smaller tiles (less working memory per model call) and a smaller output cap: iOS Safari
+// refuses canvases above 16.7M pixels, and every browser pays 4 bytes per output pixel.
+const COARSE = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 1;
+const TILE = COARSE ? 64 : 128, PAD = COARSE ? 16 : 20;
+const MAX_OUT = COARSE ? 16e6 : 36e6;
 
 const $ = id => document.getElementById(id);
 const drop = $('drop'), fileIn = $('file'), go = $('go'), bar = $('bar'), statusEl = $('status');
 const compare = $('compare'), cRes = $('cRes'), cOrig = $('cOrig'), handle = $('handle');
 const actions = $('actions'), meta = $('meta');
+const resumeBox = $('resume'), resumeText = $('resumeText'), resumeGo = $('resumeGo'), resumeNo = $('resumeNo');
 
-let bitmap = null, baseName = 'image', ort = null, session = null, backend = null, busy = false;
+let bitmap = null, currentFile = null, baseName = 'image', ort = null, session = null, backend = null, busy = false;
+let full = null, lastScale = 4, pending = null;   // full: the full-size result, a canvas that is never attached to the page
 
 function say(msg, err = false) { statusEl.textContent = msg; statusEl.classList.toggle('err', err); }
 const tick = () => new Promise(r => setTimeout(r));
+const chosenScale = () => +document.querySelector('input[name=scale]:checked').value;
 
-async function loadFile(file) {
-  if (!file || !file.type.startsWith('image/')) { say('That file is not an image.', true); return; }
+// ---- saved work (IndexedDB): the input image, a job record, and every finished tile
+const dbReady = new Promise(res => {
+  try {
+    const r = indexedDB.open('upscaler', 1);
+    r.onupgradeneeded = () => { r.result.createObjectStore('kv'); r.result.createObjectStore('tiles'); };
+    r.onsuccess = () => res(r.result);
+    r.onerror = r.onblocked = () => res(null);
+  } catch { res(null); }
+});
+async function tx(store, mode, fn) {
+  const db = await dbReady;
+  if (!db) throw new Error('no storage');
+  return new Promise((res, rej) => {
+    const t = db.transaction(store, mode);
+    const req = fn(t.objectStore(store));
+    t.oncomplete = () => res(req && req.result);
+    t.onerror = t.onabort = () => rej(t.error);
+  });
+}
+const kvPut = (k, v) => tx('kv', 'readwrite', s => s.put(v, k));
+const kvGet = k => tx('kv', 'readonly', s => s.get(k));
+const tilePut = (k, v) => tx('tiles', 'readwrite', s => s.put(v, k));
+const tileGet = k => tx('tiles', 'readonly', s => s.get(k));
+const tileKeys = () => tx('tiles', 'readonly', s => s.getAllKeys());
+const clearTiles = () => tx('tiles', 'readwrite', s => s.clear());
+const wipe = () => Promise.all([clearTiles(), tx('kv', 'readwrite', s => s.clear())]);
+
+// ---- loading an image
+async function loadFile(file, restore = false) {
+  if (!file || !file.type.startsWith('image/')) { say('That file is not an image.', true); return false; }
   try {
     const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
     if (bmp.width * bmp.height * 4 > MAX_OUT) {
       const w = bmp.width, h = bmp.height;
       bmp.close();
       say(`${w} × ${h} is too large: even 2× would pass the ${MAX_OUT / 1e6} megapixel output limit. Use an image under ${Math.floor(MAX_OUT / 4 / 1e4) / 100} megapixels.`, true);
-      return;
+      return false;
     }
     if (bitmap) bitmap.close();
-    bitmap = bmp;
+    bitmap = bmp; currentFile = file;
     baseName = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
-    cOrig.width = bmp.width; cOrig.height = bmp.height;
+    if (full) { full.width = full.height = 0; full = null; }
+    cOrig.width = cRes.width = bmp.width; cOrig.height = cRes.height = bmp.height;
     cOrig.getContext('2d').drawImage(bmp, 0, 0);
-    cRes.width = bmp.width; cRes.height = bmp.height;
     cRes.getContext('2d').drawImage(bmp, 0, 0);
     setSplit(100);
     compare.classList.add('on');
     actions.classList.remove('on');
     go.disabled = false;
     say(`${bmp.width} × ${bmp.height} px loaded.`);
+    if (!restore) {
+      resumeBox.hidden = true; pending = null;
+      wipe().then(() => kvPut('input', file)).catch(() => {});
+    }
+    return true;
   } catch (e) {
     say('Could not read that image.', true);
+    return false;
   }
 }
 
@@ -207,17 +256,18 @@ async function getSession() {
   ort.env.wasm.wasmPaths = ORT_BASE;
   say('Downloading model (4.9 MB)…');
   const buf = new Uint8Array(await (await fetch(MODEL_URL)).arrayBuffer());
+  const opts = ep => ({ executionProviders: [ep], graphOptimizationLevel: 'all', enableCpuMemArena: false, enableMemPattern: false });
   if (navigator.gpu) {
     try {
       const adapter = await navigator.gpu.requestAdapter();
       if (adapter) {
-        session = await ort.InferenceSession.create(buf, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all' });
+        session = await ort.InferenceSession.create(buf, opts('webgpu'));
         backend = 'WebGPU';
       }
     } catch (e) { console.warn('WebGPU session failed, falling back to wasm', e); session = null; }
   }
   if (!session) {
-    session = await ort.InferenceSession.create(buf, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' });
+    session = await ort.InferenceSession.create(buf, opts('wasm'));
     backend = 'CPU (WASM)';
   }
   return session;
@@ -231,20 +281,23 @@ function readPixels(bmp) {
   return ctx.getImageData(0, 0, bmp.width, bmp.height);
 }
 
-// Each tile is drawn straight into the output canvas, so the only full-size buffer is the canvas itself.
+// Each tile is drawn straight into the output canvas, so the only full-size buffer is that canvas.
 // scale < 4 draws the 4x tile scaled down; the clip keeps neighbouring tiles from overlapping.
-async function upscaleInto(ctx, src, scale, onProgress) {
+// Every finished tile is also saved, so a reload or a killed tab resumes instead of starting over.
+async function upscaleInto(ctx, src, scale, st) {
   const { width: w, height: h, data } = src;
-  const plane = TS * TS, OS = TS * S, k = scale / S;
+  const { tile, pad, done, total } = st;
+  const TS = tile + 2 * pad, plane = TS * TS, OS = TS * S, k = scale / S;
   const input = new Float32Array(3 * plane);
   const tileCv = new OffscreenCanvas(OS, OS), tctx = tileCv.getContext('2d');
   const tileImg = tctx.createImageData(OS, OS), px = tileImg.data;
   ctx.imageSmoothingEnabled = true; ctx.imageSmoothingQuality = 'high';
-  const nx = Math.ceil(w / TILE), ny = Math.ceil(h / TILE), total = nx * ny;
-  let done = 0;
+  const nx = Math.ceil(w / tile), ny = Math.ceil(h / tile);
   for (let ty = 0; ty < ny; ty++) {
     for (let tx = 0; tx < nx; tx++) {
-      const x0 = tx * TILE, y0 = ty * TILE, ox = x0 - PAD, oy = y0 - PAD;
+      const idx = ty * nx + tx;
+      if (done.has(idx)) continue;
+      const x0 = tx * tile, y0 = ty * tile, ox = x0 - pad, oy = y0 - pad;
       for (let j = 0; j < TS; j++) {
         const sy = Math.min(h - 1, Math.max(0, oy + j));
         for (let i = 0; i < TS; i++) {
@@ -255,8 +308,7 @@ async function upscaleInto(ctx, src, scale, onProgress) {
           input[2 * plane + q] = data[p + 2] / 255;
         }
       }
-      const feeds = { input: new ort.Tensor('float32', input, [1, 3, TS, TS]) };
-      const res = await session.run(feeds);
+      const res = await session.run({ input: new ort.Tensor('float32', input, [1, 3, TS, TS]) });
       const o = res.output.data, oplane = OS * OS;
       for (let k2 = 0, d = 0; k2 < oplane; k2++, d += 4) {
         px[d] = o[k2] * 255;          // Uint8ClampedArray rounds to nearest itself
@@ -266,21 +318,26 @@ async function upscaleInto(ctx, src, scale, onProgress) {
       }
       res.output.dispose?.();
       const dx = x0 * scale, dy = y0 * scale;
-      const vw = Math.min(w, x0 + TILE) - x0, vh = Math.min(h, y0 + TILE) - y0;
+      const vw = Math.min(w, x0 + tile) - x0, vh = Math.min(h, y0 + tile) - y0;
       if (scale === S) {
-        ctx.putImageData(tileImg, dx - PAD * S, dy - PAD * S, PAD * S, PAD * S, vw * S, vh * S);
+        ctx.putImageData(tileImg, dx - pad * S, dy - pad * S, pad * S, pad * S, vw * S, vh * S);
       } else {
         tctx.putImageData(tileImg, 0, 0);
         ctx.save();
         ctx.beginPath();
         ctx.rect(dx, dy, vw * scale, vh * scale);
         ctx.clip();
-        ctx.drawImage(tileCv, dx - PAD * scale, dy - PAD * scale, OS * k, OS * k);
+        ctx.drawImage(tileCv, dx - pad * scale, dy - pad * scale, OS * k, OS * k);
         ctx.restore();
-        // Chrome records canvas draws and keeps a copy of every tile until a flush; a 1 px read forces one.
-        ctx.getImageData(0, 0, 1, 1);
       }
-      onProgress(++done / total);
+      done.add(idx);
+      if (st.persist) {
+        try {
+          const reg = ctx.getImageData(dx, dy, vw * scale, vh * scale);
+          await tilePut(idx, { dx, dy, dw: reg.width, dh: reg.height, buf: reg.data.buffer });
+        } catch (e) { st.persist = false; st.onLostSave?.(); }
+      }
+      st.onProgress(done.size / total);
       await tick();
     }
   }
@@ -304,9 +361,12 @@ function applyAlpha(ctx, src, outW, outH) {
 }
 
 function allocOutput(outW, outH) {
+  // The full-size result is never put on the page, so the browser does not composite or snapshot it.
   // Browsers fail oversized canvases silently, so write a pixel at the far corner and read it back.
-  cRes.width = outW; cRes.height = outH;
-  const ctx = cRes.getContext('2d', { willReadFrequently: false });
+  if (full) { full.width = full.height = 0; }
+  full = document.createElement('canvas');
+  full.width = outW; full.height = outH;
+  const ctx = full.getContext('2d', { willReadFrequently: true });
   if (!ctx) return null;
   ctx.fillStyle = '#010203';
   ctx.fillRect(outW - 1, outH - 1, 1, 1);
@@ -315,59 +375,126 @@ function allocOutput(outW, outH) {
   return ok ? ctx : null;
 }
 
-go.addEventListener('click', async () => {
+function showResult() {
+  // The page shows a preview at most PREVIEW_W wide; the download is the full-size canvas.
+  const pw = Math.min(full.width, PREVIEW_W), ph = Math.max(1, Math.round(full.height * pw / full.width));
+  cRes.width = cOrig.width = pw; cRes.height = cOrig.height = ph;
+  const rc = cRes.getContext('2d'); rc.imageSmoothingQuality = 'high'; rc.drawImage(full, 0, 0, pw, ph);
+  const oc = cOrig.getContext('2d'); oc.imageSmoothingQuality = 'high'; oc.drawImage(bitmap, 0, 0, pw, ph);
+}
+
+async function startJob(scale, outW, outH, total) {
+  // Saved work needs room for roughly one copy of the output.
+  try {
+    const est = await navigator.storage?.estimate?.();
+    if (est && est.quota && est.quota - est.usage < outW * outH * 4 * 1.3) return false;
+    await clearTiles();
+    await kvPut('input', currentFile);
+    await kvPut('job', { ver: JOB_VER, name: currentFile.name || baseName, scale, w: bitmap.width, h: bitmap.height,
+                         tile: TILE, pad: PAD, total, complete: false, at: Date.now() });
+    return true;
+  } catch { return false; }
+}
+
+async function runJob(scale, resumeJob = null) {
   if (busy || !bitmap) return;
-  const scale = +document.querySelector('input[name=scale]:checked').value;
   const outW = Math.round(bitmap.width * scale), outH = Math.round(bitmap.height * scale);
   if (outW * outH > MAX_OUT) {
     const fit = [4, 3, 2].find(s => bitmap.width * s * bitmap.height * s <= MAX_OUT);
-    say(`${outW} × ${outH} is over the ${MAX_OUT / 1e6} megapixel output limit.` +
-        (fit ? ` Try ${fit}×.` : ' Use a smaller image.'), true);
+    say(`${outW} × ${outH} is over the ${MAX_OUT / 1e6} megapixel output limit.` + (fit ? ` Try ${fit}×.` : ' Use a smaller image.'), true);
     return;
   }
-  busy = true; go.disabled = true; actions.classList.remove('on');
+  busy = true; go.disabled = true; actions.classList.remove('on'); lastScale = scale;
+  const t0 = performance.now();
   try {
-    await getSession();
-    const t0 = performance.now();
     const src = readPixels(bitmap);
     const ctx = allocOutput(outW, outH);
     if (!ctx) throw new Error(`this browser cannot allocate a ${outW} × ${outH} canvas; try a smaller scale or image`);
-    setSplit(100);
-    cRes.style.visibility = 'hidden';   // a visible canvas that changes every tile is re-snapshotted each frame
-    bar.classList.add('on'); bar.value = 0;
-    if (backend !== 'WebGPU') say('WebGPU is not available, so this runs on the CPU and will be slow…');
-    await upscaleInto(ctx, src, scale, p => {
+    const tile = resumeJob ? resumeJob.tile : TILE, pad = resumeJob ? resumeJob.pad : PAD;
+    const total = Math.ceil(bitmap.width / tile) * Math.ceil(bitmap.height / tile);
+    const done = new Set();
+    const st = { tile, pad, done, total, persist: false, onProgress: p => {
       bar.value = p;
       if (backend === 'WebGPU') say(`Upscaling on ${backend}… ${Math.round(p * 100)}%`);
-    });
+    }, onLostSave: () => say('Saving progress failed (storage full?); this run will not survive a reload.', true) };
+    bar.classList.add('on'); bar.value = 0;
+    if (resumeJob) {
+      say('Restoring saved tiles…');
+      for (const key of await tileKeys()) {
+        const t = await tileGet(key);
+        if (!t) continue;
+        ctx.putImageData(new ImageData(new Uint8ClampedArray(t.buf), t.dw, t.dh), t.dx, t.dy);
+        done.add(key);
+      }
+      bar.value = done.size / total;
+      st.persist = true;
+    } else {
+      st.persist = await startJob(scale, outW, outH, total);
+    }
+    if (done.size < total) {
+      await getSession();
+      if (backend !== 'WebGPU') say('WebGPU is not available, so this runs on the CPU and will be slow…');
+      await upscaleInto(ctx, src, scale, st);
+    }
     applyAlpha(ctx, src, outW, outH);
-    cRes.style.visibility = '';
+    showResult();
     setSplit(50);
+    if (st.persist) kvPut('job', { ...(resumeJob || {}), ver: JOB_VER, name: currentFile.name || baseName, scale, w: bitmap.width,
+                                   h: bitmap.height, tile, pad, total, complete: true, at: Date.now() }).catch(() => {});
     const secs = ((performance.now() - t0) / 1000).toFixed(1);
-    meta.textContent = `${bitmap.width} × ${bitmap.height} → ${outW} × ${outH} px · ${backend} · ${secs} s`;
+    meta.textContent = `${bitmap.width} × ${bitmap.height} → ${outW} × ${outH} px · ${backend || 'restored from this browser'} · ${secs} s`;
     actions.classList.add('on');
-    say('Done. Drag the handle to compare.');
+    say(st.persist ? 'Done. The result is saved in this browser, so a reload brings it back. Drag the handle to compare.'
+                   : 'Done. Drag the handle to compare.');
   } catch (e) {
     console.error(e);
     say('Upscaling failed: ' + (e && e.message ? e.message : e), true);
-    cRes.style.visibility = '';
-    cRes.width = bitmap.width; cRes.height = bitmap.height;      // release the big canvas
+    if (full) { full.width = full.height = 0; full = null; }
+    cRes.width = bitmap.width; cRes.height = bitmap.height;
     cRes.getContext('2d').drawImage(bitmap, 0, 0);
     setSplit(100);
   } finally {
     bar.classList.remove('on'); busy = false; go.disabled = false;
   }
-});
+}
+
+go.addEventListener('click', () => runJob(chosenScale()));
 
 $('save').addEventListener('click', () => {
-  cRes.toBlob(blob => {
+  if (!full) return;
+  full.toBlob(blob => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = `${baseName}-x${document.querySelector('input[name=scale]:checked').value}.png`;
+    a.download = `${baseName}-x${lastScale}.png`;
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 10000);
   }, 'image/png');
 });
+
+// ---- after a reload or a killed tab: offer to pick up where the last run stopped
+(async () => {
+  try {
+    const job = await kvGet('job'), file = await kvGet('input');
+    if (!job || !file || job.ver !== JOB_VER) return;
+    const n = (await tileKeys()).length;
+    const finished = job.complete || n >= job.total;
+    pending = { job, file };
+    resumeText.textContent = finished
+      ? `A finished ${job.scale}× result for ${job.name} is saved in this browser.`
+      : `An unfinished ${job.scale}× upscale of ${job.name} was interrupted: ${n} of ${job.total} tiles are saved.`;
+    resumeGo.textContent = finished ? 'Restore' : 'Resume';
+    resumeBox.hidden = false;
+  } catch { /* no storage: nothing to offer */ }
+})();
+resumeGo.addEventListener('click', async () => {
+  if (!pending || busy) return;
+  const { job, file } = pending;
+  resumeBox.hidden = true;
+  const radio = document.querySelector(`input[name=scale][value="${job.scale}"]`);
+  if (radio) radio.checked = true;
+  if (await loadFile(file, true)) runJob(job.scale, job);
+});
+resumeNo.addEventListener('click', () => { resumeBox.hidden = true; pending = null; wipe().catch(() => {}); });
 
 document.getElementById('limit').textContent = `JPEG, PNG or WebP. The result is limited to ${MAX_OUT / 1e6} megapixels.`;
 </script>
