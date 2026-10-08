@@ -51,11 +51,19 @@ button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 progress{width:100%;height:8px;accent-color:var(--accent);display:none;margin:6px 0}
 progress.on{display:block}
 .compare{position:relative;margin-top:16px;border:1px solid var(--border);border-radius:10px;
-  overflow:hidden;background:#000;touch-action:pan-y;display:none;user-select:none;-webkit-user-select:none}
+  overflow:hidden;background:#000;touch-action:pan-y;display:none;user-select:none;-webkit-user-select:none;cursor:grab}
 .compare.on{display:block}
-.compare canvas{display:block;width:100%;height:auto}
-.compare #cOrig{position:absolute;inset:0;width:100%;height:100%;
-  clip-path:inset(0 calc(100% - var(--split,50%)) 0 0)}
+.compare.zoomed{touch-action:none}
+.compare.panning{cursor:grabbing}
+.compare canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+.compare #cOrig{clip-path:inset(0 calc(100% - var(--split,50%)) 0 0)}
+.zoombar{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-top:10px}
+.zoombar button{padding:5px 11px;font-size:.9rem}
+.zoombar label{display:flex;gap:6px;align-items:center;font-size:.9rem;color:var(--dim);cursor:pointer;margin-left:6px}
+.zoombar .meta{margin-left:auto;font-variant-numeric:tabular-nums}
+.hint{margin:6px 0 0;color:var(--dim);font-size:.85rem}
+.pastebox{margin-top:10px;border:2px dashed var(--accent);border-radius:10px;padding:18px 12px;text-align:center;
+  background:var(--surface);color:var(--dim);outline:none;min-height:3.2em}
 .handle{position:absolute;top:0;bottom:0;left:var(--split,50%);width:44px;margin-left:-22px;cursor:ew-resize;
   display:none;touch-action:none}
 .compare.on .handle{display:block}
@@ -94,12 +102,15 @@ a{color:var(--accent)}
 </div>
 
 <div class="drop" id="drop" tabindex="0" role="button" aria-label="Choose an image">
-  <strong>Drop an image here, paste one, or click to choose</strong>
+  <strong>Drop an image here or click to choose</strong>
   <span id="limit">JPEG, PNG or WebP</span>
 </div>
 <input type="file" id="file" accept="image/*" hidden>
+<div class="pastebox" id="pasteBox" contenteditable="true" hidden role="textbox" aria-label="Paste target">
+  Touch and hold here, then tap Paste</div>
 
 <div class="row">
+  <button id="pasteBtn" type="button">Paste image</button>
   <fieldset><legend>Scale</legend>
     <label><input type="radio" name="scale" value="2"><span>2&times;</span></label>
     <label><input type="radio" name="scale" value="3"><span>3&times;</span></label>
@@ -117,6 +128,18 @@ a{color:var(--accent)}
   <div class="handle" id="handle" tabindex="0" role="slider" aria-label="Compare original and upscaled"
        aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
 </div>
+<div class="zoombar" id="zoombar" hidden>
+  <button id="zOut" type="button" aria-label="Zoom out">&minus;</button>
+  <button id="zFit" type="button">Fit</button>
+  <button type="button" data-z="1">1:1</button>
+  <button type="button" data-z="2">2:1</button>
+  <button type="button" data-z="4">4:1</button>
+  <button type="button" data-z="8">8:1</button>
+  <button id="zIn" type="button" aria-label="Zoom in">+</button>
+  <label><input type="checkbox" id="pix" checked> Original as pixels</label>
+  <span class="meta" id="zinfo"></span>
+</div>
+<p class="hint" id="zhint" hidden>Scroll or pinch to zoom, drag to pan, double-click to jump in. 1:1 is one screen pixel per result pixel.</p>
 <div class="actions" id="actions">
   <button id="save">Download PNG</button>
   <span class="meta" id="meta"></span>
@@ -138,7 +161,7 @@ a{color:var(--accent)}
 const ORT_VER = '1.30.0';
 const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VER}/dist/`;
 const MODEL_URL = new URL('upscaler-model/realesr-general-x4v3.onnx', location.href).href;
-const S = 4, JOB_VER = 1, PREVIEW_W = 2048;
+const S = 4, JOB_VER = 1;
 // Phones get smaller tiles (less working memory per model call) and a smaller output cap: iOS Safari
 // refuses canvases above 16.7M pixels, and every browser pays 4 bytes per output pixel.
 const COARSE = matchMedia('(pointer:coarse)').matches || navigator.maxTouchPoints > 1;
@@ -149,10 +172,13 @@ const $ = id => document.getElementById(id);
 const drop = $('drop'), fileIn = $('file'), go = $('go'), bar = $('bar'), statusEl = $('status');
 const compare = $('compare'), cRes = $('cRes'), cOrig = $('cOrig'), handle = $('handle');
 const actions = $('actions'), meta = $('meta');
+const zoombar = $('zoombar'), zhint = $('zhint'), pix = $('pix'), zinfo = $('zinfo');
+const pasteBtn = $('pasteBtn'), pasteBox = $('pasteBox');
 const resumeBox = $('resume'), resumeText = $('resumeText'), resumeGo = $('resumeGo'), resumeNo = $('resumeNo');
 
 let bitmap = null, currentFile = null, baseName = 'image', ort = null, session = null, backend = null, busy = false;
-let full = null, lastScale = 4, pending = null;   // full: the full-size result, a canvas that is never attached to the page
+let full = null, resultReady = false, lastScale = 4, pending = null;   // full: the full-size result, a canvas that is never attached to the page
+const shown = () => (resultReady ? full : null);       // the result, once every tile is in
 
 function say(msg, err = false) { statusEl.textContent = msg; statusEl.classList.toggle('err', err); }
 const tick = () => new Promise(r => setTimeout(r));
@@ -200,11 +226,10 @@ async function loadFile(file, restore = false) {
     bitmap = bmp; currentFile = file;
     baseName = (file.name || 'image').replace(/\.[^.]+$/, '') || 'image';
     if (full) { full.width = full.height = 0; full = null; }
-    cOrig.width = cRes.width = bmp.width; cOrig.height = cRes.height = bmp.height;
-    cOrig.getContext('2d').drawImage(bmp, 0, 0);
-    cRes.getContext('2d').drawImage(bmp, 0, 0);
+    resultReady = false;
     setSplit(100);
-    compare.classList.add('on');
+    compare.classList.add('on'); zoombar.hidden = zhint.hidden = false;
+    layout(true);
     actions.classList.remove('on');
     go.disabled = false;
     say(`${bmp.width} × ${bmp.height} px loaded.`);
@@ -226,8 +251,31 @@ for (const t of ['dragenter', 'dragover']) addEventListener(t, e => { e.preventD
 for (const t of ['dragleave', 'drop']) addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); });
 addEventListener('drop', e => loadFile(e.dataTransfer.files[0]));
 addEventListener('paste', e => {
-  const f = [...(e.clipboardData?.files || [])].find(f => f.type.startsWith('image/'));
-  if (f) loadFile(f);
+  const cd = e.clipboardData;
+  if (e.target === pasteBox) e.preventDefault();
+  if (!cd) return;
+  let f = [...(cd.files || [])].find(f => f.type.startsWith('image/'));
+  if (!f) for (const it of cd.items || []) if (it.kind === 'file' && it.type.startsWith('image/')) { f = it.getAsFile(); break; }
+  if (f) { e.preventDefault(); pasteBox.hidden = true; loadFile(f); }
+});
+// iOS has no paste shortcut, so the button asks for the clipboard directly (Safari shows its own Paste prompt).
+// Where that is unavailable or refused, a paste target takes a touch-and-hold Paste instead.
+pasteBtn.addEventListener('click', async () => {
+  try {
+    if (!navigator.clipboard?.read) throw new Error('unsupported');
+    for (const item of await navigator.clipboard.read()) {
+      const type = item.types.find(t => t.startsWith('image/'));
+      if (!type) continue;
+      const blob = await item.getType(type);
+      pasteBox.hidden = true;
+      await loadFile(new File([blob], 'pasted-image.' + (type.split('/')[1] || 'png'), { type }));
+      return;
+    }
+    say('The clipboard has no image. Copy one first: touch and hold a picture, then Copy.', true);
+  } catch (e) {
+    pasteBox.hidden = false; pasteBox.focus();
+    say('Paste directly: touch and hold in the box, then tap Paste.');
+  }
 });
 
 // ---- before/after slider
@@ -241,12 +289,131 @@ const fromEvent = e => { const r = compare.getBoundingClientRect(); setSplit((e.
 handle.addEventListener('pointerdown', e => { dragging = true; handle.setPointerCapture(e.pointerId); e.preventDefault(); });
 handle.addEventListener('pointermove', e => { if (dragging) fromEvent(e); });
 handle.addEventListener('pointerup', () => { dragging = false; });
-compare.addEventListener('pointerdown', e => { if (e.target === handle) return; fromEvent(e); });
 handle.addEventListener('keydown', e => {
   const cur = +handle.getAttribute('aria-valuenow');
   if (e.key === 'ArrowLeft') setSplit(cur - 5);
   else if (e.key === 'ArrowRight') setSplit(cur + 5);
 });
+
+// ---- zoom and pan
+// The image space is the result when there is one (the loaded image before that). Both canvases show the same
+// window of it, so the original is drawn at the same size as the result and can be compared pixel for pixel.
+// They are CPU canvases on purpose: a GPU canvas would upload the whole full-size result as a texture.
+const ctxOf = c => c.getContext('2d', { willReadFrequently: true });
+const MAXZ = 16;                         // screen px per image px
+const view = { z: 1, zf: 1, cx: 0, cy: 0, fit: true };
+let box = null, imgW = 0, imgH = 0, dpr = 1, lastBoxW = 0, raf = 0, settle = 0;
+
+function layout(reset) {
+  if (!bitmap) return;
+  const res = shown();
+  [imgW, imgH] = res ? [res.width, res.height] : [bitmap.width, bitmap.height];
+  dpr = window.devicePixelRatio || 1;
+  const bw = compare.clientWidth;
+  if (!bw) return;
+  const bh = Math.max(220, Math.min(Math.round(bw * imgH / imgW), Math.round(innerHeight * 0.75)));
+  compare.style.height = bh + 'px';
+  const W = Math.round(bw * dpr), H = Math.round(bh * dpr);
+  if (cRes.width !== W || cRes.height !== H) { cRes.width = cOrig.width = W; cRes.height = cOrig.height = H; }
+  box = { w: bw, h: bh };
+  view.zf = Math.min(bw / imgW, bh / imgH);
+  if (reset || view.fit) { view.fit = true; view.z = view.zf; view.cx = imgW / 2; view.cy = imgH / 2; }
+  clampView();
+  draw(true);
+}
+
+function clampView() {
+  view.z = Math.max(view.zf, Math.min(MAXZ, view.z));
+  const vw = box.w / view.z, vh = box.h / view.z;
+  view.cx = vw >= imgW ? imgW / 2 : Math.max(vw / 2, Math.min(imgW - vw / 2, view.cx));
+  view.cy = vh >= imgH ? imgH / 2 : Math.max(vh / 2, Math.min(imgH - vh / 2, view.cy));
+  view.fit = view.z <= view.zf * 1.0001;
+  compare.classList.toggle('zoomed', !view.fit);
+}
+
+function draw(sharp) {
+  if (!bitmap || !box) return;
+  const z = view.z * dpr, W = cRes.width, H = cRes.height;
+  const sw = W / z, sh = H / z, sx = view.cx - sw / 2, sy = view.cy - sh / 2;
+  const x0 = Math.max(0, sx), y0 = Math.max(0, sy), x1 = Math.min(imgW, sx + sw), y1 = Math.min(imgH, sy + sh);
+  const rc = ctxOf(cRes), oc = ctxOf(cOrig);
+  rc.clearRect(0, 0, W, H); oc.clearRect(0, 0, W, H);
+  zinfo.textContent = view.fit ? 'Fit' : `${+z.toFixed(1)}:1`;
+  if (x1 <= x0 || y1 <= y0) return;
+  const dx = (x0 - sx) * z, dy = (y0 - sy) * z, dw = (x1 - x0) * z, dh = (y1 - y0) * z;
+  const q = sharp ? 'high' : 'low';        // 'low' while the view is moving, then redrawn sharp
+  rc.imageSmoothingEnabled = z < 2; rc.imageSmoothingQuality = q;
+  rc.drawImage(shown() || bitmap, x0, y0, x1 - x0, y1 - y0, dx, dy, dw, dh);
+  const rx = bitmap.width / imgW, ry = bitmap.height / imgH;
+  oc.imageSmoothingEnabled = !pix.checked; oc.imageSmoothingQuality = q;
+  oc.drawImage(bitmap, x0 * rx, y0 * ry, (x1 - x0) * rx, (y1 - y0) * ry, dx, dy, dw, dh);
+}
+function redraw() {
+  if (!raf) raf = requestAnimationFrame(() => { raf = 0; draw(false); });
+  clearTimeout(settle); settle = setTimeout(() => draw(true), 160);
+}
+
+function zoomAt(mx, my, nz) {            // mx, my: css px inside the viewer
+  if (!box) return;
+  nz = Math.max(view.zf, Math.min(MAXZ, nz));
+  const ix = view.cx + (mx - box.w / 2) / view.z, iy = view.cy + (my - box.h / 2) / view.z;
+  view.z = nz;
+  view.cx = ix - (mx - box.w / 2) / nz; view.cy = iy - (my - box.h / 2) / nz;
+  clampView(); redraw();
+}
+const fitView = () => { if (!box) return; view.z = view.zf; view.cx = imgW / 2; view.cy = imgH / 2; clampView(); redraw(); };
+const local = e => { const r = compare.getBoundingClientRect(); return [e.clientX - r.left - compare.clientLeft, e.clientY - r.top - compare.clientTop]; };
+
+compare.addEventListener('wheel', e => {
+  e.preventDefault();
+  const [mx, my] = local(e);
+  zoomAt(mx, my, view.z * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015)));
+}, { passive: false });
+
+const ptrs = new Map();
+let pinch = null;
+compare.addEventListener('pointerdown', e => {
+  if (e.target === handle) return;
+  compare.setPointerCapture(e.pointerId);
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (ptrs.size === 2) {
+    const [a, b] = [...ptrs.values()];
+    pinch = { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, z: view.z };
+  }
+  compare.classList.add('panning');
+});
+compare.addEventListener('pointermove', e => {
+  const p = ptrs.get(e.pointerId);
+  if (!p) return;
+  if (ptrs.size === 1) {
+    view.cx -= (e.clientX - p.x) / view.z; view.cy -= (e.clientY - p.y) / view.z;
+    p.x = e.clientX; p.y = e.clientY;
+    clampView(); redraw();
+  } else if (ptrs.size === 2 && pinch) {
+    p.x = e.clientX; p.y = e.clientY;
+    const [a, b] = [...ptrs.values()];
+    const r = compare.getBoundingClientRect();
+    zoomAt((a.x + b.x) / 2 - r.left - compare.clientLeft, (a.y + b.y) / 2 - r.top - compare.clientTop,
+           pinch.z * Math.hypot(a.x - b.x, a.y - b.y) / pinch.d);
+  }
+});
+const endPtr = e => { ptrs.delete(e.pointerId); pinch = null; if (!ptrs.size) compare.classList.remove('panning'); };
+compare.addEventListener('pointerup', endPtr);
+compare.addEventListener('pointercancel', endPtr);
+compare.addEventListener('dblclick', e => {
+  if (e.target === handle) return;
+  const [mx, my] = local(e);
+  if (view.fit) zoomAt(mx, my, 4 / dpr); else fitView();
+});
+
+$('zIn').addEventListener('click', () => zoomAt(box.w / 2, box.h / 2, view.z * 1.5));
+$('zOut').addEventListener('click', () => zoomAt(box.w / 2, box.h / 2, view.z / 1.5));
+$('zFit').addEventListener('click', fitView);
+for (const b of zoombar.querySelectorAll('[data-z]')) b.addEventListener('click', () => zoomAt(box.w / 2, box.h / 2, +b.dataset.z / dpr));
+pix.addEventListener('change', () => draw(true));
+new ResizeObserver(() => {               // window resizes and rotations only redraw; nothing is lost
+  if (compare.clientWidth !== lastBoxW) { lastBoxW = compare.clientWidth; layout(false); }
+}).observe(compare);
 
 // ---- model
 async function getSession() {
@@ -364,6 +531,7 @@ function allocOutput(outW, outH) {
   // The full-size result is never put on the page, so the browser does not composite or snapshot it.
   // Browsers fail oversized canvases silently, so write a pixel at the far corner and read it back.
   if (full) { full.width = full.height = 0; }
+  resultReady = false;
   full = document.createElement('canvas');
   full.width = outW; full.height = outH;
   const ctx = full.getContext('2d', { willReadFrequently: true });
@@ -376,11 +544,8 @@ function allocOutput(outW, outH) {
 }
 
 function showResult() {
-  // The page shows a preview at most PREVIEW_W wide; the download is the full-size canvas.
-  const pw = Math.min(full.width, PREVIEW_W), ph = Math.max(1, Math.round(full.height * pw / full.width));
-  cRes.width = cOrig.width = pw; cRes.height = cOrig.height = ph;
-  const rc = cRes.getContext('2d'); rc.imageSmoothingQuality = 'high'; rc.drawImage(full, 0, 0, pw, ph);
-  const oc = cOrig.getContext('2d'); oc.imageSmoothingQuality = 'high'; oc.drawImage(bitmap, 0, 0, pw, ph);
+  resultReady = true;
+  layout(true);        // the image space is now the full-size result; the viewer reads it directly
 }
 
 async function startJob(scale, outW, outH, total) {
@@ -450,8 +615,8 @@ async function runJob(scale, resumeJob = null) {
     console.error(e);
     say('Upscaling failed: ' + (e && e.message ? e.message : e), true);
     if (full) { full.width = full.height = 0; full = null; }
-    cRes.width = bitmap.width; cRes.height = bitmap.height;
-    cRes.getContext('2d').drawImage(bitmap, 0, 0);
+    resultReady = false;
+    layout(true);
     setSplit(100);
   } finally {
     bar.classList.remove('on'); busy = false; go.disabled = false;
