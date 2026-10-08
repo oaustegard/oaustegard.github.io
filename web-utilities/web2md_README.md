@@ -43,4 +43,4 @@ A web-based utility for converting HTML content, either from a live URL or raw s
 
 ---
 
-For issues, feature requests, or contributions, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.
+For issues or feature requests, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.

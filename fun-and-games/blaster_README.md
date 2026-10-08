@@ -40,4 +40,4 @@ This game was created as an AI-assisted project, starting as a fork of the Aster
 
 ---
 
-For issues, feature requests, or contributions, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.
+For issues or feature requests, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.

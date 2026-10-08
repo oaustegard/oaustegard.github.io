@@ -38,4 +38,4 @@ This piece was generated with AI assistance as a recreation of the original "Ete
 
 ---
 
-For issues, feature requests, or contributions, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.
+For issues or feature requests, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.

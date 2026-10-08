@@ -35,4 +35,4 @@ Created by Oskar Austegard ([@oaustegard](https://github.com/oaustegard))
 
 ---
 
-For issues, feature requests, or contributions, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.
+For issues or feature requests, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.

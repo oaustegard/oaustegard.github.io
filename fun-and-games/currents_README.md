@@ -34,4 +34,4 @@ Currents paints a full-screen field of domain-warped fractal noise, colored with
 
 ---
 
-For issues, feature requests, or contributions, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.
+For issues or feature requests, please [open an issue](https://github.com/oaustegard/oaustegard.github.io/issues) on GitHub.
