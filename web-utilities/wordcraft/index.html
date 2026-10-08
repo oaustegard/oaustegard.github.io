@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+  <title>WordCraft</title>
+  <meta name="description" content="WordCraft, an open-source Word-style word processor in Rust, running in the browser via WebAssembly">
+  
+<script type="module">
+import init, * as bindings from './wordcraft-web-625879d55985c753.js';
+// The 26.7 MB wasm lives gzipped (10.5 MB) on an orphan branch of oaustegard/experiments,
+// served by jsDelivr (CORS, 20 MB per-file cap), and is inflated here.
+const WASM_GZ = 'https://cdn.jsdelivr.net/gh/oaustegard/experiments@6af160754ed65df70f2c94a5ca67b06865d19b1f/wordcraft-web/wordcraft-web-625879d55985c753_bg.wasm.gz';
+const loading = document.getElementById('wordcraft_loading');
+try {
+  const res = await fetch(WASM_GZ);
+  if (!res.ok) throw new Error('HTTP ' + res.status);
+  const total = +res.headers.get('content-length') || 0;
+  let got = 0;
+  const counted = res.body.pipeThrough(new TransformStream({
+    transform(chunk, ctl) {
+      got += chunk.length;
+      if (loading && total) loading.textContent = 'Loading WordCraft… ' + Math.round(100 * got / total) + '%';
+      ctl.enqueue(chunk);
+    }
+  }));
+  const wasmRes = new Response(counted.pipeThrough(new DecompressionStream('gzip')), { headers: { 'content-type': 'application/wasm' } });
+  const wasm = await init({ module_or_path: wasmRes });
+  window.wasmBindings = bindings;
+  dispatchEvent(new CustomEvent('TrunkApplicationStarted', { detail: { wasm } }));
+} catch (e) {
+  if (loading) loading.textContent = 'WordCraft could not load: ' + e.message;
+  throw e;
+}
+</script>
+  <style>
+    html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #e6e6e6; }
+    #wordcraft_canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+    #wordcraft_loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      color: #555; font: 14px system-ui, sans-serif; pointer-events: none; }
+  </style>
+<link rel="modulepreload" href="./wordcraft-web-625879d55985c753.js" crossorigin="anonymous" integrity="sha384-eX+68d9xK/I95bVplcOO3QvdPymVVlqR2UoiU/nsNUmEslLgYxFqeqqyRq4hpN6t"></head>
+<body>
+  <canvas id="wordcraft_canvas"></canvas>
+  <div id="wordcraft_loading">Loading WordCraft&hellip;</div>
+</body>
+</html>
