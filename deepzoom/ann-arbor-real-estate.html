@@ -566,7 +566,9 @@ button,input,select{font:inherit;color:inherit}
     $("info").classList.add("open");
     $("info").querySelector(".close").onclick = clearSelection;
   }
-  function clearSelection() { $("info").classList.remove("open"); shapes = []; pin = null; selListing = null; selAuction = null; drawOverlay(); }
+  function clearSelection() { $("info").classList.remove("open"); shapes = []; pin = null; selListing = null; selAuction = null; drawOverlay(); setQuery(""); }
+  // The selected property goes in the query string so the URL reopens it; the hash keeps the view.
+  const setQuery = (qs) => history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
   const dl = (rows) => `<dl>${rows.filter((r) => r && r[1] !== "" && r[1] != null).map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("")}</dl>`;
 
   // Portal searches for an address. None of these sites offers a public API, so the page links out.
@@ -641,7 +643,7 @@ button,input,select{font:inherit;color:inherit}
     ]);
     if (addr) html += `<h3>Listings and history</h3>` + portals(`${addr}, ${placeName && !/township/i.test(placeName) ? placeName.replace(/^City of /, "") : "Ann Arbor"}, MI`);
     html += `<h3>Official records</h3><div class="links">` +
-      (f ? `<a href="https://bsaonline.com/Home/MunicipalityHome?uid=283" target="_blank" rel="noopener">Ann Arbor assessor (BS&amp;A)</a>` : "") +
+      (f ? `<a href="https://bsaonline.com/Home/MunicipalityHome?uid=283" target="_blank" rel="noopener">Sale history (city assessor, BS&amp;A)</a>` : "") +
       `<a href="https://secure4.ewashtenaw.org/parcelsearch/viewAllReports.xhtml" target="_blank" rel="noopener">County property search</a>` +
       (a.StreetView && /^https?:/.test(a.StreetView) ? `<a href="${esc(a.StreetView)}" target="_blank" rel="noopener">Street View</a>` : "") + `</div>`;
     showInfo(html);
@@ -656,7 +658,7 @@ button,input,select{font:inherit;color:inherit}
     clearTimeout(clickTimer);
     closeResults();
     if (milesFrom(lon, lat) > 25.5) return;
-    clickTimer = setTimeout(() => identify(lon, lat), 260);
+    clickTimer = setTimeout(() => { identify(lon, lat); setQuery(`ll=${lat.toFixed(6)},${lon.toFixed(6)}`); }, 260);
   });
   viewer.addHandler("canvas-double-click", () => clearTimeout(clickTimer));
 
@@ -775,7 +777,7 @@ button,input,select{font:inherit;color:inherit}
       if (my !== searchSeq) return;
       for (const f of r?.features || []) {
         const [w, s, e, n] = bboxOfRings(f.geometry?.rings || []);
-        out.push({ kind: "Parcel", label: f.attributes.PIN, sub: titleCase(f.attributes.PRPACOM || ""),
+        out.push({ kind: "Parcel", label: f.attributes.PIN, query: `pin=${encodeURIComponent(f.attributes.PIN)}`, sub: titleCase(f.attributes.PRPACOM || ""),
           go: () => identify((w + e) / 2, (s + n) / 2, { fit: true, known: f }) });
       }
       if (!out.length) out.push({ label: r ? `No city parcel ${text}` : "The city parcel service did not answer", msg: true });
@@ -787,7 +789,7 @@ button,input,select{font:inherit;color:inherit}
         const { x: lon, y: lat } = c.location;
         if (milesFrom(lon, lat) > 25) continue;
         const kind = /Address|Subaddress|PointAddress|StreetAddress/.test(c.attributes.Addr_type) ? "Address" : c.attributes.Type || c.attributes.Addr_type || "Place";
-        out.push({ kind, label: c.address.split(",")[0], sub: c.address.split(",").slice(1, 3).join(",").trim(),
+        out.push({ kind, label: c.address.split(",")[0], query: `q=${encodeURIComponent(c.address.split(",").slice(0, 2).join(","))}`, sub: c.address.split(",").slice(1, 3).join(",").trim(),
           go: () => {
             const z = kind === "Address" ? 18 : 15;
             setView(lon, lat, z);
@@ -811,6 +813,7 @@ button,input,select{font:inherit;color:inherit}
     if (!r || r.msg) return;
     closeResults(); q.blur(); layersPanel(false);
     r.go();
+    if (r.query) setQuery(r.query);
   }
   q.addEventListener("input", () => {
     clearTimeout(searchTimer);
@@ -846,7 +849,28 @@ button,input,select{font:inherit;color:inherit}
     scaleBar();
     drawFade();
     portalLinks();
+    lookupFromQuery();
   });
+
+  // ?q=315 E Liberty St (address, place or parcel number), ?pin=09-09-29-123-004, or ?ll=42.2794,-83.7448
+  // opens that property's card on load. The hash still carries the view.
+  async function lookupFromQuery() {
+    const p = new URLSearchParams(location.search);
+    const ll = (p.get("ll") || "").split(",").map(Number);
+    const lat = ll.length === 2 ? ll[0] : +p.get("lat"), lon = ll.length === 2 ? ll[1] : +(p.get("lon") || p.get("lng"));
+    if (isFinite(lat) && isFinite(lon) && lat && lon) {
+      if (milesFrom(lon, lat) > 25) { showInfo(`<p>${fmt(lat, "N", "S")} ${fmt(lon, "E", "W")} is outside the 25-mile map.</p>`); return; }
+      setView(lon, lat, 18, true);
+      identify(lon, lat);
+      return;
+    }
+    const text = (p.get("pin") || p.get("q") || "").trim();
+    if (text.length < 3) return;
+    q.value = text;
+    await search(text);
+    if (active >= 0) pick(active);
+    else { closeResults(); showInfo(`<p>${esc(found[0]?.label || "No matches")} for “${esc(text)}”.</p>`); }
+  }
   window.addEventListener("hashchange", () => {
     readHash();
     document.querySelectorAll("#bases input").forEach((i) => (i.checked = i.value === state.base));
