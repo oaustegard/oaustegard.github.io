@@ -11,7 +11,7 @@ Ann Arbor and the 25 miles around downtown on one zoomable map. Public records c
 - **Click** anywhere for the parcel (number, owner, use, year built, floor area, lot, land value, highest recorded sale, sale price per square foot, neighborhood, ward) together with zoning, historic district, FEMA flood zone, school district and municipality at that point. The card links the address to Zillow, Redfin, Realtor.com and Google Maps, and to the city assessor and the county property search.
 - **Search** takes an address or place (Esri's geocoder, limited to the 25-mile circle) or a Washtenaw parcel number such as `09-09-29-123-004`.
 - **Links:** the URL keeps zoom, position, base map and layers (`#16/42.28080/-83.74830/osm/zpm`), and the query string keeps the property you opened. A link can also start a lookup: `?q=315 E Liberty St` searches an address or place, `?pin=09-09-29-123-004` a parcel number, and `?ll=42.2794,-83.7448` a point.
-- **Sale dates** are not in any open city or county service. The parcel card shows the highest recorded sale and links to the city assessor's BS&A site, which lists every sale with its date.
+- **Sale dates** are not in any open city or county service. The parcel card shows the highest recorded sale and links to the city assessor's BS&A site, whose property pages carry the sale history with dates.
 
 ## Listings
 
