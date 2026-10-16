@@ -90,6 +90,7 @@ button,input,select{font:inherit;color:inherit}
 /* 25-mile fade, highlight and listing pins (SVG over the OSD canvas, redrawn every frame) */
 #fade,#hl{position:absolute;inset:0;pointer-events:none;overflow:visible;width:100%;height:100%}
 #fade{z-index:4}
+#fade .city{fill:none;stroke:var(--accent);stroke-width:3;stroke-linejoin:round;fill-rule:evenodd}
 #fade .ring{fill:none;stroke:var(--muted);stroke-width:1.5;stroke-dasharray:2 6;opacity:.7}
 #hl{z-index:5}
 #hl path{fill:color-mix(in srgb,var(--hl) 16%,transparent);stroke:var(--hl);stroke-width:3;stroke-linejoin:round;fill-rule:evenodd}
@@ -121,7 +122,7 @@ button,input,select{font:inherit;color:inherit}
 <svg id="fade" aria-hidden="true"><defs><radialGradient id="fg" gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1">
   <stop offset="0" stop-color="var(--fade)" stop-opacity="0"/><stop offset=".78" stop-color="var(--fade)" stop-opacity="0"/>
   <stop offset=".86" stop-color="var(--fade)" stop-opacity=".45"/><stop offset="1" stop-color="var(--fade)" stop-opacity=".88"/>
-</radialGradient></defs><rect x="-50%" y="-50%" width="200%" height="200%" fill="url(#fg)"/><circle class="ring"/></svg>
+</radialGradient></defs><rect x="-50%" y="-50%" width="200%" height="200%" fill="url(#fg)"/><path class="city"/><circle class="ring"/></svg>
 <svg id="hl" aria-hidden="true"></svg>
 
 <div id="top">
@@ -285,6 +286,9 @@ button,input,select{font:inherit;color:inherit}
       src: () => arcgis(A2, 13, { minZ: 14, minScale: 4801 }) },
     { id: "s", group: "bounds", name: "School districts", note: "Michigan", on: false, opacity: .8, minZ: 8, attr: "<a href='https://gis-michigan.opendata.arcgis.com/'>State of Michigan</a>",
       src: () => arcgis(MIGF, 10) },
+    // Drawn by the page as an SVG line (no tiles), so it stays crisp at every zoom.
+    { id: "c", group: "bounds", name: "Ann Arbor city limits", note: "Michigan", on: true, opacity: .9, minZ: 0, vector: true,
+      attr: "<a href='https://gis-michigan.opendata.arcgis.com/'>State of Michigan</a>" },
     { id: "m", group: "bounds", name: "Cities and townships", note: "Michigan", on: true, opacity: .8, minZ: 8, attr: "<a href='https://gis-michigan.opendata.arcgis.com/'>State of Michigan</a>",
       src: () => arcgis(MIGF, 2) },
     { id: "r", group: "mix", name: "Roads", note: "Esri", on: false, opacity: 1, minZ: 8, attr: "Roads and labels Esri, HERE, Garmin, © OpenStreetMap contributors",
@@ -395,6 +399,8 @@ button,input,select{font:inherit;color:inherit}
       if (viewer.world.getIndexOfItem(it) !== i) viewer.world.setItemIndex(it, i);
       i++;
     }
+    if (state.on.has("c")) loadCity();
+    drawFade();
     $("map").classList.toggle("paper", state.base === "none");
     const waiting = OVERLAYS.filter((o) => state.on.has(o.id) && z < o.minZ).map((o) => o.name.toLowerCase());
     $("zoomHint").textContent = waiting.length ? `Zoom in to see ${waiting.join(", ")}.` : "";
@@ -506,6 +512,23 @@ button,input,select{font:inherit;color:inherit}
     g.setAttribute("cx", c.x); g.setAttribute("cy", c.y); g.setAttribute("r", r / 0.86);
     const ring = document.querySelector("#fade .ring");
     ring.setAttribute("cx", c.x); ring.setAttribute("cy", c.y); ring.setAttribute("r", r);
+    const city = document.querySelector("#fade .city"), show = state.on.has("c") && cityRings;
+    city.setAttribute("d", show ? cityRings.map((ring) => "M" + ring.map(([lon, lat]) => {
+      const p = vp().pixelFromPoint(toVp(lon, lat), true); return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
+    }).join("L") + "Z").join("") : "");
+    city.style.opacity = OVERLAYS.find((o) => o.id === "c").opacity;
+  }
+
+  // ── city limits: the municipality polygon under Main and Liberty, fetched once ──
+  let cityRings = null, cityLoading = false;
+  async function loadCity() {
+    if (cityRings || cityLoading) return;
+    cityLoading = true;
+    const r = await getJSON(`${MIGF}/2/query?geometry=${CENTER.join(",")}&geometryType=esriGeometryPoint&inSR=4326` +
+      `&spatialRel=esriSpatialRelIntersects&outFields=NAME&returnGeometry=true&outSR=4326&maxAllowableOffset=0.00002&f=json`);
+    cityLoading = false;
+    cityRings = r?.features?.[0]?.geometry?.rings || null;
+    drawFade();
   }
 
   // ── fetch helpers ───────────────────────────────────────────────────────
