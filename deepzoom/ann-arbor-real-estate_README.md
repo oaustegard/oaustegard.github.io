@@ -4,8 +4,8 @@ Ann Arbor and the 25 miles around downtown on one zoomable map. Public records c
 
 **[Live](https://austegard.com/deepzoom/ann-arbor-real-estate.html)** | **[Source](https://github.com/oaustegard/oaustegard.github.io/blob/main/deepzoom/ann-arbor-real-estate.html)**
 
-- **Base maps:** OpenStreetMap, Esri light grey, USGS topographic, Esri World Imagery, State of Michigan aerial imagery, USGS (NAIP) aerial imagery, and None.
-- **Relief:** USGS 3DEP lidar hillshade, multiplied into whichever base map is under it.
+- **Base maps:** OpenStreetMap, Esri light grey, USGS topographic, Esri World Imagery, State of Michigan aerial imagery, and None.
+- **On top of the base map:** both aerials again as see-through layers with their own opacity, so a photo can sit over the street map; Esri's roads and place names, which put streets over an aerial base; and the USGS 3DEP lidar hillshade, multiplied into whatever is under it.
 - **Records:** City of Ann Arbor zoning, land use, historic districts and tax parcels; FEMA flood zones. The city layers stop at the city limits.
 - **Boundaries:** school districts and cities, townships and villages from the State of Michigan.
 - **Click** anywhere for the parcel (number, owner, use, year built, floor area, lot, land value, highest recorded sale, sale price per square foot, neighborhood, ward) together with zoning, historic district, FEMA flood zone, school district and municipality at that point. The card links the address to Zillow, Redfin, Realtor.com and Google Maps, and to the city assessor and the county property search.

@@ -139,8 +139,8 @@ button,input,select{font:inherit;color:inherit}
   <button class="x" aria-label="Close layers">&times;</button>
   <h2>Base map</h2>
   <div id="bases"></div>
-  <h2>Relief</h2>
-  <div id="relief"></div>
+  <h2>On top of the base map</h2>
+  <div id="mix"></div>
   <h2>Records</h2>
   <div id="records"></div>
   <h2>Boundaries</h2>
@@ -261,14 +261,17 @@ button,input,select{font:inherit;color:inherit}
       src: () => xyz(19, (z, x, y) => `${ESRI}/World_Imagery/MapServer/tile/${z}/${y}/${x}`) },
     { id: "mi", name: "Aerial, Michigan", note: "State of Michigan", attr: "Aerial imagery <a href='https://imagery.michigan.gov/'>State of Michigan</a>",
       src: () => xyz(19, (z, x, y) => `https://imagery.michigan.gov/server/rest/services/Michigan_imagery_public/MapServer/tile/${z}/${y}/${x}`) },
-    { id: "naip", name: "Aerial, USGS", note: "NAIP", attr: "<a href='https://www.usgs.gov/programs/national-geospatial-program/national-map'>USGS The National Map</a> imagery",
-      src: () => xyz(16, (z, x, y) => `${USGS}/USGSImageryOnly/MapServer/tile/${z}/${y}/${x}`) },
     { id: "none", name: "None", note: "relief only", attr: null, src: null },
   ];
   // Stack order, bottom up; the panel groups them by `group`.
   // minZ: below this the layer is hidden (and not fetched). `city` marks layers that cover Ann Arbor only.
   const OVERLAYS = [
-    { id: "t", group: "relief", name: "Terrain", note: "USGS 3DEP lidar", on: false, opacity: .5, minZ: 8, blend: "multiply",
+    // Imagery as see-through layers, so an aerial can sit over the street map or the street map's roads over an aerial.
+    { id: "e", group: "mix", name: "Aerial, Esri", on: false, opacity: .6, minZ: 8, attr: "Aerial imagery Esri, Vantor, Earthstar Geographics",
+      src: () => xyz(19, (z, x, y) => `${ESRI}/World_Imagery/MapServer/tile/${z}/${y}/${x}`) },
+    { id: "i", group: "mix", name: "Aerial, Michigan", on: false, opacity: .6, minZ: 8, attr: "Aerial imagery <a href='https://imagery.michigan.gov/'>State of Michigan</a>",
+      src: () => xyz(19, (z, x, y) => `https://imagery.michigan.gov/server/rest/services/Michigan_imagery_public/MapServer/tile/${z}/${y}/${x}`) },
+    { id: "t", group: "mix", name: "Terrain", note: "USGS 3DEP lidar", on: false, opacity: .5, minZ: 8, blend: "multiply",
       attr: "Hillshade <a href='https://www.usgs.gov/3d-elevation-program'>USGS 3DEP</a>", src: () => arcImage(DEP, "Hillshade Gray") },
     { id: "u", group: "records", name: "Land use", note: "city", city: true, on: false, opacity: .55, minZ: 13, attr: A2_ATTR,
       src: () => arcgis(A2, 20, { minZ: 12 }) },
@@ -284,6 +287,10 @@ button,input,select{font:inherit;color:inherit}
       src: () => arcgis(MIGF, 10) },
     { id: "m", group: "bounds", name: "Cities and townships", note: "Michigan", on: true, opacity: .8, minZ: 8, attr: "<a href='https://gis-michigan.opendata.arcgis.com/'>State of Michigan</a>",
       src: () => arcgis(MIGF, 2) },
+    { id: "r", group: "mix", name: "Roads", note: "Esri", on: false, opacity: 1, minZ: 8, attr: "Roads and labels Esri, HERE, Garmin, © OpenStreetMap contributors",
+      src: () => xyz(19, (z, x, y) => `${ESRI}/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}`) },
+    { id: "n", group: "mix", name: "Place names", note: "Esri", on: false, opacity: 1, minZ: 8, attr: "Roads and labels Esri, HERE, Garmin, © OpenStreetMap contributors",
+      src: () => xyz(19, (z, x, y) => `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`) },
   ];
   const ALL = [...BASES, ...OVERLAYS];
 
@@ -422,9 +429,9 @@ button,input,select{font:inherit;color:inherit}
     `${o.note ? `<span class="note">${esc(o.note)}</span>` : ""}</label>` +
     `<input type="range" min="0.1" max="1" step="0.05" value="${o.opacity}" data-o="${o.id}" aria-label="${esc(o.name)} opacity"` +
     `${state.on.has(o.id) ? "" : " hidden"}>`).join("");
-  for (const g of ["relief", "records", "bounds"]) $(g).innerHTML = toggles(g);
+  for (const g of ["mix", "records", "bounds"]) $(g).innerHTML = toggles(g);
   $("bases").addEventListener("change", (e) => { state.base = e.target.value; applyLayers(); });
-  for (const box of [$("relief"), $("records"), $("bounds")]) {
+  for (const box of [$("mix"), $("records"), $("bounds")]) {
     box.addEventListener("change", (e) => {
       if (e.target.type !== "checkbox") return;
       const id = e.target.value;
@@ -874,7 +881,7 @@ button,input,select{font:inherit;color:inherit}
   window.addEventListener("hashchange", () => {
     readHash();
     document.querySelectorAll("#bases input").forEach((i) => (i.checked = i.value === state.base));
-    document.querySelectorAll("#relief input[type=checkbox], #records input[type=checkbox], #bounds input[type=checkbox]").forEach((i) => {
+    document.querySelectorAll("#mix input[type=checkbox], #records input[type=checkbox], #bounds input[type=checkbox]").forEach((i) => {
       i.checked = state.on.has(i.value);
       document.querySelector(`[data-o="${i.value}"]`).hidden = !i.checked;
     });
