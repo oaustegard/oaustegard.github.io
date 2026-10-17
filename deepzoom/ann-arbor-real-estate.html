@@ -222,6 +222,18 @@ button,input,select{font:inherit;color:inherit}
     width: 256 * 2 ** maxZ, height: 256 * 2 ** maxZ, tileSize: 256, tileOverlap: 0, minLevel: 8, maxLevel: 8 + maxZ,
     getTileUrl: (L, x, y) => url(L - 8, x, y),
   });
+  // OpenSeadragon draws a level until its pixels are half a device pixel, so tile text comes out
+  // at 0.5 to 1 times its design size, and at a quarter to a half on a 2x screen. Label layers
+  // declare a bigger tile (256 css px × scale × device pixel ratio), which makes OSD pick a coarser
+  // level and draw it larger: their text shows at scale/2 to scale times its design size on any screen.
+  const DPR = Math.min(3, Math.max(1, window.devicePixelRatio || 1));
+  const xyzLabels = (maxZ, url, scale) => {
+    const T = Math.round(256 * scale * DPR), off = Math.ceil(Math.log2(T));
+    return new OSD.TileSource({
+      width: T * 2 ** maxZ, height: T * 2 ** maxZ, tileSize: T, tileOverlap: 0, minLevel: off, maxLevel: off + maxZ,
+      getTileUrl: (L, x, y) => url(L - off, x, y),
+    });
+  };
   const bboxOf = (L, x, y) => {
     const s = CIRC / 2 ** (L - 9), x0 = -HALF + x * s, y1 = HALF - y * s;
     return { s, bbox: `${x0.toFixed(2)},${(y1 - s).toFixed(2)},${(x0 + s).toFixed(2)},${y1.toFixed(2)}` };
@@ -326,10 +338,12 @@ button,input,select{font:inherit;color:inherit}
       attr: "<a href='https://gis-michigan.opendata.arcgis.com/'>State of Michigan</a>" },
     { id: "m", group: "bounds", name: "Cities and townships", note: "Michigan", on: true, opacity: .8, minZ: 8, attr: "<a href='https://gis-michigan.opendata.arcgis.com/'>State of Michigan</a>",
       src: () => arcgis(MIGF, 2) },
-    { id: "r", group: "mix", name: "Roads", note: "Esri", on: false, opacity: 1, minZ: 8, attr: "Roads and labels Esri, HERE, Garmin, © OpenStreetMap contributors",
-      src: () => xyz(19, (z, x, y) => `${ESRI}/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}`) },
-    { id: "n", group: "mix", name: "Place names", note: "Esri", on: false, opacity: 1, minZ: 8, attr: "Roads and labels Esri, HERE, Garmin, © OpenStreetMap contributors",
-      src: () => xyz(19, (z, x, y) => `${ESRI}/Reference/World_Boundaries_and_Places/MapServer/tile/${z}/${y}/${x}`) },
+    { id: "r", group: "mix", name: "Roads", note: "Esri", on: false, opacity: 1, minZ: 8, attr: "Roads Esri, HERE, Garmin, © OpenStreetMap contributors",
+      src: () => xyzLabels(19, (z, x, y) => `${ESRI}/Reference/World_Transportation/MapServer/tile/${z}/${y}/${x}`, 1.6) },
+    // CARTO's label tiles come at double resolution and in a clearer typeface than Esri's reference layers.
+    { id: "n", group: "mix", name: "Street and place names", note: "CARTO", on: false, opacity: 1, minZ: 8,
+      attr: "Labels © <a href='https://carto.com/attributions'>CARTO</a>, © OpenStreetMap contributors",
+      src: () => xyzLabels(20, (z, x, y) => `https://${"abcd"[(x + y) % 4]}.basemaps.cartocdn.com/rastertiles/voyager_only_labels/${z}/${x}/${y}@2x.png`, 1.8) },
   ];
   const ALL = [...BASES, ...OVERLAYS];
 
