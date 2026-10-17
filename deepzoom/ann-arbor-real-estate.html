@@ -242,15 +242,28 @@ button,input,select{font:inherit;color:inherit}
   };
   // A MapServer layer with a minScale draws nothing when zoomed out past it. Asking for a lower dpi
   // lowers the scale the server computes for the same tile, so the layer appears a few zoom levels earlier.
-  const arcgis = (svc, layers, { minZ = 8, maxZ = 21, minScale = 0 } = {}) => new OSD.TileSource({
+  // `restyle(dpi)` returns dynamicLayers that redraw the layers with our own symbols.
+  const arcgis = (svc, layers, { minZ = 8, maxZ = 21, minScale = 0, restyle = null } = {}) => new OSD.TileSource({
     width: 2 ** (8 + maxZ), height: 2 ** (8 + maxZ), tileSize: 512, tileOverlap: 0, minLevel: 8 + Math.max(minZ, 1), maxLevel: 8 + maxZ,
     getTileUrl(L, x, y) {
       const { s, bbox } = bboxOf(L, x, y);
       const dpi = minScale ? Math.max(12, Math.min(96, Math.floor(minScale * 0.85 * 0.0254 * 512 / s))) : 96;
+      const which = restyle ? `dynamicLayers=${encodeURIComponent(JSON.stringify(restyle(dpi)))}` : `layers=show:${layers}`;
       return `${svc}/export?bbox=${bbox}&bboxSR=3857&imageSR=3857&size=512,512&dpi=${dpi}` +
-        `&format=png32&transparent=true&layers=show:${layers}&f=image`;
+        `&format=png32&transparent=true&${which}&f=image`;
     },
   });
+  // The city draws parcels as thin grey lines that vanish on aerial imagery. Redraw them as a yellow line
+  // on a dark casing, which reads on photos and light maps alike. Line widths are in points, which the
+  // server scales by dpi, so widen them when the minScale trick lowers the dpi.
+  const parcelLines = (dpi) => {
+    const k = 96 / dpi, line = (id, color, w) => ({
+      id, source: { type: "mapLayer", mapLayerId: 13 },
+      drawingInfo: { renderer: { type: "simple", symbol: { type: "esriSFS", style: "esriSFSNull",
+        outline: { type: "esriSLS", style: "esriSLSSolid", color, width: +(w * k).toFixed(2) } } } },
+    });
+    return [line(1013, [255, 214, 64, 255], 0.9), line(1113, [20, 20, 20, 150], 2.2)];
+  };
   const arcImage = (svc, rule, { minZ = 8, maxZ = 18 } = {}) => new OSD.TileSource({
     width: 2 ** (8 + maxZ), height: 2 ** (8 + maxZ), tileSize: 512, tileOverlap: 0, minLevel: 8 + minZ, maxLevel: 8 + maxZ,
     getTileUrl(L, x, y) {
@@ -327,7 +340,7 @@ button,input,select{font:inherit;color:inherit}
     { id: "k", group: "records", name: "Rental properties", note: "city", city: true, on: false, opacity: .6, minZ: 13, attr: A2_ATTR,
       src: () => arcgis(A2, 43, { minZ: 12 }) },
     { id: "p", group: "records", name: "Tax parcels", note: "city", city: true, on: true, opacity: 1, minZ: 15, attr: A2_ATTR,
-      src: () => arcgis(A2, 13, { minZ: 14, minScale: 4801 }) },
+      src: () => arcgis(A2, 13, { minZ: 14, minScale: 4801, restyle: parcelLines }) },
     { id: "l", group: "records", name: "Water service lines", note: "city", city: true, on: false, opacity: 1, minZ: 16, attr: A2_ATTR,
       src: () => arcgis(`${A2MAPS}/WaterServiceLeadMaterialAll/MapServer`, "0", { minZ: 15, minScale: 3000 }) },
     { id: "o", group: "env", name: "Contours", note: "USGS", on: false, opacity: .8, minZ: 13,
