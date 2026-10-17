@@ -670,6 +670,14 @@ button,input,select{font:inherit;color:inherit}
     $("info").classList.add("open");
     $("info").querySelector(".close").onclick = clearSelection;
   }
+  // Links whose site cannot take the parcel in its URL copy it on the way out.
+  $("info").addEventListener("click", (e) => {
+    const link = e.target.closest("a[data-copy]");
+    if (!link) return;
+    navigator.clipboard?.writeText(link.dataset.copy).catch(() => {});
+    const note = $("copied");
+    if (note) { note.hidden = false; note.textContent = `Copied ${link.dataset.copy}: paste it into that site's search.`; }
+  });
   function clearSelection() { $("info").classList.remove("open"); shapes = []; pin = null; selListing = null; selAuction = null; drawOverlay(); setQuery(""); }
   // The selected property goes in the query string so the URL reopens it; the hash keeps the view.
   const setQuery = (qs) => history.replaceState(null, "", location.pathname + (qs ? `?${qs}` : "") + location.hash);
@@ -714,6 +722,16 @@ button,input,select{font:inherit;color:inherit}
     if (!list.length) return sites || tanks ? "None listed" : "";
     const n = list[0];
     return `<span class="warn">${list.length}</span> · nearest ${esc(titleCase(n.name || n.kind))} (${esc(n.kind)}, ${nf.format(n.d * 3.28084)} ft)`;
+  }
+  // "315 E LIBERTY ST" → "LIBERTY"; A2Trak and STREAM want the address without the street suffix.
+  const SUFFIX = /\s+(ST|AVE|AV|RD|DR|CT|BLVD|LN|PL|CIR|WAY|TER|TRL|PKWY|HWY|PARK|SQ)\.?$/i;
+  const addrNoSuffix = (s) => String(s || "").trim().replace(/\s+(APT|UNIT|#).*$/i, "").replace(SUFFIX, "");
+  const streetOf = (s) => addrNoSuffix(s).replace(/^\d+[A-Z]?\s+/i, "").replace(/^(N|S|E|W)\s+/i, "").trim();
+  function aapsPage(street) {
+    const c = street[0].toLowerCase();
+    const page = { i: "i-j", j: "i-j", q: "q-r", r: "q-r", u: "u-v", v: "u-v", x: "x-y-z", y: "x-y-z", z: "x-y-z" }[c] || c;
+    // The text fragment scrolls to and highlights the street on the letter's page.
+    return `https://www.a2schools.org/about-aaps/attendance-area-by-street-directory/streets-starting-with-${page}#:~:text=${encodeURIComponent(titleCase(street))}`;
   }
   const CLASS = { "201": "Commercial", "301": "Industrial", "401": "Residential", "402": "Residential vacant", "407": "Residential condo" };
   const yes = (v) => /^(y|yes|true|1)$/i.test(String(v ?? "").trim());
@@ -802,15 +820,24 @@ button,input,select{font:inherit;color:inherit}
       ["School district", esc(titleCase(school?.features?.[0]?.attributes?.NAME || ""))],
     ]);
     if (addr) html += `<h3>Listings and history</h3>` + portals(`${addr}, ${placeName && !/township/i.test(placeName) ? placeName.replace(/^City of /, "") : "Ann Arbor"}, MI`);
+    // BS&A, Census Reporter and the AAPS directory take the parcel or street in the URL. The county
+    // search, A2Trak and the Register of Deeds only take form posts, so those links copy what to
+    // paste into the search before opening it.
+    const pinRaw = String(a.PIN || "").trim();
+    // BS&A and the county write parcel numbers as 09-09-29-123-004.
+    const pinTxt = /^\d{12}$/.test(pinRaw) ? pinRaw.replace(/^(\d\d)(\d\d)(\d\d)(\d{3})(\d{3})$/, "$1-$2-$3-$4-$5") : pinRaw, street = streetOf(a.PRPACOM);
+    const ext = (href, label, copy = "") => `<a href="${esc(href)}" target="_blank" rel="noopener"${copy ? ` data-copy="${esc(copy)}"` : ""}>${label}</a>`;
     html += `<h3>Official records</h3><div class="links">` +
-      (f ? `<a href="https://bsaonline.com/Home/MunicipalityHome?uid=283" target="_blank" rel="noopener">Sale history (city assessor, BS&amp;A)</a>` : "") +
-      `<a href="https://secure4.ewashtenaw.org/parcelsearch/viewAllReports.xhtml" target="_blank" rel="noopener">County property search</a>` +
-      (f ? `<a href="https://stream.a2gov.org/" target="_blank" rel="noopener">Permits and rental records (STREAM)</a>` +
-        `<a href="https://secure.a2gov.org/A2Trak/Default" target="_blank" rel="noopener">Permits 2008–2022 (A2Trak)</a>` : "") +
-      `<a href="https://rod.ewashtenaw.org/recorder/web/about.jsp" target="_blank" rel="noopener">Deeds (Register of Deeds)</a>` +
-      (/^\d{11}/.test(a.GEOID || "") ? `<a href="https://censusreporter.org/profiles/14000US${a.GEOID.slice(0, 11)}" target="_blank" rel="noopener">Census tract profile</a>` : "") +
-      (/ann arbor/i.test(school?.features?.[0]?.attributes?.NAME || "") ? `<a href="https://www.a2schools.org/about-aaps/attendance-area-by-street-directory" target="_blank" rel="noopener">AAPS schools by street</a>` : "") +
-      (a.StreetView && /^https?:/.test(a.StreetView) ? `<a href="${esc(a.StreetView)}" target="_blank" rel="noopener">Street View</a>` : "") + `</div>`;
+      (pinTxt ? ext(`https://bsaonline.com/SiteSearch/SiteSearchDetails?SearchCategory=Parcel+Number&SearchText=${encodeURIComponent(pinTxt)}` +
+        `&SearchFocus=&uid=283&PageIndex=1&ReferenceKey=${encodeURIComponent(pinTxt)}&ReferenceType=0&SortBy=&SearchOrigin=0`, "City assessor and taxes (BS&amp;A)") : "") +
+      (pinTxt ? ext("https://secure4.ewashtenaw.org/parcelsearch/home.xhtml", "County property search", pinTxt) : "") +
+      (f && addr ? ext(`https://stream.a2gov.org/EnerGov_Prod/SelfService#/search?m=1&fm=1&ps=10&pn=1&em=true&st=${encodeURIComponent(addrNoSuffix(a.PRPACOM))}`, "Permits and rentals (STREAM)") : "") +
+      (f && addr ? ext("https://secure.a2gov.org/A2Trak/PermitSearch", "Permits 2008–2022 (A2Trak)", addrNoSuffix(a.PRPACOM)) : "") +
+      ext("https://ssclerk.ewashtenaw.org/web/", "Deeds (Register of Deeds)", pinTxt || "") +
+      (/^\d{11}/.test(a.GEOID || "") ? ext(`https://censusreporter.org/profiles/14000US${a.GEOID.slice(0, 11)}`, "Census tract profile") : "") +
+      (street && /ann arbor/i.test(school?.features?.[0]?.attributes?.NAME || "") ? ext(aapsPage(street), "AAPS schools for this street") : "") +
+      (a.StreetView && /^https?:/.test(a.StreetView) ? ext(a.StreetView, "Street View") : "") + `</div>` +
+      `<p class="sub" id="copied" hidden></p>`;
     showInfo(html);
     if (fit && f?.geometry?.rings) fitLonLat(...bboxOfRings(f.geometry.rings), 19);
   }
