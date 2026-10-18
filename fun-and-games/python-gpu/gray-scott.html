@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Gray-Scott in Python, on the GPU</title>
+<meta name="description" content="Gray-Scott reaction-diffusion whose per-cell update is a Python function, compiled to a WebGPU compute shader by pykernel.">
+<link rel="stylesheet" href="python-gpu.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div class="panel" id="panel">
+  <button class="fold" id="fold" title="Hide the panel">–</button>
+  <h1>Gray-Scott</h1>
+  <p class="crumb"><a href="./">Python on the GPU</a> · <a href="/fun-and-games/">Fun &amp; games</a></p>
+  <div class="body">
+    <p>Two chemicals diffuse and react on a 512-cell torus. Every cell runs <code>step()</code>, a Python function compiled to a WebGPU compute shader. Drag to paint with <code>paint()</code>.</p>
+    <div class="row"><label for="preset">Preset</label>
+      <select id="preset"><option value="coral">Coral</option><option value="mitosis">Mitosis</option><option value="worms">Worms</option><option value="spots">Spots</option><option value="maze">Maze</option></select>
+    </div>
+    <div class="row"><label for="steps">Steps / frame</label><input id="steps" type="range" min="1" max="64" step="1" value="16"><output id="steps-out">16</output></div>
+    <div class="row"><button id="clear">Clear</button><button id="reseed">Reseed</button></div>
+    <div class="row"><button id="toggle-code">Show the Python</button></div>
+    <div class="status"><span id="grid">–</span><span id="fps">– fps</span></div>
+    <div class="check" id="check">checking GPU against CPython…</div>
+    <div class="hint" id="hint">Feed refills the food chemical and kill removes the catalyst. Each preset is one feed/kill pair.</div>
+  </div>
+</div>
+
+<aside id="code" hidden>
+  <header><div class="tabs"></div><button class="close">Close</button></header>
+  <p class="note">The Python is the source; the WGSL is what <code>pykernel</code> generated from it at build time. Drawing the buffer to the screen is a separate hand-written shader.</p>
+  <pre></pre>
+</aside>
+
+<div id="fatal" hidden><div class="box"><h2>No GPU here</h2><p class="msg"></p><p><a href="./">Back to the gallery</a></p></div></div>
+
+<script type="module">
+import { DEMO as demo } from "./generated/gray_scott.js";
+import { initGPU, storage, loadKernels, runChecks, reportChecks, FieldView, fitCanvas, fpsMeter, showFatal, mountCode } from "./pk-runtime.js";
+
+mountCode(demo);
+const $ = (id) => document.getElementById(id);
+$("fold").onclick = () => { $("panel").classList.toggle("collapsed"); $("fold").textContent = $("panel").classList.contains("collapsed") ? "+" : "–"; };
+
+// Feed and kill rates per preset. Worms dies out from a v = 0.25 seed, so it paints at 0.5.
+const PRESETS = {
+  coral: [0.0545, 0.062], mitosis: [0.0367, 0.0649], worms: [0.078, 0.061], spots: [0.035, 0.065], maze: [0.029, 0.057],
+};
+const PALETTE = ["#0a0820", "#1d2b6e", "#217f9b", "#56c8ad", "#f3e7a1", "#f79a4b", "#e8455f"];
+const GRID_W = 512;            // simulation cells across; height follows the window aspect
+const DU = 0.2097, DV = 0.105, DT = 1.0;   // explicit Euler: 4 * DU * DT < 1 keeps the diffusion stable
+const BRUSH = 5;               // paint radius, in cells
+const MAX_PX = +new URLSearchParams(location.search).get("px") || 2.5e6;  // ?px= caps the pixel count
+
+// A small seeded PRNG, so the startup pattern is the same on every visit.
+function rng(seed) {
+  let s = seed >>> 0;
+  return () => {
+    s = (s + 0x6D2B79F5) | 0;
+    let t = Math.imul(s ^ (s >>> 15), 1 | s);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+let [feed, kill] = PRESETS[$("preset").value];
+let stepsPerFrame = +$("steps").value;
+$("steps-out").textContent = stepsPerFrame;
+
+let gpu, device, kernels, field, fps;
+try {
+  gpu = await initGPU();
+  device = gpu.device;
+  kernels = await loadKernels(device, demo);
+  field = await FieldView.create(gpu, $("view"));
+  reportChecks(await runChecks(device, demo, kernels));
+} catch (e) {
+  showFatal(e.message);
+  throw e;
+}
+field.style({ stops: PALETTE, mode: "linear", lo: 0, hi: 0.42, inside: "#000000" });
+fps = fpsMeter($("fps"));
+
+// Two (u, v) pairs; advance() reads cur and writes nxt, then they swap.
+let cur, nxt, gw = GRID_W, gh = 0;
+
+function gridHeight() {
+  return Math.round(Math.min(1200, Math.max(256, GRID_W * innerHeight / innerWidth)));  // square cells on a phone too
+}
+
+function fill(buf, value) {
+  device.queue.writeBuffer(buf, 0, new Float32Array(buf.length).fill(value));
+}
+
+function allocate(H) {
+  for (const b of [cur?.u, cur?.v, nxt?.u, nxt?.v]) b?.destroy();
+  gh = H;
+  const n = gw * gh;
+  cur = { u: storage(device, n, "u"), v: storage(device, n, "v") };
+  nxt = { u: storage(device, n, "u2"), v: storage(device, n, "v2") };
+  $("grid").textContent = `${gw}×${gh} cells · F ${feed} · k ${kill}`;
+}
+
+// Background: u = 1, v = 0 (the chemistry's resting state). Painting makes the seeds.
+function clear() {
+  fill(cur.u, 1);
+  fill(cur.v, 0);
+}
+
+function paintAt(x, y, radius = BRUSH) {
+  const strength = $("preset").value === "worms" ? 0.5 : 0.25;
+  kernels.paint.set({ w: gw, h: gh, px: x, py: y, radius, strength }).run({ u: cur.u, v: cur.v }, gw * gh);
+}
+
+// Many small discs: Mitosis, Spots and Coral need dense seeds to keep growing.
+function seed(random) {
+  clear();
+  const n = Math.round(gw * gh / 850);
+  for (let i = 0; i < n; i++) paintAt(random() * gw, random() * gh, 2 + random() * 2.5);
+}
+
+function resize() {
+  fitCanvas($("view"), MAX_PX);
+  const H = gridHeight();
+  if (!cur || Math.abs(H - gh) > 0.08 * gh) {
+    allocate(H);
+    seed(rng(1));
+  }
+}
+
+// ---- interaction: a drag paints a stroke; points are queued and stamped once per frame ----
+const canvas = $("view");
+const pending = [];
+let down = false, last = null;
+function gridPoint(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width * gw, (e.clientY - r.top) / r.height * gh];
+}
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  down = true;
+  last = gridPoint(e);
+  pending.push(last);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!down) return;
+  const p = gridPoint(e);
+  // Stamp along the segment from the last point, so a fast drag leaves no gaps.
+  const d = Math.hypot(p[0] - last[0], p[1] - last[1]);
+  const n = Math.min(32, Math.max(1, Math.ceil(d / (BRUSH * 0.75))));
+  for (let i = 1; i <= n; i++) pending.push([last[0] + (p[0] - last[0]) * i / n, last[1] + (p[1] - last[1]) * i / n]);
+  last = p;
+});
+const lift = () => { down = false; last = null; };
+canvas.addEventListener("pointerup", lift);
+canvas.addEventListener("pointercancel", lift);
+
+// ---- frame loop ----
+// Queue n simulation steps into an encoder; each step reads cur and writes nxt, then they swap.
+function advance(enc, n) {
+  for (let i = 0; i < n; i++) {
+    kernels.step.set({ w: gw, h: gh, feed, kill, du: DU, dv: DV, dt: DT })
+      .dispatch(enc, { u: cur.u, v: cur.v, u2: nxt.u, v2: nxt.v }, gw * gh);
+    [cur, nxt] = [nxt, cur];
+  }
+}
+
+function frame() {
+  resize();
+  // Each paint is its own submit (its uniforms differ), so cap the stamps per frame.
+  for (const [x, y] of pending.splice(0, 16)) paintAt(x, y);
+  const enc = device.createCommandEncoder();
+  advance(enc, stepsPerFrame);
+  field.draw(enc, cur.v, gw, gh);
+  device.queue.submit([enc.finish()]);
+  field.present();
+  fps();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- controls ----
+$("preset").onchange = () => {
+  [feed, kill] = PRESETS[$("preset").value];
+  $("grid").textContent = `${gw}×${gh} cells · F ${feed} · k ${kill}`;
+};
+$("steps").oninput = (e) => { stepsPerFrame = +e.target.value; $("steps-out").textContent = stepsPerFrame; };
+$("clear").onclick = () => clear();
+$("reseed").onclick = () => seed(Math.random);
+</script>
+</body>
+</html>

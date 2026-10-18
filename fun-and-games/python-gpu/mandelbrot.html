@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Mandelbrot in Python, on the GPU</title>
+<meta name="description" content="A Mandelbrot explorer whose per-pixel loop is a Python function, compiled to a WebGPU compute shader by pykernel.">
+<link rel="stylesheet" href="python-gpu.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div class="panel" id="panel">
+  <button class="fold" id="fold" title="Hide the panel">–</button>
+  <h1>Mandelbrot</h1>
+  <p class="crumb"><a href="./">Python on the GPU</a> · <a href="/fun-and-games/">Fun &amp; games</a></p>
+  <div class="body">
+    <p>Every pixel runs <code>escape()</code>, a Python function compiled to a WebGPU compute shader. Drag to pan, scroll or pinch to zoom, double-click to dive.</p>
+    <div class="row"><label for="iters">Iterations</label><input id="iters" type="range" min="50" max="4000" step="10" value="300"><output id="iters-out">300</output></div>
+    <div class="row"><label for="palette">Palette</label>
+      <select id="palette"><option value="ember">Ember</option><option value="ice">Ice</option><option value="mono">Ink</option></select>
+      <button id="cycle">Cycle colours</button>
+      <button id="reset">Reset</button>
+    </div>
+    <div class="row"><button id="toggle-code">Show the Python</button></div>
+    <div class="status"><span id="zoom">1×</span><span id="fps">– fps</span></div>
+    <div class="check" id="check">checking GPU against CPython…</div>
+    <div class="hint" id="hint">The GPU computes in 32-bit floats, so the picture turns blocky past about 10⁶× zoom.</div>
+  </div>
+</div>
+
+<aside id="code" hidden>
+  <header><div class="tabs"></div><button class="close">Close</button></header>
+  <p class="note">The Python is the source; the WGSL is what <code>pykernel</code> generated from it at build time. Drawing the buffer to the screen is a separate hand-written shader.</p>
+  <pre></pre>
+</aside>
+
+<div id="fatal" hidden><div class="box"><h2>No GPU here</h2><p class="msg"></p><p><a href="./">Back to the gallery</a></p></div></div>
+
+<script type="module">
+import { DEMO as demo } from "./generated/mandelbrot.js";
+import { initGPU, storage, loadKernels, runChecks, reportChecks, FieldView, fitCanvas, fpsMeter, showFatal, mountCode } from "./pk-runtime.js";
+
+mountCode(demo);
+const $ = (id) => document.getElementById(id);
+$("fold").onclick = () => { $("panel").classList.toggle("collapsed"); $("fold").textContent = $("panel").classList.contains("collapsed") ? "+" : "–"; };
+
+const PALETTES = {
+  ember: ["#000764", "#206bcb", "#edffff", "#ffaa00", "#7a1d00", "#000764"],
+  ice: ["#03045e", "#0077b6", "#90e0ef", "#caf0f8", "#0096c7", "#03045e"],
+  mono: ["#0b0b0b", "#e8e4d8", "#0b0b0b"],
+};
+const HOME = { cx: -0.6, cy: 0, span: 3.2 };   // span: world height of the window
+let view = { ...HOME };
+let iters = 300, cycling = false, phase = 0, dirty = true;
+
+try {
+  const h = new URLSearchParams(location.hash.slice(1));
+  if (h.has("x")) view = { cx: +h.get("x"), cy: +h.get("y"), span: +h.get("s") };
+  if (h.has("i")) iters = +h.get("i");
+} catch { /* a malformed hash just means the home view */ }
+$("iters").value = iters;
+$("iters-out").textContent = iters;
+
+let gpu, kernels, field, out, w = 0, h = 0;
+try {
+  gpu = await initGPU();
+  kernels = await loadKernels(gpu.device, demo);
+  field = await FieldView.create(gpu, $("view"));
+  reportChecks(await runChecks(gpu.device, demo, kernels));
+} catch (e) {
+  showFatal(e.message);
+  throw e;
+}
+
+const MIN_SPAN_PER_PX = 2e-7;   // below this, f32 coordinates collapse into blocks
+const fps = fpsMeter($("fps"));
+
+const MAX_PX = +new URLSearchParams(location.search).get("px") || 2.5e6;  // ?px= caps the pixel count
+function resize() {
+  if (fitCanvas($("view"), MAX_PX)) {
+    w = $("view").width; h = $("view").height;
+    out?.destroy();
+    out = storage(gpu.device, w * h, "escape.out");
+    dirty = true;
+  }
+}
+
+function setStyle() {
+  field.style({ stops: PALETTES[$("palette").value], mode: "cyclic", freq: 1 / 48, phase, inside: "#000000" });
+}
+
+let hashTimer;
+function frame() {
+  resize();
+  const enc = gpu.device.createCommandEncoder();
+  if (dirty) {
+    const scale = view.span / h;
+    kernels.escape.set({ w, h, cx: view.cx, cy: view.cy, scale, max_iter: iters }).dispatch(enc, { out }, w * h);
+    dirty = false;
+    $("zoom").textContent = `${(HOME.span / view.span).toPrecision(3)}× · ${(w * h / 1e6).toFixed(1)} Mpx`;
+    clearTimeout(hashTimer);
+    hashTimer = setTimeout(() => history.replaceState(null, "", `#x=${view.cx}&y=${view.cy}&s=${view.span}&i=${iters}`), 300);
+  }
+  if (cycling) phase = (phase + 0.004) % 1;
+  setStyle();
+  field.draw(enc, out, w, h);
+  gpu.device.queue.submit([enc.finish()]);
+  field.present();
+  fps();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+// ---- interaction: world coordinates of a client point, then pan and zoom about it ----
+const canvas = $("view");
+function world(px, py) {
+  const r = canvas.getBoundingClientRect();
+  const s = view.span / r.height;
+  return [view.cx + (px - r.left - r.width / 2) * s, view.cy - (py - r.top - r.height / 2) * s];
+}
+function zoomAt(px, py, factor) {
+  const minSpan = MIN_SPAN_PER_PX * h;
+  const span = Math.min(8, Math.max(minSpan, view.span * factor));
+  const [wx, wy] = world(px, py);
+  const k = span / view.span;
+  view = { cx: wx + (view.cx - wx) * k, cy: wy + (view.cy - wy) * k, span };
+  $("hint").style.color = span <= minSpan * 1.01 ? "var(--accent)" : "";
+  dirty = true;
+}
+
+canvas.addEventListener("wheel", (e) => { e.preventDefault(); zoomAt(e.clientX, e.clientY, Math.exp(e.deltaY * 0.0015)); }, { passive: false });
+canvas.addEventListener("dblclick", (e) => zoomAt(e.clientX, e.clientY, e.shiftKey ? 4 : 0.25));
+
+const pointers = new Map();
+let pinch = null;
+canvas.addEventListener("pointerdown", (e) => { canvas.setPointerCapture(e.pointerId); pointers.set(e.pointerId, [e.clientX, e.clientY]); });
+canvas.addEventListener("pointermove", (e) => {
+  if (!pointers.has(e.pointerId)) return;
+  const [ox, oy] = pointers.get(e.pointerId);
+  pointers.set(e.pointerId, [e.clientX, e.clientY]);
+  if (pointers.size === 1) {
+    const s = view.span / canvas.getBoundingClientRect().height;
+    view.cx -= (e.clientX - ox) * s;
+    view.cy += (e.clientY - oy) * s;
+    dirty = true;
+  } else if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a[0] - b[0], a[1] - b[1]);
+    if (pinch) zoomAt((a[0] + b[0]) / 2, (a[1] + b[1]) / 2, pinch / d);
+    pinch = d;
+  }
+});
+const lift = (e) => { pointers.delete(e.pointerId); if (pointers.size < 2) pinch = null; };
+canvas.addEventListener("pointerup", lift);
+canvas.addEventListener("pointercancel", lift);
+
+$("iters").oninput = (e) => { iters = +e.target.value; $("iters-out").textContent = iters; dirty = true; };
+$("palette").onchange = () => setStyle();
+$("cycle").onclick = () => { cycling = !cycling; $("cycle").classList.toggle("on", cycling); };
+$("reset").onclick = () => { view = { ...HOME }; dirty = true; };
+window.addEventListener("keydown", (e) => {
+  if (e.key === "+" || e.key === "=") zoomAt(innerWidth / 2, innerHeight / 2, 0.5);
+  if (e.key === "-") zoomAt(innerWidth / 2, innerHeight / 2, 2);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Ripples in Python, on the GPU</title>
+<meta name="description" content="A ripple tank whose wave equation is a Python function, compiled to a WebGPU compute shader by pykernel.">
+<link rel="stylesheet" href="python-gpu.css">
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div class="panel" id="panel">
+  <button class="fold" id="fold" title="Hide the panel">–</button>
+  <h1>Ripples</h1>
+  <p class="crumb"><a href="./">Python on the GPU</a> · <a href="/fun-and-games/">Fun &amp; games</a></p>
+  <div class="body">
+    <p>Each step of the wave equation is <code>wave()</code>, a Python function compiled to a WebGPU compute shader. Click or drag to drop a stone. In <em>Double slit</em> a plane wave from the top meets a wall with two gaps; the two gaps send out circles that overlap and make bands of crests and troughs.</p>
+    <div class="row"><label for="mode">Mode</label>
+      <select id="mode"><option value="rain">Rain</option><option value="slit">Double slit</option><option value="calm">Calm</option></select>
+      <button id="clear">Clear</button>
+    </div>
+    <div class="row"><label for="damp">Damping</label><input id="damp" type="range" min="0" max="3" step="0.1" value="0.2"><output id="damp-out">0.2%/step</output></div>
+    <div class="row"><button id="toggle-code">Show the Python</button></div>
+    <div class="status"><span id="grid">– cells</span><span id="fps">– fps</span></div>
+    <div class="check" id="check">checking GPU against CPython…</div>
+    <div class="hint">The grid is 512 cells across. Its outer edge absorbs waves, and the wall holds still. Dark is a trough, pale is a crest, and the light comes from the upper left.</div>
+  </div>
+</div>
+
+<aside id="code" hidden>
+  <header><div class="tabs"></div><button class="close">Close</button></header>
+  <p class="note">The Python is the source; the WGSL is what <code>pykernel</code> generated from it at build time. Drawing the buffer to the screen is a separate hand-written shader.</p>
+  <pre></pre>
+</aside>
+
+<div id="fatal" hidden><div class="box"><h2>No GPU here</h2><p class="msg"></p><p><a href="./">Back to the gallery</a></p></div></div>
+
+<script type="module">
+import { DEMO as demo } from "./generated/ripples.js";
+import { initGPU, storage, loadKernels, runChecks, reportChecks, FieldView, fitCanvas, fpsMeter, showFatal, mountCode } from "./pk-runtime.js";
+
+mountCode(demo);
+const $ = (id) => document.getElementById(id);
+$("fold").onclick = () => { $("panel").classList.toggle("collapsed"); $("fold").textContent = $("panel").classList.contains("collapsed") ? "+" : "–"; };
+
+const GW = 512;                 // simulation cells across; the height follows the canvas aspect
+const C2 = 0.25;                // (c dt / dx)^2. Must stay at or below 0.5 for 2-D stability.
+const SUBSTEPS = 4;             // wave steps per frame
+const PERIOD = 28;              // steps per cycle of the slit source: wavelength = 14 cells (speed sqrt(C2) = 0.5 cells per step)
+const OMEGA = 2 * Math.PI / PERIOD;
+const SRC_ROW = 28;             // plane-wave source, just below the 24-cell top sponge
+const WARM_UP = 480;            // slit mode: steps run before the first frame, so the pattern has formed
+const WALL_AT = 0.35;           // wall position, as a fraction of the height
+const SLIT_SEP = 56;            // slit centres, 4 wavelengths apart
+const SLIT_W = 8;               // slit width, in cells
+const WALL_T = 3;               // wall thickness, in cells
+const WATER = ["#041a2e", "#0b3c5d", "#1d6a96", "#5fb3d9", "#d9f2fb"];
+const MODES = ["rain", "slit", "calm"];
+
+const query = new URLSearchParams(location.search);
+const MAX_PX = +query.get("px") || 2.5e6;  // ?px= caps the canvas pixel count
+let mode = MODES.includes(query.get("mode")) ? query.get("mode") : "rain";   // ?mode=rain|slit|calm
+$("mode").value = mode;
+
+let gpu, kernels, field, device;
+try {
+  gpu = await initGPU();
+  device = gpu.device;
+  kernels = await loadKernels(device, demo);
+  field = await FieldView.create(gpu, $("view"));
+} catch (e) {
+  showFatal(e.message);
+  throw e;
+}
+field.style({ stops: WATER, mode: "linear", lo: 0, hi: 1 });
+
+// ---- simulation state ----------------------------------------------------------------
+let gh = 0, cur, prev, wall, out, wallCells = null;
+let stepCount = 0;
+const pending = [];       // stones waiting for the next frame: [px, py, radius, amp] in cells
+let hold = null;          // the pointer's cell while a drag is in progress
+let damp = 1 - 0.2 / 100;
+
+function wallData() {
+  const a = new Float32Array(GW * gh);
+  if (mode === "slit") {
+    const y0 = Math.round(gh * WALL_AT), cx = GW / 2;
+    for (let y = y0; y < y0 + WALL_T; y++) {
+      for (let x = 0; x < GW; x++) {
+        const gap = Math.abs(x + 0.5 - (cx - SLIT_SEP / 2)) < SLIT_W / 2 || Math.abs(x + 0.5 - (cx + SLIT_SEP / 2)) < SLIT_W / 2;
+        if (!gap) a[y * GW + x] = 1;
+      }
+    }
+  }
+  return a;
+}
+
+function allocate(rows) {
+  cur?.destroy(); prev?.destroy(); wall?.destroy(); out?.destroy();
+  gh = rows;
+  const n = GW * gh;
+  cur = storage(device, n, "ripples.cur");
+  prev = storage(device, n, "ripples.prev");
+  wall = storage(device, n, "ripples.wall");
+  out = storage(device, n, "ripples.out");
+  wallCells = wallData();
+  device.queue.writeBuffer(wall, 0, wallCells);
+  $("grid").textContent = `${GW} × ${gh} cells`;
+  stepCount = 0;
+  seed();
+  warmUp();
+}
+
+// Zero both height fields. This is the Clear button, and the reset when mode changes.
+function clear() {
+  const zeros = new Float32Array(GW * gh);
+  device.queue.writeBuffer(cur, 0, zeros);
+  device.queue.writeBuffer(prev, 0, zeros);
+}
+
+function setMode(m) {
+  mode = m;
+  $("mode").value = m;
+  wallCells = wallData();
+  device.queue.writeBuffer(wall, 0, wallCells);
+  clear();
+  seed();
+  warmUp();
+}
+
+// The double slit needs a few hundred steps for the wave to cross the grid. Run them
+// up front, so the first frame already shows the pattern.
+function warmUp() {
+  if (mode === "slit") for (let i = 0; i < WARM_UP; i++) step();
+}
+
+// A few stones at the start, so the first frames already move.
+function seed() {
+  if (mode === "rain") {
+    for (let i = 0; i < 4; i++) pending.push([20 + Math.random() * (GW - 40), 20 + Math.random() * (gh - 40), 3, 0.8]);
+  } else if (mode === "calm") {
+    pending.push([GW * 0.5, gh * 0.5, 6, 1.0]);
+  }
+}
+
+// One drop per submit: each dispatch writes its uniforms when encoded, so two
+// drops in one submit would both run with the second one's values.
+function dropStone([px, py, radius, amp]) {
+  const enc = device.createCommandEncoder();
+  kernels.drop.set({ w: GW, h: gh, px, py, radius, amp }).dispatch(enc, { cur }, GW * gh);
+  device.queue.submit([enc.finish()]);
+}
+
+// One wave step: a plane-wave source row (slit mode), then wave(), then swap the roles.
+// The source's phase is a uniform, so it gets its own submit as well.
+function step() {
+  const enc = device.createCommandEncoder();
+  if (mode === "slit") {
+    const phase = (stepCount * OMEGA) % (2 * Math.PI);
+    kernels.source.set({ w: GW, h: gh, row: SRC_ROW, phase, amp: 0.5 }).dispatch(enc, { cur }, GW * gh);
+  }
+  kernels.wave.set({ w: GW, h: gh, c2: C2, damp }).dispatch(enc, { cur, prev, wall }, GW * gh);
+  device.queue.submit([enc.finish()]);
+  [cur, prev] = [prev, cur];
+  stepCount++;
+}
+
+// ---- frame loop --------------------------------------------------------------------
+const canvas = $("view");
+const fps = fpsMeter($("fps"));
+const MAX_DROPS = 16;
+
+function resize() {
+  fitCanvas(canvas, MAX_PX);
+  // About 512 cells across. The height follows the aspect, kept within 128..1200 rows.
+  const want = Math.min(1200, Math.max(128, Math.round(GW * canvas.height / canvas.width)));  // up to 1200 rows keeps cells square on a phone
+  if (want !== gh) allocate(want);
+}
+
+function frame() {
+  resize();
+  if (mode === "rain" && Math.random() < 0.05) {
+    pending.push([8 + Math.random() * (GW - 16), 8 + Math.random() * (gh - 16), 2 + Math.random() * 2.5, 0.4 + Math.random() * 0.4]);
+  }
+  if (hold) { pending.push([hold[0], hold[1], 2.5, 0.5]); hold = null; }
+  for (let i = 0; i < MAX_DROPS && pending.length; i++) dropStone(pending.shift());
+  for (let s = 0; s < SUBSTEPS; s++) step();
+
+  const enc = device.createCommandEncoder();
+  kernels.shade.set({ w: GW, h: gh }).dispatch(enc, { cur, wall, out }, GW * gh);
+  field.draw(enc, out, GW, gh);
+  device.queue.submit([enc.finish()]);
+  field.present();
+  fps();
+  requestAnimationFrame(frame);
+}
+
+// ---- interaction: a pointer maps to a cell of the simulation grid -----------------------
+function cellAt(e) {
+  const r = canvas.getBoundingClientRect();
+  return [(e.clientX - r.left) / r.width * GW, (e.clientY - r.top) / r.height * gh];
+}
+function openCell([x, y]) {
+  const i = Math.floor(y) * GW + Math.floor(x);
+  return !(wallCells && wallCells[i] > 0.5);   // a stone on a wall would be wiped at once
+}
+
+let pressed = false;
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pressed = true;
+  const c = cellAt(e);
+  if (openCell(c)) pending.push([c[0], c[1], 3, 1.0]);
+});
+canvas.addEventListener("pointermove", (e) => {
+  if (!pressed) return;
+  const c = cellAt(e);
+  if (openCell(c)) hold = c;
+});
+const release = () => { pressed = false; hold = null; };
+canvas.addEventListener("pointerup", release);
+canvas.addEventListener("pointercancel", release);
+
+$("mode").onchange = (e) => setMode(e.target.value);
+$("clear").onclick = () => { pending.length = 0; clear(); };
+$("damp").oninput = (e) => {
+  const pct = +e.target.value;
+  damp = 1 - pct / 100;
+  $("damp-out").textContent = `${pct.toFixed(1)}%/step`;
+};
+$("damp").dispatchEvent(new Event("input"));
+
+// The check runs last. Its readback waits for everything queued before it, so the warm-up
+// (and the first frame) are finished when the check line turns green.
+try {
+  resize();
+  warmUp();
+  reportChecks(await runChecks(device, demo, kernels));
+} catch (e) {
+  showFatal(e.message);
+  throw e;
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
