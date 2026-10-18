@@ -178,7 +178,8 @@ struct View {
   freq: f32, phase: f32,
   mode: u32,         // 0 linear, 1 cyclic
   nstops: u32,
-  pad: vec2f,
+  useInside: u32,    // 1: negative values draw as 'inside'; 0: they go through the ramp
+  pad: f32,
   inside: vec4f,     // colour for negative values
   stops: array<vec4f, 8>,
 }
@@ -193,7 +194,7 @@ struct View {
 @fragment fn fs(@builtin(position) pos: vec4f) -> @location(0) vec4f {
   let cell = min(vec2u(pos.xy * view.size / view.canvas), vec2u(view.size) - 1u);
   let v = field[cell.y * u32(view.size.x) + cell.x];
-  if (v < 0.0) { return view.inside; }
+  if (v < 0.0 && view.useInside == 1u) { return view.inside; }
   var t: f32;
   if (view.mode == 1u) { t = fract(v * view.freq + view.phase); }
   else { t = clamp((v - view.lo) / (view.hi - view.lo), 0.0, 1.0); }
@@ -288,9 +289,10 @@ export class FieldView {
   present() { this.surface.present(); }
 
   // stops: up to 8 hex colours. mode "linear" maps [lo, hi]; "cyclic" wraps v*freq+phase.
+  // inside: colour for negative values, or null to send them through the ramp too.
   style({ stops, mode = "linear", lo = 0, hi = 1, freq = 1, phase = 0, inside = "#000000" }) {
     if (stops) this.stops = stops.slice(0, 8).map(hex);
-    Object.assign(this, { mode, lo, hi, freq, phase, inside: hex(inside) });
+    Object.assign(this, { mode, lo, hi, freq, phase, useInside: inside !== null, inside: hex(inside ?? "#000000") });
     return this;
   }
 
@@ -299,6 +301,7 @@ export class FieldView {
     f.set([w, h, this.canvas.width, this.canvas.height, this.lo, this.hi, this.freq, this.phase]);
     i[8] = this.mode === "cyclic" ? 1 : 0;
     i[9] = this.stops.length;
+    i[10] = this.useInside ? 1 : 0;
     f.set(this.inside, 12);
     this.stops.forEach((s, k) => f.set(s, 16 + 4 * k));
     this.gpu.device.queue.writeBuffer(this.ubuf, 0, u);
