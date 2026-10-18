@@ -1,0 +1,682 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Python on the GPU: playground</title>
+<meta name="description" content="Write Python @kernel functions and watch them run on your graphics card. The compiler is pykernel, ported to JavaScript, and the code compiles to WebGPU compute shaders in the browser.">
+<link rel="stylesheet" href="python-gpu.css">
+<link rel="stylesheet" href="playground.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="titles">
+    <h1>Playground</h1>
+    <p class="crumb"><a href="./">Python on the GPU</a> · <a href="/fun-and-games/">Fun &amp; games</a></p>
+  </div>
+  <div class="toolbar">
+    <select id="example" aria-label="Load an example">
+      <option value="">Example…</option>
+      <option value="plasma">plasma</option>
+      <option value="mandelbrot">mandelbrot</option>
+      <option value="life">life</option>
+      <option value="trails">trails</option>
+      <option value="waves">waves</option>
+      <option value="julia">julia</option>
+    </select>
+    <button id="run" title="Compile and restart (Ctrl/Cmd+Enter)">Run</button>
+    <label><input type="checkbox" id="auto" checked> Auto</label>
+    <button id="reset" title="Zero the buffers and run init again">Reset</button>
+    <button id="pause">Pause</button>
+    <label>Grid <select id="grid" aria-label="Grid width in cells">
+      <option value="128">128</option>
+      <option value="256">256</option>
+      <option value="512" selected>512</option>
+      <option value="1024">1024</option>
+    </select></label>
+    <label>Palette <select id="palette" aria-label="Palette">
+      <option value="magma" selected>Magma</option>
+      <option value="viridis">Viridis</option>
+      <option value="ember">Ember</option>
+      <option value="ice">Ice</option>
+      <option value="ink">Ink</option>
+    </select></label>
+    <button id="share">Share</button>
+    <span id="share-msg" aria-live="polite"></span>
+    <span id="fps">– fps</span>
+  </div>
+  <div class="check" id="check" aria-live="polite">checking…</div>
+</header>
+
+<main class="split">
+  <section class="left" aria-label="Editor">
+    <div class="editor-wrap">
+      <div class="gutter" id="gutter" aria-hidden="true"></div>
+      <div class="code-box">
+        <div class="errbar" id="errbar" hidden></div>
+        <pre class="hl" id="hl" aria-hidden="true"></pre>
+        <textarea id="src" spellcheck="false" autocomplete="off" autocapitalize="off" autocorrect="off" wrap="off" aria-label="Python source"></textarea>
+      </div>
+    </div>
+    <div class="wgsl" id="wgsl-pane">
+      <header>
+        <span class="label">WGSL</span>
+        <div id="wtabs"></div>
+        <button id="wgsl-toggle" type="button">Hide</button>
+      </header>
+      <pre class="hl" id="wgsl-out" tabindex="0" aria-label="Generated WGSL"></pre>
+    </div>
+  </section>
+
+  <section class="right" aria-label="Canvas and controls">
+    <div class="stage">
+      <canvas id="view"></canvas>
+    </div>
+    <div class="sliders" id="sliders"></div>
+    <details class="help" open>
+      <summary>How a program works</summary>
+      <ul>
+        <li>The editor holds a Python module. Every <code>@kernel</code> function becomes a WebGPU compute shader. Run (Ctrl/Cmd+Enter) compiles it; Auto does the same about 0.7&nbsp;s after you stop typing. A failed compile keeps the last good program running and marks the line.</li>
+        <li>The grid is <b>W</b> cells across, set by Grid. H follows the shape of the canvas, at most 2048. Each kernel runs once per cell: <code>gid % w</code> is the column and <code>gid // w</code> the row.</li>
+        <li>Every <code>list[float]</code> parameter, in any kernel, is one W×H buffer shared by that name. Reset zeroes them.</li>
+        <li>Declare <code>w</code> and <code>h</code> as <code>int</code>, <code>t</code> as <code>float</code> (seconds since reset), <code>frame</code> as <code>int</code>, <code>mx</code> and <code>my</code> as <code>float</code> (pointer in cells, -1 outside the canvas) and <code>mdown</code> as <code>int</code> (1 while pressed or touching). The playground fills them in. Any other scalar becomes a slider.</li>
+        <li><code># slider NAME MIN MAX DEFAULT</code> sets a slider's range. Without it a float slider runs 0 to 1 at 0.5 and an int slider 0 to 100 at 10.</li>
+        <li><code># steps N</code> runs the per-frame kernels N times a frame. <code># display LO HI</code> maps values linearly; <code># display cyclic FREQ</code> wraps value × FREQ around the palette. The default is <code># display 0 1</code>.</li>
+        <li><code>init</code> runs once after each reset. Every other kernel runs every frame, in source order. The picture shows <code>out</code> if there is one, otherwise the last buffer the last kernel writes.</li>
+        <li>Pause stops the kernels and freezes <code>t</code> and <code>frame</code>. Sliders apply from the next frame; a value that only <code>init</code> reads applies on Reset.</li>
+        <li>Supported: arithmetic, comparisons, <code>if</code>, <code>while</code>, <code>for … in range()</code>, <code>break</code>, <code>continue</code>, and <code>min max abs floor sqrt exp log pow</code> with <code>sin cos tan atan2</code>. There is no <code>**</code>; write <code>x*x</code>.</li>
+      </ul>
+      <p>Unlike the demos, nothing here compares the GPU result with CPython. The compiler is the same one, ported to JavaScript and held to the Python version by a test suite. In the editor, Tab indents, Shift+Tab dedents and Esc leaves the editor.</p>
+    </details>
+  </section>
+</main>
+
+<div id="fatal" hidden><div class="box"><h2>No GPU here</h2><p class="msg"></p><p><a href="./">Back to the gallery</a></p></div></div>
+
+<script type="module">
+import { translateModule, KernelError } from "./pykernel.js";
+import { initGPU, storage, Kernel, FieldView, fitCanvas, fpsMeter, highlight, showFatal } from "./pk-runtime.js";
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("view"), src = $("src"), hl = $("hl"), gutter = $("gutter"), errbar = $("errbar");
+const check = $("check"), wtabs = $("wtabs"), wgslOut = $("wgsl-out");
+const EXAMPLES = ["plasma", "mandelbrot", "life", "trails", "waves", "julia"];
+const DRAFT_KEY = "python-gpu-playground:draft";
+const MAX_PX = +new URLSearchParams(location.search).get("px") || 2.5e6;   // ?px= caps canvas pixels
+// Every ramp ends on two different colours, so the default linear 0..1 display
+// keeps 0 and 1 apart. Cyclic display wraps from the last stop back to the first.
+const RAMPS = {
+  magma: ["#000004", "#3b0f70", "#8c2981", "#de4968", "#fe9f6d", "#fcfdbf"],
+  viridis: ["#440154", "#3b528b", "#21918c", "#5ec962", "#fde725"],
+  ember: ["#000764", "#206bcb", "#edffff", "#ffaa00", "#fff1c2"],
+  ice: ["#03045e", "#0077b6", "#90e0ef", "#caf0f8"],
+  ink: ["#0b0b0b", "#e8e4d8"],
+};
+// Scalars the playground fills in, by name. Any other scalar is a slider.
+const BOUND = new Map([["w", "int"], ["h", "int"], ["frame", "int"], ["mdown", "int"], ["t", "float"], ["mx", "float"], ["my", "float"]]);
+const TYPE_NAME = { int: "int", float: "float", buffer: "list[float]" };
+const fps = fpsMeter($("fps"));
+const fail = (line, msg) => new KernelError(msg, line);
+
+let gpu = null, field = null;
+let program = null, bufs = {};
+let W = 512, H = 288, N = W * H;
+let paused = false, lastNow = 0;
+let sliderValues = new Map();
+const ptr = { x: -1, y: -1, down: 0 };
+const pointers = new Set();
+let compileSeq = 0, lastTried = null, errLine = null;
+let autoTimer = 0, draftTimer = 0, relayoutTimer = 0, gutterLines = 0, wgslTab = null;
+
+// ---- directives: # slider, # steps, # display -------------------------------------
+
+function directives(source) {
+  const d = { steps: 1, ramp: { mode: "linear", lo: 0, hi: 1, freq: 1 }, sliders: new Map() };
+  const seen = new Set();
+  const once = (what, line) => {
+    if (seen.has(what)) throw fail(line, `${what} is given twice`);
+    seen.add(what);
+  };
+  source.split("\n").forEach((text, i) => {
+    const line = i + 1;
+    if (/^\s*#\s*slider\s+[A-Za-z_]\w*\s+[-+.\deE]/.test(text)) {
+      const m = text.match(/^\s*#\s*slider\s+([A-Za-z_]\w*)\s+(\S+)\s+(\S+)\s+(\S+)\s*$/);
+      if (!m) throw fail(line, "a slider needs a name and three numbers: # slider NAME MIN MAX DEFAULT");
+      const [min, max, def] = [m[2], m[3], m[4]].map(Number);
+      if (![min, max, def].every(Number.isFinite)) throw fail(line, "slider MIN, MAX and DEFAULT must be numbers");
+      if (!(min < max)) throw fail(line, "slider MIN must be below MAX");
+      if (def < min || def > max) throw fail(line, "slider DEFAULT must lie between MIN and MAX");
+      once(`slider ${m[1]}`, line);
+      d.sliders.set(m[1], { min, max, def, line });
+    } else if (/^\s*#\s*steps\s+\d/.test(text)) {
+      const m = text.match(/^\s*#\s*steps\s+(\d+)\s*$/);
+      if (!m || +m[1] < 1 || +m[1] > 100) throw fail(line, "steps takes a whole number from 1 to 100: # steps N");
+      once("steps", line);
+      d.steps = +m[1];
+    } else if (/^\s*#\s*display\s+(cyclic\b|[-+.\deE])/.test(text)) {
+      once("display", line);
+      const c = text.match(/^\s*#\s*display\s+cyclic\s+(\S+)\s*$/);
+      if (c) {
+        const freq = Number(c[1]);
+        if (!Number.isFinite(freq) || freq === 0) throw fail(line, "display cyclic needs a nonzero FREQ: # display cyclic 0.04");
+        d.ramp = { mode: "cyclic", lo: 0, hi: 1, freq };
+      } else {
+        const r = text.match(/^\s*#\s*display\s+(\S+)\s+(\S+)\s*$/);
+        const lo = r ? Number(r[1]) : NaN, hi = r ? Number(r[2]) : NaN;
+        if (!(Number.isFinite(lo) && Number.isFinite(hi) && lo < hi)) throw fail(line, "display needs LO and HI with LO below HI: # display 0 1");
+        d.ramp = { mode: "linear", lo, hi, freq: 1 };
+      }
+    }
+  });
+  return d;
+}
+
+// ---- analysis: names, types, sliders, what runs and what is shown -----------------
+
+function analyze(modules, dirs, source) {
+  const lines = source.split("\n");
+  const defLines = (name) => lines.flatMap((t, i) => (new RegExp(`^\\s*def\\s+${name}\\s*\\(`).test(t) ? [i + 1] : []));
+  const paramLine = (kname, pname) => {
+    const start = (defLines(kname)[0] ?? 1) - 1;
+    for (let i = start; i < lines.length; i++) {
+      if (i > start && /^\S/.test(lines[i])) break;
+      if (new RegExp(`\\b${pname}\\s*:`).test(lines[i])) return i + 1;
+    }
+    return start + 1;
+  };
+
+  const names = new Set();
+  for (const m of modules) {
+    if (names.has(m.name)) throw fail(defLines(m.name)[1] ?? null, `${m.name}() is defined twice`);
+    names.add(m.name);
+  }
+
+  const info = new Map();   // name -> { kind: "buffer" | "int" | "float", kernel }
+  const note = (m, name, kind) => {
+    const want = BOUND.get(name);
+    if (want && kind !== want) {
+      throw fail(paramLine(m.name, name), `${name} is filled in by the playground, so declare it ${want}, not ${TYPE_NAME[kind]}`);
+    }
+    const prev = info.get(name);
+    if (!prev) info.set(name, { kind, kernel: m.name });
+    else if (prev.kind !== kind) {
+      throw fail(paramLine(m.name, name), `${name} is ${TYPE_NAME[prev.kind]} in ${prev.kernel}() but ${TYPE_NAME[kind]} here`);
+    }
+  };
+  for (const m of modules) {
+    for (const b of m.spec.buffers) note(m, b.name, "buffer");
+    for (const u of m.spec.uniforms) if (u.name !== "pk_count") note(m, u.name, u.type === "i32" ? "int" : "float");
+  }
+
+  // The GPU layout is derived from what each shader uses, so a list it declares and never touches would not bind.
+  for (const m of modules) {
+    const body = m.spec.wgsl.split("\n").filter((l) => !l.startsWith("//") && !l.includes("var<storage")).join("\n");
+    for (const b of m.spec.buffers) {
+      if (!new RegExp(`\\b(pk_)?${b.name}\\b`).test(body)) {
+        throw fail(paramLine(m.name, b.name), `list parameter ${b.name} is never used in ${m.name}(); every list a kernel declares must be used`);
+      }
+    }
+  }
+
+  for (const [name, d] of dirs.sliders) {
+    const i = info.get(name);
+    if (BOUND.has(name)) throw fail(d.line, `${name} is filled in by the playground, so it cannot be a slider`);
+    if (!i || i.kind === "buffer") throw fail(d.line, `slider ${name}: no kernel has a scalar parameter named ${name}`);
+    if (i.kind === "int" && ![d.min, d.max, d.def].every(Number.isInteger)) {
+      throw fail(d.line, `slider ${name} is int, so MIN, MAX and DEFAULT must be whole numbers`);
+    }
+  }
+  const sliders = [];
+  for (const [name, i] of info) {
+    if (BOUND.has(name) || i.kind === "buffer") continue;
+    const d = dirs.sliders.get(name) ?? (i.kind === "int" ? { min: 0, max: 100, def: 10 } : { min: 0, max: 1, def: 0.5 });
+    sliders.push({ name, kind: i.kind, min: d.min, max: d.max, def: d.def });
+  }
+
+  const frameMods = modules.filter((m) => m.name !== "init");
+  if (!frameMods.length) throw fail(null, "add a kernel besides init: kernels other than init run every frame");
+  let show = info.get("out")?.kind === "buffer" ? "out" : null;
+  if (!show) {
+    const written = frameMods.at(-1).spec.buffers.filter((b) => b.access === "read_write");
+    if (written.length) show = written.at(-1).name;
+  }
+  if (!show) throw fail(null, "nothing to display: name a list[float] buffer out, or have the last kernel write one");
+
+  return {
+    frameNames: frameMods.map((m) => m.name),
+    bufferNames: [...info].filter(([, i]) => i.kind === "buffer").map(([n]) => n),
+    sliders, steps: dirs.steps, ramp: dirs.ramp, show,
+  };
+}
+
+// Compiles the module. Throws KernelError (with .line) for anything the playground or the subset refuses.
+async function build(source) {
+  const modules = translateModule(source);
+  const plan = analyze(modules, directives(source), source);
+  const byName = new Map();
+  for (const m of modules) {
+    const kernel = await Kernel.create(gpu.device, { manifest: m.spec.manifest(), wgsl: m.spec.wgsl }, m.name);
+    byName.set(m.name, { kernel, wgsl: m.spec.wgsl });
+  }
+  return {
+    ...plan,
+    order: modules.map((m) => m.name),
+    byName,
+    init: byName.get("init")?.kernel ?? null,
+    frameKs: plan.frameNames.map((n) => byName.get(n).kernel),
+    okText: "✓ compiled: " + modules.map((m) => `${m.name}()`).join(", "),
+    time: 0, frame: 0, halted: false, pendingCheck: false,
+  };
+}
+
+// ---- running -----------------------------------------------------------------------
+
+function gridHeight(w) {
+  const r = canvas.getBoundingClientRect();
+  const aspect = r.width > 1 && r.height > 1 ? r.height / r.width : 1;
+  return Math.min(2048, Math.max(1, Math.round(w * aspect)));
+}
+
+function valuesOf(p) {
+  return { w: W, h: H, t: p.time, frame: p.frame, mx: ptr.x, my: ptr.y, mdown: ptr.down, ...Object.fromEntries(sliderValues) };
+}
+
+// Resets: fresh zeroed buffers, then init once.
+function startProgram(p) {
+  const device = gpu.device;
+  W = +$("grid").value;
+  H = gridHeight(W);
+  N = W * H;
+  for (const b of Object.values(bufs)) b.destroy();
+  bufs = {};
+  for (const name of p.bufferNames) bufs[name] = storage(device, N, `playground.${name}`);
+  Object.assign(p, { time: 0, frame: 0, halted: false, pendingCheck: true });
+  program = p;
+  if (p.init) {
+    try {
+      const enc = device.createCommandEncoder();
+      p.init.set(valuesOf(p)).dispatch(enc, bufs, N);
+      device.queue.submit([enc.finish()]);
+    } catch (e) {
+      p.halted = true;
+      showRuntime(e);
+    }
+  }
+}
+
+function adopt(p) {
+  const next = new Map();
+  for (const s of p.sliders) {
+    const kept = sliderValues.get(s.name);
+    const v = kept === undefined ? s.def : Math.min(s.max, Math.max(s.min, kept));
+    next.set(s.name, s.kind === "int" ? Math.round(v) : v);
+  }
+  sliderValues = next;
+  renderSliders(p.sliders);
+  renderWgsl(p);
+  setError(null);
+  startProgram(p);
+}
+
+function tick(now) {
+  requestAnimationFrame(tick);
+  fitCanvas(canvas, MAX_PX);
+  const dt = lastNow ? Math.min(0.1, (now - lastNow) / 1000) : 0;
+  lastNow = now;
+  fps();
+  const device = gpu.device;
+  const enc = device.createCommandEncoder();
+  const p = program;
+  if (p) {
+    if (!paused && !p.halted) {
+      try {
+        const v = valuesOf(p);
+        for (let s = 0; s < p.steps; s++) for (const k of p.frameKs) k.set(v).dispatch(enc, bufs, N);
+        p.time += dt;
+        p.frame += 1;
+      } catch (e) {
+        p.halted = true;
+        showRuntime(e);
+      }
+    }
+    field.style({ stops: RAMPS[$("palette").value], ...p.ramp, phase: 0, inside: null });
+    field.draw(enc, bufs[p.show], W, H);
+  }
+  device.queue.submit([enc.finish()]);
+  if (p) {
+    field.present();
+    if (p.pendingCheck) {
+      p.pendingCheck = false;
+      if (!p.halted) setCheck(p.okText, "ok");
+    }
+  }
+}
+
+// ---- status ------------------------------------------------------------------------
+
+function setCheck(text, cls = "") {
+  check.textContent = text;
+  check.className = cls ? `check ${cls}` : "check";
+}
+
+function showRuntime(e) {
+  setCheck(`✗ runtime: ${e?.message ?? e}`, "bad");
+}
+
+async function compileNow() {
+  clearTimeout(autoTimer);
+  const seq = ++compileSeq;
+  const text = src.value;
+  lastTried = text;
+  setCheck("checking…");
+  try {
+    const p = await build(text);
+    if (seq !== compileSeq) return;
+    adopt(p);
+  } catch (e) {
+    if (seq !== compileSeq) return;
+    setCheck("✗ " + (e?.message ?? String(e)), "bad");
+    setError(e instanceof KernelError ? e.line : null);
+  }
+}
+
+function scheduleAuto() {
+  clearTimeout(autoTimer);
+  if ($("auto").checked) {
+    autoTimer = setTimeout(() => { if (src.value !== lastTried) compileNow(); }, 700);
+  }
+}
+
+// ---- sliders and WGSL drawer -----------------------------------------------------------
+
+const fmtNum = (v, kind) => (kind === "int" ? String(Math.round(v)) : String(Number(v.toFixed(3))));
+
+function renderSliders(list) {
+  const box = $("sliders");
+  box.replaceChildren();
+  if (!list.length) {
+    const p = document.createElement("p");
+    p.className = "none";
+    p.textContent = "No sliders. Any scalar parameter other than w, h, t, frame, mx, my and mdown becomes one.";
+    box.append(p);
+    return;
+  }
+  for (const s of list) {
+    const row = document.createElement("label");
+    row.className = "slider";
+    const name = document.createElement("span");
+    name.textContent = s.name;
+    const input = document.createElement("input");
+    input.type = "range";
+    input.min = s.min;
+    input.max = s.max;
+    input.step = s.kind === "int" ? 1 : "any";
+    input.value = sliderValues.get(s.name);
+    const out = document.createElement("output");
+    out.textContent = fmtNum(sliderValues.get(s.name), s.kind);
+    input.addEventListener("input", () => {
+      const v = s.kind === "int" ? Math.round(+input.value) : +input.value;
+      sliderValues.set(s.name, v);
+      out.textContent = fmtNum(v, s.kind);
+    });
+    row.append(name, input, out);
+    box.append(row);
+  }
+}
+
+function renderWgsl(p) {
+  wtabs.replaceChildren();
+  const show = (name) => {
+    wgslTab = name;
+    for (const b of wtabs.children) b.classList.toggle("on", b.dataset.name === name);
+    wgslOut.innerHTML = highlight(p.byName.get(name).wgsl, "wgsl");
+    wgslOut.scrollTop = 0;
+  };
+  for (const name of p.order) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = `${name}()`;
+    b.dataset.name = name;
+    b.addEventListener("click", () => show(name));
+    wtabs.append(b);
+  }
+  show(p.byName.has(wgslTab) ? wgslTab : p.order[0]);
+}
+
+// ---- editor -----------------------------------------------------------------------------
+
+function sync() {
+  hl.scrollTop = src.scrollTop;
+  hl.scrollLeft = src.scrollLeft;
+  gutter.scrollTop = src.scrollTop;
+  errbar.style.transform = `translateY(${-src.scrollTop}px)`;
+}
+
+function setError(line) {
+  errLine = line ?? null;
+  if (!errLine) { errbar.hidden = true; return; }
+  const cs = getComputedStyle(src);
+  const lh = parseFloat(cs.lineHeight), pt = parseFloat(cs.paddingTop);
+  errbar.hidden = false;
+  errbar.style.height = `${lh}px`;
+  errbar.style.top = `${pt + (errLine - 1) * lh}px`;
+  sync();
+}
+
+function refreshEditor() {
+  const text = src.value;
+  hl.innerHTML = highlight(text, "py") + "\n ";
+  const n = text.split("\n").length;
+  if (n !== gutterLines) {
+    gutter.textContent = Array.from({ length: n }, (_, i) => i + 1).join("\n");
+    gutterLines = n;
+  }
+  sync();
+}
+
+function setSource(text) {
+  src.value = text;
+  setError(null);
+  refreshEditor();
+  saveDraft();
+}
+
+function saveDraft() {
+  clearTimeout(draftTimer);
+  draftTimer = setTimeout(() => {
+    try { localStorage.setItem(DRAFT_KEY, src.value); } catch { /* blocked storage: the draft is only a convenience */ }
+  }, 300);
+}
+
+// Inserts through execCommand so the browser's undo stack keeps the edit.
+function insertText(text) {
+  src.focus();
+  if (!document.execCommand("insertText", false, text)) {
+    src.setRangeText(text, src.selectionStart, src.selectionEnd, "end");
+    src.dispatchEvent(new Event("input"));
+  }
+}
+
+function lineBounds(v, pos) {
+  const ls = pos > 0 ? v.lastIndexOf("\n", pos - 1) + 1 : 0;
+  let le = v.indexOf("\n", pos);
+  if (le < 0) le = v.length;
+  return [ls, le];
+}
+
+function indentSelection(dedent) {
+  const v = src.value, s = src.selectionStart, e = src.selectionEnd;
+  if (!dedent && s === e) return insertText("    ");
+  const end = e > s && v[e - 1] === "\n" ? e - 1 : e;
+  const [ls] = lineBounds(v, s);
+  const [, le] = lineBounds(v, end);
+  const block = v.slice(ls, le);
+  const out = block.split("\n").map((l) => (dedent ? l.replace(/^( {1,4}|\t)/, "") : "    " + l)).join("\n");
+  src.setSelectionRange(ls, le);
+  insertText(out);
+  src.setSelectionRange(ls, ls + out.length);
+}
+
+function newlineWithIndent() {
+  const v = src.value, s = src.selectionStart;
+  const [ls, le] = lineBounds(v, s);
+  const line = v.slice(ls, le);
+  const indent = line.match(/^[ \t]*/)[0];
+  const extra = line.trimEnd().endsWith(":") ? "    " : "";
+  insertText("\n" + indent + extra);
+}
+
+src.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault();
+    compileNow();
+  } else if (e.key === "Tab") {
+    e.preventDefault();
+    indentSelection(e.shiftKey);
+  } else if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing) {
+    e.preventDefault();
+    newlineWithIndent();
+  } else if (e.key === "Escape") {
+    src.blur();
+  }
+});
+src.addEventListener("input", () => {
+  refreshEditor();
+  saveDraft();
+  scheduleAuto();
+});
+src.addEventListener("scroll", sync);
+
+// ---- pointer: cells under the pointer, or -1 outside the canvas ------------------------
+
+function locate(e) {
+  const r = canvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) / r.width * W, y = (e.clientY - r.top) / r.height * H;
+  const inside = x >= 0 && y >= 0 && x < W && y < H;
+  ptr.x = inside ? x : -1;
+  ptr.y = inside ? y : -1;
+}
+canvas.addEventListener("pointerdown", (e) => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.add(e.pointerId);
+  ptr.down = 1;
+  locate(e);
+});
+canvas.addEventListener("pointermove", locate);
+function release(e) {
+  pointers.delete(e.pointerId);
+  if (!pointers.size) ptr.down = 0;
+  if (e.pointerType !== "mouse" && !pointers.size) { ptr.x = -1; ptr.y = -1; }
+  else locate(e);
+}
+canvas.addEventListener("pointerup", release);
+canvas.addEventListener("pointercancel", release);
+canvas.addEventListener("pointerleave", () => { if (!pointers.size) { ptr.x = -1; ptr.y = -1; } });
+
+// ---- toolbar -----------------------------------------------------------------------
+
+async function fetchExample(name) {
+  if (!EXAMPLES.includes(name)) throw new Error(`no example called ${name}`);
+  const r = await fetch(`playground/${name}.py`, { cache: "no-cache" });
+  if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  return r.text();
+}
+
+async function loadExample(name) {
+  try {
+    setSource(await fetchExample(name));
+    history.replaceState(null, "", location.pathname + location.search);   // a loaded example replaces #code=
+    compileNow();
+  } catch (e) {
+    setCheck(`✗ could not load ${name}.py: ${e.message}`, "bad");
+  }
+}
+
+$("example").addEventListener("change", (e) => { if (e.target.value) loadExample(e.target.value); });
+$("run").addEventListener("click", compileNow);
+$("auto").addEventListener("change", () => { if ($("auto").checked) scheduleAuto(); else clearTimeout(autoTimer); });
+$("reset").addEventListener("click", () => { if (program) startProgram(program); else compileNow(); });
+$("pause").addEventListener("click", () => {
+  paused = !paused;
+  $("pause").textContent = paused ? "Resume" : "Pause";
+  $("pause").classList.toggle("on", paused);
+});
+$("grid").addEventListener("change", () => { if (program) startProgram(program); else compileNow(); });
+$("wgsl-toggle").addEventListener("click", () => {
+  const pane = $("wgsl-pane");
+  pane.classList.toggle("closed");
+  $("wgsl-toggle").textContent = pane.classList.contains("closed") ? "Show" : "Hide";
+});
+
+// Share: the source, deflate-raw and base64url, in the hash.
+async function deflateB64(text) {
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("deflate-raw"));
+  const bytes = new Uint8Array(await new Response(stream).arrayBuffer());
+  let bin = "";
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+async function inflateB64(b64) {
+  const bin = atob(b64.replace(/-/g, "+").replace(/_/g, "/"));
+  const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+  return new Response(stream).text();
+}
+$("share").addEventListener("click", async () => {
+  const msg = $("share-msg");
+  try {
+    const url = `${location.origin}${location.pathname}${location.search}#code=${await deflateB64(src.value)}`;
+    history.replaceState(null, "", url);
+    let copied = false;
+    try { await navigator.clipboard.writeText(url); copied = true; } catch { /* no clipboard permission: the link is in the address bar */ }
+    msg.textContent = copied ? "Link copied." : "Link is in the address bar.";
+  } catch (e) {
+    msg.textContent = `Could not make a link: ${e.message}`;
+  }
+});
+
+// ---- boot --------------------------------------------------------------------------
+
+new ResizeObserver(() => {
+  // A new canvas shape means a new grid height: restart on the new shape, once the drag settles.
+  clearTimeout(relayoutTimer);
+  relayoutTimer = setTimeout(() => {
+    if (program && gridHeight(+$("grid").value) !== H) startProgram(program);
+  }, 250);
+}).observe(canvas);
+
+async function boot() {
+  let text = null, note = null;
+  const m = location.hash.match(/^#code=([A-Za-z0-9_-]+)/);
+  if (m) {
+    try { text = await inflateB64(m[1]); } catch { note = "The code in this link could not be read; loaded the default instead."; }
+  }
+  if (text === null) {
+    const ex = new URLSearchParams(location.search).get("example");
+    if (EXAMPLES.includes(ex)) { try { text = await fetchExample(ex); } catch { /* falls through */ } }
+  }
+  if (text === null) {
+    try { text = localStorage.getItem(DRAFT_KEY); } catch { text = null; }
+  }
+  if (text === null) {
+    try { text = await fetchExample("plasma"); } catch { text = ""; }
+  }
+  setSource(text);
+  if (note) $("share-msg").textContent = note;
+
+  try {
+    gpu = await initGPU();
+    field = await FieldView.create(gpu, canvas);
+  } catch (e) {
+    showFatal(e.message);
+    return;
+  }
+  requestAnimationFrame(tick);
+  await compileNow();
+}
+boot();
+</script>
+</body>
+</html>
