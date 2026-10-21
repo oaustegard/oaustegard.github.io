@@ -139,7 +139,7 @@ function showModel() {
     el.textContent = "Queries: full EmbeddingGemma 2 (about 175 MB the first time). ";
     a.textContent = "Use the 25 MB query model";
   } else {
-    el.textContent = "Queries: a 25 MB, 4-layer cut of EmbeddingGemma 2, run in this page. ";
+    el.textContent = "Queries: a 25 MB, 4-layer cut of EmbeddingGemma 2, run on your GPU in this page. ";
     a.textContent = "Better results: load the full model (about 175 MB)";
   }
   a.onclick = (e) => {
