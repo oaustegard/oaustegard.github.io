@@ -61,6 +61,8 @@ async function start() {
   }
   if (!useFull) loadCut().catch(() => {}); // start the download now; a query awaits the same promise
   showModel();
+  const q = P.get("q")?.trim(); // ?q= runs a shared query on load
+  if (q) { $("q").value = q; run(q); }
 }
 
 // Text with literal special-token strings ("<bos>", "<eos>", ...) would inject control tokens; the
@@ -142,6 +144,8 @@ function showModel() {
 async function run(text) {
   text = text.trim();
   if (!text) return;
+  const u = new URL(location.href); // keep ?q= in step with the box, so the URL shares the search
+  if (u.searchParams.get("q") !== text) { u.searchParams.set("q", text); history.replaceState(null, "", u); }
   $("go").disabled = true;
   status("searching…");
   try {

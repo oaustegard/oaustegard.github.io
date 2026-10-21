@@ -25,6 +25,9 @@ Your query is embedded in the page too, so nothing goes to a server:
 - **For better results, the full text model** (about 175 MB the first time), from the link under
   the results or with `?model=full`.
 
+Add `?q=` to share a search: `?q=foggy+mountains+at+dawn` runs it on load, and the address bar
+follows whatever you search.
+
 The images themselves load from Bluesky's own CDN, and each tile links to its post.
 
 ## What is in the index
