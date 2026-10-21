@@ -13,7 +13,7 @@
 import { RemexTail } from "./tail.js";
 import { Eg2Engine } from "./engine.js";
 
-const D = 768, K = 36;
+const D = 768, K = 40; // 40 fills whole rows at 2, 4 and 5 columns; fullRows() trims the rest
 const QUERY = "task: search result | query: ";
 const ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 const TOKENIZERS = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
@@ -205,6 +205,7 @@ async function search(text) {
     const [top] = await tail.topk(qbuf, 1, corpus, n, K);
     const t2 = performance.now();
     render(Array.from(top.idx), Array.from(top.score));
+    fullRows();
     shown = text;
     status(`${load}query embedded in ${(t1 - t0).toFixed(0)} ms (${how}); ${n.toLocaleString()} images scanned in ${(t2 - t1).toFixed(0)} ms`);
   } catch (e) { status(String(e.message || e), true); }
@@ -235,6 +236,15 @@ function render(idx, score) {
     return tile;
   }));
 }
+
+// Show only complete rows: hide the tiles past the last full row for the current column count.
+function fullRows() {
+  const g = $("grid"), tiles = g.children;
+  const cols = getComputedStyle(g).gridTemplateColumns.split(" ").filter(Boolean).length || 1;
+  const keep = Math.max(cols, tiles.length - (tiles.length % cols));
+  for (let j = 0; j < tiles.length; j++) tiles[j].hidden = j >= keep;
+}
+new ResizeObserver(fullRows).observe($("grid"));
 
 $("form").onsubmit = (e) => { e.preventDefault(); clearTimeout(typingTimer); run($("q").value); };
 start().catch((e) => status(String(e.message || e), true));
