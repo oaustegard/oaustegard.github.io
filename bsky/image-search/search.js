@@ -136,17 +136,36 @@ function showModel() {
     useFull ? u.searchParams.set("model", "full") : u.searchParams.delete("model");
     history.replaceState(null, "", u);
     showModel();
+    shown = null; // same text, other model: search again
     if ($("q").value.trim()) run($("q").value);
   };
   el.append(a, ".");
 }
 
-async function run(text) {
+// Searches run one at a time, newest text wins: typing while a search is in flight only replaces
+// the queued text, so the grid follows the box without a backlog of stale queries.
+let busy = false, queued = null, shown = null;
+
+function run(text) {
   text = text.trim();
   if (!text) return;
   const u = new URL(location.href); // keep ?q= in step with the box, so the URL shares the search
   if (u.searchParams.get("q") !== text) { u.searchParams.set("q", text); history.replaceState(null, "", u); }
-  $("go").disabled = true;
+  queued = text;
+  if (!busy) drain();
+}
+
+async function drain() {
+  busy = true;
+  while (queued !== null) {
+    const text = queued;
+    queued = null;
+    if (text !== shown) await search(text);
+  }
+  busy = false;
+}
+
+async function search(text) {
   status("searching…");
   try {
     const t0 = performance.now();
@@ -156,10 +175,19 @@ async function run(text) {
     const [top] = await tail.topk(qbuf, 1, corpus, n, K);
     const t2 = performance.now();
     render(Array.from(top.idx), Array.from(top.score));
+    shown = text;
     status(`query embedded in ${(t1 - t0).toFixed(0)} ms (${how}); ${n.toLocaleString()} images scanned in ${(t2 - t1).toFixed(0)} ms`);
   } catch (e) { status(String(e.message || e), true); }
-  $("go").disabled = false;
 }
+
+// Search as you type: at once when a word ends (space or punctuation), else after a short pause.
+let typingTimer;
+$("q").addEventListener("input", (e) => {
+  clearTimeout(typingTimer);
+  const v = $("q").value;
+  if (e.data && /[\s\p{P}]/u.test(e.data)) run(v);
+  else typingTimer = setTimeout(() => run(v), useFull ? 600 : 300);
+});
 
 function render(idx, score) {
   $("grid").replaceChildren(...idx.map((i, j) => {
@@ -178,5 +206,5 @@ function render(idx, score) {
   }));
 }
 
-$("form").onsubmit = (e) => { e.preventDefault(); run($("q").value); };
+$("form").onsubmit = (e) => { e.preventDefault(); clearTimeout(typingTimer); run($("q").value); };
 start().catch((e) => status(String(e.message || e), true));

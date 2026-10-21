@@ -26,7 +26,7 @@ Your query is embedded in the page too, so nothing goes to a server:
   the results or with `?model=full`.
 
 Add `?q=` to share a search: `?q=foggy+mountains+at+dawn` runs it on load, and the address bar
-follows whatever you search.
+follows whatever you search. Results update as you type: at each finished word, or after a short pause.
 
 The images themselves load from Bluesky's own CDN, and each tile links to its post.
 
