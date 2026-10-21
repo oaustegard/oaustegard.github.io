@@ -82,10 +82,10 @@ function loadCut() {
     specials = tj.added_tokens.filter((t) => t.special).map((t) => t.content).sort((a, b) => b.length - a.length);
     const tokenizer = new Tokenizer(tj, {});
     try { // the WGSL engine on the index's own device; the query vector never leaves the GPU
-      if (P.get("engine") === "ort") throw new Error("?engine=ort");
+      if (P.get("engine") !== "wgsl") throw new Error("onnxruntime-web is the default; ?engine=wgsl opts in");
       return { tokenizer, engine: await Eg2Engine.create(device, manifest, data, { maxTokens: MAX_TOKENS, maxSeqs: 1 }) };
     } catch (e) { // same weights file, run by onnxruntime-web instead
-      console.warn("WGSL engine failed, using onnxruntime-web:", e);
+      if (P.get("engine") === "wgsl") console.warn("WGSL engine failed, using onnxruntime-web:", e);
       const [ort, graph] = await Promise.all([import(ORT + "ort.webgpu.min.mjs"),
                                               fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer())]);
       ort.env.wasm.wasmPaths = ORT;
