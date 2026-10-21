@@ -4,11 +4,14 @@
 // EG2 query space the image vectors live in:
 //   cut   default: EG2's first 4 layers, distilled onto EG2's query vectors, 32K vocabulary, 3-bit token
 //         table (oaustegard/experiments eg2-layer-student, release eg2-layer-onnx-20261021), ~25 MB,
-//         on onnxruntime-web
+//         run by engine.js, hand-written WGSL kernels on the index's device (oaustegard/experiments
+//         eg2-wgsl-engine), reading model_t3w.onnx_data through model/manifest.json; onnxruntime-web
+//         on the same file is the fallback (?engine=ort forces it)
 //   full  EG2 text-only q4 via transformers.js (~175 MB once, then cached); closer to the vectors that
 //         built the index, so better results. ?model=full or the link under the results.
 // No request leaves the page except for these files and the image thumbnails.
 import { RemexTail } from "./tail.js";
+import { Eg2Engine } from "./engine.js";
 
 const D = 768, K = 36;
 const QUERY = "task: search result | query: ";
@@ -72,30 +75,40 @@ const clean = (t) => specials.reduce((s, sp) => s.split(sp).join(" "), t);
 
 function loadCut() {
   cut ??= (async () => {
-    const [ort, { Tokenizer }, graph, data, tj] = await Promise.all([
-      import(ORT + "ort.webgpu.min.mjs"), import(TOKENIZERS),
-      fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer()),
+    const [manifest, data, tj, { Tokenizer }] = await Promise.all([
+      fetch(new URL("manifest.json", CUT)).then((r) => r.json()),
       fetch(new URL(CUT_FILE + "_data", CUT)).then((r) => r.arrayBuffer()),
-      fetch(new URL("tokenizer.json", CUT)).then((r) => r.json())]);
-    ort.env.wasm.wasmPaths = ORT;
+      fetch(new URL("tokenizer.json", CUT)).then((r) => r.json()), import(TOKENIZERS)]);
     specials = tj.added_tokens.filter((t) => t.special).map((t) => t.content).sort((a, b) => b.length - a.length);
-    const session = await ort.InferenceSession.create(new Uint8Array(graph), {
-      executionProviders: ["webgpu", "wasm"], externalData: [{ path: CUT_FILE + "_data", data: new Uint8Array(data) }] });
-    return { ort, session, tokenizer: new Tokenizer(tj, {}) };
+    const tokenizer = new Tokenizer(tj, {});
+    try { // the WGSL engine on the index's own device; the query vector never leaves the GPU
+      if (P.get("engine") === "ort") throw new Error("?engine=ort");
+      return { tokenizer, engine: await Eg2Engine.create(device, manifest, data, { maxTokens: MAX_TOKENS, maxSeqs: 1 }) };
+    } catch (e) { // same weights file, run by onnxruntime-web instead
+      console.warn("WGSL engine failed, using onnxruntime-web:", e);
+      const [ort, graph] = await Promise.all([import(ORT + "ort.webgpu.min.mjs"),
+                                              fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer())]);
+      ort.env.wasm.wasmPaths = ORT;
+      const session = await ort.InferenceSession.create(new Uint8Array(graph), {
+        executionProviders: ["webgpu", "wasm"], externalData: [{ path: CUT_FILE + "_data", data: new Uint8Array(data) }] });
+      return { tokenizer, ort, session };
+    }
   })();
   cut.catch(() => { cut = null; });
   return cut;
 }
 
+// Embeds into qbuf, the GPU buffer the scan reads.
 async function embedCut(text) {
   if (!cut) status("loading the 25 MB query model…");
-  const { ort, session, tokenizer } = await loadCut();
+  const { tokenizer, engine, ort, session } = await loadCut();
   const ids = tokenizer.encode(QUERY + clean(text)).ids.slice(0, MAX_TOKENS);
+  if (engine) return engine.embedTo([ids], qbuf);
   const shape = [1, ids.length];
   const out = await session.run({
     input_ids: new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), shape),
     attention_mask: new ort.Tensor("int64", new BigInt64Array(ids.length).fill(1n), shape) });
-  return new Float32Array(out.embedding.data); // mean-pooled and L2-normalized in the graph
+  device.queue.writeBuffer(qbuf, 0, new Float32Array(out.embedding.data)); // mean-pooled and L2-normalized in the graph
 }
 
 async function embedFull(text) {
@@ -109,12 +122,13 @@ async function embedFull(text) {
                   model: await T.AutoModel.from_pretrained(id, { config, device: "webgpu", dtype: "q4" }) };
   }
   const out = await fullModel.model(await fullModel.processor([QUERY + text]));
-  return new Float32Array(out.sentence_embedding.data);
+  device.queue.writeBuffer(qbuf, 0, new Float32Array(out.sentence_embedding.data));
 }
 
 async function embed(text) {
-  return useFull ? { vec: await embedFull(text), how: "full EmbeddingGemma 2" }
-                 : { vec: await embedCut(text), how: "4-layer query model" };
+  if (useFull) { await embedFull(text); return "full EmbeddingGemma 2"; }
+  await embedCut(text);
+  return (await cut).engine ? "4-layer query model, WGSL engine" : "4-layer query model, onnxruntime-web";
 }
 
 // One line under the results that says which query model runs and switches to the other.
@@ -169,9 +183,8 @@ async function search(text) {
   status("searching…");
   try {
     const t0 = performance.now();
-    const { vec, how } = await embed(text);
+    const how = await embed(text);
     const t1 = performance.now();
-    device.queue.writeBuffer(qbuf, 0, vec);
     const [top] = await tail.topk(qbuf, 1, corpus, n, K);
     const t2 = performance.now();
     render(Array.from(top.idx), Array.from(top.score));
