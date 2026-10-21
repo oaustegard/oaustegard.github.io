@@ -83,7 +83,15 @@ function loadCut() {
     const tokenizer = new Tokenizer(tj, {});
     try { // the WGSL engine on the index's own device; the query vector never leaves the GPU
       if (P.get("engine") === "ort") throw new Error("?engine=ort");
-      const engine = await Eg2Engine.create(device, manifest, data, { maxTokens: MAX_TOKENS, maxSeqs: 1 });
+      // ?device=own: the engine gets a GPU device of its own and the vector comes back through the CPU,
+      // as with onnxruntime-web; by default it shares the scan's device and the vector stays on the GPU.
+      const own = P.get("device") === "own"
+        ? await (await navigator.gpu.requestAdapter({ powerPreference: "high-performance" })).requestDevice() : null;
+      const engine = await Eg2Engine.create(own ?? device, manifest, data, { maxTokens: MAX_TOKENS, maxSeqs: 1 });
+      if (own) {
+        await engine.embed([tokenizer.encode(QUERY + "warm up").ids]);
+        return { tokenizer, engine, own: true };
+      }
       // One throwaway run while the page loads: the GPU driver finishes preparing the kernels on
       // their first use, which otherwise lands on the first search.
       await engine.embedTo([tokenizer.encode(QUERY + "warm up").ids], qbuf);
@@ -105,8 +113,9 @@ function loadCut() {
 // Embeds into qbuf, the GPU buffer the scan reads.
 async function embedCut(text) {
   if (!cut) status("loading the 25 MB query model…");
-  const { tokenizer, engine, ort, session } = await loadCut();
+  const { tokenizer, engine, own, ort, session } = await loadCut();
   const ids = tokenizer.encode(QUERY + clean(text)).ids.slice(0, MAX_TOKENS);
+  if (engine && own) return device.queue.writeBuffer(qbuf, 0, await engine.embed([ids]));
   if (engine) return engine.embedTo([ids], qbuf);
   const shape = [1, ids.length];
   const out = await session.run({
@@ -132,7 +141,8 @@ async function embedFull(text) {
 async function embed(text) {
   if (useFull) { await embedFull(text); return "full EmbeddingGemma 2"; }
   await embedCut(text);
-  return (await cut).engine ? "4-layer query model, WGSL engine" : "4-layer query model, onnxruntime-web";
+  const c = await cut;
+  return c.engine ? `4-layer query model, WGSL engine${c.own ? " on its own device" : ""}` : "4-layer query model, onnxruntime-web";
 }
 
 // One line under the results that says which query model runs and switches to the other.
