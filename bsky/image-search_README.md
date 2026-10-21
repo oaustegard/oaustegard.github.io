@@ -16,12 +16,14 @@ Each 768-number vector was then compressed to 2 bits per number with
 3.2 MB of codes plus a list of who posted what, about 4 MB over the wire, so it loads into the
 page. Your GPU scans all 16,878 images in a few milliseconds (WebGPU).
 
-Your query goes through EmbeddingGemma 2's text side, with its search prompt:
+Your query is embedded in the page too, so nothing goes to a server:
 
-- **Usually the hosted query embedder**, a small Cloudflare Worker running the same model, so
-  the page downloads no model at all.
-- **If the Worker is unavailable,** the page loads the text model itself (about 175 MB the
-  first time, then cached by the browser).
+- **By default, a 25 MB query model**: the first 4 of EmbeddingGemma 2's 24 text layers, trained to
+  put a query where the full model would, with a 32K-token vocabulary and a 3-bit token table
+  ([eg2-layer-student](https://github.com/oaustegard/experiments/tree/main/eg2-layer-student)). It runs
+  in [onnxruntime-web](https://onnxruntime.ai/docs/tutorials/web/) and downloads once, then stays cached.
+- **For better results, the full text model** (about 175 MB the first time), from the link under
+  the results or with `?model=full`.
 
 The images themselves load from Bluesky's own CDN, and each tile links to its post.
 
@@ -45,6 +47,10 @@ Over 5,248 such queries against all 16,878 images:
 - it ranks first 56% of the time;
 - it lands in the top 10 80% of the time.
 
+Those numbers are for the full text model. The 25 MB query model was trained on text-to-text
+search, not on image descriptions, and on the same test it lands in the top 10 56% of the time
+(first 31%). It is the fast default; the full model is one click away.
+
 Alt text reads like a caption, so this is a best case for what people type.
 
 To make the 3-hour embedding run fit on an 8 GB MacBook Air, images were encoded with 70
@@ -64,4 +70,6 @@ Built in [oaustegard/experiments](https://github.com/oaustegard/experiments) und
 - the index builder;
 - the evaluation, with full numbers in its `RESULTS.md`.
 
+`model/` holds the 25 MB query model (`model_t3w.onnx` + its data and the 32K tokenizer) from
+experiments release `eg2-layer-onnx-20261021`; `meta.json` there has its contract and scores.
 `tail.js` here is a copy of `embeddinggemma2-webgpu-tail/web/tail.js` from the same repo.

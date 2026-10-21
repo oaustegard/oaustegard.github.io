@@ -1,22 +1,27 @@
-// Bluesky image search. The index (built by oaustegard/experiments bsky-image-search/run/build_index.py:
+// Bluesky image search, entirely in the page. The index (built by oaustegard/experiments bsky-image-search/run/build_index.py:
 // EG2 q4 image embeddings -> remex 2-bit codes, 192 B per image) loads into a WebGPU device and is
-// scanned by RemexTail (tail.js, vendored). Queries are embedded with EG2's text model and
-// query prompt, the same q4 graph that built the image vectors' space:
-//   hosted   the eg2-query-embedder Worker (no download; allowed origins only)
-//   local    EG2 text-only q4 in this browser via transformers.js (~175 MB once, then cached)
-// ?local=1 forces local. ?index=<dir> points at another index directory.
+// scanned by RemexTail (tail.js, vendored). Queries are embedded in this browser too, into the same
+// EG2 query space the image vectors live in:
+//   cut   default: EG2's first 4 layers, distilled onto EG2's query vectors, 32K vocabulary, 3-bit token
+//         table (oaustegard/experiments eg2-layer-student, release eg2-layer-onnx-20261021), ~25 MB,
+//         on onnxruntime-web
+//   full  EG2 text-only q4 via transformers.js (~175 MB once, then cached); closer to the vectors that
+//         built the index, so better results. ?model=full or the link under the results.
+// No request leaves the page except for these files and the image thumbnails.
 import { RemexTail } from "./tail.js";
 
 const D = 768, K = 36;
 const QUERY = "task: search result | query: ";
-const EMBEDDER = "https://eg2-query-embedder.austegard.workers.dev/";
+const ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
+const TOKENIZERS = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
+const CUT = new URL("./model/", import.meta.url), CUT_FILE = "model_t3w.onnx", MAX_TOKENS = 128;
 const P = new URLSearchParams(location.search);
 const INDEX = P.get("index") || "./data/";
 const EXAMPLES = ["a cat asleep in a sunbeam", "foggy mountains at dawn", "watercolor of a city street", "a bird in the snow",
                   "neon signs at night", "moss on a tree trunk", "a dog at the beach", "an old film camera"];
 const $ = (id) => document.getElementById(id);
 const status = (t, bad = false) => { $("status").textContent = t; $("status").className = "status" + (bad ? " bad" : ""); };
-let device, tail, corpus, rows, n, qbuf, localModel = null, useLocal = P.get("local") === "1";
+let device, tail, corpus, rows, n, qbuf, cut = null, fullModel = null, useFull = P.get("model") === "full" || P.get("local") === "1";
 
 async function start() {
   const t0 = performance.now();
@@ -43,7 +48,8 @@ async function start() {
   const mb = (codes.byteLength + aux.byteLength) / 1e6;
   status(`${n.toLocaleString()} images ready (${mb.toFixed(1)} MB index) in ${((performance.now() - t0) / 1000).toFixed(1)} s`);
   $("method").textContent = `Index: ${n.toLocaleString()} images from popular Bluesky feeds, embedded with EmbeddingGemma 2 (q4) and ` +
-    `compressed to 2-bit remex codes. Queries use the same model's text side with its search prompt. Images load from Bluesky's CDN. `;
+    `compressed to 2-bit remex codes. Queries are embedded in this page into the same model's search space. Nothing is sent to a ` +
+    `server; images load from Bluesky's CDN. `;
   const how = Object.assign(document.createElement("a"), { href: "https://github.com/oaustegard/oaustegard.github.io/blob/main/bsky/image-search_README.md", textContent: "How it works" });
   $("method").append(how, ".");
   $("q").disabled = $("go").disabled = false;
@@ -53,33 +59,84 @@ async function start() {
     b.onclick = () => { $("q").value = ex; run(ex); };
     $("examples").append(b);
   }
-  if (!useLocal) fetch(EMBEDDER + "warm", { method: "POST" }).catch(() => {});
+  if (!useFull) loadCut().catch(() => {}); // start the download now; a query awaits the same promise
+  showModel();
 }
 
-async function embedLocal(text) {
-  if (!localModel) {
+// Text with literal special-token strings ("<bos>", "<eos>", ...) would inject control tokens; the
+// teacher replaced them with spaces before embedding, and the cut was trained the same way.
+let specials = [];
+const clean = (t) => specials.reduce((s, sp) => s.split(sp).join(" "), t);
+
+function loadCut() {
+  cut ??= (async () => {
+    const [ort, { Tokenizer }, graph, data, tj] = await Promise.all([
+      import(ORT + "ort.webgpu.min.mjs"), import(TOKENIZERS),
+      fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer()),
+      fetch(new URL(CUT_FILE + "_data", CUT)).then((r) => r.arrayBuffer()),
+      fetch(new URL("tokenizer.json", CUT)).then((r) => r.json())]);
+    ort.env.wasm.wasmPaths = ORT;
+    specials = tj.added_tokens.filter((t) => t.special).map((t) => t.content).sort((a, b) => b.length - a.length);
+    const session = await ort.InferenceSession.create(new Uint8Array(graph), {
+      executionProviders: ["webgpu", "wasm"], externalData: [{ path: CUT_FILE + "_data", data: new Uint8Array(data) }] });
+    return { ort, session, tokenizer: new Tokenizer(tj, {}) };
+  })();
+  cut.catch(() => { cut = null; });
+  return cut;
+}
+
+async function embedCut(text) {
+  if (!cut) status("loading the 25 MB query model…");
+  const { ort, session, tokenizer } = await loadCut();
+  const ids = tokenizer.encode(QUERY + clean(text)).ids.slice(0, MAX_TOKENS);
+  const shape = [1, ids.length];
+  const out = await session.run({
+    input_ids: new ort.Tensor("int64", BigInt64Array.from(ids, BigInt), shape),
+    attention_mask: new ort.Tensor("int64", new BigInt64Array(ids.length).fill(1n), shape) });
+  return new Float32Array(out.embedding.data); // mean-pooled and L2-normalized in the graph
+}
+
+async function embedFull(text) {
+  if (!fullModel) {
     status("loading EmbeddingGemma 2's text model in this browser (~175 MB the first time)…");
     const T = await import("https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1");
     const id = "onnx-community/embeddinggemma-2-ONNX";
     const config = await T.AutoConfig.from_pretrained(id);
     config.vision_config = config.audio_config = null; // text only: skip the image and audio encoders
-    localModel = { processor: await T.AutoProcessor.from_pretrained(id),
-                   model: await T.AutoModel.from_pretrained(id, { config, device: "webgpu", dtype: "q4" }) };
+    fullModel = { processor: await T.AutoProcessor.from_pretrained(id),
+                  model: await T.AutoModel.from_pretrained(id, { config, device: "webgpu", dtype: "q4" }) };
   }
-  const out = await localModel.model(await localModel.processor([QUERY + text]));
+  const out = await fullModel.model(await fullModel.processor([QUERY + text]));
   return new Float32Array(out.sentence_embedding.data);
 }
 
 async function embed(text) {
-  if (!useLocal) {
-    try {
-      const r = await fetch(EMBEDDER + "embed", { method: "POST", headers: { "content-type": "application/json" },
-                                                 body: JSON.stringify({ text: text.slice(0, 256), dims: D }) });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return { vec: new Float32Array((await r.json()).embedding), how: "hosted embedder" };
-    } catch (e) { useLocal = true; }
+  return useFull ? { vec: await embedFull(text), how: "full EmbeddingGemma 2" }
+                 : { vec: await embedCut(text), how: "4-layer query model" };
+}
+
+// One line under the results that says which query model runs and switches to the other.
+function showModel() {
+  const el = $("model");
+  const a = Object.assign(document.createElement("a"), { href: "#" });
+  if (useFull) {
+    el.textContent = "Queries: full EmbeddingGemma 2 (about 175 MB the first time). ";
+    a.textContent = "Use the 25 MB query model";
+  } else {
+    el.textContent = "Queries: a 25 MB, 4-layer cut of EmbeddingGemma 2, run in this page. ";
+    a.textContent = "Better results: load the full model (about 175 MB)";
   }
-  return { vec: await embedLocal(text), how: "in-browser model" };
+  a.onclick = (e) => {
+    e.preventDefault();
+    useFull = !useFull;
+    const u = new URL(location.href);
+    u.searchParams.delete("local");
+    useFull ? u.searchParams.set("model", "full") : u.searchParams.delete("model");
+    history.replaceState(null, "", u);
+    showModel();
+    if ($("q").value.trim()) run($("q").value);
+  };
+  el.append(a, ".");
 }
 
 async function run(text) {
