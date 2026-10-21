@@ -82,10 +82,14 @@ function loadCut() {
     specials = tj.added_tokens.filter((t) => t.special).map((t) => t.content).sort((a, b) => b.length - a.length);
     const tokenizer = new Tokenizer(tj, {});
     try { // the WGSL engine on the index's own device; the query vector never leaves the GPU
-      if (P.get("engine") !== "wgsl") throw new Error("onnxruntime-web is the default; ?engine=wgsl opts in");
-      return { tokenizer, engine: await Eg2Engine.create(device, manifest, data, { maxTokens: MAX_TOKENS, maxSeqs: 1 }) };
+      if (P.get("engine") === "ort") throw new Error("?engine=ort");
+      const engine = await Eg2Engine.create(device, manifest, data, { maxTokens: MAX_TOKENS, maxSeqs: 1 });
+      // One throwaway run while the page loads: the GPU driver finishes preparing the kernels on
+      // their first use, which otherwise lands on the first search.
+      await engine.embedTo([tokenizer.encode(QUERY + "warm up").ids], qbuf);
+      return { tokenizer, engine };
     } catch (e) { // same weights file, run by onnxruntime-web instead
-      if (P.get("engine") === "wgsl") console.warn("WGSL engine failed, using onnxruntime-web:", e);
+      if (P.get("engine") !== "ort") console.warn("WGSL engine failed, using onnxruntime-web:", e);
       const [ort, graph] = await Promise.all([import(ORT + "ort.webgpu.min.mjs"),
                                               fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer())]);
       ort.env.wasm.wasmPaths = ORT;
@@ -182,14 +186,17 @@ async function drain() {
 async function search(text) {
   status("searching…");
   try {
+    const tl = performance.now();
+    if (!useFull) await loadCut(); // a first search waits for the model; report that apart from the query
     const t0 = performance.now();
     const how = await embed(text);
     const t1 = performance.now();
+    const load = t0 - tl > 5 ? `query model ready in ${(t0 - tl).toFixed(0)} ms; ` : "";
     const [top] = await tail.topk(qbuf, 1, corpus, n, K);
     const t2 = performance.now();
     render(Array.from(top.idx), Array.from(top.score));
     shown = text;
-    status(`query embedded in ${(t1 - t0).toFixed(0)} ms (${how}); ${n.toLocaleString()} images scanned in ${(t2 - t1).toFixed(0)} ms`);
+    status(`${load}query embedded in ${(t1 - t0).toFixed(0)} ms (${how}); ${n.toLocaleString()} images scanned in ${(t2 - t1).toFixed(0)} ms`);
   } catch (e) { status(String(e.message || e), true); }
 }
 

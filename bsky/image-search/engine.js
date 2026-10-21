@@ -440,13 +440,18 @@ export class Eg2Engine {
     return out;
   }
 
-  // Embed and copy the vectors into `target` (same device) without a readback.
-  embedTo(batch, target, offset = 0) {
+  // Embed and copy the vectors into `target` (same device) without reading them back.
+  // sync "none": return once submitted (later submits on this queue see the vectors);
+  // "map" (default): wait by mapping 16 bytes, which Chrome resolves promptly;
+  // "done": wait on queue.onSubmittedWorkDone().
+  async embedTo(batch, target, offset = 0, sync = "map") {
     const enc = this.device.createCommandEncoder();
     const B = this._record(enc, batch);
     enc.copyBufferToBuffer(this.b.out, 0, target, offset, B * 768 * 4);
+    if (sync === "map") enc.copyBufferToBuffer(this.b.out, 0, this.read, 0, 16);
     this.device.queue.submit([enc.finish()]);
-    return this.device.queue.onSubmittedWorkDone();
+    if (sync === "done") await this.device.queue.onSubmittedWorkDone();
+    if (sync === "map") { await this.read.mapAsync(GPUMapMode.READ, 0, 16); this.read.unmap(); }
   }
 
   // Debugging: run the first nSteps dispatches and read `count` floats of an activation buffer.
