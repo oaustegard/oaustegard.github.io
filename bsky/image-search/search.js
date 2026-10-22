@@ -57,11 +57,19 @@ async function start() {
   $("method").append(how, ".");
   $("q").disabled = $("go").disabled = false;
   $("q").placeholder = "Describe an image…";
+  // Examples as chips on wide screens; on phones the same list is one dropdown, so it doesn't push the results down.
+  const pick = Object.assign(document.createElement("select"), { className: "pick", ariaLabel: "Try an example search" });
+  pick.append(new Option("Try an example…", "", true, true));
+  pick.options[0].disabled = true;
   for (const ex of EXAMPLES) {
     const b = Object.assign(document.createElement("button"), { type: "button", textContent: ex });
     b.onclick = () => { $("q").value = ex; run(ex); };
     $("examples").append(b);
+    pick.append(new Option(ex, ex));
   }
+  pick.onchange = () => { $("q").value = pick.value; run(pick.value); };
+  $("q").addEventListener("input", () => { pick.selectedIndex = 0; });
+  $("examples").append(pick);
   if (!useFull) loadCut().catch(() => {}); // start the download now; a query awaits the same promise
   showModel();
   const q = P.get("q")?.trim(); // ?q= runs a shared query on load
