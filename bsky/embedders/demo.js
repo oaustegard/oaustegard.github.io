@@ -47,6 +47,13 @@ const ASSETS = [
 ];
 
 const $ = (id) => document.getElementById(id);
+// Form fields live in the query string too (q = search box, cold=net = the network cold-launch box), so the
+// address bar is always a deep link to what is on screen. Not "net": sw.js sends ?net= requests to the network.
+function setParam(k, v) {
+  const u = new URL(location.href);
+  if (v) u.searchParams.set(k, v); else u.searchParams.delete(k);
+  if (u.href !== location.href) history.replaceState(null, "", u);
+}
 const now = () => performance.now();
 const status = (t, bad = false) => { $("status").textContent = t; $("status").className = bad ? "bad" : ""; };
 const abs = (u) => new URL(u, import.meta.url).href;
@@ -165,11 +172,12 @@ async function runModel(m, text, cold = null) {
   return s.last;
 }
 
-async function search(text, cold = null, only = null) {
+async function search(text, cold = null, only = null, fromBox = false) {
   text = text.trim();
   if (!text) return;
   lastQuery = text;
-  $("q").value = text;
+  if (!fromBox) $("q").value = text; // never rewrite the box while someone is typing in it
+  setParam("q", text);
   setBusy(true);
   try {
     for (const m of MODELS) {
@@ -181,6 +189,7 @@ async function search(text, cold = null, only = null) {
     renderShared();
     status(`"${text}": done.`);
     state.runs.push({ q: text, cold, results: Object.fromEntries(MODELS.map((m) => [m.id, state.models[m.id].last])) });
+    shown = text;
   } catch (e) {
     console.error(e);
     const offline = cold === "net" && (e instanceof TypeError || !navigator.onLine);
@@ -189,6 +198,26 @@ async function search(text, cold = null, only = null) {
   } finally {
     setBusy(false);
   }
+}
+
+// Search as you type (as bsky/image-search does): at once when a word ends (space or punctuation),
+// else after 300 ms without typing. Only the newest pending query runs; one already shown is skipped.
+let typingTimer, queued = null, busy = false, shown = null;
+function run(text) {
+  text = text.trim();
+  if (!text) return;
+  setParam("q", text);
+  queued = text;
+  if (!busy) drain();
+}
+async function drain() {
+  busy = true;
+  while (queued !== null) {
+    const text = queued;
+    queued = null;
+    if (text !== shown) await search(text, null, null, true);
+  }
+  busy = false;
 }
 
 // ---------------------------------------------------------------- rendering
@@ -318,13 +347,25 @@ async function start() {
     const b = document.createElement("span");
     b.className = "chip";
     b.textContent = ex;
-    b.onclick = () => search(ex);
+    b.onclick = () => { clearTimeout(typingTimer); $("q").value = ex; run(ex); };
     $("examples").append(b);
   }
   if ("serviceWorker" in navigator) {
     try { await navigator.serviceWorker.register("sw.js"); } catch (e) { console.warn("service worker:", e); }
   }
   $("cache").onclick = () => makeOffline().catch((e) => status("caching failed: " + e.message, true));
+  const qs = new URLSearchParams(location.search);
+  $("q").value = qs.get("q") ?? "";
+  $("fromNet").checked = qs.get("cold") === "net";
+  $("q").oninput = (e) => {
+    clearTimeout(typingTimer);
+    const v = $("q").value;
+    setParam("q", v.trim());
+    if ($("q").disabled) return; // still loading: ?q= runs once ready
+    if (e.data && /[\s\p{P}]/u.test(e.data)) run(v);
+    else typingTimer = setTimeout(() => run(v), 300);
+  };
+  $("fromNet").onchange = () => setParam("cold", $("fromNet").checked ? "net" : null);
   cacheStatus();
   const adapter = await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" });
   if (!adapter) { status("This page needs WebGPU (Chrome, Edge, or Safari 26+): the scan runs on the GPU.", true); return; }
@@ -340,11 +381,11 @@ async function start() {
          "Each model loads on its first query.");
   for (const el of [$("q"), $("go"), $("coldAll")]) el.disabled = false;
   for (const el of document.querySelectorAll("button.cold")) el.disabled = false;
-  $("go").onclick = () => search($("q").value);
-  $("q").onkeydown = (e) => { if (e.key === "Enter") search($("q").value); };
+  $("go").onclick = () => { clearTimeout(typingTimer); run($("q").value); };
+  $("q").onkeydown = (e) => { if (e.key === "Enter") { clearTimeout(typingTimer); run($("q").value); } };
   $("coldAll").onclick = () => search(lastQuery || EXAMPLES[0], $("fromNet").checked ? "net" : "cache");
   const q = new URLSearchParams(location.search).get("q");
-  if (q) search(q);
+  if (q) run(q);
 }
 
 start().catch((e) => { console.error(e); status(String(e.message || e), true); });
