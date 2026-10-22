@@ -311,19 +311,40 @@ function setBusy(b) {
 // ---------------------------------------------------------------- offline cache
 
 async function cacheStatus() {
-  if (!("caches" in window)) { $("offline").textContent = "offline cache: not available here"; return false; }
-  const c = await caches.open(CACHE);
+  if (!("caches" in window)) { $("offline").textContent = "offline: not available in this browser"; $("cache").hidden = true; return false; }
   let have = 0;
-  for (const u of ASSETS) if (await c.match(abs(u))) have++;
-  const ready = have === ASSETS.length && !!navigator.serviceWorker?.controller;
-  $("offline").textContent = ready ? "available offline ✓" : `offline cache: ${have}/${ASSETS.length} files` +
-    (navigator.serviceWorker?.controller ? "" : " (reload once to let the service worker take over)");
+  if (await caches.has(CACHE)) { // has(), not open(): open() would leave an empty cache behind after a removal
+    const c = await caches.open(CACHE);
+    for (const u of ASSETS) if (await c.match(abs(u))) have++;
+  }
+  const ctl = !!navigator.serviceWorker?.controller;
+  const ready = have === ASSETS.length && ctl;
+  let mb = "";
+  try { const e = await navigator.storage?.estimate?.(); if (e?.usage) mb = ` (${(e.usage / 1e6).toFixed(0)} MB)`; } catch (e) { /* no estimate */ }
+  $("offline").textContent = ready ? `available offline ✓${mb}`
+    : have === 0 ? "online only"
+    : have < ASSETS.length ? `offline copy incomplete: ${have}/${ASSETS.length} files`
+    : "offline copy saved; reload once to finish";
   $("offline").className = "offline" + (ready ? " ready" : "");
+  $("cache").textContent = have ? "Update offline copy" : "Make available offline";
+  $("uncache").hidden = have === 0;
   return ready;
+}
+
+// Undo "Make available offline": delete the cached files and unregister sw.js, so the page is a plain
+// online page again (the next load fetches everything from the network).
+async function removeOffline() {
+  $("uncache").disabled = true;
+  await caches.delete(CACHE);
+  for (const r of await navigator.serviceWorker?.getRegistrations?.() ?? []) await r.unregister();
+  $("uncache").disabled = false;
+  await cacheStatus();
+  status("Offline copy removed. The page now loads from the network.");
 }
 
 async function makeOffline() {
   $("cache").disabled = true;
+  try { await navigator.serviceWorker?.register("sw.js", { updateViaCache: "none" }); } catch (e) { console.warn("service worker:", e); }
   const c = await caches.open(CACHE);
   let done = 0, bytes = 0;
   for (const u of ASSETS) {
@@ -351,9 +372,16 @@ async function start() {
     $("examples").append(b);
   }
   if ("serviceWorker" in navigator) {
-    try { await navigator.serviceWorker.register("sw.js"); } catch (e) { console.warn("service worker:", e); }
+    // a new sw.js taking over an already-controlled page means new code was deployed: reload once into it
+    const hadController = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener("controllerchange", () => { if (hadController) location.reload(); }, { once: true });
+    // only pages with an offline copy run the service worker; "Make available offline" registers it
+    if (await caches?.has(CACHE)) {
+      try { await navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }); } catch (e) { console.warn("service worker:", e); }
+    }
   }
   $("cache").onclick = () => makeOffline().catch((e) => status("caching failed: " + e.message, true));
+  $("uncache").onclick = () => removeOffline().catch((e) => status("removing the offline copy failed: " + e.message, true));
   const qs = new URLSearchParams(location.search);
   $("q").value = qs.get("q") ?? "";
   $("fromNet").checked = qs.get("cold") === "net";
