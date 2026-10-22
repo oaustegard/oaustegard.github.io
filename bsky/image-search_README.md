@@ -20,7 +20,10 @@ Your query is embedded in the page too, so nothing goes to a server:
 
 - **By default, a 25 MB query model**: the first 4 of EmbeddingGemma 2's 24 text layers, trained to
   put a query where the full model would, with a 32K-token vocabulary and a 3-bit token table
-  ([eg2-layer-student](https://github.com/oaustegard/experiments/tree/main/eg2-layer-student)). It
+  ([eg2-layer-student](https://github.com/oaustegard/experiments/tree/main/eg2-layer-student)).
+  Its last round of training was on about 215,000 Bluesky alt texts. On alt-text searches for images
+  it never trained on, it finds the image in the top 10 71% of the time, against 81% for the full
+  model. It
   downloads once, then stays cached. It runs on your GPU in a small engine written for this model
   (`engine.js`, hand-written WebGPU kernels), on the same GPU device as the index scan, so the
   query vector never leaves the GPU. On a Mac's GPU a query takes under a millisecond, against
@@ -80,8 +83,9 @@ Built in [oaustegard/experiments](https://github.com/oaustegard/experiments) und
 - the index builder;
 - the evaluation, with full numbers in its `RESULTS.md`.
 
-`model/` holds the 25 MB query model (`model_t3w.onnx` + its data and the 32K tokenizer) from
-experiments release `eg2-layer-onnx-20261021`; `meta.json` there has its contract and scores.
+`model/` holds the 25 MB query model (`model_t3w.onnx` + its data and the 32K tokenizer), the
+alt-text retrain of 2026-10-22 (eg2-layer-student run C, which replaced release
+`eg2-layer-onnx-20261021`); `meta.json` there has its contract and scores.
 `engine.js` and `model/manifest.json` (the byte offset of each weight in `model_t3w.onnx_data`)
 are copies from `eg2-wgsl-engine/web/` in the same repo.
 `tail.js` here is a copy of `embeddinggemma2-webgpu-tail/web/tail.js` from the same repo.
