@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Self-Painting SVG</title>
-<meta name="description" content="Turn any picture into an animated SVG that sketches itself, paints itself in, goes through night and dawn, then falls apart. Runs in your browser; nothing is uploaded.">
+<meta name="description" content="Turn any picture into an animated SVG that sketches itself in charcoal, paints itself in, then falls apart. Runs in your browser; nothing is uploaded.">
 <meta property="og:title" content="Self-Painting SVG">
-<meta property="og:description" content="Turn any picture into one animated SVG that sketches itself, paints itself in, goes through night and dawn, then falls apart. Runs in your browser.">
+<meta property="og:description" content="Turn any picture into one animated SVG that sketches itself in charcoal, paints itself in, then falls apart. Runs in your browser.">
 <meta property="og:url" content="https://austegard.com/fun-and-games/self-painting.html">
 <meta property="og:image" content="https://austegard.com/images/self-painting-og.jpg">
 <meta property="og:image:width" content="1200">
@@ -48,12 +48,12 @@
 <body>
 <main>
   <h1>Self-Painting SVG</h1>
-  <p>Pick a picture. It gets traced into flat patches of color, and each patch gets a place on a timeline. The result is a single SVG file that sketches itself in charcoal, paints itself in, goes through night and dawn, then falls apart and starts over. It runs in your browser, and nothing is uploaded. The file plays anywhere an SVG does, with no JavaScript.</p>
+  <p>Pick a picture. It gets traced into flat patches of color, and each patch gets a place on a timeline. The result is a single SVG file that sketches itself in charcoal, paints itself in, holds, then falls apart and starts over. It runs in your browser, and nothing is uploaded. The file plays anywhere an SVG does, with no JavaScript.</p>
   <div class="bar">
     <label class="file">Choose a picture<input type="file" id="file" accept="image/*"></label>
     <button id="sample">Starry Night</button>
     <label>Detail <select id="detail"><option value="24">low</option><option value="40" selected>medium</option><option value="56">high</option></select></label>
-    <label>Loop <select id="loop"><option value="36">36 s</option><option value="48" selected>48 s</option><option value="64">64 s</option></select></label>
+    <label>Loop <select id="loop"><option value="26">26 s</option><option value="34" selected>34 s</option><option value="44">44 s</option></select></label>
     <label>Size <select id="side"><option value="700">small</option><option value="1000" selected>medium</option><option value="1400">large</option></select></label>
     <button id="go" class="primary">Paint it</button>
     <button id="save" disabled>Download .svg</button>
@@ -61,7 +61,7 @@
   <div class="stage" id="stage"><div id="out"></div><div class="busy" id="busy">Drop a picture here</div></div>
   <div class="transport">
     <button id="play" disabled>Pause</button>
-    <input type="range" id="scrub" min="0" max="48" step="0.05" value="0" disabled aria-label="Timeline position">
+    <input type="range" id="scrub" min="0" max="34" step="0.05" value="0" disabled aria-label="Timeline position">
     <output id="clock">0.0 s</output>
   </div>
   <div class="beats" id="beats"></div>
@@ -576,7 +576,7 @@ function components(labels, w, h) {
 
 
 // Self-painting SVG: any image traced into flat-color regions, then given a
-// timeline (sketch → paint → night → dawn → day → fall → erase) compiled to CSS
+// timeline (sketch → paint → hold → fall → erase) compiled to CSS
 // keyframes. Browser port of ../build.py and ../timeline.py; the tracer
 // internals (blur, kmeans*, majority, absorbSmall, components, traceLoops,
 // isJunction, simplifyLoop, curvedPathData) come from svg-in-browser/web/trace.js.
@@ -640,53 +640,6 @@ class Sheet {
   css() {
     return [...[...this.frames].map(([b, k]) => `@keyframes ${k}{${b}}`), ...[...this.rules].map(([r, c]) => `.${c}{${r}}`)].join("\n");
   }
-}
-
-// ---------- color grades (build.py) ----------
-
-const toHex = (c) => "#" + c.map((v) => Math.round(Math.max(0, Math.min(1, v)) * 255).toString(16).padStart(2, "0")).join("");
-const fromHex = (h) => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16) / 255);
-const mix = (a, b, t) => a.map((x, i) => x + (b[i] - x) * t);
-const lumOf = (c) => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
-
-function rgbToHls([r, g, b]) {
-  const mx = Math.max(r, g, b), mn = Math.min(r, g, b), l = (mx + mn) / 2;
-  if (mx === mn) return [0, l, 0];
-  const d = mx - mn, s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn);
-  let h = mx === r ? (g - b) / d + (g < b ? 6 : 0) : mx === g ? (b - r) / d + 2 : (r - g) / d + 4;
-  return [h / 6, l, s];
-}
-function hlsToRgb([h, l, s]) {
-  if (!s) return [l, l, l];
-  const q = l < 0.5 ? l * (1 + s) : l + s - l * s, p = 2 * l - q;
-  const f = (t) => {
-    t = (t + 1) % 1;
-    return t < 1 / 6 ? p + (q - p) * 6 * t : t < 1 / 2 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p;
-  };
-  return [f(h + 1 / 3), f(h), f(h - 1 / 3)];
-}
-
-/** Lamps, stars, lit windows: bright and warm (or near white). */
-function isLight(c) {
-  const [h, , s] = rgbToHls(c);
-  return lumOf(c) > 0.62 && c[0] >= c[2] && ((h > 0.08 && h < 0.2) || s < 0.25);
-}
-function night(c, lit) {
-  if (lit) return mix(c, fromHex("#fff1a8"), 0.35);
-  const [h, l, s] = rgbToHls(c);
-  const dh = ((0.63 - h + 1.5) % 1) - 0.5;
-  return hlsToRgb([(h + 0.55 * dh + 1) % 1, l * 0.42, s * 0.85]);
-}
-const DAWN = [[0, "#2b1838"], [0.35, "#7a3f6b"], [0.6, "#e0866e"], [0.85, "#ffd39a"], [1, "#fff4dc"]];
-function dawn(c) {
-  const L = lumOf(c);
-  for (let i = 1; i < DAWN.length; i++) {
-    if (L <= DAWN[i][0]) {
-      const [a, ca] = DAWN[i - 1], [b, cb] = DAWN[i];
-      return mix(c, mix(fromHex(ca), fromHex(cb), (L - a) / (b - a)), 0.55);
-    }
-  }
-  return c;
 }
 
 // ---------- tracing into regions ----------
@@ -791,16 +744,13 @@ const CANVAS = "#ebe3d0", CHARCOAL = "#4a3f35";
  * @returns {Promise<{svg: string, stats: object}>}
  */
 async function selfPainting(image, opts = {}) {
-  const { K = 40, loop = 48, width = 1000, device = null, title = "A picture painting itself" } = opts;
+  const { K = 40, loop = 34, width = 1000, device = null, title = "A picture painting itself" } = opts;
   const t0 = performance.now();
   const { width: w, height: h } = image;
   const height = Math.round((h * width) / w);
   const sx = width / w, sy = height / h;
-  const D = loop, z = D / 48;  // every beat scales with the loop length
-  const B = {
-    sketch: 0.3, sketched: 3.2, paint: 2, painted: 17, dusk: 22, night: 24.5, nightEnd: 29,
-    dawn: 31.5, dawnEnd: 34.5, day: 37, fall: 38.5, fallen: 45, erase: 45.2, erased: 47.2,
-  };
+  const D = loop, z = D / 34;  // every beat scales with the loop length
+  const B = { sketch: 0.3, sketched: 3.2, paint: 2, painted: 17, fall: 24, fallen: 30.5, erase: 30.7, erased: 32.7 };
   for (const k in B) B[k] *= z;
   const fifth = (t) => Math.round(t * 5) / 5;
   const tenth = (t) => Math.round(t * 10) / 10;
@@ -811,44 +761,22 @@ async function selfPainting(image, opts = {}) {
 
   const colors = [...new Set(regions.map((r) => r.color))];
   const cidx = new Map(colors.map((c, i) => [c, i]));
-  const base = colors.map((c) => fromHex(c.length === 4 ? "#" + [...c.slice(1)].map((x) => x + x).join("") : c));
-  // A color counts as lamplight only when it is bright and warm AND mostly
-  // lives in small regions; otherwise a white dog or a cloud would glow.
-  const small = new Float64Array(colors.length), all = new Float64Array(colors.length);
-  for (const r of regions) {
-    const c = cidx.get(r.color);
-    all[c] += r.area;
-    if (r.area < w * h * 0.002) small[c] += r.area;
-  }
-  const lit = base.map((c, i) => isLight(c) && small[i] / all[i] > 0.5);
-
-  const sheet = new Sheet(D, "m"), sketchSheet = new Sheet(D, "s"), glowSheet = new Sheet(D, "g");
+  const sheet = new Sheet(D, "m"), sketchSheet = new Sheet(D, "s");
   let s = 7;
   const rand = () => ((s = (s * 1664525 + 1013904223) >>> 0) / 4294967296);
-
-  const palette = (fn) => Object.fromEntries(base.map((c, i) => [`--c${i}`, toHex(fn(c, i))]));
-  const orig = palette((c) => c);
-  const grade = new Motion(orig).at(B.dusk).to(B.night - B.dusk, "inOut", palette((c, i) => night(c, lit[i])))
-    .at(B.nightEnd).to(B.dawn - B.nightEnd, "inOut", palette(dawn))
-    .at(B.dawnEnd).to(B.day - B.dawnEnd, "inOut", orig);
-  const canvasGrade = new Motion({ fill: CANVAS }).at(B.dusk).to(2.5 * z, "inOut", { fill: "#1d2233" })
-    .at(B.nightEnd).to(2.5 * z, "inOut", { fill: "#e9c7b0" }).at(B.dawnEnd).to(2.5 * z, "inOut", { fill: CANVAS });
 
   // Order: big forms first, then a left-to-right, top-to-bottom sweep.
   const logA = regions.map((r) => Math.log(r.area + 1));
   const amin = Math.min(...logA), amax = Math.max(...logA);
   const paintSpan = B.painted - 0.7 * z - B.paint, fallSpan = B.fallen - 0.8 * z - B.fall;
-  const slots = new Map(), lights = [];
-  const total = w * h;
+  const slots = new Map();
   regions.forEach((r, i) => {
     const size = amax > amin ? 1 - (logA[i] - amin) / (amax - amin) : 0;
     const sweep = 0.75 * r.cx + 0.25 * r.cy;
     const order = Math.min(1, Math.max(0, 0.55 * size + 0.45 * sweep + (rand() - 0.5) * 0.06));
     const start = fifth(B.paint + order * paintSpan);
     if (!slots.has(start)) slots.set(start, []);
-    const c = cidx.get(r.color);
-    slots.get(start).push([c, r]);
-    if (lit[c] && r.area < total * 0.002) lights.push([c, r]);
+    slots.get(start).push([cidx.get(r.color), r]);
   });
 
   const pathsByColor = (items) => {
@@ -877,53 +805,25 @@ async function selfPainting(image, opts = {}) {
     return `<path class="${sketchSheet.cls(line)}" d="${d}" pathLength="1"/>`;
   });
 
-  // Night glow: a soft radial halo over each small bright region, in six
-  // twinkle groups. Halos instead of blurred copies: a blur filter re-runs on
-  // every repaint and cost 4-5x the frame time in testing.
-  lights.sort((a, b) => b[1].area - a[1].area).splice(300);
-  // Plain opacity is right here, unlike on the paint groups: six small groups
-  // measured 56 fps against 12 for fill-opacity driven by custom properties.
-  const envelope = new Motion({ opacity: 0 }).at(B.dusk + 1 * z).to(2 * z, "inOut", { opacity: 1 })
-    .at(B.nightEnd - 0.5 * z).to(2.5 * z, "inOut", { opacity: 0 });
-  const twinkle = [];
-  for (let k = 0; k < 6; k++) {
-    const mine = lights.filter((_, i) => i % 6 === k);
-    if (!mine.length) continue;
-    const period = [2.4, 3.2, 4.0][k % 3];
-    const tw = new Motion({ opacity: 0.3 }).to(period / 2, "sine", { opacity: 1 }).to(period / 2, "sine", { opacity: 0.3 });
-    twinkle.push(`<g class="${glowSheet.cls(tw, period, -Math.round(period * k / 6 * 100) / 100)}">`,
-      ...mine.map(([, r]) => {
-        const rad = Math.sqrt(r.area * sx * sy) * 1.6 + 6 * width / 1000;
-        return `<circle cx="${Math.round(r.cx * width)}" cy="${Math.round(r.cy * height)}" r="${Math.round(rad)}"/>`;
-      }), "</g>");
-  }
-
-  const rootCls = sheet.cls(grade), canvasCls = sheet.cls(canvasGrade), envCls = glowSheet.cls(envelope);
-
   const esc = (t) => t.replace(/[<&"]/g, (ch) => ({ "<": "&lt;", "&": "&amp;", '"': "&quot;" })[ch]);
   const css = [
-    ...colors.map((c, i) => `@property --c${i}{syntax:'<color>';inherits:true;initial-value:${c}}`),
-    colors.map((_, i) => `.c${i}{fill:var(--c${i});stroke:var(--c${i})}`).join(""),
+    colors.map((c, i) => `.c${i}{fill:${c};stroke:${c}}`).join(""),
     `#v,:where(#v *){animation-duration:${n3(D)}s;animation-iteration-count:infinite;animation-fill-mode:both;animation-timing-function:linear}`,
     `#k path{fill:none;stroke:${CHARCOAL};stroke-width:${n3(1.4 * width / 1000)};stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1 1;opacity:.7}`,
-    sheet.css(), sketchSheet.css(), glowSheet.css(),
-    `@media (prefers-reduced-motion:reduce){#v,#v *{animation:none!important}#k,#glow{display:none}}`,
+    sheet.css(), sketchSheet.css(),
+    `@media (prefers-reduced-motion:reduce){#v *{animation:none!important}#k{display:none}}`,
   ].join("\n");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" id="v" class="${rootCls}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="t">
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" id="v" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="t">
 <title id="t">${esc(title)}</title>
-<defs><radialGradient id="halo"><stop offset="0" stop-color="#fff3b0" stop-opacity=".85"/><stop offset=".35" stop-color="#ffe680" stop-opacity=".35"/><stop offset="1" stop-color="#ffd860" stop-opacity="0"/></radialGradient></defs>
 <style><![CDATA[
 ${css}
 ]]></style>
-<rect class="${canvasCls}" width="${width}" height="${height}" fill="${CANVAS}"/>
+<rect width="${width}" height="${height}" fill="${CANVAS}"/>
 <g id="k">
 ${sketches.join("\n")}
 </g>
 <g id="f" fill-rule="evenodd" stroke-width="1" stroke-linejoin="round">
 ${fills.join("\n")}
-</g>
-<g id="glow" class="${envCls}" fill="url(#halo)">
-${twinkle.join("\n")}
 </g>
 </svg>
 `;
@@ -931,8 +831,8 @@ ${twinkle.join("\n")}
     svg,
     stats: {
       backend: device ? "webgpu" : "js", w, h, K, regions: regions.length, colors: colors.length,
-      slots: slots.size, sketchLines: sketches.length, lights: lights.length,
-      keyframes: sheet.frames.size + sketchSheet.frames.size + glowSheet.frames.size, bytes: svg.length,
+      slots: slots.size, sketchLines: sketches.length,
+      keyframes: sheet.frames.size + sketchSheet.frames.size, bytes: svg.length,
       ms: { trace: Math.round(tTrace - t0), total: Math.round(performance.now() - t0) },
     },
   };
@@ -948,7 +848,7 @@ async function gpu() {
   catch { device = null; }
   return device;
 }
-let img = null, name = "starry-night", result = null, playing = true, loopLen = 48;
+let img = null, name = "starry-night", result = null, playing = true, loopLen = 34;
 
 async function load(url, n) {
   const im = new Image();
@@ -995,7 +895,7 @@ async function run() {
   $("go").disabled = false;
 }
 function beats() {
-  const marks = [[0, "sketch"], [2, "paint"], [17, "painted"], [22, "night"], [29, "dawn"], [34.5, "day"], [38.5, "fall"], [45.2, "erase"], [48, ""]];
+  const marks = [[0, "sketch"], [2, "paint"], [17, "painted"], [24, "fall"], [30.7, "erase"], [34, ""]];
   $("beats").innerHTML = marks.slice(0, -1).map(([t, n], i) => `<span style="flex:${marks[i + 1][0] - t}">${n}</span>`).join("");
 }
 function tick() {
