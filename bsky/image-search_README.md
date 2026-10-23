@@ -19,10 +19,14 @@ page. Your GPU scans all 16,878 images in a few milliseconds (WebGPU).
 Your query is embedded in the page too, so nothing goes to a server:
 
 - **By default, a 25 MB query model**: the first 4 of EmbeddingGemma 2's 24 text layers, trained to
-  put a query where the full model would, with a 32K-token vocabulary and a 3-bit token table
+  put a query where the full model would
   ([eg2-layer-student](https://github.com/oaustegard/experiments/tree/main/eg2-layer-student)).
+  Its vocabulary has 67K tokens. Each token's vector is rotated by a fixed Hadamard transform and
+  stored at 3 bits per value for the 19K commonest tokens and 2 bits for the rest, which fits
+  60% more tokens into the bytes the earlier 41K-token, 3-bit table took
+  ([eg2-vocab-codebook](https://github.com/oaustegard/experiments/tree/main/eg2-vocab-codebook)).
   Its last round of training was on about 215,000 Bluesky alt texts. On alt-text searches for images
-  it never trained on, it finds the image in the top 10 71% of the time, against 81% for the full
+  it never trained on, it finds the image in the top 10 73% of the time, against 81% for the full
   model. It
   downloads once, then stays cached. It runs on your GPU in a small engine written for this model
   (`engine.js`, hand-written WebGPU kernels), on the same GPU device as the index scan, so the
@@ -30,8 +34,8 @@ Your query is embedded in the page too, so nothing goes to a server:
   about 5 ms in [onnxruntime-web](https://onnxruntime.ai/docs/tutorials/web/) on WebGPU and 39 ms
   on its CPU (wasm) backend, with identical vectors
   ([eg2-wgsl-engine](https://github.com/oaustegard/experiments/tree/main/eg2-wgsl-engine)). If the
-  engine can't start, the page falls back to onnxruntime-web on the same model file; `?engine=ort`
-  forces that path.
+  engine can't start, the page falls back to the previous 41K-token model (71% top 10) in
+  onnxruntime-web, which has no operator for the rotated table; `?engine=ort` forces that path.
 - **For better results, the full text model** (about 175 MB the first time), from the link under
   the results or with `?model=full`.
 
@@ -60,9 +64,9 @@ Over 5,248 such queries against all 16,878 images:
 - it ranks first 56% of the time;
 - it lands in the top 10 80% of the time.
 
-Those numbers are for the full text model. The 25 MB query model was trained on text-to-text
-search, not on image descriptions, and on the same test it lands in the top 10 56% of the time
-(first 31%). It is the fast default; the full model is one click away.
+Those numbers are for the full text model. On the 1,035 of those queries whose images were held
+out of the query model's training, the full model lands in the top 10 81% of the time and the
+25 MB query model 73%. It is the fast default; the full model is one click away.
 
 Alt text reads like a caption, so this is a best case for what people type.
 
@@ -83,9 +87,10 @@ Built in [oaustegard/experiments](https://github.com/oaustegard/experiments) und
 - the index builder;
 - the evaluation, with full numbers in its `RESULTS.md`.
 
-`model/` holds the 25 MB query model (`model_t3w.onnx` + its data and the 32K tokenizer), the
-alt-text retrain of 2026-10-22 (eg2-layer-student run C, which replaced release
-`eg2-layer-onnx-20261021`); `meta.json` there has its contract and scores.
-`engine.js` and `model/manifest.json` (the byte offset of each weight in `model_t3w.onnx_data`)
-are copies from `eg2-wgsl-engine/web/` in the same repo.
+`model/` holds the 25 MB query model of 2026-10-23 (`model_rhq.bin`, its `manifest.json` with the
+byte offset of each weight, and the 67K tokenizer), built by `eg2-vocab-codebook/run/pack_engine.py`;
+`meta.json` there has its contract and scores. `model/ort/` holds the previous model
+(`model_t3w.onnx` + its data and the 41K tokenizer, eg2-layer-student run C of 2026-10-22), which the
+onnxruntime-web fallback runs. `engine.js` is a copy of `eg2-wgsl-engine/web/engine.js` in the same
+repo.
 `tail.js` here is a copy of `embeddinggemma2-webgpu-tail/web/tail.js` from the same repo.

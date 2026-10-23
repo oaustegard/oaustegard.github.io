@@ -2,11 +2,12 @@
 // EG2 q4 image embeddings -> remex 2-bit codes, 192 B per image) loads into a WebGPU device and is
 // scanned by RemexTail (tail.js, vendored). Queries are embedded in this browser too, into the same
 // EG2 query space the image vectors live in:
-//   cut   default: EG2's first 4 layers, distilled onto EG2's query vectors, 32K vocabulary, 3-bit token
-//         table (oaustegard/experiments eg2-layer-student, release eg2-layer-onnx-20261021), ~25 MB,
-//         run by engine.js, hand-written WGSL kernels on the index's device (oaustegard/experiments
-//         eg2-wgsl-engine), reading model_t3w.onnx_data through model/manifest.json; onnxruntime-web
-//         on the same file is the fallback (?engine=ort forces it)
+//   cut   default: EG2's first 4 layers, distilled onto EG2's query vectors, 67K vocabulary, rhq token
+//         table (Hadamard-rotated rows at 3 bits for the 19K commonest tokens, 2 bits for the rest;
+//         oaustegard/experiments eg2-vocab-codebook), ~24 MB, run by engine.js, hand-written WGSL
+//         kernels on the index's device (oaustegard/experiments eg2-wgsl-engine), reading
+//         model/model_rhq.bin through model/manifest.json. Without WebGPU, or with ?engine=ort,
+//         onnxruntime-web runs the previous 41K-vocabulary 3-bit build in model/ort/ instead.
 //   full  EG2 text-only q4 via transformers.js (~175 MB once, then cached); closer to the vectors that
 //         built the index, so better results. ?model=full or the link under the results.
 // No request leaves the page except for these files and the image thumbnails.
@@ -17,7 +18,8 @@ const D = 768, K = 40; // 40 fills whole rows at 2, 4 and 5 columns; fullRows() 
 const QUERY = "task: search result | query: ";
 const ORT = "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/";
 const TOKENIZERS = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.min.mjs";
-const CUT = new URL("./model/", import.meta.url), CUT_FILE = "model_t3w.onnx", MAX_TOKENS = 128;
+const CUT = new URL("./model/", import.meta.url), CUT_FILE = "model_rhq.bin", MAX_TOKENS = 128;
+const ORT_DIR = new URL("./model/ort/", import.meta.url), ORT_FILE = "model_t3w.onnx";
 const P = new URLSearchParams(location.search);
 const INDEX = P.get("index") || "./data/";
 const EXAMPLES = ["a cat asleep in a sunbeam", "foggy mountains at dawn", "watercolor of a city street", "a bird in the snow",
@@ -81,16 +83,23 @@ async function start() {
 let specials = [];
 const clean = (t) => specials.reduce((s, sp) => s.split(sp).join(" "), t);
 
+// The engine reads model/ (rhq token table, 67K vocabulary); onnxruntime-web has no rhq op, so its
+// fallback is the previous 3-bit build in model/ort/, with its own 41K tokenizer, fetched only then.
+async function tokenizerFrom(url) {
+  const [tj, { Tokenizer }] = await Promise.all([fetch(url).then((r) => r.json()), import(TOKENIZERS)]);
+  specials = tj.added_tokens.filter((t) => t.special).map((t) => t.content).sort((a, b) => b.length - a.length);
+  return new Tokenizer(tj, {});
+}
+
 function loadCut() {
   cut ??= (async () => {
-    const [manifest, data, tj, { Tokenizer }] = await Promise.all([
-      fetch(new URL("manifest.json", CUT)).then((r) => r.json()),
-      fetch(new URL(CUT_FILE + "_data", CUT)).then((r) => r.arrayBuffer()),
-      fetch(new URL("tokenizer.json", CUT)).then((r) => r.json()), import(TOKENIZERS)]);
-    specials = tj.added_tokens.filter((t) => t.special).map((t) => t.content).sort((a, b) => b.length - a.length);
-    const tokenizer = new Tokenizer(tj, {});
     try { // the WGSL engine on the index's own device; the query vector never leaves the GPU
       if (P.get("engine") === "ort") throw new Error("?engine=ort");
+      if (!navigator.gpu) throw new Error("no WebGPU");
+      const [manifest, data, tokenizer] = await Promise.all([
+        fetch(new URL("manifest.json", CUT)).then((r) => r.json()),
+        fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer()),
+        tokenizerFrom(new URL("tokenizer.json", CUT))]);
       // ?device=own: the engine gets a GPU device of its own and the vector comes back through the CPU,
       // as with onnxruntime-web; by default it shares the scan's device and the vector stays on the GPU.
       const own = P.get("device") === "own"
@@ -104,13 +113,15 @@ function loadCut() {
       // their first use, which otherwise lands on the first search.
       await engine.embedTo([tokenizer.encode(QUERY + "warm up").ids], qbuf);
       return { tokenizer, engine };
-    } catch (e) { // same weights file, run by onnxruntime-web instead
+    } catch (e) { // the previous 3-bit build, run by onnxruntime-web
       if (P.get("engine") !== "ort") console.warn("WGSL engine failed, using onnxruntime-web:", e);
-      const [ort, graph] = await Promise.all([import(ORT + "ort.webgpu.min.mjs"),
-                                              fetch(new URL(CUT_FILE, CUT)).then((r) => r.arrayBuffer())]);
+      const [ort, graph, data, tokenizer] = await Promise.all([import(ORT + "ort.webgpu.min.mjs"),
+        fetch(new URL(ORT_FILE, ORT_DIR)).then((r) => r.arrayBuffer()),
+        fetch(new URL(ORT_FILE + "_data", ORT_DIR)).then((r) => r.arrayBuffer()),
+        tokenizerFrom(new URL("tokenizer.json", ORT_DIR))]);
       ort.env.wasm.wasmPaths = ORT;
       const session = await ort.InferenceSession.create(new Uint8Array(graph), {
-        executionProviders: ["webgpu", "wasm"], externalData: [{ path: CUT_FILE + "_data", data: new Uint8Array(data) }] });
+        executionProviders: ["webgpu", "wasm"], externalData: [{ path: ORT_FILE + "_data", data: new Uint8Array(data) }] });
       return { tokenizer, ort, session };
     }
   })();

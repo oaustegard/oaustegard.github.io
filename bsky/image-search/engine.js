@@ -53,6 +53,53 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_id) lid
   }
 }`,
 
+  // rhq token table (eg2-vocab-codebook/run/rhq.py): row = scale * s * H(levels[codes]), H the
+  // orthonormal 512-point Walsh-Hadamard transform, s fixed signs. Rows [0, n3) hold 3-bit codes
+  // (192 bytes each), the rest 2-bit codes (128 bytes), little-endian bitstreams; one fp16 scale per
+  // row. One workgroup of 256 threads per token: each thread loads two levels, then nine butterfly
+  // stages run in workgroup memory.
+  // p.a = (codes3, codes2, scales, n3) word offsets / count; p.b = (signs, levels3, levels2) word
+  // offsets; p.f.x = embedding scale.
+  embed_rhq: HEADER + /* wgsl */ `
+@group(0) @binding(2) var<storage, read> W: array<u32>;
+@group(0) @binding(3) var<storage, read> tok: array<vec4<u32>>;
+@group(0) @binding(4) var<storage, read_write> y: array<f32>;
+var<workgroup> v: array<f32, 512>;
+${BYTE}
+fn code(base: u32, bits: u32, i: u32) -> u32 {
+  let bit = i * bits;
+  let b0 = base + (bit >> 3u);
+  let two = wbyte(b0) | (wbyte(b0 + 1u) << 8u);
+  return (two >> (bit & 7u)) & ((1u << bits) - 1u);
+}
+@compute @workgroup_size(256)
+fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) l: u32) {
+  let t = wid.x;
+  if (t >= dn.n.x) { return; }
+  let id = tok[t].x;
+  let n3 = p.a.w;
+  var bits = 3u; var base = p.a.x * 4u + id * 192u; var lv = p.b.y;
+  if (id >= n3) { bits = 2u; base = p.a.y * 4u + (id - n3) * 128u; lv = p.b.z; }
+  for (var j = 0u; j < 2u; j++) {
+    let i = l + j * 256u;
+    v[i] = bitcast<f32>(W[lv + code(base, bits, i)]);
+  }
+  workgroupBarrier();
+  for (var h = 1u; h < 512u; h = h * 2u) {
+    let a = (l / h) * 2u * h + (l % h);
+    let x = v[a]; let z = v[a + h];
+    workgroupBarrier();
+    v[a] = x + z; v[a + h] = x - z;
+    workgroupBarrier();
+  }
+  let sc = unpack2x16float(W[p.a.z + id / 2u])[id % 2u] * p.f.x * 0.04419417382415922;  // 1/sqrt(512)
+  for (var j = 0u; j < 2u; j++) {
+    let i = l + j * 256u;
+    let sg = select(-1.0, 1.0, ((W[p.b.x + i / 32u] >> (i % 32u)) & 1u) == 1u);
+    y[t * 512u + i] = v[i] * sg * sc;
+  }
+}`,
+
   // Y[r, n] = alpha * sum_k X[r, k] W[n, k], W in onnxruntime's MatMulNBits layout (4-bit,
   // block 32, low nibble first, f32 scales, packed 4-bit zero points). Workgroup: 32 columns x 8
   // k-splits, 8 rows; each thread dequantizes its weights once and applies them to all 8 rows.
@@ -306,7 +353,8 @@ export class Eg2Engine {
     for (const L of m.layers) {
       if (L.head_dim !== 256 || L.n_heads % L.n_kv_heads) throw new Error("engine expects head_dim 256 and grouped heads");
     }
-    if (m.hidden !== 512 || m.table.bits !== 3 || m.inv_freq.length !== 128) throw new Error("unexpected manifest shape");
+    const rhq = m.table.kind === "rhq";
+    if (m.hidden !== 512 || (!rhq && m.table.bits !== 3) || m.inv_freq.length !== 128) throw new Error("unexpected manifest shape");
     // The whole weight file in one storage buffer; every tensor is addressed by its word offset.
     const size = Math.ceil(bytes.byteLength / 4) * 4;
     this.W = dev.createBuffer({ size, usage: U.STORAGE | U.COPY_DST, label: "weights" });
@@ -372,7 +420,12 @@ export class Eg2Engine {
       step("gelumul", { a: [D, bStride, bOff] }, [A, Bf], (n) => split(Math.ceil(n[0] * D / 256)));
 
     const t = m.table;
-    step("embed", { a: [W(t.codes), W(t.scales), W(t.zp)], f: [m.embed_scale] }, [this.W, B_.tok, B_.h], (n) => [n[0]]);
+    if (rhq) {
+      step("embed_rhq", { a: [W(t.codes3), W(t.codes2), W(t.scales), t.n3], b: [W(t.signs), W(t.levels3), W(t.levels2)], f: [m.embed_scale] },
+           [this.W, B_.tok, B_.h], (n) => [n[0]]);
+    } else {
+      step("embed", { a: [W(t.codes), W(t.scales), W(t.zp)], f: [m.embed_scale] }, [this.W, B_.tok, B_.h], (n) => [n[0]]);
+    }
     mm(m.ple, B_.h, B_.pleRaw, 0, m.ple_scale);
     norm(m.per_layer_projection_norm, B_.pleRaw, B_.ple, m.ple_dim, 0, 1, 0, m.ple_layers);
     m.layers.forEach((L, i) => {
