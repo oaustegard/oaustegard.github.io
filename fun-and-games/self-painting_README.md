@@ -24,7 +24,8 @@ The 34-second loop, by default:
 - **Detail**: 24, 40 or 56 colors.
 - **Loop**: 26, 34 or 44 seconds. Every beat scales with it.
 - **Size**: the longest side the picture is traced at (700, 1000 or 1400 px). Larger means more patches, a bigger file and slower playback.
-- **Paint it** re-runs with the current settings. **Download .svg** saves the file.
+- **Paint it** re-runs with the current settings.
+- **Download**: the animated file or just the finished picture, each as `.svg` or `.svgz` (the same file gzipped, about a quarter of the size). The finished picture has no animation and no sketch.
 - The **scrubber** pauses the animation and jumps to any moment. The labels under it mark the beats.
 
 Nothing is uploaded; the whole thing runs on the page.

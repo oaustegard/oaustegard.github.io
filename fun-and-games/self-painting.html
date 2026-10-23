@@ -40,6 +40,8 @@
   .transport output { font-variant-numeric: tabular-nums; color: var(--muted); min-width: 9ch; text-align: right; font-size: 13px; }
   .beats { display: flex; font-size: 11px; color: var(--muted); margin: 2px 0 0 52px; }
   .beats span { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; border-left: 1px solid var(--line); padding-left: 3px; }
+  .downloads { margin: -4px 0 14px; font-size: 13px; color: var(--muted); align-items: center; }
+  .downloads button small { color: var(--muted); }
   .meta { font-size: 13px; color: var(--muted); margin-top: 8px; }
   footer { margin-top: 28px; font-size: 13px; color: var(--muted); }
   [hidden] { display: none !important; }
@@ -56,7 +58,13 @@
     <label>Loop <select id="loop"><option value="26">26 s</option><option value="34" selected>34 s</option><option value="44">44 s</option></select></label>
     <label>Size <select id="side"><option value="700">small</option><option value="1000" selected>medium</option><option value="1400">large</option></select></label>
     <button id="go" class="primary">Paint it</button>
-    <button id="save" disabled>Download .svg</button>
+  </div>
+  <div class="bar downloads" id="downloads" hidden>
+    <span>Download</span>
+    <button data-kind="svg" data-ext="svg">Animated .svg</button>
+    <button data-kind="svg" data-ext="svgz">Animated .svgz</button>
+    <button data-kind="still" data-ext="svg">Finished picture .svg</button>
+    <button data-kind="still" data-ext="svgz">Finished picture .svgz</button>
   </div>
   <div class="stage" id="stage"><div id="out"></div><div class="busy" id="busy">Drop a picture here</div></div>
   <div class="transport">
@@ -741,7 +749,7 @@ const CANVAS = "#ebe3d0", CHARCOAL = "#4a3f35";
 /**
  * @param {ImageData} image
  * @param {{K?: number, loop?: number, width?: number, device?: GPUDevice|null, title?: string}} opts
- * @returns {Promise<{svg: string, stats: object}>}
+ * @returns {Promise<{svg: string, still: string, stats: object}>}  still: the finished picture, no animation
  */
 async function selfPainting(image, opts = {}) {
   const { K = 40, loop = 34, width = 1000, device = null, title = "A picture painting itself" } = opts;
@@ -805,6 +813,9 @@ async function selfPainting(image, opts = {}) {
     return `<path class="${sketchSheet.cls(line)}" d="${d}" pathLength="1"/>`;
   });
 
+  // The finished picture alone: every region at rest, one path per color.
+  const stillPaths = pathsByColor([...slots.values()].flat());
+
   const esc = (t) => t.replace(/[<&"]/g, (ch) => ({ "<": "&lt;", "&": "&amp;", '"': "&quot;" })[ch]);
   const css = [
     colors.map((c, i) => `.c${i}{fill:${c};stroke:${c}}`).join(""),
@@ -827,8 +838,16 @@ ${fills.join("\n")}
 </g>
 </svg>
 `;
+  const still = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="t">
+<title id="t">${esc(title.replace(/, painting itself$/, ""))}</title>
+<style>${colors.map((c, i) => `.c${i}{fill:${c};stroke:${c}}`).join("")}</style>
+<g fill-rule="evenodd" stroke-width="1" stroke-linejoin="round">
+${stillPaths.join("\n")}
+</g>
+</svg>
+`;
   return {
-    svg,
+    svg, still,
     stats: {
       backend: device ? "webgpu" : "js", w, h, K, regions: regions.length, colors: colors.length,
       slots: slots.size, sketchLines: sketches.length,
@@ -848,7 +867,9 @@ async function gpu() {
   catch { device = null; }
   return device;
 }
-let img = null, name = "starry-night", result = null, playing = true, loopLen = 34;
+let img = null, name = "starry-night", result = null, files = null, playing = true, loopLen = 34;
+// .svgz is the same SVG gzipped; browsers open it from a server that sends Content-Encoding: gzip.
+const gzip = (text) => new Response(new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
 
 async function load(url, n) {
   const im = new Image();
@@ -870,7 +891,8 @@ const anims = () => $("out").firstElementChild ? $("out").firstElementChild.getA
 async function run() {
   if (!img) return;
   $("busy").hidden = false; $("busy").textContent = "Tracing…";
-  $("go").disabled = $("save").disabled = true;
+  $("go").disabled = true;
+  $("downloads").hidden = true;
   await new Promise((r) => setTimeout(r, 30));
   try {
     loopLen = +$("loop").value;
@@ -880,14 +902,23 @@ async function run() {
     $("out").innerHTML = result.svg;
     const st = result.stats;
     const kb = (b) => (b / 1024).toFixed(0) + " KB";
-    const gz = await new Response(new Blob([result.svg]).stream().pipeThrough(new CompressionStream("gzip"))).blob();
+    files = {
+      svg: { svg: new Blob([result.svg], { type: "image/svg+xml" }), svgz: await gzip(result.svg) },
+      still: { svg: new Blob([result.still], { type: "image/svg+xml" }), svgz: await gzip(result.still) },
+    };
+    const gz = files.svg.svgz;
+    for (const b of $("downloads").querySelectorAll("button")) {
+      const f = files[b.dataset.kind][b.dataset.ext];
+      b.innerHTML = `${b.textContent.replace(/ \d+ KB$/, "")} <small>${kb(f.size)}</small>`;
+    }
     $("meta").textContent = `${st.w}×${st.h} px traced into ${st.regions.toLocaleString()} regions, ${st.colors} colors, ` +
       `${st.slots} paint groups, ${st.sketchLines} sketch lines · ${kb(st.bytes)} (${kb(gz.size)} gzipped) · ` +
       `${st.backend === "webgpu" ? "WebGPU" : "JavaScript"} k-means, ${(st.ms.total / 1000).toFixed(1)} s`;
     $("scrub").max = loopLen;
     beats();
     $("busy").hidden = true;
-    $("save").disabled = $("play").disabled = $("scrub").disabled = false;
+    $("downloads").hidden = false;
+    $("play").disabled = $("scrub").disabled = false;
     playing = true; $("play").textContent = "Pause";
   } catch (e) {
     $("busy").textContent = "That didn't work: " + e.message;
@@ -928,10 +959,12 @@ stage.ondrop = (e) => {
   const f = e.dataTransfer.files[0];
   if (f && f.type.startsWith("image/")) load(URL.createObjectURL(f), f.name.replace(/\.[^.]+$/, ""));
 };
-$("save").onclick = () => {
+$("downloads").onclick = (e) => {
+  const b = e.target.closest("button");
+  if (!b || !files) return;
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([result.svg], { type: "image/svg+xml" }));
-  a.download = `${name}-painting.svg`;
+  a.href = URL.createObjectURL(files[b.dataset.kind][b.dataset.ext]);
+  a.download = `${name}${b.dataset.kind === "svg" ? "-painting" : ""}.${b.dataset.ext}`;
   a.click();
 };
 window.selfPainting = selfPainting; window.loadImage = load;
