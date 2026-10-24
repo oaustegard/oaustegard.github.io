@@ -4,7 +4,7 @@ Point your camera at a person, cat or dog and the page shows a live X-ray: the f
 
 ![X-ray glasses](https://austegard.com/images/xray-glasses-og.jpg)
 
-**[Live](https://austegard.com/fun-and-games/xray-glasses/)** | **[Source, tests and write-up](https://github.com/oaustegard/experiments/tree/main/xray-glasses)**
+**[Live](https://austegard.com/fun-and-games/xray-glasses/)** | **[Source and tests](https://github.com/oaustegard/experiments/tree/main/xray-glasses)** | **[Results](https://github.com/oaustegard/experiments/blob/main/xray-glasses/RESULTS.md)**
 
 ## How it works
 
