@@ -1,0 +1,1245 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>X-ray glasses</title>
+<meta name="description" content="Point your camera at a person, cat or dog and see a live X-ray: a fitted skeleton over a radiograph view of the feed, all on your device.">
+<link rel="canonical" href="https://austegard.com/fun-and-games/xray-glasses/">
+<meta property="og:title" content="X-ray glasses">
+<meta property="og:description" content="Point your camera at a person, cat or dog and see a live X-ray: a fitted skeleton over a radiograph view of the feed, all on your device.">
+<meta property="og:url" content="https://austegard.com/fun-and-games/xray-glasses/">
+<meta property="og:type" content="website">
+<meta property="og:image" content="https://austegard.com/images/xray-glasses-og.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A woman in a yoga warrior pose on a beach; the right half of the picture shows her as a glowing blue X-ray skeleton.">
+<meta name="twitter:card" content="summary_large_image">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Big+Shoulders+Display:wght@600;800&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script type="importmap">
+{ "imports": { "@litertjs/wasm-utils": "https://cdn.jsdelivr.net/npm/@litertjs/wasm-utils@2.5.3/dist/index.js" } }
+</script>
+<style>
+  /* Layout: full-bleed fluoroscope screen; film-label readouts top, lead-marker corner, control strip bottom. */
+  :root {
+    --film: #03080f;        /* unexposed film base */
+    --lightbox: #cfe9ff;    /* lit bone */
+    --cyan: #6cc8ff;        /* phosphor tint */
+    --dim: #7f97ad;         /* label grey with a blue bias */
+    --panel: rgba(3, 10, 18, 0.72);
+    --edge: rgba(140, 200, 255, 0.22);
+    --lead: #f2f6f8;        /* lead marker */
+    --display: "Big Shoulders Display", "Arial Narrow", "Roboto Condensed", sans-serif;
+    --mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--film); color: var(--lightbox); font: 14px/1.4 var(--mono); overflow: hidden; }
+  canvas#screen { position: fixed; inset: 0; width: 100%; height: 100%; display: block; background: var(--film); touch-action: manipulation; }
+  /* kept rendered (not display:none) so every browser keeps decoding frames */
+  video { position: fixed; left: 0; top: 0; width: 2px; height: 2px; opacity: 0; pointer-events: none; }
+
+  .hud { position: fixed; left: 0; right: 0; top: 0; display: flex; justify-content: space-between; align-items: flex-start; gap: 12px;
+    padding: calc(10px + env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) 0 max(16px, env(safe-area-inset-left, 0px));
+    pointer-events: none; }
+  .label { background: var(--panel); border: 1px solid var(--edge); padding: 6px 10px; border-radius: 3px; font-size: 12px; letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums; backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); min-width: 0; }
+  .label b { font-family: var(--display); font-weight: 800; font-size: 18px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--lead); display: block; line-height: 1; margin-bottom: 3px; }
+  .label .k { color: var(--dim); }
+  #subject.on b { color: var(--cyan); }
+  #marker { position: fixed; bottom: calc(118px + env(safe-area-inset-bottom, 0px)); font-family: var(--display); font-weight: 800; font-size: 34px; color: var(--lead);
+    border: 3px solid var(--lead); width: 46px; height: 46px; display: grid; place-items: center; border-radius: 4px; opacity: 0.85; pointer-events: none; }
+  #marker.right { right: max(16px, env(safe-area-inset-right, 0px)); }
+  #marker.left { left: max(16px, env(safe-area-inset-left, 0px)); }
+
+  .controls { position: fixed; left: 0; right: 0; bottom: 0; display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: center;
+    padding: 12px max(16px, env(safe-area-inset-right, 0px)) calc(14px + env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+    background: linear-gradient(to top, rgba(3, 8, 15, 0.92), rgba(3, 8, 15, 0)); }
+  .seg { display: inline-flex; border: 1px solid var(--edge); border-radius: 4px; overflow: hidden; background: var(--panel); }
+  .seg button { border: 0; background: transparent; color: var(--dim); font: 500 13px var(--mono); padding: 10px 14px; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; }
+  .seg button[aria-pressed="true"] { background: var(--cyan); color: var(--film); }
+  .btn { border: 1px solid var(--edge); background: var(--panel); color: var(--lightbox); font: 500 13px var(--mono); padding: 10px 12px; border-radius: 4px; cursor: pointer; letter-spacing: 0.04em; }
+  .btn[aria-pressed="false"] { color: var(--dim); }
+  button:focus-visible { outline: 2px solid var(--cyan); outline-offset: 2px; }
+
+  #boot { position: fixed; inset: 0; z-index: 5; display: grid; place-items: center; background: radial-gradient(ellipse at 50% 35%, #0b2236 0%, var(--film) 70%);
+    padding: 24px max(16px, env(safe-area-inset-right, 0px)) 24px max(16px, env(safe-area-inset-left, 0px)); }
+  #boot .card { width: min(440px, 100%); }
+  #boot h1 { font-family: var(--display); font-weight: 800; font-size: clamp(48px, 14vw, 84px); line-height: 0.9; letter-spacing: 0.04em; margin: 0 0 14px; text-transform: uppercase; color: var(--lead); text-wrap: balance; }
+  #boot h1 span { color: var(--cyan); }
+  #boot p { color: var(--dim); margin: 0 0 18px; max-width: 60ch; }
+  #start { font: 800 22px var(--display); letter-spacing: 0.12em; text-transform: uppercase; padding: 14px 22px; background: var(--cyan); color: var(--film); border: 0; border-radius: 4px; cursor: pointer; }
+  #start:disabled { opacity: 0.5; cursor: progress; }
+  #steps { list-style: none; padding: 0; margin: 18px 0 0; font-size: 12px; color: var(--dim); display: grid; gap: 4px; }
+  #steps li.ok { color: var(--lightbox); }
+  #steps li.err { color: #ffb0a0; }
+  #steps li::before { content: "· "; }
+  #steps li.ok::before { content: "✓ "; }
+  #steps li.err::before { content: "✕ "; }
+  .fine { font-size: 11px; color: var(--dim); margin-top: 16px; }
+  .fine a { color: var(--cyan); }
+  #toast { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(76px + env(safe-area-inset-bottom, 0px)); background: var(--panel); border: 1px solid var(--edge);
+    padding: 6px 12px; border-radius: 3px; font-size: 12px; max-width: calc(100% - 32px); text-align: center; }
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+</head>
+<body>
+<canvas id="screen"></canvas>
+<video id="cam" playsinline muted></video>
+
+<div class="hud">
+  <div class="label" id="subject"><b id="subjName">Searching</b><span class="k">tracking </span><span id="subjInfo">no subject</span></div>
+  <div class="label" style="text-align:right"><b id="fps">-- fps</b><span class="k">model </span><span id="inf">-- ms</span></div>
+</div>
+<div id="marker" class="right" aria-hidden="true">R</div>
+<div id="toast" hidden></div>
+
+<div class="controls" id="controls" hidden>
+  <div class="seg" role="group" aria-label="Subject">
+    <button id="m-auto" data-mode="auto" aria-pressed="true">Auto</button>
+    <button id="m-human" data-mode="human" aria-pressed="false">Human</button>
+    <button id="m-cat" data-mode="cat" aria-pressed="false">Cat</button>
+    <button id="m-dog" data-mode="dog" aria-pressed="false">Dog</button>
+  </div>
+  <button class="btn" id="flip" type="button">Flip camera</button>
+  <button class="btn" id="tissue" type="button" aria-pressed="true">Soft tissue</button>
+</div>
+
+<div id="boot">
+  <div class="card">
+    <h1>X-ray <span>glasses</span></h1>
+    <p>Point the camera at a person, cat or dog. A pose model finds their joints and the GPU draws a skeleton that follows them, over a radiograph version of the camera feed. Everything runs on this device; no video leaves it.</p>
+    <button id="start" type="button">Put them on</button>
+    <ul id="steps"></ul>
+    <p class="fine">Human pose: MediaPipe Pose Landmarker (lite), with Face Landmarker for the head and jaw. Animals: EfficientDet-Lite0 finds the cat or dog, RTMPose-m (AP-10K) finds 17 joints. Rendering: WebGPU. The skeleton is a drawn template fitted to the joints, not a scan.</p>
+  </div>
+</div>
+
+<script>
+// BEGIN skeleton
+// Pure geometry: keypoints in screen pixels -> list of bone primitives.
+// No DOM, no GPU; the test harness extracts this block and runs it in node.
+const XR = (() => {
+  const T_CAP = 0, T_ELL = 1, T_BOX = 2;
+  const add = (a, b) => [a[0] + b[0], a[1] + b[1]];
+  const sub = (a, b) => [a[0] - b[0], a[1] - b[1]];
+  const mul = (a, s) => [a[0] * s, a[1] * s];
+  const lerp = (a, b, t) => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+  const len = (a) => Math.hypot(a[0], a[1]);
+  const norm = (a) => { const l = len(a) || 1; return [a[0] / l, a[1] / l]; };
+  const perp = (a) => [-a[1], a[0]];
+  const dot = (a, b) => a[0] * b[0] + a[1] * b[1];
+  const mid = (a, b) => lerp(a, b, 0.5);
+  const ang = (a) => Math.atan2(a[1], a[0]);
+
+  // 12 floats per primitive = 3 x vec4f, matches struct Prim in WGSL.
+  class Prims {
+    constructor(cap = 2048) { this.f = new Float32Array(cap * 12); this.n = 0; this.capacity = cap; this.glow = 8; this.fade = 1; }
+    reset() { this.n = 0; }
+    push(a0, a1, a2, a3, b0, b1, b2, b3, type, c1, c2) {
+      if (this.n >= this.capacity) return;
+      const o = this.n++ * 12, f = this.f;
+      f[o] = a0; f[o + 1] = a1; f[o + 2] = a2; f[o + 3] = a3;
+      f[o + 4] = b0; f[o + 5] = b1; f[o + 6] = b2; f[o + 7] = b3 * this.fade;
+      f[o + 8] = type; f[o + 9] = c1; f[o + 10] = c2; f[o + 11] = this.glow;
+    }
+    // Long bone / segment: tapered capsule, knob = epiphysis bulge, flags bit0/bit1 = round start/end.
+    cap(a, b, r0, r1, I = 1, knob = 0, shell = 0.35, flags = 3) { this.push(a[0], a[1], b[0], b[1], r0, r1, knob, I, T_CAP, shell, flags); }
+    // Ellipse: centre, half-axes, angle (rad). shell 0..1 (1 = solid). Negative I carves holes (orbits, foramina).
+    ell(c, ax, ay, angle, I = 1, shell = 1) { this.push(c[0], c[1], ax, ay, angle, 0, 0, I, T_ELL, shell, 0); }
+    // Rounded box: centre, half-size, angle, corner radius. Used for vertebrae and teeth.
+    box(c, hx, hy, angle, corner, I = 1) { this.push(c[0], c[1], hx, hy, angle, corner, 0, I, T_BOX, 0, 0); }
+    // Smooth polyline through control points (Catmull-Rom), drawn as joined capsules with flat interior joints
+    // so the additive density does not bead at the joints.
+    curve(pts, r0, r1, I = 1, sub = 4, shell = 0.5) {
+      const P = [pts[0], ...pts, pts[pts.length - 1]];
+      const out = [];
+      for (let i = 1; i < P.length - 2; i++) {
+        for (let s = 0; s < sub; s++) {
+          const t = s / sub, t2 = t * t, t3 = t2 * t;
+          const p0 = P[i - 1], p1 = P[i], p2 = P[i + 1], p3 = P[i + 2];
+          out.push([0, 1].map(k => 0.5 * ((2 * p1[k]) + (-p0[k] + p2[k]) * t + (2 * p0[k] - 5 * p1[k] + 4 * p2[k] - p3[k]) * t2 + (-p0[k] + 3 * p1[k] - 3 * p2[k] + p3[k]) * t3)));
+        }
+      }
+      out.push(pts[pts.length - 1]);
+      const n = out.length - 1;
+      for (let i = 0; i < n; i++) {
+        const flags = (i === 0 ? 1 : 0) | (i === n - 1 ? 2 : 0);
+        this.cap(out[i], out[i + 1], r0 + (r1 - r0) * i / n, r0 + (r1 - r0) * (i + 1) / n, I, 0, shell, flags);
+      }
+    }
+    // Chain of vertebral bodies along a quadratic Bezier a -> c -> b.
+    vertebrae(a, c, b, count, w0, w1, I = 0.9, gap = 0.74) {
+      const at = (t) => add(add(mul(a, (1 - t) * (1 - t)), mul(c, 2 * t * (1 - t))), mul(b, t * t));
+      let total = 0; const N = 24; let prev = a;
+      for (let i = 1; i <= N; i++) { const p = at(i / N); total += len(sub(p, prev)); prev = p; }
+      const step = total / count;
+      for (let i = 0; i < count; i++) {
+        const t = (i + 0.5) / count;
+        const p = at(t), tan = norm(sub(at(Math.min(1, t + 0.01)), at(Math.max(0, t - 0.01))));
+        const w = w0 + (w1 - w0) * t;
+        this.box(p, w, step * gap * 0.5, ang(tan) - Math.PI / 2, Math.min(w, step * 0.3) * 0.35, I);
+      }
+      return at;
+    }
+  }
+
+  // ---------------- Head pose and the 3D skull ----------------
+  // The skull is modelled in MediaPipe's canonical face-model frame: centimetres, x toward the subject's left,
+  // y up, z out of the face. A head pose maps it to the image as p2 = M p + b, where M (2x3) is the scale times
+  // the first two rows of the head rotation (row 1 negated, image y points down). Under this orthographic
+  // projection an ellipsoid becomes an ellipse and a capsule stays a capsule, so the 2D primitives draw it exactly.
+  const FACE_IDX = [1, 10, 152, 234, 454, 33, 263, 133, 362, 61, 291, 168, 172, 397, 116, 345, 127, 356, 9, 13, 14, 199, 4, 6];
+  const FACE_CANON = [[0, -1.13, 7.48], [0, 8.26, 4.48], [0, -9.4, 4.26], [-7.66, 0.67, -2.44], [7.66, 0.67, -2.44], [-4.45, 2.66, 3.17], [4.45, 2.66, 3.17], [-1.86, 2.59, 3.76], [1.86, 2.59, 3.76], [-2.46, -4.34, 4.28], [2.46, -4.34, 4.28], [0, 3.27, 5.24], [-5.94, -6.22, -0.63], [5.94, -6.22, -0.63], [-6.47, 0.94, 1.69], [6.47, 0.94, 1.69], [-7.74, 2.36, -2.01], [7.74, 2.36, -2.01], [0, 4.89, 5.39], [0, -3.99, 5.22], [0, -4.54, 5.4], [0, -7.94, 5.18], [0, -0.46, 7.59], [0, 2.47, 5.79]];
+  // Pose-landmark stand-ins in the same frame: 0 nose tip, 7 left ear, 8 right ear.
+  const POSE_HEAD = [[0, [0, -1.1, 7.5]], [7, [7.4, 1.0, -4.0]], [8, [-7.4, 1.0, -4.0]]];
+  const a3 = (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]];
+  const s3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+  const m3 = (a, k) => [a[0] * k, a[1] * k, a[2] * k];
+  const d3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+  const n3 = (a) => m3(a, 1 / (Math.hypot(a[0], a[1], a[2]) || 1));
+  const x3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+  // orthonormal frame [x, y, z] from a direction and a second, non-parallel one
+  const frame3 = (a, b) => { const x = n3(a), y = n3(s3(b, m3(x, d3(b, x)))); return [x, y, x3(x, y)]; };
+  const CANON_FRAME = frame3(s3(POSE_HEAD[1][1], POSE_HEAD[2][1]), s3(POSE_HEAD[0][1], m3(a3(POSE_HEAD[1][1], POSE_HEAD[2][1]), 0.5)));
+
+  // Least-squares scale and offset for a rotation R (rows, canonical -> camera with y up, z toward the viewer).
+  function fitHead(R, obs, canon) {
+    const q = canon.map(c => [d3(R[0], c), -d3(R[1], c)]);
+    const qm = [0, 0], om = [0, 0];
+    for (let i = 0; i < q.length; i++) { qm[0] += q[i][0] / q.length; qm[1] += q[i][1] / q.length; om[0] += obs[i][0] / q.length; om[1] += obs[i][1] / q.length; }
+    let num = 0, den = 0;
+    for (let i = 0; i < q.length; i++) { const dq = sub(q[i], qm), dob = sub(obs[i], om); num += dot(dq, dob); den += dot(dq, dq); }
+    const k = num / (den || 1);
+    return { M: [m3(R[0], k), m3(R[1], -k)], b: sub(om, mul(qm, k)), k, R, jaw: 0 };
+  }
+  // pts: face landmarks in px; R: rotation rows from the facial transformation matrix.
+  function headFromFace(pts, R) { return fitHead(R, FACE_IDX.map(i => pts[i]), FACE_CANON); }
+  // No face: rotation from the nose and ears. Image-plane positions come from the 2D landmarks and depth from
+  // the world landmarks, scaled to px. Against the face model this is ~10 deg off in yaw and ~3 deg in roll (median).
+  function headFromPose(P, W, V, thr = 0.5) {
+    if (!(V[0] > thr && V[7] > thr && V[8] > thr) || !W) return null;
+    const kz = len(sub(P[7], P[8])) / (Math.hypot(W[7][0] - W[8][0], W[7][1] - W[8][1]) || 1);
+    const H = (i) => [P[i][0], -P[i][1], -W[i][2] * kz];
+    const ears = m3(a3(H(7), H(8)), 0.5);
+    const F = frame3(s3(H(7), H(8)), s3(H(0), ears));
+    const R = [0, 1, 2].map(i => [0, 1, 2].map(j => F[0][i] * CANON_FRAME[0][j] + F[1][i] * CANON_FRAME[1][j] + F[2][i] * CANON_FRAME[2][j]));
+    return fitHead(R, POSE_HEAD.map(([i]) => P[i]), POSE_HEAD.map(([, c]) => c));
+  }
+
+  function buildSkull(pr, H) {
+    const { M, b, k } = H;
+    const Pj = (p) => [d3(M[0], p) + b[0], d3(M[1], p) + b[1]];
+    const cap3 = (a, c, r0, r1, I, knob = 0, shell = 0.35) => pr.cap(Pj(a), Pj(c), r0 * k, r1 * k, I, knob, shell);
+    const ell3 = (c, sx, sy, sz, I, shell = 1) => {
+      const e0 = [M[0][0] * sx, M[0][1] * sy, M[0][2] * sz], e1 = [M[1][0] * sx, M[1][1] * sy, M[1][2] * sz];
+      const c00 = d3(e0, e0), c11 = d3(e1, e1), c01 = d3(e0, e1);
+      const mm = (c00 + c11) / 2, dd = Math.hypot((c00 - c11) / 2, c01);
+      pr.ell(Pj(c), Math.sqrt(mm + dd), Math.sqrt(Math.max(mm - dd, 1e-4)), 0.5 * Math.atan2(2 * c01, c00 - c11), I, shell);
+    };
+    const curve3 = (pts, r0, r1, I, shell = 0.5) => pr.curve(pts.map(Pj), r0 * k, r1 * k, I, 3, shell);
+    const ring3 = (pts, r, I) => { for (let i = 0; i < pts.length; i++) cap3(pts[i], pts[(i + 1) % pts.length], r, r, I, 0, 0.6); };
+    // mandible and lower teeth hinge about the condyles
+    const th = H.jaw || 0, cj = Math.cos(th), sj = Math.sin(th), piv = [0, 0.5, -2.6];
+    const J = (p) => { const y = p[1] - piv[1], z = p[2] - piv[2]; return [p[0], piv[1] + y * cj - z * sj, piv[2] + y * sj + z * cj]; };
+
+    // cranial vault: a solid ellipsoid minus a slightly smaller one leaves a shell that is brightest where the
+    // beam runs tangent to the bone, as on a film; then a faint diploe and the frontal sinus
+    ell3([0, 5.0, -4.3], 7.1, 8.4, 9.2, 1.0);
+    ell3([0, 5.05, -4.3], 6.55, 7.85, 8.65, -0.92);
+    ell3([0, 5.2, -4.3], 6.3, 7.5, 8.3, 0.06);
+    ell3([0, 4.6, 3.9], 1.6, 1.0, 0.6, -0.3);
+    curve3([[-5.2, 3.9, 2.0], [-3.2, 4.5, 3.9], [0, 4.6, 4.8], [3.2, 4.5, 3.9], [5.2, 3.9, 2.0]], 0.45, 0.45, 0.5); // brow ridges
+    // skull base: petrous ridges, clivus, sella turcica, mastoids, ear canals, occipital protuberance
+    for (const s of [-1, 1]) {
+      cap3([1.6 * s, 1.0, -3.4], [5.8 * s, 0.4, -4.9], 0.55, 0.45, 0.55);
+      ell3([6.0 * s, -1.2, -5.4], 0.7, 1.1, 0.9, 0.5, 0.5);
+      ell3([6.6 * s, 0.5, -4.3], 0.35, 0.35, 0.5, -0.25);
+    }
+    cap3([0, 1.8, -2.2], [0, -1.4, -4.6], 0.45, 0.4, 0.45);
+    curve3([[0, 2.1, -0.9], [0, 1.3, -1.6], [0, 2.1, -2.4]], 0.17, 0.17, 0.5);
+    ell3([0, 1.0, -13.2], 0.9, 0.6, 0.4, 0.5, 0.5);
+    // orbits: dark cones ringed by a dense rim
+    for (const s of [-1, 1]) {
+      ell3([3.2 * s, 2.5, 2.4], 1.9, 1.65, 1.8, -0.45);
+      // rim: a rounded square (superellipse), set back laterally
+      const rim = [];
+      for (let i = 0; i < 20; i++) {
+        const t = i / 20 * 2 * Math.PI, c = Math.cos(t), sn = Math.sin(t);
+        const sq = (v) => Math.sign(v) * Math.pow(Math.abs(v), 0.6);
+        rim.push([3.2 * s + 2.0 * sq(c) * s, 2.5 + 1.7 * sq(sn), 3.55 - 0.7 * Math.max(c, 0) - 0.2 * Math.max(-sn, 0)]);
+      }
+      ring3(rim, 0.17, 0.42);
+    }
+    // nose: nasal bones, pear-shaped aperture with its rim, septum
+    cap3([0, 3.3, 4.7], [0, 1.6, 5.6], 0.32, 0.22, 0.6);
+    ell3([0, 0.2, 4.8], 1.15, 1.6, 0.6, -0.45);
+    const ap = [];
+    for (let i = 0; i < 14; i++) { const t = i / 14 * 2 * Math.PI, w = 1.0 + 0.3 * Math.max(-Math.sin(t), 0); ap.push([w * 1.12 * Math.cos(t), 0.2 + 1.6 * Math.sin(t), 4.85 - 0.3 * Math.abs(Math.cos(t))]); }
+    ring3(ap, 0.13, 0.45);
+    cap3([0, 1.6, 4.6], [0, -1.1, 4.6], 0.1, 0.1, 0.35);
+    // midface: maxillary sinuses, cheekbones and zygomatic arches, maxilla, hard palate
+    for (const s of [-1, 1]) {
+      ell3([2.4 * s, 0.3, 2.8], 1.4, 1.5, 1.6, -0.3);
+      ell3([4.9 * s, 0.9, 2.4], 1.3, 1.0, 1.1, 0.55, 0.4);
+      cap3([5.8 * s, 0.7, 1.2], [6.7 * s, 0.8, -2.2], 0.38, 0.34, 0.55);
+    }
+    ell3([0, -2.4, 3.9], 2.9, 1.0, 1.6, 0.35, 0.5);
+    ell3([0, -2.4, 1.5], 1.9, 0.35, 2.6, 0.45, 0.5);
+    // teeth: 16 per arch on a parabola; enamel crowns bright, roots faint
+    const toothR = (u) => (Math.abs(u) < 0.3 ? 0.3 : Math.abs(u) < 0.45 ? 0.33 : Math.abs(u) < 0.7 ? 0.36 : 0.48);
+    for (let i = 0; i < 16; i++) {
+      const u = (i - 7.5) / 7.5, r = toothR(u);
+      const up = [2.55 * u, 0, 4.6 - 3.6 * u * u], lo = [2.4 * u, 0, 4.45 - 3.5 * u * u];
+      const long = Math.abs(u) < 0.3 ? 0.1 : 0;
+      cap3([up[0], -3.25, up[2]], [up[0], -4.1 - long, up[2]], r * 0.8, r * 0.7, 0.6, 0, 0.55);
+      cap3([up[0], -1.7, up[2] - 0.2], [up[0], -3.25, up[2]], r * 0.3, r * 0.5, 0.22);
+      cap3(J([lo[0], -4.25 - long, lo[2]]), J([lo[0], -5.05, lo[2]]), r * 0.7, r * 0.8, 0.55, 0, 0.55);
+      cap3(J([lo[0], -5.05, lo[2]]), J([lo[0], -6.5, lo[2] - 0.2]), r * 0.5, r * 0.3, 0.22);
+    }
+    // mandible: body, rami with condyles and coronoid processes, chin
+    curve3([[-5.0, -6.6, -2.3], [-4.1, -7.7, 0.4], [-2.1, -8.6, 2.8], [0, -8.95, 3.7], [2.1, -8.6, 2.8], [4.1, -7.7, 0.4], [5.0, -6.6, -2.3]].map(J), 0.6, 0.6, 0.8, 0.45);
+    for (const s of [-1, 1]) {
+      cap3(J([5.4 * s, 0.5, -2.6]), J([5.05 * s, -6.5, -2.2]), 0.5, 0.65, 0.75, 0.3, 0.45);
+      ell3(J([5.4 * s, 0.6, -2.6]), 0.55, 0.4, 0.8, 0.7, 0.5);
+      cap3(J([4.9 * s, -2.6, -1.0]), J([4.6 * s, -0.4, 0.2]), 0.3, 0.25, 0.55);
+    }
+    ell3(J([0, -8.5, 3.8]), 1.2, 0.8, 0.6, 0.45, 0.5);
+    return Pj;
+  }
+
+  // ---------------- Human (MediaPipe 33 landmarks) ----------------
+  // P: 33 [x,y] screen px; V: visibility 0..1.
+  function buildHuman(pr, P, V, head = null, thr = 0.5) {
+    const ok = (...ix) => ix.every(i => V[i] > thr);
+    const shW = len(sub(P[12], P[11]));
+    const S = mid(P[11], P[12]);
+    const shouldersOk = ok(11, 12);
+    const hipsOk = ok(23, 24);
+    let Yv;
+    if (shouldersOk && hipsOk) Yv = sub(mid(P[23], P[24]), S);
+    if (!Yv || len(Yv) < shW * 0.8) {
+      // hips not in frame (typical laptop framing): torso hangs perpendicular to the shoulder line, away from the head
+      let down = norm(perp(sub(P[12], P[11])));
+      const headRef = ok(0) ? P[0] : null;
+      if (headRef && dot(down, sub(headRef, S)) > 0) down = mul(down, -1);
+      if (!headRef && down[1] < 0) down = mul(down, -1);
+      Yv = mul(down, Math.max(shW * 1.35, Yv ? len(Yv) : 0));
+    }
+    const u = len(Yv);
+    pr.glow = Math.max(2.5, Math.min(12, 0.035 * u));
+    let Xv = mul(sub(P[12], P[11]), 0.5);
+    const xl = Math.max(len(Xv), 0.3 * u);
+    Xv = mul(len(Xv) > 1e-3 ? norm(Xv) : norm(perp(Yv)), xl);
+    const T = (x, y) => add(add(S, mul(Xv, x)), mul(Yv, y));
+    const yAng = ang(Yv);
+
+    if (shouldersOk) {
+      // spine: T1..L5, slight lordosis toward the front is invisible in AP view, keep it straight with a tiny bow
+      pr.vertebrae(T(0, -0.02), T(0.0, 0.5), T(0, 0.97), 17, 0.045 * u, 0.075 * u, 0.85);
+      // sternum + manubrium
+      pr.box(T(0, 0.07), 0.05 * u, 0.045 * u, yAng - Math.PI / 2, 0.02 * u, 0.55);
+      pr.cap(T(0, 0.12), T(0, 0.42), 0.032 * u, 0.026 * u, 0.5, 0, 0.6);
+      // clavicles (S-curve)
+      for (const s of [-1, 1]) pr.curve([T(0.07 * s, 0.03), T(0.45 * s, -0.04), T(0.8 * s, -0.01), T(0.95 * s, -0.04)], 0.02 * u, 0.018 * u, 0.85, 3, 0.45);
+      // ribs: 12 pairs. posterior arc from spine, lateral turn, dim costal cartilage to sternum (ribs 1-7)
+      const W = [0.42, 0.56, 0.66, 0.74, 0.8, 0.84, 0.86, 0.86, 0.84, 0.8, 0.66, 0.52];
+      for (let i = 0; i < 12; i++) {
+        const y = 0.03 + i * 0.052, w = W[i];
+        for (const s of [-1, 1]) {
+          const pts = [T(0.06 * s, y), T(0.42 * w * s, y - 0.035), T(0.82 * w * s, y + 0.015), T(w * s, y + 0.09), T(0.9 * w * s, y + 0.17)];
+          if (i >= 10) pts.pop();
+          pr.curve(pts, 0.017 * u, 0.014 * u, 0.62, 3, 0.4);
+          if (i < 10) {
+            const sy = i < 7 ? 0.1 + i * 0.045 : 0.43 + (i - 7) * 0.03;
+            pr.curve([T(0.9 * w * s, y + 0.17), T(0.55 * w * s, y + 0.2), T((i < 7 ? 0.05 : 0.22) * s, sy + 0.02)], 0.012 * u, 0.01 * u, 0.22, 3, 1);
+          }
+        }
+      }
+      // scapulae, faint behind the ribs
+      for (const s of [-1, 1]) pr.ell(T(0.6 * s, 0.2), 0.25 * xl, 0.2 * u, yAng - Math.PI / 2 + 0.25 * s, 0.22, 0.25);
+    }
+    // pelvis
+    if (hipsOk) {
+      const H = mid(P[23], P[24]);
+      const Hx = mul(sub(P[24], P[23]), 0.5);
+      const up = mul(norm(Yv), -1);
+      const hu = len(Hx);
+      const Q = (x, y) => add(add(H, mul(Hx, x)), mul(up, y * hu));
+      const hxAng = ang(Hx);
+      pr.ell(Q(0, 0.35), 0.32 * hu, 0.42 * hu, yAng - Math.PI / 2, 0.75, 0.6);          // sacrum
+      for (const s of [-1, 1]) {
+        pr.ell(Q(0.78 * s, 0.75), 0.62 * hu, 0.45 * hu, hxAng + 0.45 * s, 0.6, 0.18);     // iliac wing
+        pr.cap(Q(0.95 * s, 0.25), Q(0.25 * s, 0.75), 0.07 * hu, 0.06 * hu, 0.5);          // sacroiliac / arcuate line
+        pr.cap(Q(0.85 * s, -0.25), Q(0.12 * s, -0.42), 0.08 * hu, 0.07 * hu, 0.7);        // superior pubic ramus
+        pr.cap(Q(0.75 * s, -0.55), Q(0.15 * s, -0.55), 0.07 * hu, 0.06 * hu, 0.6);        // inferior ramus
+        pr.ell(Q(0.48 * s, -0.42), 0.22 * hu, 0.16 * hu, hxAng, -0.35, 1);              // obturator foramen
+        pr.ell(Q(1.0 * s, 0.05), 0.3 * hu, 0.3 * hu, 0, 0.45, 0.2);                      // acetabulum rim
+      }
+    }
+    // arms
+    for (const [sh, el, wr, pi, ix, th] of [[11, 13, 15, 17, 19, 21], [12, 14, 16, 18, 20, 22]]) {
+      if (!ok(sh)) continue;
+      pr.ell(P[sh], 0.075 * u, 0.075 * u, 0, 0.75, 0.3);                                    // humeral head
+      if (!ok(el)) continue;
+      pr.cap(P[sh], P[el], 0.045 * u, 0.04 * u, 0.95, 0.45, 0.35);                          // humerus
+      if (!ok(wr)) continue;
+      const d = norm(sub(P[wr], P[el])), n = perp(d);
+      pr.cap(add(P[el], mul(n, 0.016 * u)), add(P[wr], mul(n, 0.03 * u)), 0.022 * u, 0.028 * u, 0.85, 0.3, 0.4); // radius
+      pr.cap(add(sub(P[el], mul(d, 0.04 * u)), mul(n, -0.016 * u)), add(P[wr], mul(n, -0.022 * u)), 0.028 * u, 0.018 * u, 0.85, 0.3, 0.4); // ulna
+      if (!ok(pi, ix)) continue;
+      const W = P[wr], kn = mid(P[pi], P[ix]), hd = norm(sub(kn, W)), hl = len(sub(kn, W));
+      pr.ell(lerp(W, kn, 0.2), 0.36 * len(sub(P[ix], P[pi])) + 0.02 * u, 0.16 * hl + 0.01 * u, ang(hd) - Math.PI / 2, 0.55, 0.5); // carpus
+      for (let f = 0; f < 4; f++) {
+        const t = f / 3;
+        const base = lerp(lerp(W, P[ix], 0.32), lerp(W, P[pi], 0.32), t);
+        const knuckle = lerp(P[ix], P[pi], t);
+        pr.cap(base, knuckle, 0.011 * u, 0.009 * u, 0.85, 0.5, 0.45);                      // metacarpal
+        const fd = norm(sub(knuckle, base)), fl = len(sub(knuckle, base)) * [1.05, 1.15, 1.05, 0.85][f];
+        let p0 = add(knuckle, mul(fd, 0.04 * fl));
+        for (const [frac, r] of [[0.45, 0.009], [0.32, 0.008], [0.23, 0.007]]) {
+          const p1 = add(p0, mul(fd, frac * fl));
+          pr.cap(p0, p1, r * u, r * u * 0.9, 0.8, 0.4, 0.5);
+          p0 = add(p1, mul(fd, 0.05 * fl));
+        }
+      }
+      if (ok(th)) {
+        const cmc = lerp(W, P[ix], 0.18), mcp = lerp(cmc, P[th], 0.5);
+        pr.cap(cmc, mcp, 0.012 * u, 0.01 * u, 0.85, 0.5, 0.45);
+        const td = norm(sub(P[th], mcp)), tl = len(sub(P[th], mcp));
+        pr.cap(add(mcp, mul(td, 0.06 * tl)), add(mcp, mul(td, 0.62 * tl)), 0.01 * u, 0.009 * u, 0.8, 0.4, 0.5);
+        pr.cap(add(mcp, mul(td, 0.7 * tl)), add(P[th], mul(td, 0.25 * tl)), 0.009 * u, 0.007 * u, 0.8, 0.4, 0.5);
+      }
+    }
+    // legs
+    const Hc = hipsOk ? mid(P[23], P[24]) : null;
+    for (const [hp, kn, an, he, to] of [[23, 25, 27, 29, 31], [24, 26, 28, 30, 32]]) {
+      if (!ok(hp)) continue;
+      const lat = Hc ? norm(sub(P[hp], Hc)) : [0, 0];
+      pr.ell(P[hp], 0.065 * u, 0.065 * u, 0, 0.8, 0.3);                                     // femoral head
+      const troch = add(add(P[hp], mul(lat, 0.11 * u)), mul(norm(Yv), 0.06 * u));
+      pr.cap(P[hp], troch, 0.04 * u, 0.045 * u, 0.7, 0, 0.5);                              // femoral neck
+      if (!ok(kn)) continue;
+      pr.cap(troch, P[kn], 0.05 * u, 0.044 * u, 1.0, 0.55, 0.32);                          // femur
+      pr.ell(P[kn], 0.038 * u, 0.045 * u, ang(sub(P[kn], P[hp])), 0.45, 0.6);              // patella
+      if (!ok(an)) continue;
+      const d = norm(sub(P[an], P[kn]));
+      let n = perp(d); if (dot(n, lat) < 0) n = mul(n, -1);
+      pr.cap(add(P[kn], mul(n, -0.008 * u)), P[an], 0.046 * u, 0.032 * u, 0.95, 0.45, 0.33); // tibia
+      pr.cap(add(add(P[kn], mul(n, 0.045 * u)), mul(d, 0.05 * u)), add(P[an], mul(n, 0.035 * u)), 0.016 * u, 0.014 * u, 0.7, 0.35, 0.5); // fibula
+      if (!ok(he, to)) continue;
+      const A = P[an], Hl = P[he], To = P[to];
+      const fd = norm(sub(To, Hl)), fw = mul(perp(fd), 0.07 * u);
+      pr.ell(lerp(A, To, 0.12), 0.04 * u, 0.034 * u, ang(fd), 0.7, 0.5);                   // talus
+      pr.cap(A, Hl, 0.04 * u, 0.034 * u, 0.75, 0.2, 0.4);                                  // calcaneus
+      for (let k = 0; k < 5; k++) {
+        const o = k - 2;
+        const b0 = add(lerp(A, To, 0.32), mul(fw, o * 0.35)), t0 = add(lerp(A, To, 0.78), mul(fw, o * 0.6));
+        pr.cap(b0, t0, 0.012 * u, 0.01 * u, 0.75, 0.4, 0.45);
+        pr.cap(add(t0, mul(fd, 0.02 * u)), add(add(To, mul(fw, o * 0.65)), mul(fd, 0.05 * u * (1 - k * 0.15))), 0.01 * u, 0.008 * u, 0.7, 0.3, 0.5);
+      }
+    }
+    // skull + neck: the 3D skull when a head pose is known, else a flat template from the face landmarks
+    if (head) {
+      const Pj = buildSkull(pr, head);
+      // cervical spine from C2, below the teeth, so it does not read as a third row of them in AP view
+      if (shouldersOk) { const c2 = Pj([0, -5.6, -4.6]); pr.vertebrae(c2, mid(c2, T(0, -0.04)), T(0, -0.04), 6, 0.04 * u, 0.05 * u, 0.7, 0.7); }
+    } else if (ok(0) || ok(7) || ok(8)) {
+      const eyeMid = ok(2, 5) ? mid(P[2], P[5]) : P[0];
+      const earMid = ok(7, 8) ? mid(P[7], P[8]) : ok(7) ? P[7] : ok(8) ? P[8] : eyeMid;
+      const mouthMid = ok(9, 10) ? mid(P[9], P[10]) : add(P[0], mul(norm(Yv), 0.05 * u));
+      let up = norm(sub(eyeMid, mouthMid));
+      if (!ok(9, 10)) up = mul(norm(Yv), -1);
+      const hw = Math.max(len(sub(P[7], P[8])) * 1.15 * (ok(7, 8) ? 1 : 0), len(sub(P[2], P[5])) * 3.2 * (ok(2, 5) ? 1 : 0), len(sub(P[0], earMid)) * 1.5, 0.28 * u);
+      const a = ang(up) - Math.PI / 2;
+      const C = add(lerp(earMid, eyeMid, 0.5), mul(up, 0.3 * hw));
+      pr.ell(C, 0.52 * hw, 0.64 * hw, a, 0.95, 0.12);                                      // cranium (thin shell)
+      pr.ell(add(C, mul(up, -0.05 * hw)), 0.44 * hw, 0.5 * hw, a, 0.12, 1);                // diploe haze
+      if (ok(2)) pr.ell(P[2], 0.13 * hw, 0.11 * hw, a, -0.6, 1);                           // orbits
+      if (ok(5)) pr.ell(P[5], 0.13 * hw, 0.11 * hw, a, -0.6, 1);
+      if (ok(2, 5)) {
+        for (const e of [2, 5]) pr.ell(P[e], 0.15 * hw, 0.13 * hw, a, 0.35, 0.15);          // orbital rims
+        pr.ell(lerp(eyeMid, P[0], 0.62), 0.055 * hw, 0.085 * hw, a, -0.45, 1);             // nasal aperture
+      }
+      const right = norm(perp(up));
+      const teeth = lerp(P[0], mouthMid, 0.6);
+      pr.box(teeth, 0.17 * hw, 0.03 * hw, a, 0.01 * hw, 0.45);                             // maxilla
+      for (let t = -3.5; t <= 3.5; t++) {
+        const tc = add(teeth, mul(right, t * 0.042 * hw));
+        pr.box(add(tc, mul(up, -0.035 * hw)), 0.016 * hw, 0.03 * hw, a, 0.006 * hw, 0.7);  // upper teeth
+        pr.box(add(tc, mul(up, -0.1 * hw)), 0.015 * hw, 0.028 * hw, a, 0.006 * hw, 0.65);  // lower teeth
+      }
+      const chin = add(mouthMid, mul(up, -0.24 * hw));
+      const jawPts = [];
+      for (const s of [-1, 1]) {
+        const ear = s < 0 ? (ok(7) ? P[7] : add(earMid, mul(right, -0.3 * hw))) : (ok(8) ? P[8] : add(earMid, mul(right, 0.3 * hw)));
+        const cond = add(ear, mul(up, -0.06 * hw));
+        const gon = add(add(cond, mul(up, -0.34 * hw)), mul(norm(sub(earMid, ear)), -0.0 * hw));
+        jawPts.push(s < 0 ? [cond, gon] : [gon, cond]);
+        // zygomatic arch
+        if (ok(2, 5)) pr.cap(add(P[s < 0 ? 3 : 6], mul(up, -0.06 * hw)), add(ear, mul(up, 0.0)), 0.022 * hw, 0.02 * hw, 0.5, 0, 0.6);
+      }
+      pr.curve([jawPts[0][0], jawPts[0][1], lerp(jawPts[0][1], chin, 0.6), chin, lerp(jawPts[1][0], chin, 0.6), jawPts[1][0], jawPts[1][1]], 0.032 * hw, 0.032 * hw, 0.85, 3, 0.4);
+      if (shouldersOk) pr.vertebrae(add(earMid, mul(up, -0.2 * hw)), mid(add(earMid, mul(up, -0.2 * hw)), T(0, -0.04)), T(0, -0.04), 7, 0.045 * u, 0.05 * u, 0.85, 0.7);
+    }
+    return pr;
+  }
+
+  // ---------------- Quadruped (AP-10K 17 keypoints) ----------------
+  // 0 L eye, 1 R eye, 2 nose, 3 neck, 4 tail root, 5 L shoulder, 6 L elbow, 7 L front paw, 8 R shoulder, 9 R elbow,
+  // 10 R front paw, 11 L hip, 12 L knee, 13 L back paw, 14 R hip, 15 R knee, 16 R back paw
+  const SPECIES = {
+    cat: { cranium: 1.0, craniumBack: 0.45, aspect: 0.86, snout0: 0.4, snout1: 0.26, orbit: 0.3, chest: 0.3, tail: 0.9, curl: 0.9, bone: 0.62, jaw: 0.12 },
+    dog: { cranium: 0.75, craniumBack: 0.6, aspect: 0.78, snout0: 0.32, snout1: 0.19, orbit: 0.18, chest: 0.36, tail: 0.6, curl: 0.4, bone: 0.72, jaw: 0.11 },
+  };
+  function buildQuad(pr, K, C, species = "dog", time = 0, thr = 0.3) {
+    const sp = SPECIES[species] || SPECIES.dog;
+    const ok = (...ix) => ix.every(i => C[i] > thr);
+    const meanOf = (ix) => { const v = ix.filter(i => ok(i)); if (!v.length) return null; return mul(v.reduce((s, i) => add(s, K[i]), [0, 0]), 1 / v.length); };
+    let N = ok(3) ? K[3] : meanOf([5, 8]);
+    let R = ok(4) ? K[4] : meanOf([11, 14]);
+    if (!N || !R) return pr;
+    const axis = sub(R, N), Lb = len(axis);
+    if (Lb < 8) return pr;
+    const fwd = norm(mul(axis, -1));
+    const limbMid = meanOf([6, 9, 12, 15, 7, 10, 13, 16]);
+    let ven = perp(fwd);
+    if (limbMid ? dot(ven, sub(limbMid, mid(N, R))) < 0 : ven[1] < 0) ven = mul(ven, -1);
+    const bs = sp.bone;
+    pr.glow = Math.max(2.5, Math.min(10, 0.014 * Lb));
+
+    // spine with a dorsal arch
+    const ctrl = add(mid(N, R), mul(ven, -0.1 * Lb));
+    const at = pr.vertebrae(N, ctrl, R, 20, 0.04 * Lb * bs, 0.045 * Lb * bs, 0.85, 0.72);
+    const tanAt = (t) => norm(sub(at(Math.min(1, t + 0.01)), at(Math.max(0, t - 0.01))));
+    for (let i = 0; i < 13; i++) {                                                         // spinous processes
+      const t = (i + 0.5) / 20, p = at(t);
+      pr.cap(p, add(add(p, mul(ven, -(0.085 - i * 0.004) * Lb)), mul(fwd, -0.025 * Lb)), 0.008 * Lb, 0.005 * Lb, 0.45, 0, 1);
+    }
+    // ribcage depth from the elbows if visible
+    const elb = meanOf([6, 9]);
+    let D = sp.chest * Lb;
+    if (elb) D = Math.min(0.55 * Lb, Math.max(0.2 * Lb, dot(sub(elb, at(0.12)), ven) * 0.95));
+    for (let i = 0; i < 13; i++) {
+      const t = 0.05 + i * 0.039, p = at(t);
+      const depth = D * Math.sin(Math.PI * (0.32 + 0.6 * i / 12)) * (i > 9 ? 0.85 : 1);
+      for (const off of [0, 0.018]) {
+        const q = add(p, mul(fwd, off * Lb));
+        pr.curve([q, add(add(q, mul(ven, 0.3 * depth)), mul(fwd, -0.06 * depth)), add(add(q, mul(ven, 0.75 * depth)), mul(fwd, -0.12 * depth)), add(add(q, mul(ven, depth)), mul(fwd, -0.06 * depth))],
+          0.012 * Lb * bs, 0.009 * Lb * bs, 0.42, 3, 0.45);
+      }
+    }
+    for (let i = 0; i < 7; i++) {                                                          // sternebrae
+      const t = 0.07 + i * 0.05, p = add(at(t), mul(ven, D * 0.98));
+      pr.box(p, 0.022 * Lb, 0.012 * Lb, ang(fwd) - Math.PI / 2 + Math.PI / 2, 0.005 * Lb, 0.55);
+    }
+    // head
+    const nose = ok(2) ? K[2] : null;
+    const eyeMid = ok(0, 1) ? mid(K[0], K[1]) : ok(0) ? K[0] : ok(1) ? K[1] : null;
+    let craniumBack = N;
+    if (nose && eyeMid) {
+      let hd = sub(nose, eyeMid); let hl = len(hd);
+      const neckToNose = len(sub(nose, N));
+      hl = Math.max(hl, 0.18 * neckToNose);
+      hd = norm(hd);
+      let hv = perp(hd); if (dot(hv, ven) < 0) hv = mul(hv, -1);
+      const cr = sp.cranium * hl;
+      const cc = add(add(eyeMid, mul(hd, -sp.craniumBack * hl)), mul(hv, -0.08 * hl));
+      pr.ell(cc, cr, cr * sp.aspect, ang(hd), 0.9, 0.16);                                  // cranium
+      pr.ell(cc, cr * 0.85, cr * 0.7, ang(hd), 0.12, 1);
+      pr.cap(add(eyeMid, mul(hd, -0.1 * hl)), nose, sp.snout0 * hl, sp.snout1 * hl, 0.65, 0, 0.35);  // maxilla / snout
+      for (const e of [0, 1]) if (ok(e)) {
+        pr.ell(K[e], sp.orbit * hl, sp.orbit * hl * 0.9, ang(hd), -0.55, 1);               // orbit
+        pr.ell(K[e], sp.orbit * hl * 1.15, sp.orbit * hl, ang(hd), 0.3, 0.15);             // orbital rim
+      }
+      const jawJoint = add(cc, mul(hv, 0.55 * cr));
+      pr.cap(jawJoint, add(add(nose, mul(hv, 0.3 * hl)), mul(hd, -0.08 * hl)), sp.jaw * hl, sp.jaw * hl * 0.7, 0.8, 0.3, 0.4); // mandible
+      for (const off of [0.12, 0.25]) {                                                    // canines
+        const c0 = add(add(nose, mul(hd, -off * hl)), mul(hv, 0.12 * hl));
+        pr.cap(c0, add(c0, mul(hv, 0.22 * hl)), 0.045 * hl, 0.015 * hl, 0.75, 0, 1);
+      }
+      for (let k = 0; k < 5; k++) {                                                        // cheek teeth
+        const c0 = add(lerp(add(nose, mul(hd, -0.35 * hl)), jawJoint, k / 7), mul(hv, 0.12 * hl));
+        pr.box(c0, 0.045 * hl, 0.06 * hl, ang(hd) - Math.PI / 2 + Math.PI / 2, 0.015 * hl, 0.55);
+      }
+      craniumBack = add(cc, mul(hd, -0.85 * cr));
+    }
+    // cervical vertebrae from the back of the skull to the neck keypoint
+    if (len(sub(craniumBack, N)) > 4) pr.vertebrae(craniumBack, mid(craniumBack, add(N, mul(fwd, 0.0))), N, 7, 0.036 * Lb * bs, 0.042 * Lb * bs, 0.85, 0.75);
+
+    // front limbs
+    for (const [s, e, p] of [[5, 6, 7], [8, 9, 10]]) {
+      if (!ok(s)) continue;
+      const wither = add(at(0.1), mul(ven, 0.08 * D));
+      pr.cap(wither, K[s], 0.075 * Lb * bs, 0.035 * Lb * bs, 0.5, 0, 0.2);                 // scapula blade
+      pr.cap(lerp(wither, K[s], 0.1), lerp(wither, K[s], 0.9), 0.012 * Lb, 0.01 * Lb, 0.45, 0, 1); // scapular spine
+      if (!ok(e)) continue;
+      pr.cap(K[s], K[e], 0.034 * Lb * bs, 0.03 * Lb * bs, 0.95, 0.5, 0.35);                // humerus
+      if (!ok(p)) continue;
+      const d = norm(sub(K[p], K[e])), n = perp(d);
+      const carpus = lerp(K[e], K[p], 0.8);
+      pr.cap(add(sub(K[e], mul(d, 0.06 * Lb)), mul(n, 0.008 * Lb)), add(carpus, mul(n, 0.006 * Lb)), 0.016 * Lb * bs, 0.012 * Lb * bs, 0.85, 0.35, 0.4); // ulna + olecranon
+      pr.cap(add(K[e], mul(n, -0.01 * Lb)), add(carpus, mul(n, -0.006 * Lb)), 0.02 * Lb * bs, 0.02 * Lb * bs, 0.85, 0.35, 0.4); // radius
+      pr.ell(carpus, 0.03 * Lb * bs, 0.022 * Lb * bs, ang(d), 0.6, 0.4);
+      for (let k = -1; k <= 1; k++) {
+        const tip = add(K[p], mul(n, k * 0.012 * Lb));
+        pr.cap(add(carpus, mul(n, k * 0.006 * Lb)), tip, 0.008 * Lb, 0.007 * Lb, 0.75, 0.4, 0.5);
+        pr.cap(add(tip, mul(d, 0.008 * Lb)), add(add(tip, mul(d, 0.035 * Lb)), mul(fwd, 0.02 * Lb)), 0.006 * Lb, 0.004 * Lb, 0.7, 0.3, 0.6);
+      }
+    }
+    // pelvis + hind limbs
+    const sacrum = at(0.9);
+    for (const [h, k, p] of [[11, 12, 13], [14, 15, 16]]) {
+      if (!ok(h)) continue;
+      pr.cap(at(0.78), K[h], 0.04 * Lb * bs, 0.03 * Lb * bs, 0.6, 0, 0.3);                 // ilium
+      const isch = add(add(K[h], mul(fwd, -0.13 * Lb)), mul(ven, 0.02 * Lb));
+      pr.cap(K[h], isch, 0.03 * Lb * bs, 0.035 * Lb * bs, 0.6, 0, 0.35);                   // ischium
+      pr.ell(lerp(K[h], isch, 0.5), 0.03 * Lb, 0.018 * Lb, ang(fwd), -0.3, 1);            // obturator foramen
+      pr.ell(K[h], 0.03 * Lb * bs, 0.03 * Lb * bs, 0, 0.7, 0.3);                           // femoral head
+      if (!ok(k)) continue;
+      pr.cap(K[h], K[k], 0.036 * Lb * bs, 0.032 * Lb * bs, 1.0, 0.55, 0.33);               // femur
+      pr.ell(K[k], 0.018 * Lb, 0.024 * Lb, ang(sub(K[k], K[h])), 0.5, 0.6);               // patella
+      if (!ok(p)) continue;
+      const hock = add(lerp(K[k], K[p], 0.58), mul(fwd, -0.06 * Lb));
+      pr.cap(K[k], hock, 0.03 * Lb * bs, 0.022 * Lb * bs, 0.95, 0.45, 0.35);               // tibia
+      pr.cap(add(K[k], mul(fwd, -0.015 * Lb)), add(hock, mul(fwd, -0.01 * Lb)), 0.01 * Lb, 0.008 * Lb, 0.6, 0.3, 0.6); // fibula
+      pr.cap(hock, add(add(hock, mul(fwd, -0.05 * Lb)), mul(ven, -0.035 * Lb)), 0.02 * Lb, 0.015 * Lb, 0.75, 0.2, 0.5); // calcaneal tuber
+      const d = norm(sub(K[p], hock)), n = perp(d);
+      for (let j = -1; j <= 1; j++) {
+        const tip = add(K[p], mul(n, j * 0.012 * Lb));
+        pr.cap(add(hock, mul(n, j * 0.006 * Lb)), tip, 0.009 * Lb, 0.007 * Lb, 0.75, 0.4, 0.5);
+        pr.cap(add(tip, mul(d, 0.008 * Lb)), add(add(tip, mul(d, 0.035 * Lb)), mul(fwd, 0.02 * Lb)), 0.006 * Lb, 0.004 * Lb, 0.7, 0.3, 0.6);
+      }
+    }
+    // tail: no keypoint for the tip, so it is a guess that sways
+    {
+      let dir = norm(add(mul(fwd, -0.9), mul(ven, species === "cat" ? 0.55 : -0.2)));
+      let p = R, w = 0.032 * Lb * bs;
+      const n = 20, seg = sp.tail * Lb / n;
+      for (let i = 0; i < n; i++) {
+        const s = i / n;
+        const bend = (sp.curl * 1.6 / n) * (species === "cat" ? 1 : 0.6) + Math.sin(time * 1.7 - s * 3) * 0.05 * s;
+        dir = norm(add(mul(dir, Math.cos(bend)), mul(perp(dir), Math.sin(bend) * (dot(perp(dir), ven) < 0 ? 1 : -1))));
+        const L = seg * (1.1 - 0.4 * s);
+        const q = add(p, mul(dir, L));
+        pr.box(mid(p, q), w * (1 - 0.75 * s), L * 0.36, ang(dir) - Math.PI / 2, w * 0.25 * (1 - 0.7 * s), 0.8);
+        p = q;
+      }
+      pr.box(sacrum, 0.05 * Lb, 0.03 * Lb, ang(fwd) - Math.PI / 2 + Math.PI / 2, 0.01 * Lb, 0.7);
+    }
+    return pr;
+  }
+
+  // One-Euro filter (Casiez et al. 2012): low jitter at rest, low lag when moving.
+  class OneEuro {
+    constructor(minCutoff = 1.2, beta = 0.02, dCutoff = 1.0) { Object.assign(this, { minCutoff, beta, dCutoff }); this.x = null; this.dx = 0; this.t = 0; }
+    static alpha(cutoff, dt) { const tau = 1 / (2 * Math.PI * cutoff); return 1 / (1 + tau / dt); }
+    filter(x, t) {
+      if (this.x === null) { this.x = x; this.t = t; return x; }
+      const dt = Math.max(1e-3, t - this.t); this.t = t;
+      const dx = (x - this.x) / dt;
+      this.dx += OneEuro.alpha(this.dCutoff, dt) * (dx - this.dx);
+      const cutoff = this.minCutoff + this.beta * Math.abs(this.dx);
+      this.x += OneEuro.alpha(cutoff, dt) * (x - this.x);
+      return this.x;
+    }
+    reset() { this.x = null; this.dx = 0; }
+  }
+
+  // Decode RTMPose SimCC heads: argmax per keypoint, 2 bins per pixel; score = min of the two peak values (rtmlib convention).
+  function decodeSimcc(sx, sy, K, bins) {
+    const out = [], conf = [];
+    for (let k = 0; k < K; k++) {
+      let bx = 0, vx = -1e9, by = 0, vy = -1e9;
+      for (let i = 0; i < bins; i++) { const a = sx[k * bins + i]; if (a > vx) { vx = a; bx = i; } const b = sy[k * bins + i]; if (b > vy) { vy = b; by = i; } }
+      out.push([bx / 2, by / 2]); conf.push(Math.min(vx, vy));
+    }
+    return { pts: out, conf };
+  }
+
+  return { Prims, buildHuman, buildQuad, buildSkull, headFromFace, headFromPose, OneEuro, decodeSimcc, SPECIES };
+})();
+if (typeof module !== "undefined") module.exports = XR;
+// END skeleton
+</script>
+
+<script type="text/plain" id="wgsl-bones">
+struct U { res: vec2f, vsize: vec2f, map: vec4f, p: vec4f };
+struct Prim { a: vec4f, b: vec4f, c: vec4f };
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var<storage, read> prims: array<Prim>;
+
+struct VO { @builtin(position) pos: vec4f, @location(0) px: vec2f, @location(1) @interpolate(flat) id: u32 };
+struct FO { @location(0) dens: vec4f, @location(1) glow: vec4f };
+
+fn rot(v: vec2f, a: f32) -> vec2f { let c = cos(a); let s = sin(a); return vec2f(c * v.x - s * v.y, s * v.x + c * v.y); }
+
+// Chord length through a hollow tube/ellipsoid: bright cortical rim, dimmer marrow. x = r/R, shell = wall fraction.
+fn tube(x: f32, shell: f32) -> f32 {
+  let outer = sqrt(max(1.0 - x * x, 0.0));
+  let ri = max(1.0 - shell, 0.001);
+  let xi = x / ri;
+  let inner = sqrt(max(1.0 - xi * xi, 0.0)) * ri;
+  return pow(max(outer - 0.75 * inner, 0.0), 0.8);
+}
+
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VO {
+  let p = prims[ii];
+  let t = u32(p.c.x + 0.5);
+  let g = p.c.w * 3.0 + 1.5;
+  var lo: vec2f;
+  var hi: vec2f;
+  if (t == 0u) {
+    let r = max(p.b.x, p.b.y) * (1.0 + p.b.z) + g;
+    lo = min(p.a.xy, p.a.zw) - vec2f(r);
+    hi = max(p.a.xy, p.a.zw) + vec2f(r);
+  } else {
+    let r = max(p.a.z, p.a.w) * 1.42 + g;
+    lo = p.a.xy - vec2f(r);
+    hi = p.a.xy + vec2f(r);
+  }
+  let corner = vec2f(f32(vi & 1u), f32((vi >> 1u) & 1u));
+  let px = mix(lo, hi, corner);
+  let ndc = vec2f(px.x / u.res.x * 2.0 - 1.0, 1.0 - px.y / u.res.y * 2.0);
+  var o: VO;
+  o.pos = vec4f(ndc, 0.0, 1.0);
+  o.px = px;
+  o.id = ii;
+  return o;
+}
+
+@fragment fn fs(i: VO) -> FO {
+  let p = prims[i.id];
+  let t = u32(p.c.x + 0.5);
+  let I = p.b.w * u.p.w;
+  var dens = 0.0;
+  var sd = 1e9;
+  var keep = true;
+  if (t == 0u) {
+    let a = p.a.xy;
+    let ba = p.a.zw - a;
+    let pa = i.px - a;
+    let h = dot(pa, ba) / max(dot(ba, ba), 1e-6);
+    let flags = u32(p.c.z + 0.5);
+    if ((h < 0.0 && (flags & 1u) == 0u) || (h > 1.0 && (flags & 2u) == 0u)) { keep = false; }
+    let hc = clamp(h, 0.0, 1.0);
+    let bump = exp(-pow(hc / 0.08, 2.0)) + exp(-pow((1.0 - hc) / 0.08, 2.0));
+    let R = max(mix(p.b.x, p.b.y, hc) * (1.0 + p.b.z * bump), 0.5);
+    let q = length(pa - ba * hc);
+    sd = q - R;
+    dens = tube(q / R, p.c.y);
+  } else if (t == 1u) {
+    let l = rot(i.px - p.a.xy, -p.b.x) / max(p.a.zw, vec2f(0.5));
+    let k = length(l);
+    sd = (k - 1.0) * min(p.a.z, p.a.w);
+    dens = tube(k, p.c.y);
+  } else {
+    let l = rot(i.px - p.a.xy, -p.b.x);
+    let cr = p.b.y;
+    let qd = abs(l) - p.a.zw + vec2f(cr);
+    sd = length(max(qd, vec2f(0.0))) + min(max(qd.x, qd.y), 0.0) - cr;
+    let m = min(p.a.z, p.a.w);
+    dens = (1.0 - smoothstep(-1.0, 0.5, sd)) * (0.55 + 0.45 * smoothstep(-0.3 * m, 0.0, sd));
+  }
+  if (!keep) { discard; }
+  let aa = 1.0 - smoothstep(-0.75, 0.75, sd);
+  let g = max(I, 0.0) * exp(-max(sd, 0.0) / max(p.c.w, 1.0));
+  var o: FO;
+  o.dens = vec4f(dens * I * aa, 0.0, 0.0, 1.0);
+  o.glow = vec4f(g * 0.55, 0.0, 0.0, 1.0);
+  return o;
+}
+</script>
+
+<script type="text/plain" id="wgsl-composite">
+struct U { res: vec2f, vsize: vec2f, map: vec4f, p: vec4f };
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var smp: sampler;
+@group(0) @binding(2) var vid: texture_external;
+@group(0) @binding(3) var maskT: texture_2d<f32>;
+@group(0) @binding(4) var densT: texture_2d<f32>;
+@group(0) @binding(5) var glowT: texture_2d<f32>;
+
+// screen px -> video uv, honouring object-fit: cover and the selfie mirror
+fn toVid(px: vec2f) -> vec2f {
+  var x = px.x;
+  if (u.map.w > 0.5) { x = u.res.x - x; }
+  return vec2f((x - u.map.y) / u.map.x, (px.y - u.map.z) / u.map.x) / u.vsize;
+}
+fn lum(uv: vec2f) -> f32 { return dot(textureSampleBaseClampToEdge(vid, smp, uv).rgb, vec3f(0.299, 0.587, 0.114)); }
+fn hash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(12.9898, 78.233))) * 43758.5453); }
+
+@vertex fn vsFull(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+  let x = f32((vi << 1u) & 2u);
+  let y = f32(vi & 2u);
+  return vec4f(x * 2.0 - 1.0, 1.0 - y * 2.0, 0.0, 1.0);
+}
+
+@fragment fn fsComp(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let px = fc.xy;
+  let uv = toVid(px);
+  let tx = 1.5 / u.vsize;
+  let l = lum(uv);
+  let gx = lum(uv + vec2f(tx.x, 0.0)) - lum(uv - vec2f(tx.x, 0.0));
+  let gy = lum(uv + vec2f(0.0, tx.y)) - lum(uv - vec2f(0.0, tx.y));
+  let edge = clamp(length(vec2f(gx, gy)) * 2.5, 0.0, 1.0);
+  var film = pow(1.0 - l, 1.6) * 0.38 + edge * 0.55;
+  let m = textureSampleLevel(maskT, smp, uv, 0.0).r;
+  film = mix(film, film * (0.4 + 0.6 * m) + m * 0.2, u.p.y);
+  let ip = vec2i(px);
+  let D = max(textureLoad(densT, ip, 0).r, 0.0);
+  let G = textureLoad(glowT, ip, 0).r;
+  let b = 1.0 - exp(-1.4 * D);
+  var col = mix(vec3f(0.006, 0.02, 0.04), vec3f(0.42, 0.72, 0.95), clamp(film, 0.0, 1.0));
+  col = mix(col, vec3f(0.9, 0.97, 1.0), b) + vec3f(0.25, 0.6, 1.0) * G * 0.5;
+  let grain = (hash(px + vec2f(fract(u.p.x * 7.0) * 113.0, fract(u.p.x * 3.0) * 71.0)) - 0.5) * 0.05;
+  let scan = 0.97 + 0.03 * sin(px.y * 1.7);
+  let c = (px / u.res - 0.5) * 1.4;
+  let vig = 1.0 - 0.45 * dot(c, c);
+  return vec4f(max((col * scan + vec3f(grain)) * vig, vec3f(0.0)), 1.0);
+}
+</script>
+
+<script type="module">
+const MP_VER = "1.1.0";
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`;
+const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`;
+const POSE_MODEL = "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task";
+const DET_MODEL = "https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite";
+const FACE_MODEL = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+const LITERT_URL = "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/dist/index.js";
+const LITERT_WASM = "https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.3/wasm/";
+// a local copy beside the page wins if present; otherwise the pinned Hugging Face revision
+const ANIMAL_MODELS = ["./rtm_animal_fp16.bin",
+  "https://huggingface.co/litert-community/RTMPose-Animal-AP10K-LiteRT/resolve/1daee634c9db6889268124735374e6a9c1c2fc7b/rtm_animal_fp16.tflite"];
+const RTM_SIZE = 256, RTM_BINS = 512, RTM_K = 17;
+const MEAN = [123.675, 116.28, 103.53], STD = [58.395, 57.12, 57.375];
+
+const $ = (id) => document.getElementById(id);
+const steps = $("steps");
+function step(text) { const li = document.createElement("li"); li.textContent = text; steps.appendChild(li); return { ok(t) { li.className = "ok"; if (t) li.textContent = t; }, err(t) { li.className = "err"; if (t) li.textContent = t; } }; }
+let toastTimer;
+function toast(msg, ms = 3500) { const t = $("toast"); t.textContent = msg; t.hidden = false; clearTimeout(toastTimer); if (ms) toastTimer = setTimeout(() => (t.hidden = true), ms); }
+
+const state = { mode: "auto", facing: "user", tissue: true, subject: null, species: "dog" };
+const canvas = $("screen"), video = $("cam");
+let device, ctx, format, pipes = {}, gpuRes = {}, stream;
+let vision, pose, det, face = null, rtm = null, rtmLoading = null, LiteRT;
+const prims = new XR.Prims(2048);
+
+// ---------------- camera ----------------
+async function openCamera() {
+  if (stream) stream.getTracks().forEach(t => t.stop());
+  stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: { facingMode: state.facing, width: { ideal: 960 }, height: { ideal: 540 }, frameRate: { ideal: 30 } } });
+  video.srcObject = stream;
+  await video.play();
+  const marker = $("marker");
+  // radiograph side marker: the subject's right. Selfie view is mirrored, so it sits on the screen's right.
+  marker.className = state.facing === "user" ? "right" : "left";
+}
+
+// ---------------- WebGPU ----------------
+async function initGPU() {
+  if (!navigator.gpu) throw new Error("This browser has no WebGPU. Try Chrome or Edge 121+, Safari 26+, or Firefox 141+ on Windows.");
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) throw new Error("WebGPU is present but no GPU adapter was granted.");
+  device = await adapter.requestDevice();
+  device.lost.then((info) => toast("GPU device lost: " + info.message, 0));
+  ctx = canvas.getContext("webgpu");
+  format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format, alphaMode: "opaque" });
+  const boneMod = device.createShaderModule({ code: $("wgsl-bones").textContent });
+  const compMod = device.createShaderModule({ code: $("wgsl-composite").textContent });
+  for (const [name, m] of [["bones", boneMod], ["composite", compMod]]) {
+    const info = await m.getCompilationInfo();
+    const errs = info.messages.filter(x => x.type === "error");
+    if (errs.length) throw new Error(`WGSL ${name}: ` + errs.map(e => `${e.lineNum}:${e.linePos} ${e.message}`).join("; "));
+  }
+  const add = { color: { srcFactor: "one", dstFactor: "one", operation: "add" }, alpha: { srcFactor: "one", dstFactor: "one", operation: "add" } };
+  const max = { color: { srcFactor: "one", dstFactor: "one", operation: "max" }, alpha: { srcFactor: "one", dstFactor: "one", operation: "max" } };
+  pipes.bones = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: boneMod, entryPoint: "vs" },
+    fragment: { module: boneMod, entryPoint: "fs", targets: [{ format: "r16float", blend: add }, { format: "r16float", blend: max }] },
+    primitive: { topology: "triangle-strip" },
+  });
+  pipes.composite = device.createRenderPipeline({
+    layout: "auto",
+    vertex: { module: compMod, entryPoint: "vsFull" },
+    fragment: { module: compMod, entryPoint: "fsComp", targets: [{ format }] },
+    primitive: { topology: "triangle-list" },
+  });
+  gpuRes.uniform = device.createBuffer({ size: 48, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  gpuRes.prims = device.createBuffer({ size: prims.f.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  gpuRes.sampler = device.createSampler({ magFilter: "linear", minFilter: "linear" });
+  gpuRes.boneBG = device.createBindGroup({ layout: pipes.bones.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: gpuRes.uniform } }, { binding: 1, resource: { buffer: gpuRes.prims } }] });
+  setMask(1, 1, new Uint8Array([0]));
+}
+function setMask(w, h, data) {
+  if (!gpuRes.mask || gpuRes.mask.width !== w || gpuRes.mask.height !== h) {
+    gpuRes.mask?.destroy();
+    gpuRes.mask = device.createTexture({ size: [w, h], format: "r8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+  }
+  device.queue.writeTexture({ texture: gpuRes.mask }, data, { bytesPerRow: w }, [w, h]);
+}
+function resize() {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  let w = Math.round(canvas.clientWidth * dpr), h = Math.round(canvas.clientHeight * dpr);
+  const maxPx = 2.4e6;
+  if (w * h > maxPx) { const s = Math.sqrt(maxPx / (w * h)); w = Math.round(w * s); h = Math.round(h * s); }
+  if (canvas.width === w && canvas.height === h && gpuRes.dens) return;
+  canvas.width = w; canvas.height = h;
+  gpuRes.dens?.destroy(); gpuRes.glow?.destroy();
+  const mk = () => device.createTexture({ size: [w, h], format: "r16float", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING });
+  gpuRes.dens = mk(); gpuRes.glow = mk();
+}
+
+// video px -> screen px (object-fit: cover, mirrored for the front camera)
+function mapping() {
+  const W = canvas.width, H = canvas.height, vw = video.videoWidth || 1, vh = video.videoHeight || 1;
+  const sc = Math.max(W / vw, H / vh);
+  return { W, H, vw, vh, sc, ox: (W - vw * sc) / 2, oy: (H - vh * sc) / 2, mirror: state.facing === "user" };
+}
+const toScreen = (m, x, y) => { let X = x * m.sc + m.ox; if (m.mirror) X = m.W - X; return [X, y * m.sc + m.oy]; };
+
+let fade = 0;
+function render(t) {
+  resize();
+  const m = mapping();
+  prims.reset();
+  const target = state.subject ? 1 : 0;
+  fade += (target - fade) * 0.15;
+  prims.fade = fade;
+  if (fade > 0.02 && filt.pts) {
+    const P = filt.pts.map(p => toScreen(m, p[0], p[1]));
+    if (filt.kind === "human") {
+      let head = null;
+      if (filt.head) {
+        const h = filt.head, sx = m.mirror ? -m.sc : m.sc;
+        head = { M: [h.M[0].map(v => v * sx), h.M[1].map(v => v * m.sc)], b: toScreen(m, h.b[0], h.b[1]), k: h.k * m.sc, jaw: h.jaw };
+      }
+      XR.buildHuman(prims, P, filt.conf, head);
+      // lead marker on the subject's right, wherever the landmarks put it (it swaps sides when they turn around)
+      if (filt.conf[11] > 0.5 && filt.conf[12] > 0.5) $("marker").className = P[12][0] > P[11][0] ? "right" : "left";
+    }
+    else XR.buildQuad(prims, P, filt.conf, filt.species, t / 1000);
+  }
+  device.queue.writeBuffer(gpuRes.uniform, 0, new Float32Array([m.W, m.H, m.vw, m.vh, m.sc, m.ox, m.oy, m.mirror ? 1 : 0, t / 1000, state.tissue && maskFresh ? 1 : 0, 0, 1]));
+  if (prims.n) device.queue.writeBuffer(gpuRes.prims, 0, prims.f, 0, prims.n * 12);
+  const enc = device.createCommandEncoder();
+  const bp = enc.beginRenderPass({ colorAttachments: [
+    { view: gpuRes.dens.createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 0] },
+    { view: gpuRes.glow.createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 0] }] });
+  if (prims.n) { bp.setPipeline(pipes.bones); bp.setBindGroup(0, gpuRes.boneBG); bp.draw(4, prims.n); }
+  bp.end();
+  const bg = device.createBindGroup({ layout: pipes.composite.getBindGroupLayout(0), entries: [
+    { binding: 0, resource: { buffer: gpuRes.uniform } },
+    { binding: 1, resource: gpuRes.sampler },
+    { binding: 2, resource: device.importExternalTexture({ source: video }) },
+    { binding: 3, resource: gpuRes.mask.createView() },
+    { binding: 4, resource: gpuRes.dens.createView() },
+    { binding: 5, resource: gpuRes.glow.createView() }] });
+  const cp = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 1] }] });
+  cp.setPipeline(pipes.composite); cp.setBindGroup(0, bg); cp.draw(3); cp.end();
+  device.queue.submit([enc.finish()]);
+}
+
+// ---------------- models ----------------
+async function initVision() {
+  const mp = await import(MP_URL);
+  vision = { mp, files: await mp.FilesetResolver.forVisionTasks(MP_WASM) };
+}
+async function createTask(Cls, opts) {
+  try { return await Cls.createFromOptions(vision.files, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "GPU" } }); }
+  catch (e) { console.warn("GPU delegate failed, using CPU", e); return await Cls.createFromOptions(vision.files, { ...opts, baseOptions: { ...opts.baseOptions, delegate: "CPU" } }); }
+}
+async function initPose() {
+  pose = await createTask(vision.mp.PoseLandmarker, { baseOptions: { modelAssetPath: POSE_MODEL }, runningMode: "VIDEO", numPoses: 1,
+    outputSegmentationMasks: state.tissue, minPoseDetectionConfidence: 0.5, minPosePresenceConfidence: 0.5, minTrackingConfidence: 0.5 });
+}
+// The detector is int8 and runs every 6-20 frames: XNNPACK on the CPU handles it directly, while the GPU
+// delegate has to build a GL graph for a quantized model and stalls the first frames for seconds.
+// Face Landmarker: 478 landmarks, a head rotation and blendshapes. It sharpens the skull's pose and opens its
+// jaw; without it the head pose comes from the pose landmarks.
+async function initFace() {
+  face = await createTask(vision.mp.FaceLandmarker, { baseOptions: { modelAssetPath: FACE_MODEL }, runningMode: "VIDEO", numFaces: 1,
+    outputFacialTransformationMatrixes: true, outputFaceBlendshapes: true });
+}
+async function initDetector() {
+  det = await vision.mp.ObjectDetector.createFromOptions(vision.files, { baseOptions: { modelAssetPath: DET_MODEL, delegate: "CPU" },
+    runningMode: "VIDEO", scoreThreshold: 0.35, maxResults: 5, categoryAllowlist: ["person", "cat", "dog"] });
+}
+async function fetchWithProgress(url, onProgress) {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  const total = +r.headers.get("content-length") || 0;
+  const reader = r.body.getReader(); const chunks = []; let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; onProgress?.(got, total); }
+  const out = new Uint8Array(got); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; }
+  return out;
+}
+function loadAnimalModel() {
+  if (rtmLoading) return rtmLoading;
+  rtmLoading = (async () => {
+    toast("Loading the animal pose model (27 MB, once)…", 0);
+    LiteRT = await import(LITERT_URL);
+    await LiteRT.loadLiteRt(LITERT_WASM);
+    let bytes = null, lastErr;
+    for (const url of ANIMAL_MODELS) {
+      try { bytes = await fetchWithProgress(url, (g, t) => toast(`Animal pose model ${(g / 1e6).toFixed(1)}${t ? " / " + (t / 1e6).toFixed(1) : ""} MB`, 0)); break; }
+      catch (e) { lastErr = e; }
+    }
+    if (!bytes) throw lastErr;
+    const accel = LiteRT.isWebGPUSupported() ? "webgpu" : "wasm";
+    rtm = await LiteRT.loadAndCompile(bytes, { accelerator: accel });
+    toast(`Animal model ready (${accel})`);
+    return rtm;
+  })().catch((e) => { console.error(e); toast("Animal model failed to load: " + e.message, 0); rtmLoading = null; throw e; });
+  return rtmLoading;
+}
+
+// ---------------- tracking ----------------
+const filt = { kind: null, pts: null, conf: null, species: "dog", filters: [], head: null, headFilters: null, headSrc: null, away: false, view: null };
+let maskFresh = false;
+function ensureFilters(n) {
+  if (filt.filters.length !== n * 2) filt.filters = Array.from({ length: n * 2 }, () => new XR.OneEuro(1.2, 0.02));
+}
+function updateFiltered(kind, pts, conf, tsec, species) {
+  if (filt.kind !== kind) { filt.filters = []; filt.head = null; filt.headFilters = null; }
+  filt.kind = kind; filt.species = species || filt.species;
+  ensureFilters(pts.length);
+  filt.pts = pts.map((p, i) => [filt.filters[2 * i].filter(p[0], tsec), filt.filters[2 * i + 1].filter(p[1], tsec)]);
+  filt.conf = conf;
+}
+
+const crop = new OffscreenCanvas(RTM_SIZE, RTM_SIZE);
+const cropCtx = crop.getContext("2d", { willReadFrequently: true });
+const rtmInput = new Float32Array(3 * RTM_SIZE * RTM_SIZE);
+const track = { box: null, lastDet: -99, species: "dog", busy: false, lost: 0 };
+let frameNo = 0, infMs = 0;
+
+function detect(ts) {
+  const r = det.detectForVideo(video, ts);
+  return r.detections.map(d => ({ label: d.categories[0].categoryName, score: d.categories[0].score, box: [d.boundingBox.originX, d.boundingBox.originY, d.boundingBox.width, d.boundingBox.height] }));
+}
+function runPose(ts, tsec) {
+  const r = pose.detectForVideo(video, ts);
+  maskFresh = false;
+  if (r.segmentationMasks?.length) {
+    const mk = r.segmentationMasks[0];
+    if (state.tissue) {
+      // the mask comes back at video resolution; a ~256 px copy is plenty for a soft-tissue haze
+      const f = mk.getAsFloat32Array(), W0 = mk.width, H0 = mk.height;
+      const st = Math.max(1, Math.round(Math.max(W0, H0) / 256)), w = Math.ceil(W0 / st), h = Math.ceil(H0 / st);
+      const b = new Uint8Array(w * h);
+      for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) b[y * w + x] = f[(y * st) * W0 + x * st] * 255;
+      setMask(w, h, b); maskFresh = true;
+    }
+    for (const m of r.segmentationMasks) m.close?.();
+  }
+  if (!r.landmarks?.length) return false;
+  const lm = r.landmarks[0], vw = video.videoWidth, vh = video.videoHeight;
+  const P = lm.map(p => [p.x * vw, p.y * vh]), V = lm.map(p => p.visibility ?? 1);
+  updateFiltered("human", P, V, tsec);
+  updateHead(P, V, r.worldLandmarks?.[0]?.map(p => [p.x, p.y, p.z]), ts, tsec);
+  return true;
+}
+// Head pose for the 3D skull, in video px: from the face model when it sees this person's face, else from the
+// nose and ears of the pose. Also decides AP / PA / lateral.
+function updateHead(P, V, W, ts, tsec) {
+  let head = null, src = "pose";
+  // head size that survives a profile view, where the ears overlap
+  const dd = (i, j) => Math.hypot(P[i][0] - P[j][0], P[i][1] - P[j][1]);
+  const hs = Math.max(dd(7, 8), dd(0, 7), dd(0, 8));
+  if (face && hs > 30) {
+    const fr = face.detectForVideo(video, ts);
+    const fl = fr.faceLandmarks?.[0], mx = fr.facialTransformationMatrixes?.[0];
+    if (fl && mx) {
+      const pts = fl.map(p => [p.x * video.videoWidth, p.y * video.videoHeight]);
+      // the face found must be this pose's face
+      if (Math.hypot(pts[1][0] - P[0][0], pts[1][1] - P[0][1]) < 0.6 * hs) {
+        const d = mx.data, R = [[d[0], d[4], d[8]], [d[1], d[5], d[9]], [d[2], d[6], d[10]]];  // column-major 4x4
+        const sc = Math.hypot(R[0][0], R[1][0], R[2][0]) || 1;
+        head = XR.headFromFace(pts, R.map(row => row.map(v => v / sc)));
+        const jo = fr.faceBlendshapes?.[0]?.categories.find(c => c.categoryName === "jawOpen");
+        head.jaw = (jo ? jo.score : 0) * 0.45;
+        src = "face mesh";
+      }
+    }
+  }
+  if (!head && W) head = XR.headFromPose(P, W, V);
+  // facing: the nose's world depth against the shoulders' (front views <= -0.03 m, back views >= +0.12 m in
+  // the README's test set); a face the face model can see always means facing the camera
+  if (W) {
+    const wz = W[0][2] - (W[11][2] + W[12][2]) / 2;
+    if (src === "face mesh" || wz < -0.02) filt.away = false;
+    else if (wz > 0.05) filt.away = true;
+  }
+  if (!head) { filt.head = null; return; }
+  const raw = [...head.M[0], ...head.M[1], ...head.b, head.jaw];
+  if (!filt.headFilters) filt.headFilters = raw.map(() => new XR.OneEuro(1.0, 0.02));
+  const f = raw.map((v, i) => filt.headFilters[i].filter(v, tsec));
+  const M = [f.slice(0, 3), f.slice(3, 6)], k = Math.hypot(...M[0]);
+  filt.head = { M, b: [f[6], f[7]], k, jaw: Math.max(0, f[8]) };
+  filt.headSrc = src;
+  // canonical z (out of the face) in camera z: the rotation's third row is row0 x row1
+  const r0 = M[0].map(v => v / k), r1 = M[1].map(v => -v / k), fz = r0[0] * r1[1] - r0[1] * r1[0];
+  filt.view = Math.abs(fz) < 0.35 ? "lateral" : filt.away ? "PA" : "AP";
+}
+async function runAnimal(box, species, tsec) {
+  const [bx, by, bw, bh] = box;
+  const s = Math.max(bw, bh) * 1.25, cx = bx + bw / 2, cy = by + bh / 2;
+  const sx = cx - s / 2, sy = cy - s / 2;
+  cropCtx.fillStyle = "#000"; cropCtx.fillRect(0, 0, RTM_SIZE, RTM_SIZE);
+  // clip the source rect to the frame ourselves so out-of-frame padding stays black on every browser
+  const vw = video.videoWidth, vh = video.videoHeight, k = RTM_SIZE / s;
+  const x0 = Math.max(0, sx), y0 = Math.max(0, sy), x1 = Math.min(vw, sx + s), y1 = Math.min(vh, sy + s);
+  if (x1 <= x0 || y1 <= y0) return false;
+  cropCtx.drawImage(video, x0, y0, x1 - x0, y1 - y0, (x0 - sx) * k, (y0 - sy) * k, (x1 - x0) * k, (y1 - y0) * k);
+  const px = cropCtx.getImageData(0, 0, RTM_SIZE, RTM_SIZE).data, N = RTM_SIZE * RTM_SIZE;
+  for (let i = 0; i < N; i++) for (let c = 0; c < 3; c++) rtmInput[c * N + i] = (px[i * 4 + c] - MEAN[c]) / STD[c];
+  const t0 = performance.now();
+  const input = new LiteRT.Tensor(rtmInput, [1, 3, RTM_SIZE, RTM_SIZE]);
+  let outs;
+  try { outs = await rtm.run(input); } finally { input.delete(); }
+  const host = await Promise.all(outs.map(o => o.moveTo("wasm")));
+  // outs[0] is simcc_x, outs[1] simcc_y, each [1, 17, 512] (checked against the model in test/verify-rtmpose.js)
+  const sxArr = host[0].toTypedArray(), syArr = host[1].toTypedArray();
+  const { pts, conf } = XR.decodeSimcc(sxArr, syArr, RTM_K, RTM_BINS);
+  host.forEach(h => h.delete());
+  infMs = infMs * 0.8 + (performance.now() - t0) * 0.2;
+  const vp = pts.map(p => [sx + p[0] / k, sy + p[1] / k]);
+  const good = conf.filter(c => c > 0.3).length;
+  if (good < 5) return false;
+  updateFiltered("animal", vp, conf, tsec, species);
+  // next crop follows the keypoints
+  const gp = vp.filter((_, i) => conf[i] > 0.3);
+  const xs = gp.map(p => p[0]), ys = gp.map(p => p[1]);
+  const nb = [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+  const pad = 0.12;
+  track.box = [nb[0] - nb[2] * pad, nb[1] - nb[3] * pad, nb[2] * (1 + 2 * pad), nb[3] * (1 + 2 * pad)];
+  return true;
+}
+
+let lastVideoTime = -1, lastSeen = 0;
+async function infer(now) {
+  if (video.readyState < 2 || video.currentTime === lastVideoTime) return;
+  lastVideoTime = video.currentTime;
+  frameNo++;
+  const ts = now, tsec = now / 1000;
+  const mode = state.mode;
+  let want = mode === "auto" ? (state.subject?.kind || null) : (mode === "human" ? "human" : "animal");
+
+  if (mode === "auto" && (!want || frameNo - track.lastDet > (want === "human" ? 20 : 8))) {
+    const t0 = performance.now();
+    const ds = detect(ts); track.lastDet = frameNo;
+    infMs = infMs * 0.8 + (performance.now() - t0) * 0.2;
+    const best = ds.sort((a, b) => b.score * b.box[2] * b.box[3] - a.score * a.box[2] * a.box[3])[0];
+    if (best) {
+      want = best.label === "person" ? "human" : "animal";
+      if (want === "animal") { track.box = best.box; track.species = best.label; }
+    } else if (!want) { setSubject(null); return; }
+  }
+  if (want === "human") {
+    const t0 = performance.now();
+    const found = runPose(ts, tsec);
+    infMs = infMs * 0.8 + (performance.now() - t0) * 0.2;
+    if (found) { lastSeen = now; setSubject({ kind: "human", label: "Human" }); }
+    else if (now - lastSeen > 400) setSubject(null);
+    return;
+  }
+  // animal path
+  if (!rtm) { loadAnimalModel().catch(() => {}); setSubject(null, rtmLoading ? "loading animal model" : "animal model unavailable"); return; }
+  if (track.busy) return;
+  const forced = mode === "cat" || mode === "dog" ? mode : null;
+  if (mode !== "auto" && (!track.box || frameNo - track.lastDet >= 6)) {
+    const ds = detect(ts).filter(d => d.label !== "person"); track.lastDet = frameNo;
+    const best = ds.sort((a, b) => b.score - a.score)[0];
+    if (best) { track.box = best.box; track.species = best.label; }
+    else if (!track.box || now - lastSeen > 600) { track.box = null; setSubject(null); return; }
+  }
+  if (!track.box) { setSubject(null); return; }
+  const species = forced || track.species;
+  track.busy = true;
+  try {
+    const ok = await runAnimal(track.box, species, tsec);
+    if (ok) { lastSeen = now; setSubject({ kind: "animal", label: species === "cat" ? "Cat" : "Dog" }); }
+    else { track.box = null; if (now - lastSeen > 600) setSubject(null); }
+  } catch (e) { console.error(e); toast("Animal pose failed: " + e.message); }
+  finally { track.busy = false; }
+}
+
+function setSubject(s, why) {
+  state.subject = s;
+  $("subject").classList.toggle("on", !!s);
+  $("subjName").textContent = s ? s.label : "Searching";
+  $("subjInfo").textContent = s ? (s.kind === "human" ? (filt.view ? `${filt.view} view · ${filt.headSrc}` : "33 landmarks") : "17 keypoints") : (why || "no subject");
+}
+
+// ---------------- loop ----------------
+let frames = 0, fpsT = performance.now();
+function loop(now) {
+  infer(now).catch(e => console.error(e));
+  try { render(now); } catch (e) { console.error(e); }
+  frames++;
+  if (now - fpsT > 500) {
+    $("fps").textContent = `${Math.round(frames * 1000 / (now - fpsT))} fps`;
+    $("inf").textContent = `${infMs.toFixed(1)} ms`;
+    frames = 0; fpsT = now;
+  }
+  requestAnimationFrame(loop);
+}
+
+// ---------------- UI ----------------
+for (const b of document.querySelectorAll(".seg button")) {
+  b.addEventListener("click", () => {
+    state.mode = b.dataset.mode;
+    for (const o of document.querySelectorAll(".seg button")) o.setAttribute("aria-pressed", String(o === b));
+    track.box = null; track.lastDet = -99; setSubject(null);
+    if (state.mode === "cat" || state.mode === "dog") loadAnimalModel().catch(() => {});
+  });
+}
+$("flip").addEventListener("click", async () => {
+  state.facing = state.facing === "user" ? "environment" : "user";
+  try { await openCamera(); } catch (e) { toast("Could not switch camera: " + e.message); }
+  for (const f of filt.filters) f.reset();
+});
+$("tissue").addEventListener("click", async () => {
+  state.tissue = !state.tissue;
+  $("tissue").setAttribute("aria-pressed", String(state.tissue));
+  try { await pose?.setOptions({ outputSegmentationMasks: state.tissue }); } catch (e) { console.warn(e); }
+});
+
+$("start").addEventListener("click", async () => {
+  $("start").disabled = true;
+  steps.textContent = "";
+  let s;
+  try {
+    s = step("WebGPU"); await initGPU(); s.ok("WebGPU ready");
+    s = step("Camera"); await openCamera(); s.ok(`Camera ${video.videoWidth}×${video.videoHeight}`);
+    s = step("MediaPipe runtime"); await initVision(); s.ok("MediaPipe runtime");
+    // the two models load side by side; neither needs the other
+    const sp = step("Pose model (5.8 MB)"), sd = step("Detector (4.6 MB)"), sf = step("Face model (3.8 MB)");
+    await Promise.all([
+      initPose().then(() => sp.ok("Pose model"), (e) => { s = sp; throw e; }),
+      initDetector().then(() => sd.ok("Detector"), (e) => { s = sd; throw e; }),
+      // optional: without it the skull is posed from the pose landmarks
+      initFace().then(() => sf.ok("Face model"), (e) => { console.warn(e); face = null; sf.err("Face model unavailable; skull follows the pose"); })]);
+  } catch (e) {
+    console.error(e);
+    s?.err(e.name === "NotAllowedError" ? "Camera permission was refused. Allow camera access for this site and try again." : e.message);
+    $("start").disabled = false;
+    return;
+  }
+  $("boot").hidden = true;
+  $("controls").hidden = false;
+  requestAnimationFrame(loop);
+});
+if (!navigator.gpu) step("This browser has no WebGPU, which the renderer needs. Chrome or Edge 121+, Safari 26+, or Firefox 141+ on Windows will work.").err();
+</script>
+</body>
+</html>
