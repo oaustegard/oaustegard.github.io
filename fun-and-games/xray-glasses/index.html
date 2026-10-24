@@ -758,7 +758,7 @@ fn tube(x: f32, shell: f32) -> f32 {
 struct U { res: vec2f, vsize: vec2f, map: vec4f, p: vec4f };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var smp: sampler;
-@group(0) @binding(2) var vid: texture_external;
+@group(0) @binding(2) var vid: texture_2d<f32>;
 @group(0) @binding(3) var maskT: texture_2d<f32>;
 @group(0) @binding(4) var densT: texture_2d<f32>;
 @group(0) @binding(5) var glowT: texture_2d<f32>;
@@ -781,7 +781,7 @@ fn hash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(12.9898, 78.233))) * 43
 @fragment fn fsComp(@builtin(position) fc: vec4f) -> @location(0) vec4f {
   let px = fc.xy;
   let uv = toVid(px);
-  let tx = 1.5 / u.vsize;
+  let tx = 1.5 / vec2f(textureDimensions(vid));
   let l = lum(uv);
   let gx = lum(uv + vec2f(tx.x, 0.0)) - lum(uv - vec2f(tx.x, 0.0));
   let gy = lum(uv + vec2f(0.0, tx.y)) - lum(uv - vec2f(0.0, tx.y));
@@ -898,6 +898,22 @@ function resize() {
   gpuRes.dens = mk(); gpuRes.glow = mk();
 }
 
+// The camera frame for the composite. importExternalTexture would be cheaper, but on iOS 26 WebKit hands it the
+// sensor frame unrotated, so a portrait camera shows 90 degrees off (tfjs#8733). drawImage applies the rotation in
+// every browser, so the frame goes through a 2D canvas, at 640 px at most, then into a plain texture.
+let frameCanvas, frameCtx;
+function frameTexture(vw, vh) {
+  const s = Math.min(1, 640 / Math.max(vw, vh)), w = Math.max(1, Math.round(vw * s)), h = Math.max(1, Math.round(vh * s));
+  if (!gpuRes.vid || gpuRes.vid.width !== w || gpuRes.vid.height !== h) {
+    gpuRes.vid?.destroy();
+    gpuRes.vid = device.createTexture({ size: [w, h], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+    frameCanvas = new OffscreenCanvas(w, h); frameCtx = frameCanvas.getContext("2d");
+  }
+  frameCtx.drawImage(video, 0, 0, w, h);
+  device.queue.copyExternalImageToTexture({ source: frameCanvas }, { texture: gpuRes.vid }, [w, h]);
+  return gpuRes.vid;
+}
+
 // video px -> screen px (object-fit: cover, mirrored for the front camera)
 function mapping() {
   const W = canvas.width, H = canvas.height, vw = video.videoWidth || 1, vh = video.videoHeight || 1;
@@ -939,7 +955,7 @@ function render(t) {
   const bg = device.createBindGroup({ layout: pipes.composite.getBindGroupLayout(0), entries: [
     { binding: 0, resource: { buffer: gpuRes.uniform } },
     { binding: 1, resource: gpuRes.sampler },
-    { binding: 2, resource: device.importExternalTexture({ source: video }) },
+    { binding: 2, resource: frameTexture(m.vw, m.vh).createView() },
     { binding: 3, resource: gpuRes.mask.createView() },
     { binding: 4, resource: gpuRes.dens.createView() },
     { binding: 5, resource: gpuRes.glow.createView() }] });
