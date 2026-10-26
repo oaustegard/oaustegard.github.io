@@ -103,7 +103,8 @@ input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius
 .toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
 input[type="color"] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
 details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
-textarea { width: 100%; box-sizing: border-box; min-height: 110px; margin-top: 8px; font: 12px/1.4 var(--mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; resize: vertical; }
+textarea { width: 100%; box-sizing: border-box; min-height: 110px; font: 12px/1.4 var(--mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; resize: vertical; }
+code { font: 12px var(--mono); }
 .note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
 .err { color: #c2412d; }
 .swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; box-shadow: 0 0 0 1px rgba(0,0,0,.25); vertical-align: -1px; }
@@ -144,7 +145,7 @@ textarea { width: 100%; box-sizing: border-box; min-height: 110px; margin-top: 8
       </div>
       <details>
         <summary>Paste SVG markup</summary>
-        <textarea id="paste" spellcheck="false" placeholder="&lt;svg viewBox=&quot;0 0 400 300&quot; …&gt;"></textarea>
+        <textarea id="paste" style="margin-top:8px" spellcheck="false" placeholder="&lt;svg viewBox=&quot;0 0 400 300&quot; …&gt;"></textarea>
         <div class="row" style="margin-top:8px"><button class="btn primary" id="paste-apply" type="button">Light it</button><span class="note" id="paste-msg"></span></div>
       </details>
       <p class="note">Each overlapping shape sits one step higher than the one under it, so the drawing's own stacking becomes the terrain. Photos use brightness instead.</p>
@@ -182,13 +183,24 @@ textarea { width: 100%; box-sizing: border-box; min-height: 110px; margin-top: 8
       <h2>Room</h2>
       <div class="row"><span class="note">Wall behind the piece</span><input type="color" id="wall" value="#d8d3ca"></div>
       <div id="room-ctls" style="display:grid;gap:10px"></div>
+      <label class="toggle"><input type="checkbox" id="transparent"> No wall: keep only the shadows (transparent PNG and embed)</label>
       <label class="toggle"><input type="checkbox" id="compare"> Compare with the original (drag the divider)</label>
+    </section>
+
+    <section>
+      <h2>Use it</h2>
+      <div class="row" style="justify-content:flex-start"><button class="btn primary" id="save-png" type="button">Save PNG</button><button class="btn" id="copy-png" type="button">Copy image</button><span class="note" id="png-msg"></span></div>
+      <p class="note">Embed it live on any page as a <code>&lt;raking-light&gt;</code> element with these settings. In the embed the key light can</p>
+      <div class="chips" id="embed-light"></div>
+      <div class="row" style="justify-content:flex-start"><button class="btn" id="copy-embed" type="button">Copy embed code</button><span class="note" id="embed-msg"></span></div>
+      <textarea id="embed" readonly spellcheck="false" aria-label="Embed code"></textarea>
+      <p class="note">The element shows the plain SVG where WebGPU is missing, and holds the light still for people who ask for reduced motion.</p>
     </section>
   </aside>
 </div>
 
-<script>
-"use strict";
+<script type="module">
+import { Relighter, buildStage, newLight, PRESETS, MATERIALS, PROFILES, LAYER_A, clamp, kelvinCSS, KELVIN_TRACK } from "./raking-light.js";
 const FONT_SANS = "Helvetica Neue, Helvetica, Arial, sans-serif";
 const SAMPLES = {
   Card: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 440">
@@ -249,459 +261,12 @@ const S = {
   source: { kind: "svg", text: SAMPLES.Card, name: "Card" },
   relief: { lift: 22, step: 6, bevel: 10, profile: 0, invert: false, grain: 0.35, grainScale: 3 },
   mat: { rough: 0.5, metal: 0, spec: 0.6 },
-  room: { wall: "#d8d3ca", ambient: 0.18, skyK: 7500, exposure: 1.0 },
+  room: { wall: "#d8d3ca", transparent: false, ambient: 0.18, skyK: 7500, exposure: 1.0 },
   lights: [],
-  sel: 0, compare: false, wipe: 0.5, orbit: false,
+  sel: 0, compare: false, wipe: 0.5, orbit: false, embedLight: "Pointer",
 };
 const LIGHT_NAMES = ["Key", "Fill", "Rim", "Accent"];
-const PRESETS = {
-  Gallery: { wall: "#d8d3ca", ambient: 0.18, skyK: 7500, exposure: 1.0, mat: "Satin",
-    relief: { lift: 22, step: 6, bevel: 10, profile: 0, invert: false, grain: 0.35 },
-    lights: [{ x: 0.16, y: 0.1, z: 0.55, k: 3000, power: 1.3, size: 0.06 }, { x: 0.92, y: 0.88, z: 0.9, k: 6500, power: 0.35, size: 0.22 }] },
-  Raking: { wall: "#bab4a9", ambient: 0.05, skyK: 7000, exposure: 1.15, mat: "Paper",
-    relief: { lift: 16, step: 5, bevel: 6, profile: 2, invert: false, grain: 0.45 },
-    lights: [{ x: -0.18, y: 0.42, z: 0.07, k: 2900, power: 3.0, size: 0.03 }] },
-  "Golden hour": { wall: "#c9b8a3", ambient: 0.12, skyK: 9500, exposure: 1.0, mat: "Enamel",
-    relief: { lift: 26, step: 7, bevel: 14, profile: 0, invert: false, grain: 0.2 },
-    lights: [{ x: 1.15, y: 0.78, z: 0.17, k: 2100, power: 2.4, size: 0.05 }, { x: 0.15, y: -0.05, z: 0.75, k: 11000, power: 0.4, size: 0.3 }] },
-  Overcast: { wall: "#d3d7da", ambient: 0.42, skyK: 7000, exposure: 1.0, mat: "Clay",
-    relief: { lift: 20, step: 8, bevel: 18, profile: 2, invert: false, grain: 0.5 },
-    lights: [{ x: 0.5, y: 0.25, z: 1.0, k: 6500, power: 1.0, size: 0.25 }] },
-  Letterpress: { wall: "#e2dccf", ambient: 0.2, skyK: 7500, exposure: 1.05, mat: "Paper",
-    relief: { lift: 10, step: 5, bevel: 4, profile: 3, invert: true, grain: 0.8 },
-    lights: [{ x: 0.04, y: 0.08, z: 0.22, k: 4000, power: 1.9, size: 0.04 }] },
-  Studio: { wall: "#2b2d33", ambient: 0.08, skyK: 8000, exposure: 1.1, mat: "Metal",
-    relief: { lift: 24, step: 7, bevel: 12, profile: 0, invert: false, grain: 0.15 },
-    lights: [{ x: 0.22, y: 0.18, z: 0.45, k: 5200, power: 1.6, size: 0.05 }, { x: 1.1, y: 0.15, z: 0.12, k: 3200, power: 1.6, size: 0.04 }, { x: 0.6, y: 1.1, z: 0.5, k: 7500, power: 0.4, size: 0.2 }] },
-};
-const MATERIALS = {
-  Paper: { rough: 0.9, metal: 0, spec: 0.25 },
-  Satin: { rough: 0.5, metal: 0, spec: 0.6 },
-  Enamel: { rough: 0.17, metal: 0, spec: 1.0 },
-  Metal: { rough: 0.34, metal: 1, spec: 1.0 },
-  Clay: { rough: 0.78, metal: 0, spec: 0.2 },
-};
-const PROFILES = ["Round", "Chamfer", "Pillow", "Cove"];
 S.lights = PRESETS.Gallery.lights.map(newLight); S.preset = "Gallery";
-
-/* ---------- color helpers ---------- */
-const s2l = c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
-function hexLin(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => s2l(v / 255)); }
-function kelvinSRGB(K) {
-  const t = clamp(K, 1000, 40000) / 100;
-  const r = t <= 66 ? 255 : 329.698727446 * Math.pow(t - 60, -0.1332047592);
-  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * Math.pow(t - 60, -0.0755148492);
-  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
-  return [r, g, b].map(v => clamp(v, 0, 255) / 255);
-}
-function kelvinLin(K) { const c = kelvinSRGB(K).map(s2l); const y = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map(v => v / y); }
-const kelvinCSS = K => `rgb(${kelvinSRGB(K).map(v => Math.round(v * 255)).join(" ")})`;
-const KELVIN_TRACK = `linear-gradient(90deg, ${[1800, 2700, 3600, 4600, 5600, 6500, 8000, 10000, 12000].map(kelvinCSS).join(", ")})`;
-
-/* ---------- SVG handling ---------- */
-function normalizeSVG(text) {
-  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
-  const svg = doc.documentElement;
-  if (doc.querySelector("parsererror") || svg.nodeName.toLowerCase() !== "svg") throw new Error("That markup is not a valid SVG document.");
-  doc.querySelectorAll("script, foreignObject").forEach(e => e.remove());
-  doc.querySelectorAll("*").forEach(e => { for (const a of [...e.attributes]) if (/^on/i.test(a.name)) e.removeAttribute(a.name); });
-  let w, h;
-  const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
-  if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) { w = vb[2]; h = vb[3]; }
-  else {
-    w = parseFloat(svg.getAttribute("width")) || 800; h = parseFloat(svg.getAttribute("height")) || 600;
-    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
-  }
-  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  return { text: new XMLSerializer().serializeToString(svg), w, h };
-}
-const LAYER_A = 0.2; // each painted shape adds 20% white: v = 1 - 0.8^k recovers the stack depth k
-function heightSVG(text) {
-  const host = document.createElement("div");
-  host.style.cssText = "position:absolute;left:-99999px;top:0;width:10px;height:10px;overflow:hidden;visibility:hidden";
-  host.innerHTML = text;
-  document.body.appendChild(host);
-  const svg = host.querySelector("svg");
-  const shapes = svg.querySelectorAll("path,rect,circle,ellipse,polygon,polyline,line,text,tspan,textPath,use,image");
-  const none = c => !c || c === "none" || /rgba\([^)]*,\s*0\)$/.test(c);
-  const plan = [];
-  for (const el of shapes) {
-    if (el.closest("defs,clipPath,mask,pattern,marker,symbol")) continue;
-    const cs = getComputedStyle(el);
-    const isImg = el.tagName.toLowerCase() === "image";
-    plan.push([el, isImg || (!none(cs.fill) && parseFloat(cs.fillOpacity) > 0.02), !isImg && !none(cs.stroke) && parseFloat(cs.strokeWidth) > 0]);
-  }
-  for (const [el, f, s] of plan) {
-    if (el.tagName.toLowerCase() === "image") {
-      const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
-      for (const a of ["x", "y", "width", "height", "transform"]) if (el.hasAttribute(a)) r.setAttribute(a, el.getAttribute(a));
-      el.replaceWith(r); el = r;
-    }
-    const st = el.style;
-    st.setProperty("fill", f ? "#fff" : "none", "important");
-    st.setProperty("fill-opacity", String(LAYER_A), "important");
-    st.setProperty("stroke", s ? "#fff" : "none", "important");
-    st.setProperty("stroke-opacity", String(LAYER_A), "important");
-  }
-  svg.querySelectorAll("*").forEach(e => { e.style.setProperty("opacity", "1", "important"); e.style.setProperty("filter", "none", "important"); });
-  svg.style.setProperty("opacity", "1", "important");
-  const out = new XMLSerializer().serializeToString(svg);
-  host.remove();
-  return out;
-}
-async function svgImage(text, w, h) {
-  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
-  const svg = doc.documentElement;
-  svg.setAttribute("width", w); svg.setAttribute("height", h);
-  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml" }));
-  try { const img = new Image(); img.src = url; await img.decode(); return img; }
-  finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
-}
-
-/* Stage: content fitted into a 1024px-long texture with a wall margin for shadows to land on. */
-async function buildStage(src) {
-  let cw, ch, ar, albedoImg, heightImg = null, mode = 0;
-  if (src.kind === "svg") {
-    const n = normalizeSVG(src.text);
-    ar = n.w / n.h;
-    cw = Math.round(ar >= 1 ? 820 : 820 * ar); ch = Math.round(ar >= 1 ? 820 / ar : 820);
-    albedoImg = await svgImage(n.text, cw, ch);
-    heightImg = await svgImage(heightSVG(n.text), cw, ch);
-  } else {
-    albedoImg = src.bitmap; ar = albedoImg.width / albedoImg.height; mode = 1;
-    cw = Math.round(ar >= 1 ? 820 : 820 * ar); ch = Math.round(ar >= 1 ? 820 / ar : 820);
-  }
-  const m = 102, W = cw + 2 * m, H = ch + 2 * m;
-  const alb = document.createElement("canvas"); alb.width = W; alb.height = H;
-  alb.getContext("2d", { willReadFrequently: true }).drawImage(albedoImg, m, m, cw, ch);
-  const hc = document.createElement("canvas"); hc.width = W; hc.height = H;
-  const hx = hc.getContext("2d", { willReadFrequently: true }); hx.fillStyle = "#000"; hx.fillRect(0, 0, W, H);
-  if (heightImg) hx.drawImage(heightImg, m, m, cw, ch);
-  return { W, H, alb, hc, mode };
-}
-
-/* ---------- WGSL ---------- */
-const WGSL_P = /* wgsl */`
-struct P { size: vec2f, lift: f32, stepH: f32, bevel: f32, profile: f32, invert: f32, grain: f32,
-  mode: f32, alphaA: f32, jstep: f32, grainScale: f32, smoothR: f32, p0: f32, p1: f32, p2: f32 }
-@group(0) @binding(0) var<uniform> u: P;
-fn inb(p: vec2i) -> bool { return p.x >= 0 && p.y >= 0 && p.x < i32(u.size.x) && p.y < i32(u.size.y); }
-fn cl(p: vec2i) -> vec2i { return clamp(p, vec2i(0), vec2i(u.size) - 1); }
-`;
-const WGSL_LAYERS = WGSL_P + `
-@group(0) @binding(1) var hsrc: texture_2d<f32>;
-@group(0) @binding(2) var alb: texture_2d<f32>;
-@group(0) @binding(3) var outH: texture_storage_2d<r32float, write>;
-@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
-  let p = vec2i(id.xy); if (!inb(p)) { return; }
-  var h = 0.0;
-  if (u.mode < 0.5) {
-    let v = textureLoad(hsrc, p, 0).r;
-    let k = log(max(1.0 - v, 1e-4)) / log(1.0 - u.alphaA);
-    let base = u.lift * clamp(k, 0.0, 1.0);
-    let extra = u.stepH * max(k - 1.0, 0.0);
-    h = select(base + extra, base - extra, u.invert > 0.5);
-  } else {
-    let a = textureLoad(alb, p, 0);
-    let l = sqrt(dot(a.rgb, vec3f(0.2126, 0.7152, 0.0722)));
-    let t = select(l, 1.0 - l, u.invert > 0.5);
-    h = a.a * (u.lift + t * u.stepH * 3.0);
-  }
-  textureStore(outH, p, vec4f(h, 0.0, 0.0, 1.0));
-}`;
-const WGSL_SEED = WGSL_P + `
-@group(0) @binding(1) var h0: texture_2d<f32>;
-@group(0) @binding(2) var outS: texture_storage_2d<rgba32float, write>;
-fn ld(p: vec2i) -> f32 { return textureLoad(h0, cl(p), 0).r; }
-@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
-  let p = vec2i(id.xy); if (!inb(p)) { return; }
-  let c = ld(p);
-  let n4 = min(min(ld(p + vec2i(1, 0)), ld(p - vec2i(1, 0))), min(ld(p + vec2i(0, 1)), ld(p - vec2i(0, 1))));
-  var o = vec4f(0.0);
-  if (c - n4 > 0.15) {
-    var lo = c;
-    for (var y = -2; y <= 2; y++) { for (var x = -2; x <= 2; x++) { lo = min(lo, ld(p + vec2i(x, y))); } }
-    o = vec4f(f32(p.x), f32(p.y), lo, 1.0);
-  }
-  textureStore(outS, p, o);
-}`;
-const WGSL_JFA = WGSL_P + `
-@group(0) @binding(1) var inS: texture_2d<f32>;
-@group(0) @binding(2) var outS: texture_storage_2d<rgba32float, write>;
-@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
-  let p = vec2i(id.xy); if (!inb(p)) { return; }
-  var best = textureLoad(inS, p, 0);
-  var bd = 1e20;
-  if (best.w > 0.5) { bd = distance(vec2f(p), best.xy); }
-  let s = i32(u.jstep);
-  for (var y = -1; y <= 1; y++) { for (var x = -1; x <= 1; x++) {
-    let q = p + vec2i(x, y) * s;
-    if (!inb(q)) { continue; }
-    let c = textureLoad(inS, q, 0);
-    if (c.w > 0.5) { let d = distance(vec2f(p), c.xy); if (d < bd) { bd = d; best = c; } }
-  } }
-  textureStore(outS, p, best);
-}`;
-const WGSL_RELIEF = WGSL_P + `
-@group(0) @binding(1) var h0: texture_2d<f32>;
-@group(0) @binding(2) var jf: texture_2d<f32>;
-@group(0) @binding(3) var outR: texture_storage_2d<r32float, write>;
-fn prof(t: f32) -> f32 {
-  if (u.profile < 0.5) { return sqrt(max(0.0, 1.0 - (1.0 - t) * (1.0 - t))); }
-  if (u.profile < 1.5) { return t; }
-  if (u.profile < 2.5) { return t * t * (3.0 - 2.0 * t); }
-  return 1.0 - sqrt(max(0.0, 1.0 - t * t));
-}
-@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
-  let p = vec2i(id.xy); if (!inb(p)) { return; }
-  let H = textureLoad(h0, p, 0).r;
-  let s = textureLoad(jf, p, 0);
-  var h = H;
-  if (s.w > 0.5 && u.bevel > 0.5 && H > s.z + 0.01) {
-    let t = clamp(distance(vec2f(p), s.xy) / u.bevel, 0.0, 1.0);
-    h = s.z + (H - s.z) * prof(t);
-  }
-  textureStore(outR, p, vec4f(h, 0.0, 0.0, 1.0));
-}`;
-const WGSL_BAKE = WGSL_P + `
-@group(0) @binding(1) var rel: texture_2d<f32>;
-@group(0) @binding(2) var outB: texture_storage_2d<rgba16float, write>;
-fn rl(p: vec2i) -> f32 { return textureLoad(rel, cl(p), 0).r; }
-fn hash(p: vec2f) -> f32 {
-  let v = vec2u(vec2i(p) + vec2i(65536));
-  var h = v.x * 1664525u + v.y * 1013904223u + 374761393u;
-  h = h ^ (h >> 16u); h = h * 2246822519u; h = h ^ (h >> 13u); h = h * 3266489917u; h = h ^ (h >> 16u);
-  return f32(h) / 4294967295.0;
-}
-fn vnoise(p: vec2f) -> f32 {
-  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2f(1.0, 0.0)), w.x), mix(hash(i + vec2f(0.0, 1.0)), hash(i + vec2f(1.0, 1.0)), w.x), w.y);
-}
-fn grainAt(p: vec2f) -> f32 {
-  let q = p / max(u.grainScale, 0.5);
-  return vnoise(q) * 0.6 + vnoise(q * 2.13 + 17.0) * 0.3 + vnoise(q * 4.7 + 3.0) * 0.1 - 0.5;
-}
-fn hg(p: vec2i) -> f32 { return rl(p) + u.grain * grainAt(vec2f(p)); }
-@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
-  let p = vec2i(id.xy); if (!inb(p)) { return; }
-  let r = max(1, i32(u.smoothR));
-  let fr = f32(2 * r);
-  let dx = (hg(p + vec2i(r, 0)) - hg(p - vec2i(r, 0))) * 2.0 + (hg(p + vec2i(r, r)) - hg(p + vec2i(-r, r))) + (hg(p + vec2i(r, -r)) - hg(p + vec2i(-r, -r)));
-  let dy = (hg(p + vec2i(0, r)) - hg(p - vec2i(0, r))) * 2.0 + (hg(p + vec2i(r, r)) - hg(p + vec2i(r, -r))) + (hg(p + vec2i(-r, r)) - hg(p + vec2i(-r, -r)));
-  let n = normalize(vec3f(-dx / (4.0 * fr), -dy / (4.0 * fr), 1.0));
-  let h = rl(p);
-  var occ = 0.0;
-  for (var i = 0; i < 12; i++) {
-    let a = f32(i) * 0.5235988 + 0.26;
-    let d = vec2f(cos(a), sin(a));
-    var ms = 0.0; var rad = 2.0;
-    for (var j = 0; j < 7; j++) {
-      let q = vec2i(round(vec2f(p) + d * rad));
-      ms = max(ms, (rl(q) - h) / rad);
-      rad = rad * 1.85;
-    }
-    occ += ms / sqrt(1.0 + ms * ms);
-  }
-  textureStore(outB, p, vec4f(n.x, n.y, h, 1.0 - occ / 12.0));
-}`;
-const WGSL_RENDER = /* wgsl */`
-struct Light { pos: vec4f, col: vec4f }
-struct U { size: vec4f, wall: vec4f, sky: vec4f, ground: vec4f, mat: vec4f, misc: vec4f, lights: array<Light, 4> }
-@group(0) @binding(0) var<uniform> u: U;
-@group(0) @binding(1) var smp: sampler;
-@group(0) @binding(2) var bake: texture_2d<f32>;
-@group(0) @binding(3) var alb: texture_2d<f32>;
-struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
-@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
-  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
-  var o: VO;
-  o.pos = vec4f(p[i], 0.0, 1.0);
-  o.uv = vec2f((p[i].x + 1.0) * 0.5, (1.0 - p[i].y) * 0.5);
-  return o;
-}
-fn toSrgb(c: vec3f) -> vec3f {
-  let x = clamp(c, vec3f(0.0), vec3f(1.0));
-  return select(1.055 * pow(x, vec3f(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3f(0.0031308));
-}
-fn aces(x: vec3f) -> vec3f { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0)); }
-fn heightAt(q: vec2f) -> f32 { return textureSampleLevel(bake, smp, q / u.size.xy, 0.0).z; }
-fn shadow(P: vec3f, L: vec3f, alpha: f32) -> f32 {
-  let d = L - P;
-  let lxy = length(d.xy);
-  if (lxy < 0.5) { return 1.0; }
-  let dir = d.xy / lxy;
-  let slope = d.z / lxy;
-  let eL = atan(slope);
-  var occ = -1e3;
-  var t = 1.5;
-  let maxT = min(lxy, u.size.x * 0.8);
-  for (var i = 0; i < 80; i++) {
-    if (t >= maxT) { break; }
-    if (P.z + slope * t > u.mat.z + 1.0) { break; }
-    let th = heightAt(P.xy + dir * t);
-    occ = max(occ, (th - P.z) / t);
-    if (atan(occ) > eL + alpha) { return 0.0; }
-    t += clamp(t * 0.07, 0.6, 9.0);
-  }
-  let v = clamp(0.5 + (eL - atan(occ)) / (2.0 * alpha), 0.0, 1.0);
-  return v * v * (3.0 - 2.0 * v);
-}
-@fragment fn fs(i: VO) -> @location(0) vec4f {
-  let uv = i.uv;
-  let a = textureSample(alb, smp, uv);
-  let b = textureSample(bake, smp, uv);
-  let base = mix(u.wall.rgb, a.rgb, a.a);
-  if (uv.x < u.misc.x) { return vec4f(toSrgb(base), 1.0); }
-  let N = normalize(vec3f(b.x, b.y, sqrt(max(0.0, 1.0 - b.x * b.x - b.y * b.y))));
-  let P = vec3f(uv * u.size.xy, b.z);
-  let V = vec3f(0.0, 0.0, 1.0);
-  let rough = max(u.ground.w, 0.04);
-  let metal = u.mat.x;
-  let F0 = mix(vec3f(0.04 * u.mat.y * 2.0), base, metal);
-  let diffC = base * (1.0 - metal);
-  let ao = clamp(b.w, 0.0, 1.0);
-  let hemi = mix(u.ground.rgb, u.sky.rgb, N.z * 0.5 + 0.5);
-  var col = diffC * hemi * u.wall.w * ao + F0 * u.sky.rgb * u.wall.w * ao * 0.15;
-  let W2 = u.size.x * u.size.x;
-  let a2 = rough * rough * rough * rough;
-  let kG = (rough + 1.0) * (rough + 1.0) / 8.0;
-  let NV = max(N.z, 1e-3);
-  for (var k = 0; k < i32(u.misc.z); k++) {
-    let Lp = u.lights[k].pos.xyz;
-    let Ld = Lp - P;
-    let dist = length(Ld);
-    let L = Ld / dist;
-    let NL = dot(N, L);
-    if (NL <= 0.0) { continue; }
-    let att = u.lights[k].pos.w * W2 / (W2 * 0.6 + dist * dist);
-    let sh = shadow(P, Lp, u.lights[k].col.w);
-    if (sh <= 0.0) { continue; }
-    let H = normalize(L + V);
-    let NH = max(dot(N, H), 0.0);
-    let VH = max(dot(V, H), 0.0);
-    let dd = NH * NH * (a2 - 1.0) + 1.0;
-    let D = a2 / (3.14159 * dd * dd);
-    let G = (NL / (NL * (1.0 - kG) + kG)) * (NV / (NV * (1.0 - kG) + kG));
-    let F = F0 + (1.0 - F0) * pow(1.0 - VH, 5.0);
-    let spec = min(D * G * F / (4.0 * NL * NV) * 3.14159, vec3f(40.0));
-    col += (diffC * (1.0 - F) + spec) * u.lights[k].col.rgb * att * NL * sh;
-  }
-  var c = toSrgb(aces(col * u.sky.w));
-  let n = fract(sin(dot(i.pos.xy, vec2f(12.9898, 78.233)) + u.misc.y) * 43758.5453);
-  c += (n - 0.5) / 255.0;
-  return vec4f(c, 1.0);
-}`;
-
-/* ---------- GPU renderer ---------- */
-const G = { device: null, ok: false };
-async function initGPU(canvas) {
-  if (!navigator.gpu) return false;
-  const adapter = await navigator.gpu.requestAdapter();
-  if (!adapter) return false;
-  const device = await adapter.requestDevice();
-  device.lost.then(i => setMode("GPU device lost (" + i.reason + "). Reload the page to restart."));
-  device.addEventListener("uncapturederror", e => { console.error(e.error.message); setMode("WebGPU error: " + e.error.message.slice(0, 80)); });
-  const ctx = canvas.getContext("webgpu");
-  const format = navigator.gpu.getPreferredCanvasFormat();
-  ctx.configure({ device, format, alphaMode: "opaque" });
-  const C = GPUShaderStage.COMPUTE, F = GPUShaderStage.FRAGMENT;
-  const uni = { buffer: { type: "uniform" } };
-  const unf = { texture: { sampleType: "unfilterable-float" } };
-  const sto = f => ({ storageTexture: { access: "write-only", format: f } });
-  const layout = (vis, list) => device.createBindGroupLayout({ entries: list.map((r, i) => ({ binding: i, visibility: vis, ...r })) });
-  async function comp(code, lay) {
-    const module = device.createShaderModule({ code });
-    const info = await module.getCompilationInfo();
-    for (const m of info.messages) if (m.type === "error") throw new Error(`WGSL ${m.lineNum}:${m.linePos} ${m.message}`);
-    return device.createComputePipelineAsync({ layout: device.createPipelineLayout({ bindGroupLayouts: [lay] }), compute: { module, entryPoint: "main" } });
-  }
-  const L = {
-    layers: layout(C, [uni, unf, unf, sto("r32float")]),
-    seed: layout(C, [uni, unf, sto("rgba32float")]),
-    jfa: layout(C, [uni, unf, sto("rgba32float")]),
-    relief: layout(C, [uni, unf, unf, sto("r32float")]),
-    bake: layout(C, [uni, unf, sto("rgba16float")]),
-    render: layout(F, [{ buffer: { type: "uniform" } }, { sampler: { type: "filtering" } }, { texture: { sampleType: "float" } }, { texture: { sampleType: "float" } }]),
-  };
-  const [pLayers, pSeed, pJfa, pRelief, pBake] = await Promise.all([
-    comp(WGSL_LAYERS, L.layers), comp(WGSL_SEED, L.seed), comp(WGSL_JFA, L.jfa), comp(WGSL_RELIEF, L.relief), comp(WGSL_BAKE, L.bake)]);
-  const rmod = device.createShaderModule({ code: WGSL_RENDER });
-  for (const m of (await rmod.getCompilationInfo()).messages) if (m.type === "error") throw new Error(`WGSL render ${m.lineNum}:${m.linePos} ${m.message}`);
-  const pRender = await device.createRenderPipelineAsync({
-    layout: device.createPipelineLayout({ bindGroupLayouts: [L.render] }),
-    vertex: { module: rmod, entryPoint: "vs" }, fragment: { module: rmod, entryPoint: "fs", targets: [{ format }] },
-    primitive: { topology: "triangle-list" },
-  });
-  const JSTEPS = [64, 32, 16, 8, 4, 2, 1, 1];
-  const bakeU = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const jfaU = JSTEPS.map(() => device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
-  const renderU = device.createBuffer({ size: 224, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
-  Object.assign(G, { device, ctx, format, L, pLayers, pSeed, pJfa, pRelief, pBake, pRender, JSTEPS, bakeU, jfaU, renderU, sampler, tex: null, ok: true });
-  return true;
-}
-function gpuSetStage(st) {
-  const { device } = G;
-  if (G.tex) Object.values(G.tex).forEach(t => t.destroy());
-  const U = GPUTextureUsage, size = [st.W, st.H];
-  const mk = (format, usage) => device.createTexture({ size, format, usage });
-  G.tex = {
-    alb: mk("rgba8unorm-srgb", U.TEXTURE_BINDING | U.COPY_DST | U.RENDER_ATTACHMENT),
-    hsrc: mk("rgba8unorm", U.TEXTURE_BINDING | U.COPY_DST | U.RENDER_ATTACHMENT),
-    h0: mk("r32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
-    sA: mk("rgba32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
-    sB: mk("rgba32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
-    rel: mk("r32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
-    bake: mk("rgba16float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
-  };
-  const put = (cv, texture) => device.queue.writeTexture({ texture }, cv.getContext("2d").getImageData(0, 0, st.W, st.H).data, { bytesPerRow: st.W * 4 }, size);
-  put(st.alb, G.tex.alb); put(st.hc, G.tex.hsrc);
-  const v = t => t.createView();
-  const bg = (lay, res) => device.createBindGroup({ layout: lay, entries: res.map((r, i) => ({ binding: i, resource: r })) });
-  const T = G.tex;
-  G.groups = {
-    layers: bg(G.L.layers, [{ buffer: G.bakeU }, v(T.hsrc), v(T.alb), v(T.h0)]),
-    seed: bg(G.L.seed, [{ buffer: G.bakeU }, v(T.h0), v(T.sA)]),
-    jfa: G.JSTEPS.map((_, i) => i % 2 === 0
-      ? bg(G.L.jfa, [{ buffer: G.jfaU[i] }, v(T.sA), v(T.sB)])
-      : bg(G.L.jfa, [{ buffer: G.jfaU[i] }, v(T.sB), v(T.sA)])),
-    relief: bg(G.L.relief, [{ buffer: G.bakeU }, v(T.h0), v(G.JSTEPS.length % 2 === 0 ? T.sA : T.sB), v(T.rel)]),
-    bake: bg(G.L.bake, [{ buffer: G.bakeU }, v(T.rel), v(T.bake)]),
-    render: bg(G.L.render, [{ buffer: G.renderU }, G.sampler, v(T.bake), v(T.alb)]),
-  };
-}
-function gpuBake(st) {
-  const { device } = G, r = S.relief;
-  const raster = st.mode === 1;
-  const params = j => new Float32Array([st.W, st.H, r.lift, r.step, raster ? 0 : r.bevel, r.profile, r.invert ? 1 : 0, r.grain,
-    st.mode, LAYER_A, j, r.grainScale, raster ? 2 : 1, 0, 0, 0]);
-  device.queue.writeBuffer(G.bakeU, 0, params(1));
-  G.JSTEPS.forEach((s, i) => device.queue.writeBuffer(G.jfaU[i], 0, params(s)));
-  const enc = device.createCommandEncoder();
-  const wx = Math.ceil(st.W / 8), wy = Math.ceil(st.H / 8);
-  const run = (pipe, group) => { const p = enc.beginComputePass(); p.setPipeline(pipe); p.setBindGroup(0, group); p.dispatchWorkgroups(wx, wy); p.end(); };
-  run(G.pLayers, G.groups.layers);
-  run(G.pSeed, G.groups.seed);
-  G.groups.jfa.forEach(g => run(G.pJfa, g));
-  run(G.pRelief, G.groups.relief);
-  run(G.pBake, G.groups.bake);
-  device.queue.submit([enc.finish()]);
-}
-const RU = new Float32Array(56);
-function gpuRender(st, t) {
-  const r = S.room, wall = hexLin(r.wall), sky = kelvinLin(r.skyK);
-  const maxH = S.relief.invert ? S.relief.lift : S.relief.lift + S.relief.step * 9;
-  const lights = S.lights.slice(0, 4);
-  RU.set([st.W, st.H, 0, 0, ...wall, r.ambient, ...sky, r.exposure, ...wall.map(c => c * 0.6), S.mat.rough,
-    S.mat.metal, S.mat.spec, maxH + S.relief.grain, 0, S.compare ? S.wipe : -1, t % 1000, lights.length, 0]);
-  lights.forEach((l, i) => RU.set([l.x * st.W, l.y * st.H, l.z * st.W, l.power, ...kelvinLin(l.k), l.size], 24 + i * 8));
-  G.device.queue.writeBuffer(G.renderU, 0, RU);
-  const enc = G.device.createCommandEncoder();
-  const pass = enc.beginRenderPass({ colorAttachments: [{ view: G.ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
-  pass.setPipeline(G.pRender); pass.setBindGroup(0, G.groups.render); pass.draw(3); pass.end();
-  G.device.queue.submit([enc.finish()]);
-}
 
 /* ---------- SVG-filter fallback (no WebGPU) ---------- */
 const FB = { el: null };
@@ -746,7 +311,9 @@ function fallbackRender(st) {
 /* ---------- app wiring ---------- */
 const $ = s => document.querySelector(s);
 const frame = $("#frame"), canvas = $("#gl"), stageEl = $("#stage");
-let stage = null, needBake = true, dirty = true, busy = false;
+let stage = null, needBake = true, dirty = true, busy = false, R = null;
+window.rakingLight = { get relighter() { return R; }, get cfg() { return cfg(); } };
+const cfg = () => ({ relief: S.relief, mat: S.mat, room: S.room, lights: S.lights, wipe: S.compare ? S.wipe : -1 });
 const refreshers = [];
 function setMode(t) { $("#hud-mode").textContent = t; }
 
@@ -803,7 +370,6 @@ refreshers.push(() => { $("#wall").value = S.room.wall; });
 $("#compare").addEventListener("change", e => { S.compare = e.target.checked; $("#wipe").hidden = !S.compare; placeWipe(); dirty = true; });
 
 // lights
-function newLight(o) { return Object.assign({ x: 0.2, y: 0.15, z: 0.5, k: 4000, power: 1.2, size: 0.06 }, o); }
 const lc = $("#light-ctls");
 const L = () => S.lights[S.sel];
 slider(lc, { id: "lk", label: "Warmth", min: 1800, max: 12000, step: 50, get: () => L().k, set: v => L().k = v, fmt: v => `${v} K`, track: KELVIN_TRACK, after: drawHandles });
@@ -848,15 +414,15 @@ function applyPreset(name) {
 chips($("#presets"), Object.keys(PRESETS), n => S.preset === n, applyPreset);
 chips($("#samples"), Object.keys(SAMPLES), n => S.source.kind === "svg" && S.source.name === n, n => loadSource({ kind: "svg", text: SAMPLES[n], name: n }));
 
-function refreshAll() { refreshers.forEach(f => f()); lightTabs(); drawHandles(); readout(); refreshChips(); }
+function refreshAll() { refreshers.forEach(f => f()); lightTabs(); drawHandles(); readout(); refreshChips(); if (typeof writeEmbed === "function") writeEmbed(); }
 
 // sources
 async function loadSource(src) {
   try {
-    const st = await buildStage(src);
+    const st = R ? await R.setSource(src) : await buildStage(src);
     S.source = src; stage = st;
     $("#src-name").textContent = src.name;
-    if (G.ok) gpuSetStage(st); else fallbackSetStage(st);
+    if (!R) fallbackSetStage(st);
     $("#hud-size").textContent = `${st.W}×${st.H} relief`;
     needBake = dirty = true; layout(); refreshAll();
     return true;
@@ -938,6 +504,74 @@ frame.addEventListener("pointermove", e => {
 frame.addEventListener("pointerup", () => { drag = null; });
 frame.addEventListener("pointercancel", () => { drag = null; });
 
+
+$("#transparent").addEventListener("change", e => { S.room.transparent = e.target.checked; dirty = true; });
+refreshers.push(() => { $("#transparent").checked = !!S.room.transparent; });
+
+// use it: PNG + embed
+const EMBED_LIGHTS = { Pointer: "follows the pointer", Tilt: "follows phone tilt", Orbit: "orbits", Fixed: "stays put" };
+chips($("#embed-light"), Object.keys(EMBED_LIGHTS), n => S.embedLight === n, n => { S.embedLight = n; writeEmbed(); });
+document.querySelectorAll("#embed-light .chip").forEach(b => b.title = "Key light " + EMBED_LIGHTS[b.textContent]);
+const MODULE_URL = "https://austegard.com/fun-and-games/raking-light.js";
+const r3 = v => +(+v).toFixed(3);
+function embedCode() {
+  const r = S.relief, m = S.mat, room = S.room;
+  const attrs = [["elevation", r.lift], ["step", r.step], ["bevel", r.bevel], ["profile", PROFILES[r.profile].toLowerCase()],
+    ["grain", r.grain], ["grain-size", r.grainScale], ["roughness", m.rough], ["metal", m.metal], ["specular", m.spec],
+    ["ambient", room.ambient], ["sky", room.skyK], ["exposure", room.exposure],
+    ["wall", room.transparent ? "transparent" : room.wall], ["light", S.embedLight.toLowerCase()]]
+    .map(([k, v]) => `${k}="${typeof v === "number" ? r3(v) : v}"`);
+  if (r.invert) attrs.push("deboss");
+  const lights = JSON.stringify(S.lights.map(l => ({ x: r3(l.x), y: r3(l.y), z: r3(l.z), k: l.k, power: r3(l.power), size: r3(l.size) })));
+  attrs.push(`lights='${lights}'`);
+  const open = `<raking-light ${attrs.join(" ")}`;
+  const body = S.source.kind === "svg"
+    ? `${open}>\n${S.source.text.trim()}\n</raking-light>`
+    : `<!-- Put your image next to the page and point src at it -->\n${open} src="${S.source.name.replace(/"/g, "")}"></raking-light>`;
+  return `<script type="module" src="${MODULE_URL}"></` + `script>\n${body}`;
+}
+function writeEmbed() { $("#embed").value = embedCode(); }
+$("#copy-embed").addEventListener("click", () => {
+  writeEmbed();
+  const msg = $("#embed-msg"), ta = $("#embed");
+  navigator.clipboard.writeText(ta.value).then(() => { msg.textContent = "Copied."; },
+    () => { ta.focus(); ta.select(); msg.textContent = "Selected: press Ctrl+C or ⌘C to copy."; });
+});
+$("#embed").addEventListener("focus", writeEmbed);
+async function pngBlob() {
+  if (!R || !stage) throw new Error("PNG export needs WebGPU.");
+  if (needBake) { R.bake(cfg()); needBake = false; }
+  const c = await R.snapshot(cfg());
+  return new Promise(res => c.toBlob(res, "image/png"));
+}
+const pngName = () => `${(S.source.name || "relit").replace(/\.[a-z]+$/i, "").replace(/[^a-z0-9-]+/gi, "-").toLowerCase()}-relit.png`;
+// Inside the Claude viewer a page can only offer files through its downloads capability; elsewhere a plain link works.
+let viewerDownloads = null;
+window.claude?.use?.("downloads").then(d => { viewerDownloads = d; }, () => {});
+$("#save-png").addEventListener("click", async () => {
+  const msg = $("#png-msg");
+  try {
+    const blob = await pngBlob();
+    if (viewerDownloads) {
+      try { await viewerDownloads.save({ filename: pngName(), data: blob }); msg.textContent = `Saved ${stage.W}×${stage.H} PNG.`; }
+      catch (e) { msg.textContent = e.code === "declined" ? "" : "Saving isn't available here. Try Copy image."; }
+      return;
+    }
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = pngName(); document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+    msg.textContent = `${stage.W}×${stage.H} PNG. If nothing downloaded, use Copy image.`;
+  } catch (e) { msg.textContent = e.message; }
+});
+$("#copy-png").addEventListener("click", async () => {
+  const msg = $("#png-msg");
+  try {
+    const blob = await pngBlob();
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    msg.textContent = "Image copied.";
+  } catch (e) { msg.textContent = "This browser won't copy images here. Try Save PNG."; }
+});
+
 // loop
 const t0 = performance.now();
 function frameLoop(now) {
@@ -947,9 +581,9 @@ function frameLoop(now) {
       const l = S.lights[0]; l.x = 0.5 + 0.62 * Math.cos(t * 0.45); l.y = 0.5 + 0.5 * Math.sin(t * 0.45);
       drawHandles(); readout(); dirty = true;
     }
-    if (G.ok) {
-      if (needBake) { gpuBake(stage); needBake = false; dirty = true; }
-      if (dirty) { gpuRender(stage, t); dirty = false; }
+    if (R) {
+      if (needBake) { R.bake(cfg()); needBake = false; dirty = true; }
+      if (dirty) { R.render(cfg(), t); dirty = false; }
     } else if (dirty || needBake) {
       if (needBake) { fallbackSetStage(stage); needBake = false; }
       fallbackRender(stage); dirty = false;
@@ -959,9 +593,9 @@ function frameLoop(now) {
 }
 
 (async function start() {
-  let ok = false;
-  try { ok = await initGPU(canvas); } catch (e) { console.error(e); }
-  if (ok) setMode("WebGPU · 12 compute dispatches + soft shadows");
+  try { R = await Relighter.create(canvas); } catch (e) { console.error(e); }
+  if (R) R.G.onLost.add(i => setMode("GPU device lost (" + i.reason + "). Reload the page to restart."));
+  if (R) setMode("WebGPU · 12 compute dispatches + soft shadows");
   else { setMode("No WebGPU here: SVG filter lighting with the key light only, no shadows or occlusion"); canvas.hidden = true; $("#fallback").hidden = false; }
   await loadSource(S.source);
   requestAnimationFrame(frameLoop);

@@ -31,6 +31,24 @@ Prompted by [Lumen](https://lumen.renderg.host), which turns Kelvin-temperature 
 - **Surface**: Paper, Satin, Enamel, Metal, Clay, or set roughness, metal and specular directly.
 - **Room**: wall colour, ambient light, sky warmth, exposure, and a divider to compare with the original.
 
+## Use it
+
+- **Save PNG** or **Copy image**: the current render at 1024 px on the long side. Tick "No wall" in Room
+  for a transparent background that keeps only the shadows.
+- **Copy embed code**: a `<raking-light>` element with the current settings and the SVG inside it. Choose
+  whether the key light follows the pointer, follows phone tilt, orbits, or stays put. Paste it into any page:
+
+```html
+<script type="module" src="https://austegard.com/fun-and-games/raking-light.js"></script>
+<raking-light preset="gallery" light="pointer" style="width: 480px">
+  <svg viewBox="0 0 200 200">…</svg>
+</raking-light>
+```
+
+The element can also take the picture by URL (`src="logo.svg"`). It shows the plain SVG where WebGPU is
+missing and keeps the light still for people who ask for reduced motion. The attributes are listed in the
+[write-up](https://github.com/oaustegard/experiments/tree/main/raking-light#embedding-it).
+
 Without WebGPU the page falls back to SVG filter lighting with the first light only: no cast shadows,
 and the compare divider and several controls do nothing. Not handled in SVG input: `<image>` elements
 become plain rectangles, shapes inside clip paths, masks or patterns are skipped, and opacity, filters and
