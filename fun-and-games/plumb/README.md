@@ -17,9 +17,12 @@ motion access then), and use Add to Home Screen to install it full-screen and of
 | shake sideways | hold: three alternating x-axis spikes inside 700 ms | swipe up |
 | tap | rotate clockwise; left third of the well rotates counter-clockwise | same |
 
-The spirit-level vial in the header shows roll against the neutral angle, with ticks at the dead zone
-and at full speed. Tapping it sets the current angle as level; Start and Resume do the same, so you
-can play lying down. Keyboard works on a desktop: arrows, X/Z, space, C, P.
+Start, Resume and New game each spend about a second reading how you hold the phone and treat
+that pose as level, so sitting up, lying down or holding the phone overhead all play the same. The
+spirit-level vial in the header shows roll against that level, with ticks at the dead zone and at
+full speed; tapping it re-levels mid-game. "FAST" next to the tilt readout means the tip soft-drop
+is on. Roll and tip are read from gravity's components along the screen's own axes (cos β · sin γ
+and sin β), not from the raw γ angle, which flips sign once the screen faces the floor. Keyboard works on a desktop: arrows, X/Z, space, C, P.
 
 ## How it is built
 
@@ -32,10 +35,11 @@ can play lying down. Keyboard works on a desktop: arrows, X/Z, space, C, P.
 - **SVG** holds 200 pre-built cell rects updated only on lock, 4 active and 4 ghost rects moved by
   one transform per frame, per-piece gradients, and the board tilts slightly in 3D with the phone.
 - **WebGPU**: 16,384 grains (4,096 with reduced motion), one compute pass and one instanced draw
-  per frame. The gravity vector comes from `deviceorientation` as (cos β · sin γ, sin β) in screen
-  coordinates. Each grain has a hashed depth and is pushed back once it sinks deeper than that into
-  the downhill wall, so the dust pools as a layer that sloshes like liquid in a vial when you tilt.
-  Locks and line clears push radial bursts through it. Without WebGPU, or after a device loss, a
+  per frame. The dust's gravity vector comes from `deviceorientation`, in screen
+  coordinates relative to the calibrated pose, so the dust is a readout of the steering: at level it
+  rests along the bottom, and it slides toward the side the piece is drifting to, harder the steeper
+  the roll. Each grain has a hashed depth and is pushed back once it sinks deeper than that into the
+  wall it is sliding toward, so it moves as a layer. Locks and line clears push radial bursts through it. Without WebGPU, or after a device loss, a
   Canvas 2D version of the same simulation runs 1,600 grains.
 - **PWA**: `manifest.json` (fullscreen, portrait), `sw.js` precaches the shell and refreshes it in
   the background, screen wake lock while playing, haptics through `navigator.vibrate` where the

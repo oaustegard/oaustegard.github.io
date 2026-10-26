@@ -136,7 +136,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
 <div id="overlay">
   <section class="card" id="titleCard">
     <h1>PLU<span>M</span>B</h1>
-    <p class="tag">Falling blocks, steered by the way you hold the phone. The dust behind the well settles under real gravity.</p>
+    <p class="tag">Falling blocks, steered by the way you hold the phone. Start reads how you are holding it, in a chair or lying down, and treats that as level. The dust behind the well slides the way your piece is steering.</p>
     <dl class="keys">
       <dt>Tilt left / right</dt><dd>steer; a steeper roll moves faster</dd>
       <dt>Tap</dt><dd>rotate clockwise (left third: counter-clockwise)</dd>
@@ -166,9 +166,15 @@ dl.keys dd { margin: 0; color: var(--fg); }
 
   <section class="card" id="pauseCard" hidden>
     <h2>Paused</h2>
-    <p class="tag">Hold the phone the way you want to play, then resume. Resuming sets that angle as level.</p>
+    <p class="tag">Hold the phone the way you want to play, then resume. Resume reads that angle as level.</p>
     <div class="row"><button class="go" type="button" id="resumeBtn">RESUME</button></div>
     <div class="row"><button type="button" id="restartBtn">New game</button><button type="button" id="menuBtn">Settings</button></div>
+  </section>
+
+  <section class="card" id="calCard" hidden>
+    <h2>Hold still</h2>
+    <p class="tag">Hold the phone the way you will play. This angle becomes level: tilt from here to steer, tip steeper to drop faster. Tap the bubble during play to re-level.</p>
+    <div class="big" id="calCount">3</div>
   </section>
 
   <section class="card" id="overCard" hidden>
@@ -265,7 +271,6 @@ function newGame() {
   score = 0; lines = 0; level = 1; clearing = null; energy = 0;
   refill(); spawn();
   drawLocked(); drawHud(); drawMinis();
-  levelHere();
   setMode('play');
 }
 
@@ -365,16 +370,20 @@ function gameOver() {
 }
 
 /* ---------- motion ---------- */
-const motion = { ok: false, beta: 45, gamma: 0, b0: 45, g0: 0, lp: [0, 0, 0], lpInit: false,
+// gx, gd: gravity's components along the screen's right edge and down its long axis, from -1 to 1.
+// They stay correct in any pose, including lying down with the screen facing the floor, where the
+// raw gamma angle flips sign. gx0, gd0 are the same at the moment of calibration.
+const motion = { ok: false, gx: 0, gd: 0.7, gx0: 0, gd0: 0.7, lp: [0, 0, 0], lpInit: false,
   lastKnock: 0, lastShake: 0, shakes: [], listening: false };
 
 function onOrient(e) {
   if (e.beta == null || e.gamma == null) return;
-  let b = e.beta, g = e.gamma;
+  const b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+  let gx = Math.cos(b) * Math.sin(g), gd = Math.sin(b);
   const ang = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
-  if (Math.abs(ang) === 180) { b = -b; g = -g; }
-  if (!motion.ok) { motion.ok = true; motion.beta = b; motion.gamma = g; levelHere(); updateStatus(); }
-  motion.beta = b; motion.gamma = g;
+  if (Math.abs(ang) === 180) { gx = -gx; gd = -gd; }
+  motion.gx = gx; motion.gd = gd;
+  if (!motion.ok) { motion.ok = true; levelTo(gx, gd); updateStatus(); }
 }
 function onMotion(e) {
   const a = e.accelerationIncludingGravity;
@@ -415,27 +424,29 @@ async function enableMotion() {
   setTimeout(updateStatus, 1200);
 }
 let motionDenied = false;
-function levelHere() {
-  if (!motion.ok) return;
-  motion.b0 = clamp(motion.beta, 5, 80);
-  motion.g0 = clamp(motion.gamma, -20, 20);
-}
+const deg = v => Math.asin(clamp(v, -1, 1)) * 180 / Math.PI;
+function levelTo(gx, gd) { motion.gx0 = gx; motion.gd0 = gd; }
+function levelHere() { if (motion.ok) levelTo(motion.gx, motion.gd); }
+// Roll and tip relative to the calibrated pose, in degrees; positive is right edge down / steeper.
+const steerDeg = () => deg(motion.gx) - deg(motion.gx0);
+const tipDeg = () => deg(motion.gd) - deg(motion.gd0);
 function steerVelocity() {
   if (!(settings.tilt && motion.ok)) return 0;
-  const d = motion.gamma - motion.g0, a = Math.abs(d), dz = 4;
+  const d = steerDeg(), a = Math.abs(d), dz = 4;
   if (a < dz) return 0;
   const n = clamp((a - dz) / (settings.range - dz), 0, 1);
   return Math.sign(d) * (1.5 + 14 * n * n);
 }
 function tipMultiplier() {
   if (!(settings.pour && motion.ok)) return 1;
-  const d = motion.beta - motion.b0 - 14;
+  const d = tipDeg() - 14;
   return d <= 0 ? 1 : 1 + clamp(d / 16, 0, 1) * 19;
 }
+// The dust's "gravity" is the steering input, not the room's: at level it rests along the bottom,
+// and it slides toward the side the piece is drifting to, harder the steeper the roll.
 function gravityVector(t) {
-  if (!motion.ok) return [Math.sin(t * 0.21) * 0.18, 0.92];
-  const b = motion.beta * Math.PI / 180, g = motion.gamma * Math.PI / 180;
-  return [Math.cos(b) * Math.sin(g), Math.sin(b)];
+  if (!motion.ok || !settings.tilt) return [Math.sin(t * 0.21) * 0.18, 0.92];
+  return [clamp(steerDeg() / settings.range, -1, 1) * 0.95, 0.55 + clamp(tipDeg() / 30, -0.4, 0.4)];
 }
 
 /* ---------- sound and haptics ---------- */
@@ -579,9 +590,10 @@ let bubbleX = 80;
 function drawVial(dt) {
   let target = 80;
   if (motion.ok) {
-    const d = motion.gamma - motion.g0;
+    const d = steerDeg();
     target = 80 - clamp(d / settings.range, -1, 1) * 58;
-    tiltRead.textContent = `TILT ${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(0).padStart(2, '0')}°`;
+    tiltRead.textContent = `TILT ${d >= 0 ? '+' : '−'}${Math.abs(d).toFixed(0).padStart(2, '0')}°` +
+      (mode === 'play' && tipMultiplier() > 1.5 ? ' · FAST' : '');
   }
   bubbleX += (target - bubbleX) * Math.min(1, dt * 14);
   bubble.setAttribute('cx', bubbleX.toFixed(2));
@@ -656,12 +668,12 @@ fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VOut 
   let p = ps[ii];
   let b = hash(ii);
   let s = 0.004 + b * 0.007;
-  let sp = clamp(length(p.vel) * 0.7, 0.0, 1.0);
+  let sp = clamp(length(p.vel) * 0.35, 0.0, 1.0);
   var o: VOut;
   o.pos = vec4f((p.pos.x + c.x * s) / u.aspect, -(p.pos.y + c.y * s), 0.0, 1.0);
   o.c = c;
   let base = mix(vec3f(0.20, 0.52, 0.58), vec3f(0.85, 0.71, 0.42), b * b);
-  o.col = vec4f(mix(base, vec3f(1.0, 0.88, 0.66), sp), 0.30 + 0.45 * sp + u.energy * 0.3);
+  o.col = vec4f(mix(base, vec3f(1.0, 0.88, 0.66), sp), 0.28 + 0.3 * sp + u.energy * 0.3);
   return o;
 }
 @fragment
@@ -772,7 +784,7 @@ function make2dSky(canvas) {
         if (px[i] < -aspect) { px[i] = -aspect; vx[i] = Math.abs(vx[i]) * 0.4; }
         if (py[i] > 1) { py[i] = 1; vy[i] = -Math.abs(vy[i]) * 0.4; }
         if (py[i] < -1) { py[i] = -1; vy[i] = Math.abs(vy[i]) * 0.4; }
-        const sp = Math.min(1, Math.hypot(vx[i], vy[i]) * 0.7), s = (0.004 + b * 0.007) * sc * 1.4;
+        const sp = Math.min(1, Math.hypot(vx[i], vy[i]) * 0.35), s = (0.004 + b * 0.007) * sc * 1.4;
         ctx.fillStyle = sp > 0.3 ? `rgba(255,224,168,${0.25 + 0.4 * sp})` : (b > 0.6 ? 'rgba(216,180,106,0.32)' : 'rgba(64,140,150,0.36)');
         ctx.fillRect((px[i] / aspect * 0.5 + 0.5) * cw - s / 2, (py[i] * 0.5 + 0.5) * ch - s / 2, s, s);
       }
@@ -840,11 +852,12 @@ let last = performance.now(), clock = 0;
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now; clock += dt;
+  if (cal) stepCalibration(dt);
   update(dt);
   drawPiece();
   drawVial(dt);
   if (motion.ok && !reduced && mode === 'play') {
-    const rx = clamp(motion.beta - motion.b0, -20, 20) * -0.25, ry = clamp(motion.gamma - motion.g0, -20, 20) * 0.35;
+    const rx = clamp(tipDeg(), -20, 20) * -0.25, ry = clamp(steerDeg(), -20, 20) * 0.35;
     board.style.transform = `perspective(900px) rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)`;
   } else {
     board.style.transform = '';
@@ -930,13 +943,31 @@ function setMode(m) {
   $('#titleCard').hidden = m !== 'title';
   $('#pauseCard').hidden = m !== 'pause';
   $('#overCard').hidden = m !== 'over';
+  $('#calCard').hidden = m !== 'cal';
   if (m === 'play') wake();
   if (m === 'title') { $('#stBest').textContent = best.toLocaleString(); updateStatus(); }
   const focus = { title: '#startBtn', pause: '#resumeBtn', over: '#againBtn' }[m];
   if (focus) setTimeout(() => { try { $(focus).focus({ preventScroll: true }); } catch {} }, 0);
 }
 function pause() { if (mode === 'play') { softKey = softTouch = false; setMode('pause'); } }
-function resume() { levelHere(); last = performance.now(); setMode('play'); }
+function resume() { calibrate(() => { last = performance.now(); setMode('play'); }); }
+// Average the pose over about a second before play. Skipped when no sensor reports.
+let cal = null;
+function calibrate(then) {
+  if (!motion.listening || motionDenied) { then(); return; }
+  cal = { t: 0, n: 0, sx: 0, sd: 0, then };
+  setMode('cal');
+}
+function stepCalibration(dt) {
+  cal.t += dt;
+  if (!motion.ok && cal.t > 0.8) { const f = cal.then; cal = null; f(); return; }
+  if (motion.ok && cal.t > 0.5) { cal.sx += motion.gx; cal.sd += motion.gd; cal.n++; }
+  $('#calCount').textContent = Math.max(1, Math.ceil(1.8 - cal.t));
+  if (cal.t >= 1.8) {
+    if (cal.n) levelTo(cal.sx / cal.n, cal.sd / cal.n);
+    const f = cal.then; cal = null; f();
+  }
+}
 function updateStatus() {
   $('#stGpu').textContent = sky ? sky.label : 'starting…';
   let m;
@@ -961,13 +992,12 @@ $('#rangeIn').addEventListener('input', e => {
 });
 $('#startBtn').addEventListener('click', async () => {
   try { actx = actx || new (window.AudioContext || window.webkitAudioContext)(); if (actx.state === 'suspended') actx.resume(); } catch {}
-  const asking = enableMotion();
-  newGame();
-  await asking;
+  await enableMotion();
+  calibrate(newGame);
 });
 $('#resumeBtn').addEventListener('click', resume);
-$('#restartBtn').addEventListener('click', newGame);
-$('#againBtn').addEventListener('click', newGame);
+$('#restartBtn').addEventListener('click', () => calibrate(newGame));
+$('#againBtn').addEventListener('click', () => calibrate(newGame));
 $('#menuBtn').addEventListener('click', () => setMode('title'));
 $('#overMenuBtn').addEventListener('click', () => setMode('title'));
 $('#pauseBtn').addEventListener('click', pause);
