@@ -1,7 +1,7 @@
 # Plumb
 
 Falling blocks for a phone, played by tilting it. Installable PWA; SVG draws the well and pieces,
-WebGPU runs a particle field behind it that settles under the phone's real gravity, and the motion
+WebGPU shatters cleared rows into shards that fall away, and the motion
 sensors replace most of the buttons.
 
 Live: <https://austegard.com/fun-and-games/plumb/>. Open it on a phone, press Start (iOS asks for
@@ -17,12 +17,12 @@ motion access then), and use Add to Home Screen to install it full-screen and of
 | shake sideways | hold: three alternating x-axis spikes inside 700 ms | swipe up |
 | tap | rotate clockwise; left third of the well rotates counter-clockwise | same |
 
-Pick how you hold the phone: **Upright** (sitting or standing; level is the screen 50° from
-horizontal) or **Flat** (lying down with the phone overhead, or on a table; level is 25°). The toggle
-is on the start and pause screens. The tip soft-drop starts 20° steeper than level. The spirit-level
-vial in the header shows roll, with ticks at the dead zone and at full speed; tapping it sets the
-current angle as level for the rest of the game. "FAST" next to the tilt readout means the tip
-soft-drop is on. Roll and tip are read from gravity's components along the screen's own axes
+After Start, hold the phone the way you want to play (sitting up, lying down, on your side) and
+press **Plumb**: that pose becomes level. The card shows the screen's angle from flat and the roll
+while you hold it. The tip soft-drop starts 20° steeper than plumb. Pause has **Plumb again** for
+when you change position, and tapping the spirit-level vial mid-game re-plumbs on the spot. The vial
+shows roll, with ticks at the dead zone and at full speed. "FAST" next to the tilt readout means the
+tip soft-drop is on. Roll and tip are read from gravity's components along the screen's own axes
 (cos β · sin γ and sin β), not from the raw γ angle, which flips sign once the screen faces the floor. Keyboard works on a desktop: arrows, X/Z, space, C, P.
 
 ## How it is built
@@ -35,15 +35,16 @@ soft-drop is on. Roll and tip are read from gravity's components along the scree
   per-column jump.
 - **SVG** holds 200 pre-built cell rects updated only on lock, 4 active and 4 ghost rects moved by
   one transform per frame, per-piece gradients, and the board tilts slightly in 3D with the phone.
-- **WebGPU**: 16,384 grains (4,096 with reduced motion), one compute pass and one instanced draw
-  per frame. The dust's gravity vector comes from `deviceorientation`, in screen
-  coordinates relative to the calibrated pose, so the dust is a readout of the steering: at level it
-  rests along the bottom, and it slides toward the side the piece is drifting to, harder the steeper
-  the roll. Each grain has a hashed depth and is pushed back once it sinks deeper than that into the
-  wall it is sliding toward, so it moves as a layer. Locks and line clears push radial bursts through it. Without WebGPU, or after a device loss, a
-  Canvas 2D version of the same simulation runs 1,600 grains.
+- **WebGPU shards.** A cleared row breaks into nine shards per cell in that cell's colour; a
+  locking piece throws a small puff from its bottom cells. Shards fly out, spin, fall down the screen
+  and drift toward the side the piece is steering to, then fade within about 1.5 s. A 4,096-slot ring
+  buffer on the GPU holds them; the CPU only writes newly spawned shards, one compute pass moves them
+  and one instanced draw renders them on a transparent canvas above the board. When nothing is alive
+  the GPU work stops. Without WebGPU, or after a device loss, a Canvas 2D version does the same.
+  This replaced an ambient dust field that, having no particle-to-particle forces, collapsed onto
+  the flow lines of its own noise field and drew streaks.
 - **PWA**: `manifest.json` (fullscreen, portrait), `sw.js` precaches the shell and refreshes it in
-  the background (a new version shows on the second load), screen wake lock while playing.
+  the background (the page itself is network-first, so an update shows on the next load), screen wake lock while playing.
 - **Sound and haptics on iOS.** Web Audio is muted by the silent switch unless the page sets
   `navigator.audioSession.type = 'playback'`, which it does (the in-game Sound toggle still mutes).
   iOS has no `navigator.vibrate`; since iOS 18 a click on a hidden `<input type="checkbox" switch>`

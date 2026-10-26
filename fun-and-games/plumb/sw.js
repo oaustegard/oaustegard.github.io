@@ -1,5 +1,5 @@
 // Plumb service worker: precache the app shell, serve it cache-first, refresh in the background.
-const VERSION = 'plumb-v2';
+const VERSION = 'plumb-v3';
 const CORE = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
@@ -20,6 +20,15 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin && !FONT_HOSTS.includes(url.hostname)) return;
+  // The page itself goes network-first, so an update shows on the next load; the cache is the offline copy.
+  if (req.mode === 'navigate') {
+    e.respondWith(
+      fetch(req)
+        .then(res => { if (res.ok) caches.open(VERSION).then(c => c.put('index.html', res.clone())); return res; })
+        .catch(() => caches.open(VERSION).then(c => c.match('index.html')))
+    );
+    return;
+  }
   e.respondWith(
     caches.open(VERSION).then(async cache => {
       const hit = await cache.match(req, { ignoreSearch: url.origin === location.origin });
