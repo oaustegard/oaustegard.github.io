@@ -1,0 +1,972 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>:root{color-scheme:light}body{margin:0}[hidden]{display:none!important}</style>
+<title>Raking Light</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one-screen bench — the lit stage fills the left, a conservator's control sheet runs down the right; stacks on phones. */
+:root {
+  --bg: #e4e6ea;
+  --panel: #f3f4f6;
+  --ink: #15181e;
+  --muted: #5b6270;
+  --line: #cdd1d8;
+  --accent: #2f45c4;
+  --accent-ink: #ffffff;
+  --stage: #c7cad0;
+  --chip: #e7e9ee;
+  --display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --body: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #111317; --panel: #191c22; --ink: #e7e9ee; --muted: #98a0ad; --line: #2b2f37;
+    --accent: #8d9cff; --accent-ink: #0d1020; --stage: #0b0c0f; --chip: #22262e; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #111317; --panel: #191c22; --ink: #e7e9ee; --muted: #98a0ad; --line: #2b2f37;
+  --accent: #8d9cff; --accent-ink: #0d1020; --stage: #0b0c0f; --chip: #22262e; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 14px; }
+.app {
+  height: 100%; box-sizing: border-box;
+  display: grid; grid-template-columns: minmax(0, 1fr) 356px; gap: 16px;
+  padding-block: 16px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+.stage {
+  position: relative; min-width: 0; min-height: 0;
+  background: var(--stage); border-radius: 6px;
+  display: grid; place-items: center; overflow: hidden;
+}
+.frame { position: relative; touch-action: none; cursor: crosshair; }
+.frame canvas, #fallback, #fallback svg { display: block; width: 100%; height: 100%; }
+.handles { position: absolute; inset: 0; pointer-events: none; }
+.handle {
+  position: absolute; width: 26px; height: 26px; margin: -13px 0 0 -13px; border-radius: 50%;
+  border: 2px solid rgba(255,255,255,.9); box-shadow: 0 0 0 1px rgba(0,0,0,.35), 0 2px 10px rgba(0,0,0,.35);
+  pointer-events: auto; cursor: grab; padding: 0; display: grid; place-items: center;
+  font: 600 10px/1 var(--mono); color: #111;
+}
+.handle.sel { outline: 2px solid var(--accent); outline-offset: 3px; }
+.handle:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.wipe { position: absolute; top: 0; bottom: 0; width: 0; pointer-events: none; }
+.wipe::before { content: ""; position: absolute; top: 0; bottom: 0; left: -1px; width: 2px; background: rgba(255,255,255,.85); box-shadow: 0 0 0 1px rgba(0,0,0,.25); }
+.wipe span { position: absolute; top: 10px; font: 500 10px/1 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: #fff; background: rgba(0,0,0,.55); padding: 4px 6px; border-radius: 3px; white-space: nowrap; }
+.wipe span:first-child { right: 8px; } .wipe span:last-child { left: 8px; }
+.hud {
+  position: absolute; left: 12px; bottom: 12px; right: 12px;
+  display: flex; flex-wrap: wrap; gap: 6px; pointer-events: none;
+}
+.hud span { font: 500 11px/1 var(--mono); color: #f2f3f5; background: rgba(12,13,16,.62); padding: 6px 8px; border-radius: 3px; font-variant-numeric: tabular-nums; }
+.hud .gpu { background: var(--accent); color: var(--accent-ink); }
+
+.panel {
+  min-height: 0; overflow-y: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  display: flex; flex-direction: column;
+}
+.head { padding: 18px 18px 14px; border-bottom: 1px solid var(--line); display: grid; gap: 6px; }
+.head h1 { margin: 0; font: 700 26px/1 var(--display); letter-spacing: -.02em; text-wrap: balance; }
+.head p { margin: 0; color: var(--muted); line-height: 1.45; font-size: 13px; }
+section { padding: 14px 18px 16px; border-bottom: 1px solid var(--line); display: grid; gap: 10px; }
+section:last-child { border-bottom: 0; }
+h2 { margin: 0; font: 600 11px/1 var(--mono); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); display: flex; justify-content: space-between; gap: 8px; }
+h2 em { font-style: normal; color: var(--ink); letter-spacing: .04em; text-transform: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip, .btn {
+  font: 500 13px/1 var(--body); color: var(--ink); background: var(--chip); border: 1px solid var(--line);
+  border-radius: 999px; padding: 7px 11px; cursor: pointer;
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--panel); border-color: var(--ink); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.chip:focus-visible, .btn:focus-visible, input:focus-visible, textarea:focus-visible, summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.ctl { display: grid; grid-template-columns: 86px minmax(0, 1fr) 64px; align-items: center; gap: 10px; }
+.ctl label { font-size: 13px; color: var(--muted); }
+.ctl output { font: 500 12px/1 var(--mono); text-align: right; font-variant-numeric: tabular-nums; }
+input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 20px; background: transparent; margin: 0; }
+input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; background: var(--track, var(--line)); }
+input[type="range"]::-moz-range-track { height: 4px; border-radius: 2px; background: var(--track, var(--line)); }
+input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: var(--panel); border: 2px solid var(--accent); }
+input[type="range"]::-moz-range-thumb { width: 12px; height: 12px; border-radius: 50%; background: var(--panel); border: 2px solid var(--accent); }
+.row { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--muted); cursor: pointer; }
+.toggle input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+input[type="color"] { width: 44px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 4px; background: none; cursor: pointer; }
+details summary { cursor: pointer; font-size: 13px; color: var(--muted); }
+textarea { width: 100%; box-sizing: border-box; min-height: 110px; margin-top: 8px; font: 12px/1.4 var(--mono); color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 4px; padding: 8px; resize: vertical; }
+.note { font-size: 12px; color: var(--muted); line-height: 1.45; margin: 0; }
+.err { color: #c2412d; }
+.swatch { width: 10px; height: 10px; border-radius: 50%; display: inline-block; margin-right: 6px; box-shadow: 0 0 0 1px rgba(0,0,0,.25); vertical-align: -1px; }
+@media (max-width: 860px) {
+  html, body { height: auto; }
+  .app { height: auto; grid-template-columns: minmax(0, 1fr); }
+  .stage { height: 62vh; min-height: 320px; }
+  .panel { overflow: visible; }
+}
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+</head>
+<body>
+<div class="app">
+  <main class="stage" id="stage">
+    <div class="frame" id="frame">
+      <canvas id="gl" aria-label="Relit content"></canvas>
+      <div id="fallback" hidden></div>
+      <div class="wipe" id="wipe" hidden><span>As drawn</span><span>Relit</span></div>
+      <div class="handles" id="handles"></div>
+    </div>
+    <div class="hud" id="hud"><span class="gpu" id="hud-mode">Starting…</span><span id="hud-light"></span><span id="hud-size"></span></div>
+  </main>
+
+  <aside class="panel">
+    <div class="head">
+      <h1>Raking Light</h1>
+      <p>Flat SVG goes in. Paint order becomes height, and WebGPU bevels it, works out ambient occlusion, and lights it with soft shadows. Drag the stage to move a light.</p>
+    </div>
+
+    <section>
+      <h2>Source <em id="src-name">Card</em></h2>
+      <div class="chips" id="samples"></div>
+      <div class="row">
+        <button class="btn" id="upload-btn" type="button">Upload SVG or image</button>
+        <input type="file" id="file" accept=".svg,image/svg+xml,image/png,image/jpeg,image/webp" hidden>
+      </div>
+      <details>
+        <summary>Paste SVG markup</summary>
+        <textarea id="paste" spellcheck="false" placeholder="&lt;svg viewBox=&quot;0 0 400 300&quot; …&gt;"></textarea>
+        <div class="row" style="margin-top:8px"><button class="btn primary" id="paste-apply" type="button">Light it</button><span class="note" id="paste-msg"></span></div>
+      </details>
+      <p class="note">Each overlapping shape sits one step higher than the one under it, so the drawing's own stacking becomes the terrain. Photos use brightness instead.</p>
+    </section>
+
+    <section>
+      <h2>Lighting setup</h2>
+      <div class="chips" id="presets"></div>
+    </section>
+
+    <section>
+      <h2>Lights <em id="light-readout"></em></h2>
+      <div class="chips" id="light-tabs"></div>
+      <div id="light-ctls" style="display:grid;gap:10px"></div>
+      <div class="row">
+        <label class="toggle"><input type="checkbox" id="orbit"> Orbit the key light</label>
+        <button class="btn" id="remove-light" type="button">Remove light</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Relief</h2>
+      <div id="relief-ctls" style="display:grid;gap:10px"></div>
+      <div class="chips" id="profiles"></div>
+      <label class="toggle"><input type="checkbox" id="invert"> Deboss (press shapes into the surface)</label>
+    </section>
+
+    <section>
+      <h2>Surface</h2>
+      <div class="chips" id="materials"></div>
+      <div id="mat-ctls" style="display:grid;gap:10px"></div>
+    </section>
+
+    <section>
+      <h2>Room</h2>
+      <div class="row"><span class="note">Wall behind the piece</span><input type="color" id="wall" value="#d8d3ca"></div>
+      <div id="room-ctls" style="display:grid;gap:10px"></div>
+      <label class="toggle"><input type="checkbox" id="compare"> Compare with the original (drag the divider)</label>
+    </section>
+  </aside>
+</div>
+
+<script>
+"use strict";
+const FONT_SANS = "Helvetica Neue, Helvetica, Arial, sans-serif";
+const SAMPLES = {
+  Card: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 440">
+  <rect width="720" height="440" rx="40" fill="#F3EFE6"/>
+  <circle cx="100" cy="100" r="46" fill="#E2603B"/>
+  <path d="M79 101 l15 15 l29 -31" fill="none" stroke="#F3EFE6" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="168" y="92" font-family="${FONT_SANS}" font-size="34" font-weight="700" fill="#1F2430">Payment received</text>
+  <text x="168" y="128" font-family="${FONT_SANS}" font-size="20" fill="#6B7180">Invoice 4821 · Oct 26</text>
+  <text x="56" y="262" font-family="${FONT_SANS}" font-size="104" font-weight="800" fill="#1F2430">$2,480</text>
+  <rect x="56" y="300" width="608" height="14" rx="7" fill="#E1DBCF"/>
+  <rect x="56" y="300" width="420" height="14" rx="7" fill="#2F6F5E"/>
+  <rect x="56" y="350" width="210" height="56" rx="28" fill="#1F2430"/>
+  <text x="161" y="386" text-anchor="middle" font-family="${FONT_SANS}" font-size="22" font-weight="600" fill="#F3EFE6">View receipt</text>
+  <rect x="284" y="351.5" width="140" height="53" rx="26.5" fill="none" stroke="#1F2430" stroke-width="3"/>
+  <text x="354" y="386" text-anchor="middle" font-family="${FONT_SANS}" font-size="22" font-weight="600" fill="#1F2430">Share</text>
+</svg>`,
+  Poster: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 600 800">
+  <rect width="600" height="800" fill="#ECE6D8"/>
+  <circle cx="380" cy="300" r="190" fill="#D6452E"/>
+  <rect x="60" y="120" width="70" height="560" fill="#1E1E24"/>
+  <path d="M130 680 L330 330 L530 680 Z" fill="#F2B632"/>
+  <path d="M380 110 A190 190 0 0 1 570 300 L380 300 Z" fill="#2846A8"/>
+  <circle cx="230" cy="200" r="46" fill="none" stroke="#1E1E24" stroke-width="14"/>
+  <rect x="60" y="700" width="480" height="10" fill="#1E1E24"/>
+  <text x="60" y="766" font-family="${FONT_SANS}" font-weight="800" font-size="50" letter-spacing="6" fill="#1E1E24">FORM · 1926</text>
+</svg>`,
+  Icons: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 724 388">
+  <rect width="724" height="388" rx="32" fill="#F1EEE8"/>
+  <g transform="translate(40 40)"><rect width="140" height="140" rx="30" fill="#F6C453"/>
+    <circle cx="70" cy="70" r="24" fill="#FFF7E0"/>
+    <g stroke="#FFF7E0" stroke-width="8" stroke-linecap="round"><path d="M70 22v10M70 108v10M22 70h10M108 70h10M36 36l7 7M97 97l7 7M104 36l-7 7M43 97l-7 7"/></g></g>
+  <g transform="translate(208 40)"><rect width="140" height="140" rx="30" fill="#8FB8E8"/>
+    <path d="M44 98h56a20 20 0 0 0 1-40a28 28 0 0 0-53-6a23 23 0 0 0-4 46z" fill="#F4F8FD"/></g>
+  <g transform="translate(376 40)"><rect width="140" height="140" rx="30" fill="#EE8C8C"/>
+    <path d="M70 110C22 80 24 42 48 40c12-1 19 7 22 13c3-6 10-14 22-13c24 2 26 40-22 70z" fill="#FFF1F1"/></g>
+  <g transform="translate(544 40)"><rect width="140" height="140" rx="30" fill="#2B2F3A"/>
+    <path d="M80 22L42 80h26l-8 38l40-60H74z" fill="#F6C453"/></g>
+  <g transform="translate(40 208)"><rect width="140" height="140" rx="30" fill="#9AD0A8"/>
+    <path d="M36 104C36 58 66 34 108 32c0 44-24 74-66 74z" fill="#F1FAF3"/><path d="M44 98L86 58" stroke="#9AD0A8" stroke-width="6" stroke-linecap="round" fill="none"/></g>
+  <g transform="translate(208 208)"><rect width="140" height="140" rx="30" fill="#5B8DEF"/>
+    <path d="M70 26c0 0 32 38 32 60a32 32 0 0 1-64 0c0-22 32-60 32-60z" fill="#EEF3FE"/></g>
+  <g transform="translate(376 208)"><rect width="140" height="140" rx="30" fill="#C9A3E6"/>
+    <path d="M70 28l12 26l28 3l-21 19l6 28l-25-14l-25 14l6-28l-21-19l28-3z" fill="#FBF6FF"/></g>
+  <g transform="translate(544 208)"><rect width="140" height="140" rx="30" fill="#E9A66B"/>
+    <path d="M30 72L70 36l40 36v40H30z" fill="#FFF5EC"/><rect x="60" y="84" width="20" height="28" rx="4" fill="#E9A66B"/></g>
+</svg>`,
+  Type: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 420">
+  <rect width="800" height="420" rx="28" fill="#1F3A5F"/>
+  <rect x="60" y="56" width="120" height="12" rx="6" fill="#F4C95D"/>
+  <circle cx="738" cy="62" r="15" fill="none" stroke="#9FB4D3" stroke-width="5"/>
+  <text x="400" y="262" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-style="italic" font-weight="700" font-size="196" fill="#F4C95D">Relief</text>
+  <text x="400" y="340" text-anchor="middle" font-family="${FONT_SANS}" font-size="26" font-weight="600" letter-spacing="10" fill="#9FB4D3">PRESSED · RAISED · LIT</text>
+</svg>`
+};
+
+/* ---------- state ---------- */
+const S = {
+  source: { kind: "svg", text: SAMPLES.Card, name: "Card" },
+  relief: { lift: 22, step: 6, bevel: 10, profile: 0, invert: false, grain: 0.35, grainScale: 3 },
+  mat: { rough: 0.5, metal: 0, spec: 0.6 },
+  room: { wall: "#d8d3ca", ambient: 0.18, skyK: 7500, exposure: 1.0 },
+  lights: [],
+  sel: 0, compare: false, wipe: 0.5, orbit: false,
+};
+const LIGHT_NAMES = ["Key", "Fill", "Rim", "Accent"];
+const PRESETS = {
+  Gallery: { wall: "#d8d3ca", ambient: 0.18, skyK: 7500, exposure: 1.0, mat: "Satin",
+    relief: { lift: 22, step: 6, bevel: 10, profile: 0, invert: false, grain: 0.35 },
+    lights: [{ x: 0.16, y: 0.1, z: 0.55, k: 3000, power: 1.3, size: 0.06 }, { x: 0.92, y: 0.88, z: 0.9, k: 6500, power: 0.35, size: 0.22 }] },
+  Raking: { wall: "#bab4a9", ambient: 0.05, skyK: 7000, exposure: 1.15, mat: "Paper",
+    relief: { lift: 16, step: 5, bevel: 6, profile: 2, invert: false, grain: 0.45 },
+    lights: [{ x: -0.18, y: 0.42, z: 0.07, k: 2900, power: 3.0, size: 0.03 }] },
+  "Golden hour": { wall: "#c9b8a3", ambient: 0.12, skyK: 9500, exposure: 1.0, mat: "Enamel",
+    relief: { lift: 26, step: 7, bevel: 14, profile: 0, invert: false, grain: 0.2 },
+    lights: [{ x: 1.15, y: 0.78, z: 0.17, k: 2100, power: 2.4, size: 0.05 }, { x: 0.15, y: -0.05, z: 0.75, k: 11000, power: 0.4, size: 0.3 }] },
+  Overcast: { wall: "#d3d7da", ambient: 0.42, skyK: 7000, exposure: 1.0, mat: "Clay",
+    relief: { lift: 20, step: 8, bevel: 18, profile: 2, invert: false, grain: 0.5 },
+    lights: [{ x: 0.5, y: 0.25, z: 1.0, k: 6500, power: 1.0, size: 0.25 }] },
+  Letterpress: { wall: "#e2dccf", ambient: 0.2, skyK: 7500, exposure: 1.05, mat: "Paper",
+    relief: { lift: 10, step: 5, bevel: 4, profile: 3, invert: true, grain: 0.8 },
+    lights: [{ x: 0.04, y: 0.08, z: 0.22, k: 4000, power: 1.9, size: 0.04 }] },
+  Studio: { wall: "#2b2d33", ambient: 0.08, skyK: 8000, exposure: 1.1, mat: "Metal",
+    relief: { lift: 24, step: 7, bevel: 12, profile: 0, invert: false, grain: 0.15 },
+    lights: [{ x: 0.22, y: 0.18, z: 0.45, k: 5200, power: 1.6, size: 0.05 }, { x: 1.1, y: 0.15, z: 0.12, k: 3200, power: 1.6, size: 0.04 }, { x: 0.6, y: 1.1, z: 0.5, k: 7500, power: 0.4, size: 0.2 }] },
+};
+const MATERIALS = {
+  Paper: { rough: 0.9, metal: 0, spec: 0.25 },
+  Satin: { rough: 0.5, metal: 0, spec: 0.6 },
+  Enamel: { rough: 0.17, metal: 0, spec: 1.0 },
+  Metal: { rough: 0.34, metal: 1, spec: 1.0 },
+  Clay: { rough: 0.78, metal: 0, spec: 0.2 },
+};
+const PROFILES = ["Round", "Chamfer", "Pillow", "Cove"];
+S.lights = PRESETS.Gallery.lights.map(newLight); S.preset = "Gallery";
+
+/* ---------- color helpers ---------- */
+const s2l = c => c <= 0.04045 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+function hexLin(hex) { const n = parseInt(hex.slice(1), 16); return [(n >> 16) & 255, (n >> 8) & 255, n & 255].map(v => s2l(v / 255)); }
+function kelvinSRGB(K) {
+  const t = clamp(K, 1000, 40000) / 100;
+  const r = t <= 66 ? 255 : 329.698727446 * Math.pow(t - 60, -0.1332047592);
+  const g = t <= 66 ? 99.4708025861 * Math.log(t) - 161.1195681661 : 288.1221695283 * Math.pow(t - 60, -0.0755148492);
+  const b = t >= 66 ? 255 : t <= 19 ? 0 : 138.5177312231 * Math.log(t - 10) - 305.0447927307;
+  return [r, g, b].map(v => clamp(v, 0, 255) / 255);
+}
+function kelvinLin(K) { const c = kelvinSRGB(K).map(s2l); const y = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]; return c.map(v => v / y); }
+const kelvinCSS = K => `rgb(${kelvinSRGB(K).map(v => Math.round(v * 255)).join(" ")})`;
+const KELVIN_TRACK = `linear-gradient(90deg, ${[1800, 2700, 3600, 4600, 5600, 6500, 8000, 10000, 12000].map(kelvinCSS).join(", ")})`;
+
+/* ---------- SVG handling ---------- */
+function normalizeSVG(text) {
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = doc.documentElement;
+  if (doc.querySelector("parsererror") || svg.nodeName.toLowerCase() !== "svg") throw new Error("That markup is not a valid SVG document.");
+  doc.querySelectorAll("script, foreignObject").forEach(e => e.remove());
+  doc.querySelectorAll("*").forEach(e => { for (const a of [...e.attributes]) if (/^on/i.test(a.name)) e.removeAttribute(a.name); });
+  let w, h;
+  const vb = (svg.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(Number);
+  if (vb.length === 4 && vb[2] > 0 && vb[3] > 0) { w = vb[2]; h = vb[3]; }
+  else {
+    w = parseFloat(svg.getAttribute("width")) || 800; h = parseFloat(svg.getAttribute("height")) || 600;
+    svg.setAttribute("viewBox", `0 0 ${w} ${h}`);
+  }
+  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  return { text: new XMLSerializer().serializeToString(svg), w, h };
+}
+const LAYER_A = 0.2; // each painted shape adds 20% white: v = 1 - 0.8^k recovers the stack depth k
+function heightSVG(text) {
+  const host = document.createElement("div");
+  host.style.cssText = "position:absolute;left:-99999px;top:0;width:10px;height:10px;overflow:hidden;visibility:hidden";
+  host.innerHTML = text;
+  document.body.appendChild(host);
+  const svg = host.querySelector("svg");
+  const shapes = svg.querySelectorAll("path,rect,circle,ellipse,polygon,polyline,line,text,tspan,textPath,use,image");
+  const none = c => !c || c === "none" || /rgba\([^)]*,\s*0\)$/.test(c);
+  const plan = [];
+  for (const el of shapes) {
+    if (el.closest("defs,clipPath,mask,pattern,marker,symbol")) continue;
+    const cs = getComputedStyle(el);
+    const isImg = el.tagName.toLowerCase() === "image";
+    plan.push([el, isImg || (!none(cs.fill) && parseFloat(cs.fillOpacity) > 0.02), !isImg && !none(cs.stroke) && parseFloat(cs.strokeWidth) > 0]);
+  }
+  for (const [el, f, s] of plan) {
+    if (el.tagName.toLowerCase() === "image") {
+      const r = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+      for (const a of ["x", "y", "width", "height", "transform"]) if (el.hasAttribute(a)) r.setAttribute(a, el.getAttribute(a));
+      el.replaceWith(r); el = r;
+    }
+    const st = el.style;
+    st.setProperty("fill", f ? "#fff" : "none", "important");
+    st.setProperty("fill-opacity", String(LAYER_A), "important");
+    st.setProperty("stroke", s ? "#fff" : "none", "important");
+    st.setProperty("stroke-opacity", String(LAYER_A), "important");
+  }
+  svg.querySelectorAll("*").forEach(e => { e.style.setProperty("opacity", "1", "important"); e.style.setProperty("filter", "none", "important"); });
+  svg.style.setProperty("opacity", "1", "important");
+  const out = new XMLSerializer().serializeToString(svg);
+  host.remove();
+  return out;
+}
+async function svgImage(text, w, h) {
+  const doc = new DOMParser().parseFromString(text, "image/svg+xml");
+  const svg = doc.documentElement;
+  svg.setAttribute("width", w); svg.setAttribute("height", h);
+  const url = URL.createObjectURL(new Blob([new XMLSerializer().serializeToString(svg)], { type: "image/svg+xml" }));
+  try { const img = new Image(); img.src = url; await img.decode(); return img; }
+  finally { setTimeout(() => URL.revokeObjectURL(url), 1000); }
+}
+
+/* Stage: content fitted into a 1024px-long texture with a wall margin for shadows to land on. */
+async function buildStage(src) {
+  let cw, ch, ar, albedoImg, heightImg = null, mode = 0;
+  if (src.kind === "svg") {
+    const n = normalizeSVG(src.text);
+    ar = n.w / n.h;
+    cw = Math.round(ar >= 1 ? 820 : 820 * ar); ch = Math.round(ar >= 1 ? 820 / ar : 820);
+    albedoImg = await svgImage(n.text, cw, ch);
+    heightImg = await svgImage(heightSVG(n.text), cw, ch);
+  } else {
+    albedoImg = src.bitmap; ar = albedoImg.width / albedoImg.height; mode = 1;
+    cw = Math.round(ar >= 1 ? 820 : 820 * ar); ch = Math.round(ar >= 1 ? 820 / ar : 820);
+  }
+  const m = 102, W = cw + 2 * m, H = ch + 2 * m;
+  const alb = document.createElement("canvas"); alb.width = W; alb.height = H;
+  alb.getContext("2d", { willReadFrequently: true }).drawImage(albedoImg, m, m, cw, ch);
+  const hc = document.createElement("canvas"); hc.width = W; hc.height = H;
+  const hx = hc.getContext("2d", { willReadFrequently: true }); hx.fillStyle = "#000"; hx.fillRect(0, 0, W, H);
+  if (heightImg) hx.drawImage(heightImg, m, m, cw, ch);
+  return { W, H, alb, hc, mode };
+}
+
+/* ---------- WGSL ---------- */
+const WGSL_P = /* wgsl */`
+struct P { size: vec2f, lift: f32, stepH: f32, bevel: f32, profile: f32, invert: f32, grain: f32,
+  mode: f32, alphaA: f32, jstep: f32, grainScale: f32, smoothR: f32, p0: f32, p1: f32, p2: f32 }
+@group(0) @binding(0) var<uniform> u: P;
+fn inb(p: vec2i) -> bool { return p.x >= 0 && p.y >= 0 && p.x < i32(u.size.x) && p.y < i32(u.size.y); }
+fn cl(p: vec2i) -> vec2i { return clamp(p, vec2i(0), vec2i(u.size) - 1); }
+`;
+const WGSL_LAYERS = WGSL_P + `
+@group(0) @binding(1) var hsrc: texture_2d<f32>;
+@group(0) @binding(2) var alb: texture_2d<f32>;
+@group(0) @binding(3) var outH: texture_storage_2d<r32float, write>;
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let p = vec2i(id.xy); if (!inb(p)) { return; }
+  var h = 0.0;
+  if (u.mode < 0.5) {
+    let v = textureLoad(hsrc, p, 0).r;
+    let k = log(max(1.0 - v, 1e-4)) / log(1.0 - u.alphaA);
+    let base = u.lift * clamp(k, 0.0, 1.0);
+    let extra = u.stepH * max(k - 1.0, 0.0);
+    h = select(base + extra, base - extra, u.invert > 0.5);
+  } else {
+    let a = textureLoad(alb, p, 0);
+    let l = sqrt(dot(a.rgb, vec3f(0.2126, 0.7152, 0.0722)));
+    let t = select(l, 1.0 - l, u.invert > 0.5);
+    h = a.a * (u.lift + t * u.stepH * 3.0);
+  }
+  textureStore(outH, p, vec4f(h, 0.0, 0.0, 1.0));
+}`;
+const WGSL_SEED = WGSL_P + `
+@group(0) @binding(1) var h0: texture_2d<f32>;
+@group(0) @binding(2) var outS: texture_storage_2d<rgba32float, write>;
+fn ld(p: vec2i) -> f32 { return textureLoad(h0, cl(p), 0).r; }
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let p = vec2i(id.xy); if (!inb(p)) { return; }
+  let c = ld(p);
+  let n4 = min(min(ld(p + vec2i(1, 0)), ld(p - vec2i(1, 0))), min(ld(p + vec2i(0, 1)), ld(p - vec2i(0, 1))));
+  var o = vec4f(0.0);
+  if (c - n4 > 0.15) {
+    var lo = c;
+    for (var y = -2; y <= 2; y++) { for (var x = -2; x <= 2; x++) { lo = min(lo, ld(p + vec2i(x, y))); } }
+    o = vec4f(f32(p.x), f32(p.y), lo, 1.0);
+  }
+  textureStore(outS, p, o);
+}`;
+const WGSL_JFA = WGSL_P + `
+@group(0) @binding(1) var inS: texture_2d<f32>;
+@group(0) @binding(2) var outS: texture_storage_2d<rgba32float, write>;
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let p = vec2i(id.xy); if (!inb(p)) { return; }
+  var best = textureLoad(inS, p, 0);
+  var bd = 1e20;
+  if (best.w > 0.5) { bd = distance(vec2f(p), best.xy); }
+  let s = i32(u.jstep);
+  for (var y = -1; y <= 1; y++) { for (var x = -1; x <= 1; x++) {
+    let q = p + vec2i(x, y) * s;
+    if (!inb(q)) { continue; }
+    let c = textureLoad(inS, q, 0);
+    if (c.w > 0.5) { let d = distance(vec2f(p), c.xy); if (d < bd) { bd = d; best = c; } }
+  } }
+  textureStore(outS, p, best);
+}`;
+const WGSL_RELIEF = WGSL_P + `
+@group(0) @binding(1) var h0: texture_2d<f32>;
+@group(0) @binding(2) var jf: texture_2d<f32>;
+@group(0) @binding(3) var outR: texture_storage_2d<r32float, write>;
+fn prof(t: f32) -> f32 {
+  if (u.profile < 0.5) { return sqrt(max(0.0, 1.0 - (1.0 - t) * (1.0 - t))); }
+  if (u.profile < 1.5) { return t; }
+  if (u.profile < 2.5) { return t * t * (3.0 - 2.0 * t); }
+  return 1.0 - sqrt(max(0.0, 1.0 - t * t));
+}
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let p = vec2i(id.xy); if (!inb(p)) { return; }
+  let H = textureLoad(h0, p, 0).r;
+  let s = textureLoad(jf, p, 0);
+  var h = H;
+  if (s.w > 0.5 && u.bevel > 0.5 && H > s.z + 0.01) {
+    let t = clamp(distance(vec2f(p), s.xy) / u.bevel, 0.0, 1.0);
+    h = s.z + (H - s.z) * prof(t);
+  }
+  textureStore(outR, p, vec4f(h, 0.0, 0.0, 1.0));
+}`;
+const WGSL_BAKE = WGSL_P + `
+@group(0) @binding(1) var rel: texture_2d<f32>;
+@group(0) @binding(2) var outB: texture_storage_2d<rgba16float, write>;
+fn rl(p: vec2i) -> f32 { return textureLoad(rel, cl(p), 0).r; }
+fn hash(p: vec2f) -> f32 {
+  let v = vec2u(vec2i(p) + vec2i(65536));
+  var h = v.x * 1664525u + v.y * 1013904223u + 374761393u;
+  h = h ^ (h >> 16u); h = h * 2246822519u; h = h ^ (h >> 13u); h = h * 3266489917u; h = h ^ (h >> 16u);
+  return f32(h) / 4294967295.0;
+}
+fn vnoise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2f(1.0, 0.0)), w.x), mix(hash(i + vec2f(0.0, 1.0)), hash(i + vec2f(1.0, 1.0)), w.x), w.y);
+}
+fn grainAt(p: vec2f) -> f32 {
+  let q = p / max(u.grainScale, 0.5);
+  return vnoise(q) * 0.6 + vnoise(q * 2.13 + 17.0) * 0.3 + vnoise(q * 4.7 + 3.0) * 0.1 - 0.5;
+}
+fn hg(p: vec2i) -> f32 { return rl(p) + u.grain * grainAt(vec2f(p)); }
+@compute @workgroup_size(8, 8) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let p = vec2i(id.xy); if (!inb(p)) { return; }
+  let r = max(1, i32(u.smoothR));
+  let fr = f32(2 * r);
+  let dx = (hg(p + vec2i(r, 0)) - hg(p - vec2i(r, 0))) * 2.0 + (hg(p + vec2i(r, r)) - hg(p + vec2i(-r, r))) + (hg(p + vec2i(r, -r)) - hg(p + vec2i(-r, -r)));
+  let dy = (hg(p + vec2i(0, r)) - hg(p - vec2i(0, r))) * 2.0 + (hg(p + vec2i(r, r)) - hg(p + vec2i(r, -r))) + (hg(p + vec2i(-r, r)) - hg(p + vec2i(-r, -r)));
+  let n = normalize(vec3f(-dx / (4.0 * fr), -dy / (4.0 * fr), 1.0));
+  let h = rl(p);
+  var occ = 0.0;
+  for (var i = 0; i < 12; i++) {
+    let a = f32(i) * 0.5235988 + 0.26;
+    let d = vec2f(cos(a), sin(a));
+    var ms = 0.0; var rad = 2.0;
+    for (var j = 0; j < 7; j++) {
+      let q = vec2i(round(vec2f(p) + d * rad));
+      ms = max(ms, (rl(q) - h) / rad);
+      rad = rad * 1.85;
+    }
+    occ += ms / sqrt(1.0 + ms * ms);
+  }
+  textureStore(outB, p, vec4f(n.x, n.y, h, 1.0 - occ / 12.0));
+}`;
+const WGSL_RENDER = /* wgsl */`
+struct Light { pos: vec4f, col: vec4f }
+struct U { size: vec4f, wall: vec4f, sky: vec4f, ground: vec4f, mat: vec4f, misc: vec4f, lights: array<Light, 4> }
+@group(0) @binding(0) var<uniform> u: U;
+@group(0) @binding(1) var smp: sampler;
+@group(0) @binding(2) var bake: texture_2d<f32>;
+@group(0) @binding(3) var alb: texture_2d<f32>;
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f }
+@vertex fn vs(@builtin(vertex_index) i: u32) -> VO {
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  var o: VO;
+  o.pos = vec4f(p[i], 0.0, 1.0);
+  o.uv = vec2f((p[i].x + 1.0) * 0.5, (1.0 - p[i].y) * 0.5);
+  return o;
+}
+fn toSrgb(c: vec3f) -> vec3f {
+  let x = clamp(c, vec3f(0.0), vec3f(1.0));
+  return select(1.055 * pow(x, vec3f(1.0 / 2.4)) - 0.055, x * 12.92, x <= vec3f(0.0031308));
+}
+fn aces(x: vec3f) -> vec3f { return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), vec3f(0.0), vec3f(1.0)); }
+fn heightAt(q: vec2f) -> f32 { return textureSampleLevel(bake, smp, q / u.size.xy, 0.0).z; }
+fn shadow(P: vec3f, L: vec3f, alpha: f32) -> f32 {
+  let d = L - P;
+  let lxy = length(d.xy);
+  if (lxy < 0.5) { return 1.0; }
+  let dir = d.xy / lxy;
+  let slope = d.z / lxy;
+  let eL = atan(slope);
+  var occ = -1e3;
+  var t = 1.5;
+  let maxT = min(lxy, u.size.x * 0.8);
+  for (var i = 0; i < 80; i++) {
+    if (t >= maxT) { break; }
+    if (P.z + slope * t > u.mat.z + 1.0) { break; }
+    let th = heightAt(P.xy + dir * t);
+    occ = max(occ, (th - P.z) / t);
+    if (atan(occ) > eL + alpha) { return 0.0; }
+    t += clamp(t * 0.07, 0.6, 9.0);
+  }
+  let v = clamp(0.5 + (eL - atan(occ)) / (2.0 * alpha), 0.0, 1.0);
+  return v * v * (3.0 - 2.0 * v);
+}
+@fragment fn fs(i: VO) -> @location(0) vec4f {
+  let uv = i.uv;
+  let a = textureSample(alb, smp, uv);
+  let b = textureSample(bake, smp, uv);
+  let base = mix(u.wall.rgb, a.rgb, a.a);
+  if (uv.x < u.misc.x) { return vec4f(toSrgb(base), 1.0); }
+  let N = normalize(vec3f(b.x, b.y, sqrt(max(0.0, 1.0 - b.x * b.x - b.y * b.y))));
+  let P = vec3f(uv * u.size.xy, b.z);
+  let V = vec3f(0.0, 0.0, 1.0);
+  let rough = max(u.ground.w, 0.04);
+  let metal = u.mat.x;
+  let F0 = mix(vec3f(0.04 * u.mat.y * 2.0), base, metal);
+  let diffC = base * (1.0 - metal);
+  let ao = clamp(b.w, 0.0, 1.0);
+  let hemi = mix(u.ground.rgb, u.sky.rgb, N.z * 0.5 + 0.5);
+  var col = diffC * hemi * u.wall.w * ao + F0 * u.sky.rgb * u.wall.w * ao * 0.15;
+  let W2 = u.size.x * u.size.x;
+  let a2 = rough * rough * rough * rough;
+  let kG = (rough + 1.0) * (rough + 1.0) / 8.0;
+  let NV = max(N.z, 1e-3);
+  for (var k = 0; k < i32(u.misc.z); k++) {
+    let Lp = u.lights[k].pos.xyz;
+    let Ld = Lp - P;
+    let dist = length(Ld);
+    let L = Ld / dist;
+    let NL = dot(N, L);
+    if (NL <= 0.0) { continue; }
+    let att = u.lights[k].pos.w * W2 / (W2 * 0.6 + dist * dist);
+    let sh = shadow(P, Lp, u.lights[k].col.w);
+    if (sh <= 0.0) { continue; }
+    let H = normalize(L + V);
+    let NH = max(dot(N, H), 0.0);
+    let VH = max(dot(V, H), 0.0);
+    let dd = NH * NH * (a2 - 1.0) + 1.0;
+    let D = a2 / (3.14159 * dd * dd);
+    let G = (NL / (NL * (1.0 - kG) + kG)) * (NV / (NV * (1.0 - kG) + kG));
+    let F = F0 + (1.0 - F0) * pow(1.0 - VH, 5.0);
+    let spec = min(D * G * F / (4.0 * NL * NV) * 3.14159, vec3f(40.0));
+    col += (diffC * (1.0 - F) + spec) * u.lights[k].col.rgb * att * NL * sh;
+  }
+  var c = toSrgb(aces(col * u.sky.w));
+  let n = fract(sin(dot(i.pos.xy, vec2f(12.9898, 78.233)) + u.misc.y) * 43758.5453);
+  c += (n - 0.5) / 255.0;
+  return vec4f(c, 1.0);
+}`;
+
+/* ---------- GPU renderer ---------- */
+const G = { device: null, ok: false };
+async function initGPU(canvas) {
+  if (!navigator.gpu) return false;
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) return false;
+  const device = await adapter.requestDevice();
+  device.lost.then(i => setMode("GPU device lost (" + i.reason + "). Reload the page to restart."));
+  device.addEventListener("uncapturederror", e => { console.error(e.error.message); setMode("WebGPU error: " + e.error.message.slice(0, 80)); });
+  const ctx = canvas.getContext("webgpu");
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format, alphaMode: "opaque" });
+  const C = GPUShaderStage.COMPUTE, F = GPUShaderStage.FRAGMENT;
+  const uni = { buffer: { type: "uniform" } };
+  const unf = { texture: { sampleType: "unfilterable-float" } };
+  const sto = f => ({ storageTexture: { access: "write-only", format: f } });
+  const layout = (vis, list) => device.createBindGroupLayout({ entries: list.map((r, i) => ({ binding: i, visibility: vis, ...r })) });
+  async function comp(code, lay) {
+    const module = device.createShaderModule({ code });
+    const info = await module.getCompilationInfo();
+    for (const m of info.messages) if (m.type === "error") throw new Error(`WGSL ${m.lineNum}:${m.linePos} ${m.message}`);
+    return device.createComputePipelineAsync({ layout: device.createPipelineLayout({ bindGroupLayouts: [lay] }), compute: { module, entryPoint: "main" } });
+  }
+  const L = {
+    layers: layout(C, [uni, unf, unf, sto("r32float")]),
+    seed: layout(C, [uni, unf, sto("rgba32float")]),
+    jfa: layout(C, [uni, unf, sto("rgba32float")]),
+    relief: layout(C, [uni, unf, unf, sto("r32float")]),
+    bake: layout(C, [uni, unf, sto("rgba16float")]),
+    render: layout(F, [{ buffer: { type: "uniform" } }, { sampler: { type: "filtering" } }, { texture: { sampleType: "float" } }, { texture: { sampleType: "float" } }]),
+  };
+  const [pLayers, pSeed, pJfa, pRelief, pBake] = await Promise.all([
+    comp(WGSL_LAYERS, L.layers), comp(WGSL_SEED, L.seed), comp(WGSL_JFA, L.jfa), comp(WGSL_RELIEF, L.relief), comp(WGSL_BAKE, L.bake)]);
+  const rmod = device.createShaderModule({ code: WGSL_RENDER });
+  for (const m of (await rmod.getCompilationInfo()).messages) if (m.type === "error") throw new Error(`WGSL render ${m.lineNum}:${m.linePos} ${m.message}`);
+  const pRender = await device.createRenderPipelineAsync({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [L.render] }),
+    vertex: { module: rmod, entryPoint: "vs" }, fragment: { module: rmod, entryPoint: "fs", targets: [{ format }] },
+    primitive: { topology: "triangle-list" },
+  });
+  const JSTEPS = [64, 32, 16, 8, 4, 2, 1, 1];
+  const bakeU = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const jfaU = JSTEPS.map(() => device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST }));
+  const renderU = device.createBuffer({ size: 224, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const sampler = device.createSampler({ magFilter: "linear", minFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" });
+  Object.assign(G, { device, ctx, format, L, pLayers, pSeed, pJfa, pRelief, pBake, pRender, JSTEPS, bakeU, jfaU, renderU, sampler, tex: null, ok: true });
+  return true;
+}
+function gpuSetStage(st) {
+  const { device } = G;
+  if (G.tex) Object.values(G.tex).forEach(t => t.destroy());
+  const U = GPUTextureUsage, size = [st.W, st.H];
+  const mk = (format, usage) => device.createTexture({ size, format, usage });
+  G.tex = {
+    alb: mk("rgba8unorm-srgb", U.TEXTURE_BINDING | U.COPY_DST | U.RENDER_ATTACHMENT),
+    hsrc: mk("rgba8unorm", U.TEXTURE_BINDING | U.COPY_DST | U.RENDER_ATTACHMENT),
+    h0: mk("r32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
+    sA: mk("rgba32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
+    sB: mk("rgba32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
+    rel: mk("r32float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
+    bake: mk("rgba16float", U.STORAGE_BINDING | U.TEXTURE_BINDING),
+  };
+  const put = (cv, texture) => device.queue.writeTexture({ texture }, cv.getContext("2d").getImageData(0, 0, st.W, st.H).data, { bytesPerRow: st.W * 4 }, size);
+  put(st.alb, G.tex.alb); put(st.hc, G.tex.hsrc);
+  const v = t => t.createView();
+  const bg = (lay, res) => device.createBindGroup({ layout: lay, entries: res.map((r, i) => ({ binding: i, resource: r })) });
+  const T = G.tex;
+  G.groups = {
+    layers: bg(G.L.layers, [{ buffer: G.bakeU }, v(T.hsrc), v(T.alb), v(T.h0)]),
+    seed: bg(G.L.seed, [{ buffer: G.bakeU }, v(T.h0), v(T.sA)]),
+    jfa: G.JSTEPS.map((_, i) => i % 2 === 0
+      ? bg(G.L.jfa, [{ buffer: G.jfaU[i] }, v(T.sA), v(T.sB)])
+      : bg(G.L.jfa, [{ buffer: G.jfaU[i] }, v(T.sB), v(T.sA)])),
+    relief: bg(G.L.relief, [{ buffer: G.bakeU }, v(T.h0), v(G.JSTEPS.length % 2 === 0 ? T.sA : T.sB), v(T.rel)]),
+    bake: bg(G.L.bake, [{ buffer: G.bakeU }, v(T.rel), v(T.bake)]),
+    render: bg(G.L.render, [{ buffer: G.renderU }, G.sampler, v(T.bake), v(T.alb)]),
+  };
+}
+function gpuBake(st) {
+  const { device } = G, r = S.relief;
+  const raster = st.mode === 1;
+  const params = j => new Float32Array([st.W, st.H, r.lift, r.step, raster ? 0 : r.bevel, r.profile, r.invert ? 1 : 0, r.grain,
+    st.mode, LAYER_A, j, r.grainScale, raster ? 2 : 1, 0, 0, 0]);
+  device.queue.writeBuffer(G.bakeU, 0, params(1));
+  G.JSTEPS.forEach((s, i) => device.queue.writeBuffer(G.jfaU[i], 0, params(s)));
+  const enc = device.createCommandEncoder();
+  const wx = Math.ceil(st.W / 8), wy = Math.ceil(st.H / 8);
+  const run = (pipe, group) => { const p = enc.beginComputePass(); p.setPipeline(pipe); p.setBindGroup(0, group); p.dispatchWorkgroups(wx, wy); p.end(); };
+  run(G.pLayers, G.groups.layers);
+  run(G.pSeed, G.groups.seed);
+  G.groups.jfa.forEach(g => run(G.pJfa, g));
+  run(G.pRelief, G.groups.relief);
+  run(G.pBake, G.groups.bake);
+  device.queue.submit([enc.finish()]);
+}
+const RU = new Float32Array(56);
+function gpuRender(st, t) {
+  const r = S.room, wall = hexLin(r.wall), sky = kelvinLin(r.skyK);
+  const maxH = S.relief.invert ? S.relief.lift : S.relief.lift + S.relief.step * 9;
+  const lights = S.lights.slice(0, 4);
+  RU.set([st.W, st.H, 0, 0, ...wall, r.ambient, ...sky, r.exposure, ...wall.map(c => c * 0.6), S.mat.rough,
+    S.mat.metal, S.mat.spec, maxH + S.relief.grain, 0, S.compare ? S.wipe : -1, t % 1000, lights.length, 0]);
+  lights.forEach((l, i) => RU.set([l.x * st.W, l.y * st.H, l.z * st.W, l.power, ...kelvinLin(l.k), l.size], 24 + i * 8));
+  G.device.queue.writeBuffer(G.renderU, 0, RU);
+  const enc = G.device.createCommandEncoder();
+  const pass = enc.beginRenderPass({ colorAttachments: [{ view: G.ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+  pass.setPipeline(G.pRender); pass.setBindGroup(0, G.groups.render); pass.draw(3); pass.end();
+  G.device.queue.submit([enc.finish()]);
+}
+
+/* ---------- SVG-filter fallback (no WebGPU) ---------- */
+const FB = { el: null };
+function fallbackSetStage(st) {
+  const { W, H } = st, r = S.relief;
+  const src = st.hc.getContext("2d").getImageData(0, 0, W, H).data;
+  const alb = st.alb.getContext("2d").getImageData(0, 0, W, H).data;
+  const hm = document.createElement("canvas"); hm.width = W; hm.height = H;
+  const hx = hm.getContext("2d"), img = hx.createImageData(W, H), maxH = r.lift + r.step * 9;
+  for (let i = 0; i < W * H; i++) {
+    let h;
+    if (st.mode === 0) { const v = src[i * 4] / 255, k = Math.log(Math.max(1 - v, 1e-4)) / Math.log(1 - LAYER_A); h = r.lift * clamp(k, 0, 1) + r.step * Math.max(k - 1, 0) * (r.invert ? -1 : 1); }
+    else h = alb[i * 4 + 3] / 255 * (r.lift + r.step * 1.5);
+    img.data[i * 4 + 3] = clamp(Math.round(h / maxH * 255), 0, 255);
+  }
+  hx.putImageData(img, 0, 0);
+  const blur = document.createElement("canvas"); blur.width = W; blur.height = H;
+  const bx = blur.getContext("2d"); bx.filter = `blur(${Math.max(1, r.bevel / 3)}px)`; bx.drawImage(hm, 0, 0);
+  const NS = "http://www.w3.org/2000/svg";
+  const box = document.getElementById("fallback");
+  box.innerHTML = `<svg xmlns="${NS}" viewBox="0 0 ${W} ${H}"><defs><filter id="rl" x="0" y="0" width="${W}" height="${H}" filterUnits="userSpaceOnUse" primitiveUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+    <feImage href="${blur.toDataURL()}" x="0" y="0" width="${W}" height="${H}" result="hm"/>
+    <feImage href="${st.alb.toDataURL()}" x="0" y="0" width="${W}" height="${H}" result="alb"/>
+    <feFlood id="fb-wall" flood-color="${S.room.wall}" result="wall"/>
+    <feComposite in="alb" in2="wall" operator="over" result="base"/>
+    <feDiffuseLighting in="hm" surfaceScale="${maxH * 0.5}" diffuseConstant="1.1" id="fb-dif" result="dif"><fePointLight id="fb-l1"/></feDiffuseLighting>
+    <feSpecularLighting in="hm" surfaceScale="${maxH * 0.5}" specularConstant="0.5" specularExponent="${Math.round(4 + (1 - S.mat.rough) * 40)}" id="fb-spe" result="spe"><fePointLight id="fb-l2"/></feSpecularLighting>
+    <feComposite in="base" in2="dif" operator="arithmetic" k1="1" result="lit"/>
+    <feComposite in="lit" in2="spe" operator="arithmetic" k2="1" k3="1"/>
+  </filter></defs><rect width="${W}" height="${H}" filter="url(#rl)"/></svg>`;
+  FB.el = box;
+}
+function fallbackRender(st) {
+  if (!FB.el) return;
+  const l = S.lights[0] || { x: .2, y: .2, z: .5, k: 4000 };
+  for (const id of ["fb-l1", "fb-l2"]) { const p = document.getElementById(id); p.setAttribute("x", l.x * st.W); p.setAttribute("y", l.y * st.H); p.setAttribute("z", l.z * st.W); }
+  document.getElementById("fb-dif").setAttribute("lighting-color", kelvinCSS(l.k));
+  document.getElementById("fb-spe").setAttribute("lighting-color", kelvinCSS(l.k));
+  document.getElementById("fb-wall").setAttribute("flood-color", S.room.wall);
+}
+
+/* ---------- app wiring ---------- */
+const $ = s => document.querySelector(s);
+const frame = $("#frame"), canvas = $("#gl"), stageEl = $("#stage");
+let stage = null, needBake = true, dirty = true, busy = false;
+const refreshers = [];
+function setMode(t) { $("#hud-mode").textContent = t; }
+
+function slider(parent, o) {
+  const id = "c-" + o.id;
+  const row = document.createElement("div"); row.className = "ctl";
+  row.innerHTML = `<label for="${id}">${o.label}</label><input type="range" id="${id}" min="${o.min}" max="${o.max}" step="${o.step}"><output for="${id}"></output>`;
+  const inp = row.querySelector("input"), out = row.querySelector("output");
+  if (o.track) inp.style.setProperty("--track", o.track);
+  const refresh = () => { inp.value = o.get(); out.textContent = o.fmt(+inp.value); };
+  inp.addEventListener("input", () => { o.set(+inp.value); out.textContent = o.fmt(+inp.value); o.bake ? (needBake = true) : null; dirty = true; o.after && o.after(); });
+  parent.appendChild(row); refresh(); refreshers.push(refresh);
+  return row;
+}
+function chips(parent, names, isOn, onPick) {
+  parent.innerHTML = "";
+  const btns = names.map(n => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip"; b.textContent = n;
+    b.addEventListener("click", () => { onPick(n); sync(); });
+    parent.appendChild(b); return b;
+  });
+  const sync = () => btns.forEach((b, i) => b.setAttribute("aria-pressed", String(isOn(names[i]))));
+  refreshers.push(sync); sync();
+}
+const px = v => `${v.toFixed(0)} px`;
+
+// relief
+const rc = $("#relief-ctls");
+slider(rc, { id: "lift", label: "Elevation", min: 0, max: 60, step: 1, get: () => S.relief.lift, set: v => S.relief.lift = v, fmt: px, bake: 1 });
+slider(rc, { id: "step", label: "Layer step", min: 0, max: 24, step: 0.5, get: () => S.relief.step, set: v => S.relief.step = v, fmt: v => `${v.toFixed(1)} px`, bake: 1 });
+slider(rc, { id: "bevel", label: "Bevel", min: 0, max: 48, step: 1, get: () => S.relief.bevel, set: v => S.relief.bevel = v, fmt: px, bake: 1 });
+slider(rc, { id: "grain", label: "Grain", min: 0, max: 3, step: 0.05, get: () => S.relief.grain, set: v => S.relief.grain = v, fmt: v => v.toFixed(2), bake: 1 });
+slider(rc, { id: "gscale", label: "Grain size", min: 1, max: 12, step: 0.5, get: () => S.relief.grainScale, set: v => S.relief.grainScale = v, fmt: v => `${v.toFixed(1)} px`, bake: 1 });
+chips($("#profiles"), PROFILES, n => PROFILES[S.relief.profile] === n, n => { S.relief.profile = PROFILES.indexOf(n); needBake = dirty = true; });
+$("#invert").addEventListener("change", e => { S.relief.invert = e.target.checked; needBake = dirty = true; });
+refreshers.push(() => { $("#invert").checked = S.relief.invert; });
+
+// surface
+const mc = $("#mat-ctls");
+const matName = () => Object.keys(MATERIALS).find(k => { const m = MATERIALS[k]; return m.rough === S.mat.rough && m.metal === S.mat.metal && m.spec === S.mat.spec; });
+chips($("#materials"), Object.keys(MATERIALS), n => matName() === n, n => { Object.assign(S.mat, MATERIALS[n]); dirty = true; refreshAll(); });
+slider(mc, { id: "rough", label: "Roughness", min: 0.04, max: 1, step: 0.01, get: () => S.mat.rough, set: v => S.mat.rough = v, fmt: v => v.toFixed(2), after: refreshChips });
+slider(mc, { id: "metal", label: "Metal", min: 0, max: 1, step: 0.01, get: () => S.mat.metal, set: v => S.mat.metal = v, fmt: v => v.toFixed(2), after: refreshChips });
+slider(mc, { id: "spec", label: "Specular", min: 0, max: 1, step: 0.01, get: () => S.mat.spec, set: v => S.mat.spec = v, fmt: v => v.toFixed(2), after: refreshChips });
+function refreshChips() { document.querySelectorAll("#materials .chip").forEach(b => b.setAttribute("aria-pressed", String(matName() === b.textContent))); }
+
+// room
+const roomC = $("#room-ctls");
+slider(roomC, { id: "amb", label: "Ambient", min: 0, max: 1, step: 0.01, get: () => S.room.ambient, set: v => S.room.ambient = v, fmt: v => v.toFixed(2) });
+slider(roomC, { id: "sky", label: "Sky", min: 3000, max: 14000, step: 100, get: () => S.room.skyK, set: v => S.room.skyK = v, fmt: v => `${v} K`, track: KELVIN_TRACK });
+slider(roomC, { id: "exp", label: "Exposure", min: 0.3, max: 2.5, step: 0.01, get: () => S.room.exposure, set: v => S.room.exposure = v, fmt: v => `${v.toFixed(2)}×` });
+$("#wall").addEventListener("input", e => { S.room.wall = e.target.value; dirty = true; });
+refreshers.push(() => { $("#wall").value = S.room.wall; });
+$("#compare").addEventListener("change", e => { S.compare = e.target.checked; $("#wipe").hidden = !S.compare; placeWipe(); dirty = true; });
+
+// lights
+function newLight(o) { return Object.assign({ x: 0.2, y: 0.15, z: 0.5, k: 4000, power: 1.2, size: 0.06 }, o); }
+const lc = $("#light-ctls");
+const L = () => S.lights[S.sel];
+slider(lc, { id: "lk", label: "Warmth", min: 1800, max: 12000, step: 50, get: () => L().k, set: v => L().k = v, fmt: v => `${v} K`, track: KELVIN_TRACK, after: drawHandles });
+slider(lc, { id: "lp", label: "Power", min: 0, max: 4, step: 0.01, get: () => L().power, set: v => L().power = v, fmt: v => v.toFixed(2) });
+slider(lc, { id: "lz", label: "Height", min: 0.02, max: 1.4, step: 0.005, get: () => L().z, set: v => L().z = v, fmt: v => v.toFixed(2), after: readout });
+slider(lc, { id: "ls", label: "Size", min: 0.01, max: 0.4, step: 0.005, get: () => L().size, set: v => L().size = v, fmt: v => `${(v * 57.3).toFixed(1)}°` });
+function lightTabs() {
+  const box = $("#light-tabs"); box.innerHTML = "";
+  S.lights.forEach((l, i) => {
+    const b = document.createElement("button"); b.type = "button"; b.className = "chip";
+    b.innerHTML = `<span class="swatch" style="background:${kelvinCSS(l.k)}"></span>${LIGHT_NAMES[i]}`;
+    b.setAttribute("aria-pressed", String(i === S.sel));
+    b.addEventListener("click", () => { S.sel = i; refreshAll(); });
+    box.appendChild(b);
+  });
+  if (S.lights.length < 4) {
+    const add = document.createElement("button"); add.type = "button"; add.className = "chip"; add.textContent = "+ Add light";
+    add.addEventListener("click", () => { S.lights.push(newLight({ x: Math.random() * 0.8 + 0.1, y: Math.random() * 0.3, k: 5000, power: 0.8 })); S.sel = S.lights.length - 1; dirty = true; refreshAll(); });
+    box.appendChild(add);
+  }
+  $("#remove-light").disabled = S.lights.length <= 1;
+}
+$("#remove-light").addEventListener("click", () => { if (S.lights.length > 1) { S.lights.splice(S.sel, 1); S.sel = Math.max(0, S.sel - 1); dirty = true; refreshAll(); } });
+$("#orbit").addEventListener("change", e => { S.orbit = e.target.checked; dirty = true; });
+function rakingAngle(l) { const dx = l.x - 0.5, dy = (l.y - 0.5) * (stage ? stage.H / stage.W : 1); return Math.atan2(l.z, Math.hypot(dx, dy)) * 57.2958; }
+function readout() {
+  const l = L(); if (!l) return;
+  const t = `${LIGHT_NAMES[S.sel]} · ${l.k} K · ${rakingAngle(l).toFixed(0)}° above the surface`;
+  $("#light-readout").textContent = `${rakingAngle(l).toFixed(0)}°`;
+  $("#hud-light").textContent = t;
+}
+
+// presets + samples
+function applyPreset(name) {
+  const p = PRESETS[name];
+  Object.assign(S.room, { wall: p.wall, ambient: p.ambient, skyK: p.skyK, exposure: p.exposure });
+  Object.assign(S.relief, p.relief);
+  Object.assign(S.mat, MATERIALS[p.mat]);
+  S.lights = p.lights.map(newLight); S.sel = 0; S.preset = name;
+  needBake = dirty = true; refreshAll();
+}
+chips($("#presets"), Object.keys(PRESETS), n => S.preset === n, applyPreset);
+chips($("#samples"), Object.keys(SAMPLES), n => S.source.kind === "svg" && S.source.name === n, n => loadSource({ kind: "svg", text: SAMPLES[n], name: n }));
+
+function refreshAll() { refreshers.forEach(f => f()); lightTabs(); drawHandles(); readout(); refreshChips(); }
+
+// sources
+async function loadSource(src) {
+  try {
+    const st = await buildStage(src);
+    S.source = src; stage = st;
+    $("#src-name").textContent = src.name;
+    if (G.ok) gpuSetStage(st); else fallbackSetStage(st);
+    $("#hud-size").textContent = `${st.W}×${st.H} relief`;
+    needBake = dirty = true; layout(); refreshAll();
+    return true;
+  } catch (e) { console.error(e); $("#paste-msg").textContent = e.message; $("#paste-msg").classList.add("err"); return false; }
+}
+$("#upload-btn").addEventListener("click", () => $("#file").click());
+$("#file").addEventListener("change", async e => { const f = e.target.files[0]; if (f) await loadFile(f); e.target.value = ""; });
+async function loadFile(f) {
+  if (f.type === "image/svg+xml" || /\.svg$/i.test(f.name)) return loadSource({ kind: "svg", text: await f.text(), name: f.name });
+  if (f.type.startsWith("image/")) return loadSource({ kind: "image", bitmap: await createImageBitmap(f), name: f.name });
+}
+$("#paste-apply").addEventListener("click", async () => {
+  const msg = $("#paste-msg"); msg.classList.remove("err"); msg.textContent = "";
+  if (await loadSource({ kind: "svg", text: $("#paste").value, name: "Pasted SVG" })) msg.textContent = "Loaded.";
+});
+document.addEventListener("paste", async e => {
+  if (e.target.closest && e.target.closest("textarea")) return;
+  const f = [...(e.clipboardData?.files || [])][0];
+  if (f) { e.preventDefault(); return loadFile(f); }
+  const t = e.clipboardData?.getData("text") || "";
+  if (/^\s*(<\?xml[^>]*>\s*)?<svg[\s>]/i.test(t)) { e.preventDefault(); loadSource({ kind: "svg", text: t, name: "Pasted SVG" }); }
+});
+stageEl.addEventListener("dragover", e => e.preventDefault());
+stageEl.addEventListener("drop", e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+// layout + handles
+let fw = 0, fh = 0;
+function layout() {
+  if (!stage) return;
+  const r = stageEl.getBoundingClientRect();
+  const ar = stage.W / stage.H;
+  let w = r.width - 24, h = w / ar;
+  if (h > r.height - 24) { h = r.height - 24; w = h * ar; }
+  fw = Math.max(50, Math.floor(w)); fh = Math.max(30, Math.floor(h));
+  frame.style.width = fw + "px"; frame.style.height = fh + "px";
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = Math.round(fw * dpr); canvas.height = Math.round(fh * dpr);
+  drawHandles(); placeWipe(); dirty = true;
+}
+new ResizeObserver(layout).observe(stageEl);
+function drawHandles() {
+  const box = $("#handles");
+  while (box.children.length > S.lights.length) box.lastChild.remove();
+  S.lights.forEach((l, i) => {
+    let h = box.children[i];
+    if (!h) {
+      h = document.createElement("button"); h.type = "button"; h.className = "handle"; h.dataset.i = i;
+      h.setAttribute("aria-label", `${LIGHT_NAMES[i]} light. Arrow keys move it.`);
+      h.addEventListener("keydown", e => {
+        const d = e.shiftKey ? 0.05 : 0.01, k = S.lights[i];
+        const mv = { ArrowLeft: [-d, 0], ArrowRight: [d, 0], ArrowUp: [0, -d], ArrowDown: [0, d] }[e.key];
+        if (mv) { e.preventDefault(); k.x += mv[0]; k.y += mv[1]; S.sel = i; dirty = true; refreshAll(); }
+      });
+      box.appendChild(h);
+    }
+    h.style.left = clamp(l.x, 0, 1) * fw + "px"; h.style.top = clamp(l.y, 0, 1) * fh + "px";
+    h.style.background = kelvinCSS(l.k);
+    h.textContent = LIGHT_NAMES[i][0];
+    h.classList.toggle("sel", i === S.sel);
+  });
+}
+function placeWipe() { $("#wipe").style.left = S.wipe * fw + "px"; }
+let drag = null;
+frame.addEventListener("pointerdown", e => {
+  const r = frame.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+  const hd = e.target.closest(".handle");
+  if (hd) { S.sel = +hd.dataset.i; drag = { kind: "light" }; }
+  else if (S.compare && Math.abs(x - S.wipe) * r.width < 14) drag = { kind: "wipe" };
+  else { drag = { kind: "light" }; Object.assign(L(), { x, y }); S.orbit = false; $("#orbit").checked = false; }
+  frame.setPointerCapture(e.pointerId); dirty = true; refreshAll();
+});
+frame.addEventListener("pointermove", e => {
+  if (!drag) return;
+  const r = frame.getBoundingClientRect(), x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+  if (drag.kind === "wipe") { S.wipe = clamp(x, 0, 1); placeWipe(); }
+  else { const l = L(); l.x = clamp(x, -0.3, 1.3); l.y = clamp(y, -0.3, 1.3); drawHandles(); readout(); }
+  dirty = true;
+});
+frame.addEventListener("pointerup", () => { drag = null; });
+frame.addEventListener("pointercancel", () => { drag = null; });
+
+// loop
+const t0 = performance.now();
+function frameLoop(now) {
+  const t = (now - t0) / 1000;
+  if (stage && !busy) {
+    if (S.orbit && S.lights[0]) {
+      const l = S.lights[0]; l.x = 0.5 + 0.62 * Math.cos(t * 0.45); l.y = 0.5 + 0.5 * Math.sin(t * 0.45);
+      drawHandles(); readout(); dirty = true;
+    }
+    if (G.ok) {
+      if (needBake) { gpuBake(stage); needBake = false; dirty = true; }
+      if (dirty) { gpuRender(stage, t); dirty = false; }
+    } else if (dirty || needBake) {
+      if (needBake) { fallbackSetStage(stage); needBake = false; }
+      fallbackRender(stage); dirty = false;
+    }
+  }
+  requestAnimationFrame(frameLoop);
+}
+
+(async function start() {
+  let ok = false;
+  try { ok = await initGPU(canvas); } catch (e) { console.error(e); }
+  if (ok) setMode("WebGPU · 12 compute dispatches + soft shadows");
+  else { setMode("No WebGPU here: SVG filter lighting with the key light only, no shadows or occlusion"); canvas.hidden = true; $("#fallback").hidden = false; }
+  await loadSource(S.source);
+  requestAnimationFrame(frameLoop);
+})();
+</script>
+
+</body>
+</html>
