@@ -21,7 +21,7 @@ After Start, hold the phone the way you want to play (sitting up, lying down, on
 press **Plumb**: that pose becomes level. The card shows the screen's angle from flat and the roll
 while you hold it. The tip soft-drop starts 20° steeper than plumb. Pause has **Plumb again** for
 when you change position, and tapping the spirit-level vial mid-game re-plumbs on the spot. The vial
-shows roll, with ticks at the dead zone and at full speed. "FAST" next to the tilt readout means the
+shows roll, with ticks at the dead zone and at full speed. The tilt readout turns brass and reads FAST while the
 tip soft-drop is on. Roll and tip are read from gravity's components along the screen's own axes
 (cos β · sin γ and sin β), not from the raw γ angle, which flips sign once the screen faces the floor. Keyboard works on a desktop: arrows, X/Z, space, C, P.
 
