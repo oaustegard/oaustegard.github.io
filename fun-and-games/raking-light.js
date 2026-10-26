@@ -520,7 +520,7 @@ function schedule(el) {
 const reducedMotion = () => matchMedia("(prefers-reduced-motion: reduce)").matches;
 
 class RakingLightElement extends HTMLElement {
-  static observedAttributes = ["src", "margin", "preset", "material", "elevation", "step", "bevel", "profile", "grain", "grain-size", "deboss",
+  static observedAttributes = ["src", "margin", "preset", "lighting", "material", "elevation", "step", "bevel", "profile", "grain", "grain-size", "deboss",
     "roughness", "metal", "specular", "ambient", "sky", "exposure", "wall", "light", "lights"];
   constructor() {
     super();
@@ -563,9 +563,14 @@ class RakingLightElement extends HTMLElement {
     if (this.hasAttribute("deboss")) r.invert = this.getAttribute("deboss") !== "false";
     const m = { ...MATERIALS[pick(MATERIALS, this.getAttribute("material")) || p.mat] };
     m.rough = this.num("roughness", m.rough); m.metal = this.num("metal", m.metal); m.spec = this.num("specular", m.spec);
-    const room = { wall: this.getAttribute("wall") || "transparent", ambient: this.num("ambient", p.ambient), skyK: this.num("sky", p.skyK), exposure: this.num("exposure", p.exposure) };
-    let lights = p.lights;
-    try { const j = JSON.parse(this.getAttribute("lights")); if (Array.isArray(j) && j.length) lights = j; } catch (e) { /* keep preset lights */ }
+    // Lighting (lights, ambient, sky, exposure) can come from a different setup than the rest of the look.
+    // `lights` takes a JSON array, or a setup name as a shorthand for `lighting`.
+    const rawLights = (this.getAttribute("lights") || "").trim();
+    let custom = null;
+    if (rawLights.startsWith("[")) { try { const j = JSON.parse(rawLights); if (Array.isArray(j) && j.length) custom = j; } catch (e) { /* ignore malformed JSON */ } }
+    const lp = PRESETS[pick(PRESETS, this.getAttribute("lighting")) || (!custom && pick(PRESETS, rawLights))] || p;
+    const room = { wall: this.getAttribute("wall") || "transparent", ambient: this.num("ambient", lp.ambient), skyK: this.num("sky", lp.skyK), exposure: this.num("exposure", lp.exposure) };
+    let lights = custom || lp.lights;
     lights = lights.slice(0, 4).map(l => newLight(l));
     this.home = { x: lights[0].x, y: lights[0].y };
     return { relief: r, mat: m, room, lights, wipe: -1 };

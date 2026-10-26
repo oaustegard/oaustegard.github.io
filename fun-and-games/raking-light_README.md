@@ -45,7 +45,7 @@ Prompted by [Lumen](https://lumen.renderg.host), which turns Kelvin-temperature 
 </raking-light>
 ```
 
-The element can also take the picture by URL (`src="logo.svg"`). It shows the plain SVG where WebGPU is
+`lighting="golden hour"` (or any setup name) relights the element without changing its material or relief. The element can also take the picture by URL (`src="logo.svg"`). It shows the plain SVG where WebGPU is
 missing and keeps the light still for people who ask for reduced motion. The attributes are listed in the
 [write-up](https://github.com/oaustegard/experiments/tree/main/raking-light#embedding-it).
 
