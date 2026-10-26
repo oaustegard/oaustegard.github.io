@@ -17,12 +17,13 @@ motion access then), and use Add to Home Screen to install it full-screen and of
 | shake sideways | hold: three alternating x-axis spikes inside 700 ms | swipe up |
 | tap | rotate clockwise; left third of the well rotates counter-clockwise | same |
 
-Start, Resume and New game each spend about a second reading how you hold the phone and treat
-that pose as level, so sitting up, lying down or holding the phone overhead all play the same. The
-spirit-level vial in the header shows roll against that level, with ticks at the dead zone and at
-full speed; tapping it re-levels mid-game. "FAST" next to the tilt readout means the tip soft-drop
-is on. Roll and tip are read from gravity's components along the screen's own axes (cos β · sin γ
-and sin β), not from the raw γ angle, which flips sign once the screen faces the floor. Keyboard works on a desktop: arrows, X/Z, space, C, P.
+Pick how you hold the phone: **Upright** (sitting or standing; level is the screen 50° from
+horizontal) or **Flat** (lying down with the phone overhead, or on a table; level is 25°). The toggle
+is on the start and pause screens. The tip soft-drop starts 20° steeper than level. The spirit-level
+vial in the header shows roll, with ticks at the dead zone and at full speed; tapping it sets the
+current angle as level for the rest of the game. "FAST" next to the tilt readout means the tip
+soft-drop is on. Roll and tip are read from gravity's components along the screen's own axes
+(cos β · sin γ and sin β), not from the raw γ angle, which flips sign once the screen faces the floor. Keyboard works on a desktop: arrows, X/Z, space, C, P.
 
 ## How it is built
 
@@ -42,8 +43,12 @@ and sin β), not from the raw γ angle, which flips sign once the screen faces t
   wall it is sliding toward, so it moves as a layer. Locks and line clears push radial bursts through it. Without WebGPU, or after a device loss, a
   Canvas 2D version of the same simulation runs 1,600 grains.
 - **PWA**: `manifest.json` (fullscreen, portrait), `sw.js` precaches the shell and refreshes it in
-  the background, screen wake lock while playing, haptics through `navigator.vibrate` where the
-  browser supports it (Android, not iOS).
+  the background (a new version shows on the second load), screen wake lock while playing.
+- **Sound and haptics on iOS.** Web Audio is muted by the silent switch unless the page sets
+  `navigator.audioSession.type = 'playback'`, which it does (the in-game Sound toggle still mutes).
+  iOS has no `navigator.vibrate`; since iOS 18 a click on a hidden `<input type="checkbox" switch>`
+  plays the system haptic, but only inside a tap, so iPhones feel taps, swipes and the drops they
+  cause and not pieces that land on their own. Android uses `navigator.vibrate` for everything.
 
 ## Testing
 
