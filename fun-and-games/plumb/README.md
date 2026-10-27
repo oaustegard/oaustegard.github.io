@@ -54,8 +54,12 @@ tip soft-drop is on. Roll and tip are read from gravity's components along the s
   snare on 2 and 4. All of it is synthesized in Web Audio with no audio files, scheduled a quarter
   second ahead from the frame loop. Tempo starts at 132 bpm and gains 6 bpm per level, up to 200.
   It stops on pause and game over and has its own toggle, separate from the sound effects.
-- **PWA**: `manifest.json` (fullscreen, portrait), `sw.js` precaches the shell and refreshes it in
-  the background (the page itself is network-first, so an update shows on the next load), screen wake lock while playing.
+- **PWA and updates**: `manifest.json` (fullscreen, portrait) and `sw.js`. The page is fetched
+  network-first, other files cache-first with a background refresh, and every network fetch skips the
+  HTTP cache (GitHub Pages sends `max-age=600`). A home-screen app on iOS resumes instead of
+  reloading, so the page asks the worker to check for a new version each time it returns to the
+  foreground and every 30 minutes; when a new worker takes over, the page reloads itself, but only on
+  the title or game-over screen. Screen wake lock while playing.
 - **Sound and haptics on iOS.** Web Audio is muted by the silent switch unless the page sets
   `navigator.audioSession.type = 'playback'`, which it does (the in-game Sound toggle still mutes).
   iOS has no `navigator.vibrate`; since iOS 18 a click on a hidden `<input type="checkbox" switch>`

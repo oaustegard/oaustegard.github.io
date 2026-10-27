@@ -179,7 +179,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
       <span>Effects: <b id="stGpu">starting…</b></span>
       <span>Motion: <b id="stMotion">asks when you press Start</b></span>
       <span>Best: <b id="stBest">0</b></span>
-      <span>Version: <b>7 (Korobeiniki)</b></span>
+      <span>Version: <b>8 (self-updating)</b></span>
     </div>
   </section>
 
@@ -1069,6 +1069,7 @@ function setMode(m) {
   $('#overCard').hidden = m !== 'over';
   $('#plumbCard').hidden = m !== 'plumb';
   if (m === 'play') { wake(); music.start(); } else music.stop();
+  if (m === 'title' || m === 'over') setTimeout(applyUpdate, 0);
   if (m === 'title') { $('#stBest').textContent = best.toLocaleString(); updateStatus(); }
   const focus = { title: '#startBtn', pause: '#resumeBtn', over: '#againBtn', plumb: '#plumbBtn' }[m];
   if (focus) setTimeout(() => { try { $(focus).focus({ preventScroll: true }); } catch {} }, 0);
@@ -1140,7 +1141,10 @@ $('#overMenuBtn').addEventListener('click', () => setMode('title'));
 $('#pauseBtn').addEventListener('click', pause);
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) pause();
-  else if (mode === 'play') wake();
+  else {
+    if (mode === 'play') wake();
+    if (swReg) swReg.update().catch(() => {});
+  }
 });
 
 /* ---------- boot ---------- */
@@ -1162,8 +1166,23 @@ if (new URLSearchParams(location.search).has('debug')) {
     musicOut: () => music.gain,
     place(t, x, r = 0) { piece = { t, r, x, y: 1 }; pieceKey = ''; }, hardDrop, rotate, hold, tryMove };
 }
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+/* Updates. A home-screen app on iOS usually resumes rather than reloads, so it never navigates and
+   never meets a new version on its own. Ask the service worker to check whenever the app comes back to
+   the foreground (and every 30 minutes); when a new worker takes over, reload, but only on the title
+   or game-over screen so a game in progress is never lost. */
+let updateReady = false, swReg = null;
+function applyUpdate() { if (updateReady && (mode === 'title' || mode === 'over')) location.reload(); }
+if ('serviceWorker' in navigator && isSecureContext) {
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }   // first install: this page is already current
+    updateReady = true; applyUpdate();
+  });
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(r => { swReg = r; setInterval(() => r.update().catch(() => {}), 30 * 60 * 1000); })
+      .catch(() => {});
+  });
 }
 })();
 </script>
