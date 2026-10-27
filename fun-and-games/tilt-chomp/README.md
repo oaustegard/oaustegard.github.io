@@ -2,7 +2,7 @@
 
 A maze-chase arcade game steered by tilting your phone.
 
-**[Play](https://austegard.com/fun-and-games/tilt-chomp.html)** | **[Source](https://github.com/oaustegard/oaustegard.github.io/blob/main/fun-and-games/tilt-chomp.html)**
+**[Play](https://austegard.com/fun-and-games/tilt-chomp/)** | **[Source](https://github.com/oaustegard/oaustegard.github.io/blob/main/fun-and-games/tilt-chomp/index.html)**
 
 ## Playing
 
@@ -18,7 +18,7 @@ Without a motion sensor, swipe on the maze or use the arrow keys (or WASD). `P` 
 
 ## How it's built
 
-One self-contained HTML file, no build step.
+One self-contained HTML file, no build step. It installs as an app (Add to Home Screen) and plays offline: `manifest.json` and the icons make it installable, and `sw.js` caches the page, icons and fonts.
 
 - **Rendering**: a single WebGPU fragment shader draws the whole scene. The walls come from a signed-distance field computed once on the CPU (16 samples per tile) and uploaded as a texture; the shader draws a neon tube along an inset of that field and brightens the side facing the way you tilt. Pellets are read from a storage buffer, and the chomper, ghosts and fruit are drawn as signed-distance shapes from a small entity buffer. Browsers without WebGPU get a Canvas 2D renderer that reuses the same distance field.
 - **Sound**: synthesized with Web Audio: the chomp, a siren that speeds up as the maze empties, fright and returning-eyes sirens, and an original start jingle.
