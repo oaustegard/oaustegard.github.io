@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Doom on the GPU</title>
+<meta name="description" content="The Doom engine rewritten as WebGPU compute shaders: BSP rendering, movement, doors and lifts all run on the GPU, playing Freedoom's first episode.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Doom on the GPU">
+<meta property="og:description" content="The Doom engine rewritten as WebGPU compute shaders, playing Freedoom's first episode.">
+<meta property="og:url" content="https://austegard.com/fun-and-games/doom/">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root { --ink: #e8e2d0; --mute: #9a927c; --red: #b3261e; --panel: rgba(16, 12, 8, .88); }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; color: var(--ink); font: 15px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow: hidden; touch-action: none; }
+#stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; image-rendering: pixelated; background: #000; }
+.overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; padding: 16px; background: rgba(0, 0, 0, .72); }
+.overlay[hidden] { display: none; }
+.card { width: min(520px, 100%); max-height: 100%; overflow: auto; background: var(--panel); border: 1px solid #4a3c28; padding: 20px 22px; }
+h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: .04em; color: #f0c060; text-shadow: 2px 2px 0 var(--red); }
+p { margin: 8px 0; }
+.mute { color: var(--mute); font-size: 13px; }
+label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; }
+select, button, input[type=file] { font: inherit; color: var(--ink); background: #241b10; border: 1px solid #6b5636; padding: 6px 10px; }
+button.go { width: 100%; margin-top: 12px; padding: 12px; font-size: 18px; background: var(--red); border-color: #e05040; cursor: pointer; }
+button.go:disabled { opacity: .5; cursor: wait; }
+#status { min-height: 1.4em; }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; margin-top: 10px; }
+.keys b { color: #f0c060; font-weight: normal; }
+#touch { position: fixed; inset: 0; pointer-events: none; }
+#touch[hidden] { display: none; }
+.tbtn { position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .5); background: rgba(40, 30, 16, .45); color: var(--ink); font: 12px ui-monospace, monospace; display: flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; }
+#bUse { right: max(16px, env(safe-area-inset-right)); bottom: 120px; }
+#bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
+#stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
+#nub { position: absolute; left: 40px; top: 40px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
+#fps { position: fixed; left: 8px; top: 6px; font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="screen" width="640" height="400"></canvas></div>
+<div id="fps"></div>
+<div id="touch" hidden>
+  <div id="stick"><div id="nub"></div></div>
+  <div class="tbtn" id="bUse">USE</div>
+  <div class="tbtn" id="bMenu">II</div>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="card">
+    <h1>DOOM ON THE GPU</h1>
+    <p>The Doom engine rewritten as WebGPU compute shaders. One GPU thread per screen column walks the BSP tree and draws walls, floors and sprites; the game tic (movement, collision, doors, lifts, pickups) runs in GPU kernels too. JavaScript reads the WAD, passes keys and plays sounds.</p>
+    <p class="mute">Playing Freedoom's first episode (BSD licence). Monsters and weapons don't fight back yet: this build is the renderer and the world.</p>
+    <label>Level <select id="map"></select></label>
+    <label>Resolution <select id="res">
+      <option value="320x200">320 × 200 (original)</option>
+      <option value="640x400" selected>640 × 400</option>
+      <option value="960x600">960 × 600</option>
+      <option value="1280x800">1280 × 800</option>
+    </select></label>
+    <label>Your own WAD <input type="file" id="wadfile" accept=".wad,.WAD"></label>
+    <div id="status" class="mute"></div>
+    <button class="go" id="play" disabled>Loading…</button>
+    <div class="keys">
+      <b>W A S D / arrows</b><span>move and turn (A/D strafe)</span>
+      <b>mouse</b><span>turn (click the screen to capture it)</span>
+      <b>shift</b><span>run</span>
+      <b>space / E</b><span>open doors, press switches</span>
+      <b>alt + ← →</b><span>strafe with the arrows</span>
+      <b>esc</b><span>this menu</span>
+      <b>touch</b><span>left thumb moves, right thumb turns, USE button</span>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="done" hidden>
+  <div class="card">
+    <h1 id="doneTitle">LEVEL COMPLETE</h1>
+    <p id="doneStats"></p>
+    <button class="go" id="next">Continue</button>
+  </div>
+</div>
+
+<script type="module">
+import { Engine, unpackWad, freshPlayer, W } from "./engine.js";
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("screen");
+const status = (t) => { $("status").textContent = t; };
+
+if (!navigator.gpu) {
+  status("This browser has no WebGPU. Try a recent Chrome, Edge or Safari.");
+  $("play").textContent = "WebGPU unavailable";
+  throw new Error("no webgpu");
+}
+
+let device, context, format, engine, wadBuf;
+let running = false, loading = false;
+let player = freshPlayer();
+let res = [640, 400];
+
+async function initGPU() {
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) throw new Error("no GPU adapter");
+  device = await adapter.requestDevice({ requiredLimits: {
+    maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    maxBufferSize: adapter.limits.maxBufferSize,
+  } });
+  device.lost.then((i) => { status("GPU device lost: " + i.message); running = false; showMenu(); });
+  context = canvas.getContext("webgpu");
+  format = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({ device, format, alphaMode: "opaque" });
+}
+
+async function fetchWad() {
+  const r = await fetch("e1.wad.gz");
+  if (!r.ok) throw new Error("WAD download failed: " + r.status);
+  const total = +r.headers.get("content-length") || 0;
+  const reader = r.body.getReader(); const parts = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+    if (total) status(`Downloading Freedoom… ${Math.round(100 * got / total)}%`);
+  }
+  return unpackWad(await new Blob(parts).arrayBuffer());
+}
+
+async function buildEngine() {
+  const [w, h] = $("res").value.split("x").map(Number);
+  res = [w, h];
+  canvas.width = w; canvas.height = h;
+  status("Packing textures…");
+  engine = await Engine.create(device, wadBuf, { width: w, height: h, format });
+  const sel = $("map"), prev = sel.value;
+  sel.innerHTML = "";
+  for (const m of engine.maps()) sel.add(new Option(m, m));
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
+async function start(mapName, carry = freshPlayer()) {
+  loading = true;
+  status(`Compiling shaders for ${mapName}…`);
+  $("play").disabled = true;
+  await engine.loadMap(mapName, carry);
+  player = carry;
+  status("");
+  loading = false;
+  $("play").disabled = false;
+  $("play").textContent = "Resume";
+  hideMenu();
+  running = true;
+  lastTime = performance.now(); ticAccum = 0;
+}
+
+// ---------------------------------------------------------------- layout
+function fit() {
+  const vw = innerWidth, vh = innerHeight;
+  const ar = 4 / 3;
+  let w = vw, h = vw / ar;
+  if (h > vh) { h = vh; w = vh * ar; }
+  canvas.style.width = Math.floor(w) + "px";
+  canvas.style.height = Math.floor(h) + "px";
+}
+addEventListener("resize", fit); fit();
+
+// ---------------------------------------------------------------- input
+const keys = new Set();
+let mouseDX = 0, turnHeld = 0, weaponKey = 0;
+const isTouch = matchMedia("(pointer: coarse)").matches;
+addEventListener("keydown", (e) => {
+  if (e.code === "Escape") { if (running) { running = false; showMenu(); } else if (engine?.map) { hideMenu(); running = true; lastTime = performance.now(); } return; }
+  if (/^Digit[1-9]$/.test(e.code)) weaponKey = +e.code.slice(5);
+  keys.add(e.code);
+  if (running && ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+});
+addEventListener("keyup", (e) => keys.delete(e.code));
+addEventListener("blur", () => keys.clear());
+canvas.addEventListener("click", () => { if (running && !isTouch) canvas.requestPointerLock?.(); });
+addEventListener("mousemove", (e) => { if (document.pointerLockElement === canvas) mouseDX += e.movementX; });
+
+// touch: left half is a floating stick, right half drags to turn
+const touch = { stickId: null, sx: 0, sy: 0, dx: 0, dy: 0, turnId: null, tx: 0, use: false };
+if (isTouch) {
+  $("touch").hidden = false;
+  const stick = $("stick"), nub = $("nub");
+  addEventListener("touchstart", (e) => {
+    if (!running) return;
+    for (const t of e.changedTouches) {
+      if (t.target.closest?.(".tbtn")) continue;
+      if (t.clientX < innerWidth / 2 && touch.stickId === null) {
+        touch.stickId = t.identifier; touch.sx = t.clientX; touch.sy = t.clientY; touch.dx = touch.dy = 0;
+        stick.style.display = "block"; stick.style.left = t.clientX - 60 + "px"; stick.style.top = t.clientY - 60 + "px";
+        nub.style.left = "40px"; nub.style.top = "40px";
+      } else if (touch.turnId === null) { touch.turnId = t.identifier; touch.tx = t.clientX; }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  addEventListener("touchmove", (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === touch.stickId) {
+        let dx = t.clientX - touch.sx, dy = t.clientY - touch.sy;
+        const m = Math.hypot(dx, dy); if (m > 50) { dx *= 50 / m; dy *= 50 / m; }
+        touch.dx = dx / 50; touch.dy = dy / 50;
+        nub.style.left = 40 + dx + "px"; nub.style.top = 40 + dy + "px";
+      } else if (t.identifier === touch.turnId) { mouseDX += (t.clientX - touch.tx) * 2.2; touch.tx = t.clientX; }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  const end = (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === touch.stickId) { touch.stickId = null; touch.dx = touch.dy = 0; stick.style.display = "none"; }
+      if (t.identifier === touch.turnId) touch.turnId = null;
+    }
+  };
+  addEventListener("touchend", end); addEventListener("touchcancel", end);
+  $("bUse").addEventListener("touchstart", (e) => { touch.use = true; e.preventDefault(); e.stopPropagation(); });
+  $("bUse").addEventListener("touchend", (e) => { touch.use = false; e.preventDefault(); });
+  $("bMenu").addEventListener("touchstart", (e) => { running = false; showMenu(); e.preventDefault(); e.stopPropagation(); });
+}
+
+const ANG = (units) => units * 65536 / 4294967296 * 2 * Math.PI; // DOOM angleturn units -> radians
+function readInput() {
+  const k = (...c) => c.some((x) => keys.has(x));
+  const run = k("ShiftLeft", "ShiftRight");
+  const strafeMod = k("AltLeft", "AltRight");
+  let forward = 0, side = 0, turn = 0;
+  const fw = run ? 50 : 25, sw = run ? 40 : 24;
+  if (k("KeyW", "ArrowUp")) forward += fw;
+  if (k("KeyS", "ArrowDown")) forward -= fw;
+  if (k("KeyD") || (strafeMod && k("ArrowRight"))) side += sw;
+  if (k("KeyA") || (strafeMod && k("ArrowLeft"))) side -= sw;
+  const turning = !strafeMod && (k("ArrowLeft") || k("ArrowRight"));
+  turnHeld = turning ? turnHeld + 1 : 0;
+  const tspeed = turnHeld < 6 ? 320 : run ? 1280 : 640;
+  if (!strafeMod && k("ArrowRight")) turn -= ANG(tspeed);
+  if (!strafeMod && k("ArrowLeft")) turn += ANG(tspeed);
+  if (touch.stickId !== null) {
+    forward += -touch.dy * 50; side += touch.dx * 40;
+  }
+  const mouseturn = -mouseDX * 0.0028;
+  mouseDX = 0;
+  const use = k("Space", "KeyE", "Enter") || touch.use;
+  const w = weaponKey; weaponKey = 0;
+  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, weapon: w };
+}
+
+// ---------------------------------------------------------------- sound
+let audio = null;
+const bufferCache = new Map();
+function playSound(ev, view) {
+  if (!audio || !ev.sfx) return;
+  let b = bufferCache.get(ev.sfx);
+  if (b === undefined) {
+    const s = engine.sound(ev.sfx);
+    b = null;
+    if (s) { b = audio.createBuffer(1, s.samples.length, s.rate); b.copyToChannel(s.samples, 0); }
+    bufferCache.set(ev.sfx, b);
+  }
+  if (!b) return;
+  const dx = ev.x - view.x, dy = ev.y - view.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > 1200) return;
+  const vol = dist < 160 ? 1 : (1200 - dist) / 1040;
+  const rel = Math.atan2(dy, dx) - view.angle;
+  const src = audio.createBufferSource(); src.buffer = b;
+  const g = audio.createGain(); g.gain.value = 0.5 * vol;
+  const pan = audio.createStereoPanner(); pan.pan.value = dist < 1 ? 0 : -Math.sin(rel) * 0.75;
+  src.connect(g).connect(pan).connect(audio.destination);
+  src.start();
+}
+
+// ---------------------------------------------------------------- loop
+let lastTime = 0, ticAccum = 0, frames = 0, fpsT = 0, gpuMs = 0;
+const NEXT = { E1M1: "E1M2", E1M2: "E1M3", E1M3: "E1M4", E1M4: "E1M5", E1M5: "E1M6", E1M6: "E1M7", E1M7: "E1M8", E1M9: "E1M4",
+  E2M1: "E2M2", E2M2: "E2M3", E2M3: "E2M4", E2M4: "E2M5", E2M5: "E2M6", E2M6: "E2M7", E2M7: "E2M8", E2M9: "E2M6",
+  E3M1: "E3M2", E3M2: "E3M3", E3M3: "E3M4", E3M4: "E3M5", E3M5: "E3M6", E3M6: "E3M7", E3M7: "E3M8", E3M9: "E3M7" };
+const SECRET = { E1M3: "E1M9", E2M5: "E2M9", E3M6: "E3M9", MAP15: "MAP31", MAP31: "MAP32" };
+let pendingExit = null;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!running || loading || !engine?.map) { lastTime = now; return; }
+  ticAccum += (now - lastTime) * 35 / 1000;
+  lastTime = now;
+  let tics = Math.floor(ticAccum);
+  ticAccum -= tics;
+  if (tics > 4) tics = 4;
+  const input = readInput();
+  const enc = device.createCommandEncoder();
+  engine.encodeFrame(enc, tics, tics ? input : { ...input, use: false, forward: 0, side: 0, turn: 0 });
+  engine.present(enc, context.getCurrentTexture().createView());
+  const rb = engine.readWorld(enc);
+  const t0 = performance.now();
+  device.queue.submit([enc.finish()]);
+  if (rb) engine.finishRead(rb).then(onWorld);
+  device.queue.onSubmittedWorkDone().then(() => { gpuMs = gpuMs * 0.9 + (performance.now() - t0) * 0.1; });
+  frames++;
+  if (now - fpsT > 1000) { $("fps").textContent = `${frames} fps · ${res[0]}×${res[1]} · gpu ${gpuMs.toFixed(1)} ms`; frames = 0; fpsT = now; }
+}
+requestAnimationFrame(frame);
+
+function onWorld(buf) {
+  const wf = new Float32Array(buf), wi = new Int32Array(buf), wu = new Uint32Array(buf);
+  const view = { x: wf[W.viewx], y: wf[W.viewy], angle: wf[W.viewangle] };
+  for (const ev of engine.soundEvents(buf)) playSound(ev, view);
+  const exit = wu[W.exit];
+  if (exit && !pendingExit && running) {
+    running = false;
+    document.exitPointerLock?.();
+    const cur = engine.mapName;
+    if (exit === 3) { pendingExit = { map: cur, carry: freshPlayer() }; start(cur, freshPlayer()).then(() => { pendingExit = null; }); return; }
+    const next = exit === 2 ? SECRET[cur] || NEXT[cur] : NEXT[cur] || (/^MAP(\d\d)$/.test(cur) ? "MAP" + String(+cur.slice(3) + 1).padStart(2, "0") : null);
+    const carry = engine.playerFrom(buf);
+    const secs = Math.floor(wu[W.leveltime] / 35);
+    $("doneTitle").textContent = `${cur} COMPLETE`;
+    $("doneStats").innerHTML = `Kills ${wi[W.killcount]} / ${wi[W.totalkills]}<br>Items ${wi[W.itemcount]} / ${wi[W.totalitems]}<br>Secrets ${wi[W.secretcount]} / ${wi[W.totalsecrets]}<br>Time ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+    const ok = next && engine.maps().includes(next);
+    $("next").textContent = ok ? `Continue to ${next}` : "The end of the episode — play again";
+    pendingExit = { map: ok ? next : engine.maps()[0], carry: ok ? carry : freshPlayer() };
+    $("done").hidden = false;
+  }
+}
+$("next").addEventListener("click", async () => {
+  $("done").hidden = true;
+  const p = pendingExit;
+  await start(p.map, p.carry);
+  pendingExit = null;
+});
+
+function showMenu() { $("menu").hidden = false; document.exitPointerLock?.(); }
+function hideMenu() { $("menu").hidden = true; }
+
+$("play").addEventListener("click", async () => {
+  if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
+  audio?.resume?.();
+  const [w, h] = $("res").value.split("x").map(Number);
+  if (w !== res[0] || h !== res[1]) { await buildEngine(); engine.map = null; }
+  const m = $("map").value;
+  if (engine.map && engine.mapName === m) { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); return; }
+  await start(m);
+  if (!isTouch) canvas.requestPointerLock?.();
+});
+$("wadfile").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    status("Reading " + f.name + "…");
+    wadBuf = await unpackWad(await f.arrayBuffer());
+    await buildEngine();
+    engine.map = null;
+    $("play").textContent = "Play";
+    status(f.name + " loaded.");
+  } catch (err) { status("Could not load that WAD: " + err.message); }
+});
+
+(async () => {
+  try {
+    await initGPU();
+    wadBuf = await fetchWad();
+    await buildEngine();
+    status("");
+    $("play").disabled = false;
+    $("play").textContent = "Play";
+  } catch (err) {
+    status(err.message);
+    console.error(err);
+  }
+})();
+</script>
+</body>
+</html>
