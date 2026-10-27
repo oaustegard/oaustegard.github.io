@@ -53,7 +53,13 @@ tip soft-drop is on. Roll and tip are read from gravity's components along the s
   bass bouncing between octaves on one chord root per bar, noise-channel hats on the eighths and a
   snare on 2 and 4. All of it is synthesized in Web Audio with no audio files, scheduled a quarter
   second ahead from the frame loop. Tempo starts at 132 bpm and gains 6 bpm per level, up to 200.
-  It stops on pause and game over and has its own toggle, separate from the sound effects.
+  It stops on pause and has its own toggle, separate from the sound effects.
+- **Game-over music.** The opening of Chopin's funeral march (Piano Sonata No. 2 in B-flat minor,
+  Op. 35, 1839; public domain), the march heard at Soviet state funerals from Brezhnev's on. Chopin's
+  melody, an octave up, on a square wave, over a triangle bass rocking between the B-flat minor and
+  G-flat major roots on every beat, as his left hand does, with a muffled drum on beats 1 and 3.
+  Two phrases at 54 bpm, about 21 seconds, ending on a held B-flat; it plays once and stops when you
+  leave the game-over screen.
 - **PWA and updates**: `manifest.json` (fullscreen, portrait) and `sw.js`. The page is fetched
   network-first, other files cache-first with a background refresh, and every network fetch skips the
   HTTP cache (GitHub Pages sends `max-age=600`). A home-screen app on iOS resumes instead of

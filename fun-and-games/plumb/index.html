@@ -193,7 +193,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
       <span>Effects: <b id="stGpu">starting…</b></span>
       <span>Motion: <b id="stMotion">asks when you press Start</b></span>
       <span>Best: <b id="stBest">0</b></span>
-      <span>Version: <b>9 (self-updating)</b></span>
+      <span>Version: <b>10 (funeral march)</b></span>
     </div>
   </section>
 
@@ -398,7 +398,7 @@ function gameOver() {
   if (score > best) { best = score; store.set('best', best); }
   $('#finalScore').textContent = score.toLocaleString();
   $('#finalLine').textContent = `Lines ${lines} · level ${level} · best ${best.toLocaleString()}`;
-  beep(220, 0.5, 'sawtooth', 0.04, 0.4);
+  if (!settings.music) beep(220, 0.5, 'sawtooth', 0.04, 0.4);
   buzz([60, 40, 120]);
   buildShare();
   setMode('over');
@@ -604,9 +604,30 @@ const SCORE = (() => {
   ev.sort((a, b) => a.t - b.t);
   return { ev, length: base };
 })();
+/* Game over: the opening of Chopin's funeral march (Piano Sonata No. 2 in B-flat minor, Op. 35,
+   1839; public domain), the march played at Soviet state funerals. The melody is Chopin's, an octave
+   up for small speakers, on a square wave; under it a triangle bass rocks between the B-flat minor and
+   G-flat major roots on every beat, as Chopin's left hand does, with a muffled drum on beats 1 and 3.
+   Plays once at 54 bpm and ends on a held B-flat. */
+const DIRGE = (() => {
+  const bar1 = [['A#4', 1], ['A#4', .75], ['A#4', .25], ['A#4', 2]];
+  const bar2 = [['C#5', .75], ['C5', .25], ['C5', .75], ['A#4', .25], ['A#4', .75], ['A4', .25], ['A#4', 1]];
+  const mel = [...bar1, ...bar2, ...bar1, ...bar2.slice(0, -1), ['A#4', 4]];
+  const ev = []; let t = 0;
+  for (const [n, d] of mel) { ev.push({ t, d, v: 'sq', f: freqOf(n) }); t += d; }
+  const length = t;
+  for (let b = 0; b < length - 4; b++) {
+    ev.push({ t: b, d: 0.9, v: 'bass', f: freqOf(b % 2 ? 'F#2' : 'A#1') });
+    if (b % 2 === 0) ev.push({ t: b, d: 0.4, v: 'drum' });
+  }
+  ev.push({ t: length - 4, d: 4, v: 'bass', f: freqOf('A#1') }, { t: length - 4, d: 0.4, v: 'drum' });
+  ev.sort((a, b) => a.t - b.t);
+  return { ev, length, loop: false, bpm: () => 54 };
+})();
+SCORE.loop = true; SCORE.bpm = () => Math.min(200, 132 + (level - 1) * 6);
 const music = {
-  i: 0, next: 0, playing: false, gain: null, pulse: null, noise: null, scheduled: 0,
-  bpm() { return Math.min(200, 132 + (level - 1) * 6); },
+  i: 0, next: 0, playing: false, gain: null, pulse: null, noise: null, scheduled: 0, song: SCORE,
+  bpm() { return this.song.bpm(); },
   init() {
     if (this.gain || !actx) return;
     this.gain = actx.createGain(); this.gain.gain.value = 0; this.gain.connect(actx.destination);
@@ -617,13 +638,22 @@ const music = {
     const data = this.noise.getChannelData(0);
     for (let k = 0; k < data.length; k++) data[k] = Math.random() * 2 - 1;
   },
-  reset() { this.i = 0; this.next = 0; },
+  reset() { this.i = 0; this.next = 0; this.song = SCORE; },
   start() {
     if (!actx) return;
+    if (this.song !== SCORE) this.reset();
     this.init();
     this.playing = true;
     this.next = Math.max(this.next, actx.currentTime + 0.06);
     this.gain.gain.setTargetAtTime(settings.music ? 0.9 : 0, actx.currentTime, 0.02);
+  },
+  dirge() {
+    if (!actx || !settings.music) return;
+    this.init();
+    this.song = DIRGE; this.i = 0; this.playing = true;
+    this.next = actx.currentTime + 0.5;
+    this.gain.gain.cancelScheduledValues(actx.currentTime);
+    this.gain.gain.setValueAtTime(0.9, actx.currentTime);
   },
   stop() {
     if (!this.playing) return;
@@ -633,11 +663,16 @@ const music = {
   voice(e, t, dur) {
     const g = actx.createGain();
     g.connect(this.gain);
-    if (e.v === 'lead' || e.v === 'bass') {
+    if (e.v === 'drum') {
       const o = actx.createOscillator();
-      if (e.v === 'lead') o.setPeriodicWave(this.pulse); else o.type = 'triangle';
+      o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.35);
+      g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+      o.connect(g); o.start(t); o.stop(t + 0.42);
+    } else if (e.v === 'lead' || e.v === 'sq' || e.v === 'bass') {
+      const o = actx.createOscillator();
+      if (e.v === 'lead') o.setPeriodicWave(this.pulse); else o.type = e.v === 'sq' ? 'square' : 'triangle';
       o.frequency.value = e.f;
-      const peak = e.v === 'lead' ? 0.075 : 0.14, end = t + dur * (e.v === 'lead' ? 0.92 : 0.8);
+      const peak = { lead: 0.075, sq: 0.05, bass: 0.14 }[e.v], end = t + dur * (e.v === 'bass' ? 0.8 : 0.92);
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(peak, t + 0.006);
       g.gain.setValueAtTime(peak * 0.8, Math.max(t + 0.007, end - 0.03));
@@ -659,11 +694,13 @@ const music = {
   tick() {
     if (!this.playing || !actx) return;
     if (this.next < actx.currentTime) this.next = actx.currentTime + 0.03;   // resumed after a stall
-    const spb = 60 / this.bpm(), ev = SCORE.ev;
+    const song = this.song, spb = 60 / song.bpm(), ev = song.ev;
     while (this.next < actx.currentTime + 0.25) {
-      const e = ev[this.i], nxt = ev[(this.i + 1) % ev.length];
+      const e = ev[this.i];
       if (settings.music) this.voice(e, this.next, e.d * spb);
-      let gap = nxt.t - e.t; if (gap < 0) gap += SCORE.length;
+      if (!song.loop && this.i === ev.length - 1) { this.playing = false; return; }   // a one-shot song ends
+      const nxt = ev[(this.i + 1) % ev.length];
+      let gap = nxt.t - e.t; if (gap < 0) gap += song.length;
       this.next += gap * spb;
       this.i = (this.i + 1) % ev.length;
     }
@@ -1141,7 +1178,9 @@ function setMode(m) {
   $('#pauseCard').hidden = m !== 'pause';
   $('#overCard').hidden = m !== 'over';
   $('#plumbCard').hidden = m !== 'plumb';
-  if (m === 'play') { wake(); music.start(); } else music.stop();
+  if (m === 'play') { wake(); music.start(); }
+  else if (m === 'over') music.dirge();
+  else music.stop();
   if (m === 'title' || m === 'over') setTimeout(applyUpdate, 0);
   if (m === 'title') { $('#stBest').textContent = best.toLocaleString(); updateStatus(); }
   const focus = { title: '#startBtn', pause: '#resumeBtn', over: '#againBtn', plumb: '#plumbBtn' }[m];
@@ -1236,7 +1275,8 @@ requestAnimationFrame(frame);
 // ?debug exposes the rules engine to the Playwright harness in plumb/test_plumb.js.
 if (new URLSearchParams(location.search).has('debug')) {
   window.__plumb = { grid: () => grid, piece: () => piece, stats: () => ({ score, lines, level, mode }),
-    music: () => ({ playing: music.playing, scheduled: music.scheduled, bpm: music.bpm(), beats: SCORE.length }),
+    music: () => ({ playing: music.playing, scheduled: music.scheduled, bpm: music.bpm(), beats: music.song.length,
+      song: music.song === DIRGE ? 'dirge' : 'main' }),
     musicOut: () => music.gain,
     place(t, x, r = 0) { piece = { t, r, x, y: 1 }; pieceKey = ''; }, hardDrop, rotate, hold, tryMove };
 }
