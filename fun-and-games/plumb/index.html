@@ -193,7 +193,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
       <span>Effects: <b id="stGpu">starting…</b></span>
       <span>Motion: <b id="stMotion">asks when you press Start</b></span>
       <span>Best: <b id="stBest">0</b></span>
-      <span>Version: <b>11 (funeral march, corrected)</b></span>
+      <span>Version: <b>12 (funeral march, bars 3–6)</b></span>
     </div>
   </section>
 
@@ -604,18 +604,24 @@ const SCORE = (() => {
   ev.sort((a, b) => a.t - b.t);
   return { ev, length: base };
 })();
-/* Game over: the opening four bars of Chopin's funeral march (Piano Sonata No. 2 in B-flat minor,
-   Op. 35, 1839; public domain), the march played at Soviet state funerals. Notes and rhythms are
-   checked against a MIDI of the score: the melody an octave up for small speakers, on a square
-   wave, over a triangle bass that rocks between Chopin's left-hand roots, B-flat and D-flat, on every
-   beat, with a muffled drum on beats 1 and 3. Plays once at 52 bpm, Chopin's Lento. */
+/* Game over: bars 3 to 6 of Chopin's funeral march (Piano Sonata No. 2 in B-flat minor, Op. 35,
+   1839; public domain), the march played at Soviet state funerals. Bars 1-2 only toll B-flat, so
+   they are skipped. Notes and rhythms are checked against a MIDI of the score: the B-flat toll and
+   its turn down through D-flat and C, then the same figure a third higher on D-flat, where Chopin
+   adds a lower voice in parallel thirds. Melody an octave up for small speakers, on square waves;
+   under it a triangle bass rocking between his left-hand roots, B-flat and D-flat, on every beat,
+   and a muffled drum on beats 1 and 3. Plays once at 52 bpm, Chopin's Lento. */
 const DIRGE = (() => {
-  const toll = [['A#4', 1], ['A#4', .75], ['A#4', .25], ['A#4', 2]];
-  const mel = [...toll, ...toll,
-    ['A#4', 1], ['A#4', .75], ['A#4', .25], ['A#4', 1], ['C#5', .75], ['C5', .25],
-    ['C5', .75], ['A#4', .25], ['A#4', .75], ['A#4', .25], ['A#4', 3]];
+  const top = [
+    ['A#4', 1], ['A#4', .75], ['A#4', .25], ['A#4', 1], ['C#5', .75], ['C5', .25],        // bar 3
+    ['C5', .75], ['A#4', .25], ['A#4', .75], ['A#4', .25], ['A#4', 2],                    // bar 4
+    ['C#5', 1], ['C#5', .75], ['C#5', .25], ['C#5', 1], ['F5', .75], ['D#5', .25],        // bar 5
+    ['D#5', .75], ['C#5', .25], ['C#5', .75], ['C#5', .25], ['C#5', 3]];                  // bar 6, held
+  const thirds = [['C#5', .75], ['C5', .25], ['C5', .75], ['A#4', .25], ['A#4', .75], ['A#4', .25], ['A#4', 3]];
   const ev = []; let t = 0;
-  for (const [n, d] of mel) { ev.push({ t, d, v: 'sq', f: freqOf(n) }); t += d; }
+  for (const [n, d] of top) { ev.push({ t, d, v: 'sq', f: freqOf(n) }); t += d; }
+  let u = 11;                                                // the lower voice enters on beat 4 of bar 5
+  for (const [n, d] of thirds) { ev.push({ t: u, d, v: 'sq2', f: freqOf(n) }); u += d; }
   for (let b = 0; b < 14; b++) {
     ev.push({ t: b, d: 0.9, v: 'bass', f: freqOf(b % 2 ? 'C#2' : 'A#1') });
     if (b % 2 === 0) ev.push({ t: b, d: 0.4, v: 'drum' });
@@ -668,11 +674,11 @@ const music = {
       o.frequency.setValueAtTime(90, t); o.frequency.exponentialRampToValueAtTime(42, t + 0.35);
       g.gain.setValueAtTime(0.22, t); g.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
       o.connect(g); o.start(t); o.stop(t + 0.42);
-    } else if (e.v === 'lead' || e.v === 'sq' || e.v === 'bass') {
+    } else if (e.v === 'lead' || e.v === 'sq' || e.v === 'sq2' || e.v === 'bass') {
       const o = actx.createOscillator();
-      if (e.v === 'lead') o.setPeriodicWave(this.pulse); else o.type = e.v === 'sq' ? 'square' : 'triangle';
+      if (e.v === 'lead') o.setPeriodicWave(this.pulse); else o.type = e.v === 'bass' ? 'triangle' : 'square';
       o.frequency.value = e.f;
-      const peak = { lead: 0.075, sq: 0.05, bass: 0.14 }[e.v], end = t + dur * (e.v === 'bass' ? 0.8 : 0.92);
+      const peak = { lead: 0.075, sq: 0.05, sq2: 0.03, bass: 0.14 }[e.v], end = t + dur * (e.v === 'bass' ? 0.8 : 0.92);
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(peak, t + 0.006);
       g.gain.setValueAtTime(peak * 0.8, Math.max(t + 0.007, end - 0.03));

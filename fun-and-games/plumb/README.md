@@ -54,14 +54,15 @@ tip soft-drop is on. Roll and tip are read from gravity's components along the s
   snare on 2 and 4. All of it is synthesized in Web Audio with no audio files, scheduled a quarter
   second ahead from the frame loop. Tempo starts at 132 bpm and gains 6 bpm per level, up to 200.
   It stops on pause and has its own toggle, separate from the sound effects.
-- **Game-over music.** The opening four bars of Chopin's funeral march (Piano Sonata No. 2 in
-  B-flat minor, Op. 35, 1839; public domain), the march heard at Soviet state funerals. Notes and
-  rhythms were checked against a MIDI of the score (mfiles.co.uk): B-flat tolled as quarter,
-  dotted-eighth, sixteenth, half, twice; then the turn through D-flat and C back to B-flat. Melody an
-  octave up on a square wave, a triangle bass rocking between Chopin's left-hand roots B-flat and
+- **Game-over music.** Bars 3 to 6 of Chopin's funeral march (Piano Sonata No. 2 in B-flat minor,
+  Op. 35, 1839; public domain), the march heard at Soviet state funerals. Bars 1-2 only toll B-flat
+  and are skipped. Notes and rhythms were checked against a MIDI of the score (mfiles.co.uk): the
+  B-flat toll with its turn down through D-flat and C, then the same figure a third higher on D-flat,
+  where Chopin's lower voice in parallel thirds enters; it ends on a held D-flat over B-flat. Melody
+  an octave up on square waves, a triangle bass rocking between his left-hand roots B-flat and
   D-flat on every beat, a muffled drum on beats 1 and 3, at 52 bpm, about 20 seconds. It plays once
-  and stops when you leave the game-over screen. The first version got the second bar's rhythm wrong
-  and added an A natural that is not in the score; a test now checks every onset against the beat grid.
+  and stops when you leave the game-over screen. A test checks every melody onset against the beat
+  grid; the first version had the rhythm wrong and an A natural that is not in the score.
 - **PWA and updates**: `manifest.json` (fullscreen, portrait) and `sw.js`. The page is fetched
   network-first, other files cache-first with a background refresh, and every network fetch skips the
   HTTP cache (GitHub Pages sends `max-age=600`). A home-screen app on iOS resumes instead of
