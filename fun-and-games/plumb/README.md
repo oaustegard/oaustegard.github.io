@@ -54,12 +54,14 @@ tip soft-drop is on. Roll and tip are read from gravity's components along the s
   snare on 2 and 4. All of it is synthesized in Web Audio with no audio files, scheduled a quarter
   second ahead from the frame loop. Tempo starts at 132 bpm and gains 6 bpm per level, up to 200.
   It stops on pause and has its own toggle, separate from the sound effects.
-- **Game-over music.** The opening of Chopin's funeral march (Piano Sonata No. 2 in B-flat minor,
-  Op. 35, 1839; public domain), the march heard at Soviet state funerals from Brezhnev's on. Chopin's
-  melody, an octave up, on a square wave, over a triangle bass rocking between the B-flat minor and
-  G-flat major roots on every beat, as his left hand does, with a muffled drum on beats 1 and 3.
-  Two phrases at 54 bpm, about 21 seconds, ending on a held B-flat; it plays once and stops when you
-  leave the game-over screen.
+- **Game-over music.** The opening four bars of Chopin's funeral march (Piano Sonata No. 2 in
+  B-flat minor, Op. 35, 1839; public domain), the march heard at Soviet state funerals. Notes and
+  rhythms were checked against a MIDI of the score (mfiles.co.uk): B-flat tolled as quarter,
+  dotted-eighth, sixteenth, half, twice; then the turn through D-flat and C back to B-flat. Melody an
+  octave up on a square wave, a triangle bass rocking between Chopin's left-hand roots B-flat and
+  D-flat on every beat, a muffled drum on beats 1 and 3, at 52 bpm, about 20 seconds. It plays once
+  and stops when you leave the game-over screen. The first version got the second bar's rhythm wrong
+  and added an A natural that is not in the score; a test now checks every onset against the beat grid.
 - **PWA and updates**: `manifest.json` (fullscreen, portrait) and `sw.js`. The page is fetched
   network-first, other files cache-first with a background refresh, and every network fetch skips the
   HTTP cache (GitHub Pages sends `max-age=600`). A home-screen app on iOS resumes instead of
