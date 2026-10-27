@@ -18,11 +18,17 @@ You are an eel with an anglerfish lure. Every bite takes you 25 m deeper, throug
 
 ## Controls
 
-Press **Tilt**, hold the phone at whatever angle is comfortable, and tip it toward where you want to swim. The angle you hold when you switch tilt on, start a dive, resume or rotate the screen counts as level; a tip of 9° along one axis turns the eel. iOS asks for motion permission when you press Tilt. The small vial in the Tilt button shows your current tilt.
+On a phone, Lantern Eel starts in **tilt** mode and the water fills the screen. The angle you hold the phone at when you dive, resume or rotate the screen counts as level; tap the vial at the top to reset it. A tip of 6° along one axis turns the eel, and the axis already steering keeps priority until the other leads it by 3°, so holding a diagonal does not flicker. iOS asks for motion permission when you press Dive. If no motion data arrives, the game switches to arrows for that visit.
 
-Without a motion sensor, use the on-screen arrows, swipe on the water, or the keyboard: arrows or WASD to steer, Space or Shift to boost, P or Esc to pause. Hold the Boost button on a phone.
+**Arrows** mode shows an on-screen D-pad, a Boost button and the glow and phase meters. Choose the mode, and whether the arrows sit on the left or the right, on the title screen or in the pause menu; the choice is remembered.
+
+In both modes you can swipe on the water to steer, and press and hold the water to boost. On a keyboard: arrows or WASD steer, Space or Shift boosts, P or Esc pauses.
 
 Add to Home Screen to install it full-screen and offline. The best score stays in the browser.
+
+## Sound
+
+All synthesized with Web Audio: an ambient bed of filtered surf and a low two-note drone that both darken as you go deeper, plus sounds for bites (rising in pitch with the chain), lanternfish, pearls and the end of a phase, turns, boost, zone changes, sonar pings from the Midnight Zone down, a low double thud when a jellyfish is within two cells, and the end of a dive. The page asks iOS for playback audio, so it plays with the ring/silent switch on silent; the speaker button mutes it.
 
 ## How it is built
 
