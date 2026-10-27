@@ -1,0 +1,491 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Like Poll</title>
+<meta name="description" content="Build a Bluesky poll people answer with likes: one post for the question, one reply per option, and a results counter that drops anyone who liked more than one option.">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #14171a; --muted: #5b6672;
+    --line: #dde2e8; --accent: #1083fe; --accent-ink: #ffffff;
+    --bad: #c62828; --ok: #2e7d32; --bar: #cfe3ff; --post: #f0f3f6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1419; --panel: #161e27; --ink: #e7ecf0; --muted: #94a3b3;
+      --line: #2b3946; --accent: #3b9bff; --accent-ink: #0b1016;
+      --bad: #ff7b72; --ok: #7ee787; --bar: #1d3b5e; --post: #1c2631;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.5rem; margin: 0 0 4px; }
+  h2 { font-size: 1.1rem; margin: 0 0 12px; }
+  p.lede { color: var(--muted); margin: 0 0 20px; }
+  section { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px; }
+  label { display: block; font-weight: 600; margin: 12px 0 4px; }
+  label:first-of-type { margin-top: 0; }
+  input[type=text], input[type=password], textarea {
+    width: 100%; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); font: inherit; }
+  textarea { resize: vertical; min-height: 64px; }
+  .hint { color: var(--muted); font-size: 0.875rem; margin: 4px 0 0; }
+  .hint a { color: var(--accent); }
+  button { font: inherit; border-radius: 8px; padding: 9px 16px; cursor: pointer;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+  button.ghost { background: transparent; color: var(--accent); }
+  button.icon { background: transparent; border-color: var(--line); color: var(--muted);
+    padding: 0 12px; font-weight: 400; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .row { display: flex; gap: 8px; align-items: center; }
+  .row > input { flex: 1; }
+  .opts .row { margin-bottom: 8px; }
+  .opts .key { width: 2em; text-align: center; flex: none; }
+  .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+  .check { display: flex; gap: 8px; align-items: flex-start; font-weight: 400; margin-top: 16px; }
+  .check input { margin-top: 4px; }
+  .check a { color: var(--accent); }
+  .who { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .msg { margin-top: 12px; font-size: 0.925rem; white-space: pre-wrap; }
+  .msg.bad { color: var(--bad); }
+  .msg.ok { color: var(--ok); }
+  .msg a { color: var(--accent); }
+  .preview { display: grid; gap: 8px; }
+  .post { background: var(--post); border-radius: 10px; padding: 10px 12px; white-space: pre-wrap;
+    border-left: 3px solid var(--line); position: relative; }
+  .post.root { border-left-color: var(--accent); }
+  .post .n { position: absolute; right: 10px; top: 8px; font-size: 0.75rem; color: var(--muted); }
+  .post .n.over { color: var(--bad); font-weight: 700; }
+  table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+  th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th.num, td.num { text-align: right; white-space: nowrap; }
+  td.opt { position: relative; }
+  td.opt .bar { position: absolute; inset: 4px auto 4px 0; background: var(--bar); border-radius: 4px; z-index: 0; }
+  td.opt span { position: relative; z-index: 1; padding-left: 6px; }
+  .question { font-weight: 600; margin: 12px 0 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Like Poll</h1>
+  <p class="lede">Bluesky has no polls. This posts a question, then one reply per option; people vote by liking a reply.
+    The results counter below can drop anyone who liked more than one option.</p>
+
+  <section id="login">
+    <h2>Sign in to Bluesky</h2>
+    <form id="loginForm">
+      <label for="handle">Handle</label>
+      <input id="handle" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" placeholder="you.bsky.social" required>
+      <label for="password">App password</label>
+      <input id="password" type="password" autocomplete="current-password" placeholder="xxxx-xxxx-xxxx-xxxx" required>
+      <p class="hint">Use an app password, not your main one:
+        <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener">Settings → Privacy and security → App passwords</a>.
+        The password goes only to your own PDS; this page has no server. The session lasts until you close the tab.</p>
+      <div class="actions"><button type="submit" id="loginBtn">Sign in</button></div>
+    </form>
+    <div class="msg bad" id="loginMsg"></div>
+  </section>
+
+  <section id="builder" class="hidden">
+    <div class="who"><h2 style="margin:0">New poll</h2>
+      <span><span id="whoami" class="hint"></span> <button class="ghost" id="logoutBtn" type="button">Sign out</button></span></div>
+    <label for="question" style="margin-top:12px">Question</label>
+    <textarea id="question" placeholder="What should I have for lunch?"></textarea>
+    <label>Options</label>
+    <div class="opts" id="opts"></div>
+    <button class="ghost" id="addOpt" type="button">+ Add option</button>
+    <label class="check"><input type="checkbox" id="lockReplies" checked>
+      <span>Turn off replies from others, so the thread holds only the options. People can still quote-post to discuss it.</span></label>
+    <label class="check"><input type="checkbox" id="addLink" checked>
+      <span>End the question with “via <a href="https://austegard.com/bsky/like-poll.html" target="_blank" rel="noopener">Like Poll</a>”, linked to this page.</span></label>
+
+    <h2 style="margin-top:20px">Preview</h2>
+    <div class="preview" id="preview"></div>
+    <div class="actions"><button id="postBtn" type="button">Post poll</button></div>
+    <div class="msg" id="postMsg"></div>
+  </section>
+
+  <section id="results">
+    <h2>Results</h2>
+    <form id="resultsForm" class="row">
+      <input id="pollUrl" type="text" placeholder="https://bsky.app/profile/…/post/…" autocapitalize="none" spellcheck="false">
+      <button type="submit">Count</button>
+    </form>
+    <p class="hint">Paste the link to the question post. Counting reads public data, so no sign-in is needed.</p>
+    <div class="msg" id="resultsMsg"></div>
+    <div id="resultsOut"></div>
+  </section>
+</main>
+
+<script>
+const APPVIEW = 'https://public.api.bsky.app';
+const KEYCAPS = ['1️⃣', '2️⃣', '3️⃣', '4️⃣', '5️⃣', '6️⃣', '7️⃣', '8️⃣', '9️⃣', '🔟'];
+const MAX_GRAPHEMES = 300;
+const segmenter = new Intl.Segmenter();
+const graphemes = s => [...segmenter.segment(s)].length;
+const $ = id => document.getElementById(id);
+
+const BUILDER_URL = 'https://austegard.com/bsky/like-poll.html';
+const VIA = 'via Like Poll';
+const rootText = (q, n, via) =>
+  `${q.trim()}\n\n🗳️ Poll: open the thread and ♥ like ONE reply to vote.\n🧵 ${n} options below 👇` + (via ? `\n\n${VIA}` : '');
+const optionText = (i, label) => `${KEYCAPS[i]} ${label.trim()}\n\n♥ like to vote`;
+
+// Link facets: bare URLs anywhere, plus "Like Poll" in the trailing credit line.
+// Facet offsets are UTF-8 byte offsets, not string indexes.
+function facetsFor(text, via) {
+  const enc = new TextEncoder();
+  const bytes = i => enc.encode(text.slice(0, i)).length;
+  const link = (start, end, uri) => ({
+    index: { byteStart: bytes(start), byteEnd: bytes(end) },
+    features: [{ $type: 'app.bsky.richtext.facet#link', uri }],
+  });
+  const facets = [];
+  for (const m of text.matchAll(/https?:\/\/\S+/g)) {
+    const url = m[0].replace(/[.,;:!?)\]'"’]+$/, '');
+    facets.push(link(m.index, m.index + url.length, url));
+  }
+  if (via) facets.push(link(text.length - 'Like Poll'.length, text.length, BUILDER_URL));
+  return facets;
+}
+
+function postRecord(text, via, extra = {}) {
+  const facets = facetsFor(text, via);
+  return { $type: 'app.bsky.feed.post', text, createdAt: new Date().toISOString(),
+    langs: [(navigator.language || 'en').split('-')[0]], ...(facets.length ? { facets } : {}), ...extra };
+}
+
+async function xrpc(base, nsid, { params, body, token } = {}) {
+  const url = new URL(`${base.replace(/\/$/, '')}/xrpc/${nsid}`);
+  for (const [k, v] of Object.entries(params || {})) if (v != null) url.searchParams.set(k, v);
+  const headers = {};
+  if (body) headers['content-type'] = 'application/json';
+  if (token) headers.authorization = `Bearer ${token}`;
+  const res = await fetch(url, { method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const err = new Error(data.message || data.error || `HTTP ${res.status}`);
+    err.code = data.error;
+    throw err;
+  }
+  return data;
+}
+
+// ---- identity ----
+function normalizeHandle(raw) {
+  let h = raw.trim().replace(/^@/, '').toLowerCase();
+  if (!h.startsWith('did:') && !h.includes('.')) h += '.bsky.social';
+  return h;
+}
+
+async function resolveDid(actor) {
+  if (actor.startsWith('did:')) return actor;
+  return (await xrpc(APPVIEW, 'com.atproto.identity.resolveHandle', { params: { handle: actor } })).did;
+}
+
+async function resolvePds(did) {
+  const docUrl = did.startsWith('did:plc:')
+    ? `https://plc.directory/${did}`
+    : `https://${decodeURIComponent(did.slice('did:web:'.length))}/.well-known/did.json`;
+  const doc = await (await fetch(docUrl)).json();
+  const svc = (doc.service || []).find(s => s.id === '#atproto_pds' || s.id === `${did}#atproto_pds`);
+  if (!svc) throw new Error('No PDS listed in the DID document');
+  return svc.serviceEndpoint;
+}
+
+// ---- session ----
+let session = null; // { did, handle, pds, accessJwt, refreshJwt }
+
+function saveSession() {
+  try { session ? sessionStorage.setItem('likepoll', JSON.stringify(session)) : sessionStorage.removeItem('likepoll'); } catch {}
+}
+function loadSession() {
+  try { return JSON.parse(sessionStorage.getItem('likepoll')); } catch { return null; }
+}
+
+async function login(handleRaw, password) {
+  const handle = normalizeHandle(handleRaw);
+  const did = await resolveDid(handle);
+  const pds = await resolvePds(did);
+  const s = await xrpc(pds, 'com.atproto.server.createSession', { body: { identifier: did, password } });
+  session = { did: s.did, handle: s.handle, pds, accessJwt: s.accessJwt, refreshJwt: s.refreshJwt };
+  saveSession();
+}
+
+async function authed(nsid, body) {
+  try {
+    return await xrpc(session.pds, nsid, { body, token: session.accessJwt });
+  } catch (e) {
+    if (e.code !== 'ExpiredToken') throw e;
+    const s = await xrpc(session.pds, 'com.atproto.server.refreshSession', { body: {}, token: session.refreshJwt });
+    Object.assign(session, { accessJwt: s.accessJwt, refreshJwt: s.refreshJwt });
+    saveSession();
+    return xrpc(session.pds, nsid, { body, token: session.accessJwt });
+  }
+}
+
+const createRecord = (collection, record, rkey) =>
+  authed('com.atproto.repo.createRecord', { repo: session.did, collection, record, ...(rkey ? { rkey } : {}) });
+
+const rkeyOf = uri => uri.split('/').pop();
+const webUrl = (uri, handle) => `https://bsky.app/profile/${handle}/post/${rkeyOf(uri)}`;
+
+// ---- builder ----
+function optionInputs() { return [...document.querySelectorAll('#opts input')]; }
+
+function addOption(value = '') {
+  const n = optionInputs().length;
+  if (n >= KEYCAPS.length) return;
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML = `<span class="key"></span><input type="text" maxlength="250"><button class="icon" type="button" aria-label="Remove option">✕</button>`;
+  row.querySelector('input').value = value;
+  row.querySelector('input').addEventListener('input', render);
+  row.querySelector('button').addEventListener('click', () => { row.remove(); render(); });
+  $('opts').appendChild(row);
+  render();
+}
+
+function currentPoll() {
+  return { question: $('question').value.trim(), options: optionInputs().map(i => i.value.trim()).filter(Boolean) };
+}
+
+function render() {
+  const rows = [...document.querySelectorAll('#opts .row')];
+  rows.forEach((r, i) => {
+    r.querySelector('.key').textContent = KEYCAPS[i];
+    r.querySelector('input').placeholder = `Option ${i + 1}`;
+    r.querySelector('button').disabled = rows.length <= 2;
+  });
+  $('addOpt').disabled = rows.length >= KEYCAPS.length;
+
+  const { question, options } = currentPoll();
+  const texts = [rootText(question || '…', options.length, $('addLink').checked), ...options.map((o, i) => optionText(i, o))];
+  $('preview').innerHTML = '';
+  let over = false;
+  texts.forEach((t, i) => {
+    const n = graphemes(t);
+    over ||= n > MAX_GRAPHEMES;
+    const div = document.createElement('div');
+    div.className = 'post' + (i === 0 ? ' root' : '');
+    div.textContent = t;
+    const badge = document.createElement('span');
+    badge.className = 'n' + (n > MAX_GRAPHEMES ? ' over' : '');
+    badge.textContent = `${n}/${MAX_GRAPHEMES}`;
+    div.appendChild(badge);
+    $('preview').appendChild(div);
+  });
+  $('postBtn').disabled = !question || options.length < 2 || over;
+}
+
+async function postPoll() {
+  const { question, options } = currentPoll();
+  const msg = $('postMsg');
+  msg.className = 'msg';
+  msg.textContent = 'Posting…';
+  $('postBtn').disabled = true;
+  const now = () => new Date().toISOString();
+  const via = $('addLink').checked;
+  const created = [];
+  try {
+    const root = await createRecord('app.bsky.feed.post', postRecord(rootText(question, options.length, via), via));
+    created.push(root);
+    // Every option replies to the question directly, so each sits one level under it.
+    const ref = { uri: root.uri, cid: root.cid };
+    for (let i = 0; i < options.length; i++) {
+      msg.textContent = `Posting option ${i + 1} of ${options.length}…`;
+      created.push(await createRecord('app.bsky.feed.post',
+        postRecord(optionText(i, options[i]), false, { reply: { root: ref, parent: ref } })));
+    }
+    // Gate after the options exist, so the gate can never get in the author's own way.
+    if ($('lockReplies').checked) {
+      await createRecord('app.bsky.feed.threadgate',
+        { $type: 'app.bsky.feed.threadgate', post: root.uri, allow: [], createdAt: now() }, rkeyOf(root.uri));
+    }
+    const link = webUrl(root.uri, session.handle);
+    msg.className = 'msg ok';
+    msg.innerHTML = `Posted. <a href="${link}" target="_blank" rel="noopener">Open the poll on Bluesky</a> · <a href="?poll=${encodeURIComponent(link)}">Results</a>`;
+    $('pollUrl').value = link;
+    $('question').value = '';
+    optionInputs().forEach(i => { i.value = ''; });
+    render();
+  } catch (e) {
+    msg.className = 'msg bad';
+    const done = created.length
+      ? `\n${created.length} of ${options.length + 1} posts went up before the error; delete them on Bluesky before trying again: ${webUrl(created[0].uri, session.handle)}`
+      : '';
+    msg.textContent = `Posting failed: ${e.message}${done}`;
+    render();
+  }
+}
+
+// ---- results ----
+async function toAtUri(input) {
+  input = input.trim();
+  let m = input.match(/^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/([^/?#]+)/);
+  if (!m) m = input.match(/bsky\.app\/profile\/([^/]+)\/post\/([^/?#]+)/);
+  if (!m) throw new Error('That does not look like a Bluesky post link');
+  return `at://${await resolveDid(decodeURIComponent(m[1]))}/app.bsky.feed.post/${m[2]}`;
+}
+
+function optionIndex(text) {
+  const i = KEYCAPS.findIndex(k => text.startsWith(k));
+  return i;
+}
+
+// Likers come from Constellation (microcosm's backlink index of the whole network),
+// which counts every like. Bluesky's logged-out getLikes is the fallback; it may
+// leave out likers who hide their account from logged-out viewers.
+const CONSTELLATION = 'https://constellation.microcosm.blue';
+
+async function likersOf(uri) {
+  try {
+    const dids = new Set();
+    let cursor;
+    do {
+      const url = new URL(`${CONSTELLATION}/links/distinct-dids`);
+      url.search = new URLSearchParams({ target: uri, collection: 'app.bsky.feed.like', path: '.subject.uri', limit: 100, ...(cursor ? { cursor } : {}) });
+      const res = await fetch(url, { headers: { accept: 'application/json' } });
+      if (!res.ok) throw new Error(`Constellation HTTP ${res.status}`);
+      const page = await res.json();
+      page.linking_dids.forEach(d => dids.add(d));
+      cursor = page.linking_dids.length ? page.cursor : null;
+    } while (cursor);
+    return { dids, source: 'constellation' };
+  } catch {
+    const dids = new Set();
+    let cursor;
+    do {
+      const page = await xrpc(APPVIEW, 'app.bsky.feed.getLikes', { params: { uri, limit: 100, cursor } });
+      page.likes.forEach(l => dids.add(l.actor.did));
+      cursor = page.likes.length ? page.cursor : undefined;
+    } while (cursor);
+    return { dids, source: 'getLikes' };
+  }
+}
+
+// Options are read from the author's repo on their PDS, not from Bluesky's thread
+// view: the AppView hides replies from logged-out readers when the author has
+// turned on "discourage apps from showing my account to logged-out users".
+// Record keys are timestamps, so listing forward from the question's key reaches
+// the options, which are posted seconds after it.
+async function pollFromRepo(uri) {
+  const [, did, , rkey] = uri.slice('at://'.length).match(/^([^/]+)(\/app\.bsky\.feed\.post\/)([^/]+)$/) || [];
+  if (!did) throw new Error('That does not look like a Bluesky post link');
+  const pds = await resolvePds(did);
+  let question;
+  try {
+    question = (await xrpc(pds, 'com.atproto.repo.getRecord', { params: { repo: did, collection: 'app.bsky.feed.post', rkey } })).value.text;
+  } catch {
+    throw new Error('Post not found');
+  }
+  const { records } = await xrpc(pds, 'com.atproto.repo.listRecords',
+    { params: { repo: did, collection: 'app.bsky.feed.post', limit: 50, reverse: true, cursor: rkey } });
+  const found = [];
+  for (const r of records) {
+    if (r.value.reply?.root?.uri !== uri) continue;
+    const text = r.value.text || '';
+    const i = optionIndex(text);
+    if (i >= 0 && !found[i]) found[i] = { uri: r.uri, label: text.slice(KEYCAPS[i].length).split('\n')[0].trim() };
+  }
+  const options = [];
+  for (let i = 0; found[i]; i++) options.push(found[i]);
+  return { question: question.split('\n')[0], options };
+}
+
+async function countResults(input) {
+  const msg = $('resultsMsg');
+  const out = $('resultsOut');
+  msg.className = 'msg';
+  msg.textContent = 'Counting…';
+  out.innerHTML = '';
+  try {
+    const uri = await toAtUri(input);
+    const { question, options } = await pollFromRepo(uri);
+    if (options.length < 2) throw new Error('No numbered option replies found under that post. Paste the link to the question post.');
+
+    msg.textContent = `Counting likes on ${options.length} options…`;
+    const counted = await Promise.all(options.map(o => likersOf(o.uri)));
+    const likers = counted.map(c => c.dids);
+    const partial = counted.some(c => c.source === 'getLikes');
+    const seen = new Map();
+    likers.forEach(set => set.forEach(d => seen.set(d, (seen.get(d) || 0) + 1)));
+    const multi = new Set([...seen].filter(([, n]) => n > 1).map(([d]) => d));
+    const rows = options.map((o, i) => ({
+      ...o, likes: likers[i].size, votes: [...likers[i]].filter(d => !multi.has(d)).length,
+    }));
+    const total = rows.reduce((a, r) => a + r.votes, 0);
+    const top = Math.max(1, ...rows.map(r => r.votes));
+
+    out.innerHTML = `<p class="question"></p><table><thead><tr><th>Option</th><th class="num">Votes</th><th class="num">Likes</th></tr></thead><tbody></tbody></table>`;
+    out.querySelector('.question').textContent = question;
+    const tbody = out.querySelector('tbody');
+    rows.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      const pct = total ? Math.round((100 * r.votes) / total) : 0;
+      tr.innerHTML = `<td class="opt"><div class="bar" style="width:${(100 * r.votes) / top}%"></div><span></span></td>
+        <td class="num">${r.votes} <span class="hint">(${pct}%)</span></td><td class="num">${r.likes}</td>`;
+      tr.querySelector('span').textContent = `${KEYCAPS[i]} ${r.label}`;
+      tbody.appendChild(tr);
+    });
+    msg.textContent = `${total} vote${total === 1 ? '' : 's'} from ${seen.size} account${seen.size === 1 ? '' : 's'}.` +
+      (multi.size ? ` ${multi.size} account${multi.size === 1 ? '' : 's'} liked more than one option; Votes leaves them out, Likes keeps them.` : '') +
+      (partial ? ' The like index was unreachable, so these counts come from Bluesky and may miss likers who hide their account from logged-out viewers.' : '');
+  } catch (e) {
+    msg.className = 'msg bad';
+    msg.textContent = e.message;
+  }
+}
+
+// ---- wiring ----
+function showSignedIn() {
+  $('login').classList.toggle('hidden', !!session);
+  $('builder').classList.toggle('hidden', !session);
+  if (session) $('whoami').textContent = `@${session.handle}`;
+}
+
+$('loginForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  $('loginMsg').textContent = '';
+  $('loginBtn').disabled = true;
+  try {
+    await login($('handle').value, $('password').value);
+    $('password').value = '';
+    showSignedIn();
+  } catch (err) {
+    $('loginMsg').textContent = err.code === 'AuthFactorTokenRequired'
+      ? 'Your account asks for an email code at sign-in. Use an app password instead; it skips the code.'
+      : `Sign-in failed: ${err.message}`;
+  } finally {
+    $('loginBtn').disabled = false;
+  }
+});
+
+$('logoutBtn').addEventListener('click', async () => {
+  const s = session;
+  session = null;
+  saveSession();
+  showSignedIn();
+  try { await xrpc(s.pds, 'com.atproto.server.deleteSession', { body: {}, token: s.refreshJwt }); } catch {}
+});
+
+$('question').addEventListener('input', render);
+$('addLink').addEventListener('change', render);
+$('addOpt').addEventListener('click', () => addOption());
+$('postBtn').addEventListener('click', postPoll);
+$('resultsForm').addEventListener('submit', e => { e.preventDefault(); countResults($('pollUrl').value); });
+
+addOption();
+addOption();
+session = loadSession();
+showSignedIn();
+const pollParam = new URLSearchParams(location.search).get('poll');
+if (pollParam) { $('pollUrl').value = pollParam; countResults(pollParam); }
+</script>
+</body>
+</html>
