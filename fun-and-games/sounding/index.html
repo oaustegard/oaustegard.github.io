@@ -74,6 +74,8 @@ button[aria-pressed="true"] { color: var(--ink); background: var(--sonar); borde
 .card.lost h2 { color: var(--beacon); }
 .card p { margin: 0; color: var(--dim); }
 .card p b { color: var(--fg); font-weight: 600; }
+.acts { display: flex; gap: 8px; }
+.acts .go { flex: 1; }
 .go { font: 800 20px var(--display); letter-spacing: 0.12em; padding: 10px 18px; background: var(--sonar);
   color: var(--ink); border-color: var(--sonar); }
 #nogpu { color: var(--beacon); }
@@ -105,7 +107,7 @@ button[aria-pressed="true"] { color: var(--ink); background: var(--sonar); borde
   <div class="card" id="card">
     <h2 id="ovTitle"></h2>
     <p id="ovBody"></p>
-    <button class="go" id="againBtn">AGAIN</button>
+    <div class="acts"><button class="go" id="againBtn">AGAIN</button><button id="shareBtn" disabled>SHARE</button></div>
   </div>
 </div>
 
@@ -296,7 +298,7 @@ function hud() {
 function showOverlay(delay) {
   clearTimeout(overlayTimer);
   setTimeout(applyUpdate, delay * 1000 + 50);
-  overlayTimer = setTimeout(() => { $('overlay').hidden = false; $('againBtn').focus({ preventScroll: true }); }, delay * 1000);
+  overlayTimer = setTimeout(() => { buildShare(); $('overlay').hidden = false; $('againBtn').focus({ preventScroll: true }); }, delay * 1000);
 }
 function tickClock() {
   const s = status === 'play' ? now() - startT : status === 'ready' ? 0 : endT - startT;
@@ -366,6 +368,7 @@ function setFlagMode(on) { flagMode = on; $('flagBtn').setAttribute('aria-presse
 for (const b of document.querySelectorAll('[data-level]')) b.addEventListener('click', () => newGame(b.dataset.level));
 $('flagBtn').addEventListener('click', () => setFlagMode(!flagMode));
 $('againBtn').addEventListener('click', () => newGame());
+$('shareBtn').addEventListener('click', share);
 $('soundBtn').addEventListener('click', () => {
   sfx.on = !sfx.on; store.set('sounding-sound', sfx.on);
   $('soundBtn').setAttribute('aria-pressed', String(sfx.on)); if (sfx.on) unlockAudio();
@@ -910,9 +913,13 @@ function useFallback() { $('gl').hidden = true; $('c2').hidden = false; $('nogpu
 /* ---------- plain 2D view, when WebGPU is missing ---------- */
 const NUMC = ['', '#4fc7ff', '#61eb80', '#ff6e5e', '#b88fff', '#ffb84d', '#40e6d6', '#f5f2e6', '#9eadbd'];
 function draw2d(t) {
-  const cv = $('c2'), g = cv.getContext('2d'), s = cellCss * dpr, ox = orgCss[0] * dpr, oy = orgCss[1] * dpr;
+  const cv = $('c2'), g = cv.getContext('2d');
   g.fillStyle = '#06121a'; g.fillRect(0, 0, cv.width, cv.height);
-  g.fillStyle = '#0b161c'; g.fillRect(ox - 4 * dpr, oy - 4 * dpr, C * s + 8 * dpr, R * s + 8 * dpr);
+  paintBoard(g, orgCss[0] * dpr, orgCss[1] * dpr, cellCss * dpr, dpr, t);
+}
+// The board at cell size s from (ox, oy); u is one CSS pixel. The share card draws it too.
+function paintBoard(g, ox, oy, s, u, t) {
+  g.fillStyle = '#0b161c'; g.fillRect(ox - 4 * u, oy - 4 * u, C * s + 8 * u, R * s + 8 * u);
   g.textAlign = 'center'; g.textBaseline = 'middle'; g.font = `800 ${Math.round(s * 0.72)}px "Big Shoulders Display", sans-serif`;
   for (let i = 0; i < N; i++) {
     const x = ox + (i % C) * s, y = oy + ((i / C) | 0) * s, open = state[i] === OPEN && t >= revealT[i];
@@ -922,14 +929,54 @@ function draw2d(t) {
       else if (count[i]) { g.fillStyle = NUMC[count[i]]; g.fillText(String(count[i]), x + s / 2, y + s * 0.54); }
     } else {
       g.fillStyle = '#1b2f38'; g.fillRect(x + 1, y + 1, s - 2, s - 2);
-      g.fillStyle = '#2a4552'; g.fillRect(x + 1, y + 1, s - 2, 2 * dpr);
+      g.fillStyle = '#2a4552'; g.fillRect(x + 1, y + 1, s - 2, 2 * u);
       if (state[i] === FLAG && t >= flagT[i]) {
         g.fillStyle = status === 'won' ? '#4dffb3' : '#ff6a3a'; g.beginPath(); g.arc(x + s / 2, y + s / 2, s * 0.15, 0, 7); g.fill();
-        if (status === 'lost' && !mine[i]) { g.strokeStyle = '#ff4030'; g.lineWidth = 2 * dpr; g.beginPath();
+        if (status === 'lost' && !mine[i]) { g.strokeStyle = '#ff4030'; g.lineWidth = 2 * u; g.beginPath();
           g.moveTo(x + s * 0.25, y + s * 0.25); g.lineTo(x + s * 0.75, y + s * 0.75); g.moveTo(x + s * 0.75, y + s * 0.25); g.lineTo(x + s * 0.25, y + s * 0.75); g.stroke(); }
       }
     }
   }
+}
+
+/* ---------- share card ---------- */
+// A PNG of the finished board, the result and the game's address. It is built when the end card shows,
+// so the tap on SHARE can call navigator.share at once: iOS refuses it after an await.
+const SHARE_URL = 'austegard.com/fun-and-games/sounding/';
+let shareFile = null;
+function buildShare() {
+  shareFile = null; $('shareBtn').disabled = true;
+  const won = status === 'won', s = Math.floor(Math.min(960 / C, 1000 / R)), bw = C * s, bh = R * s;
+  const W = 1080, H = 330 + bh + 160, cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d'), disp = '"Big Shoulders Display", "Arial Narrow", sans-serif', mono = '"IBM Plex Mono", ui-monospace, monospace';
+  g.fillStyle = '#06121a'; g.fillRect(0, 0, W, H);
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left'; g.letterSpacing = '10px';
+  g.fillStyle = '#5fd4f0'; g.font = `800 40px ${disp}`; g.fillText('SOUNDING', 60, 100);
+  g.letterSpacing = '0px'; g.textAlign = 'right'; g.fillStyle = '#7f9ea8'; g.font = `400 28px ${mono}`;
+  g.fillText(`${C}×${R} · ${M} mines`, W - 60, 100);
+  g.textAlign = 'left'; g.fillStyle = won ? '#6ff0c0' : '#ff7a4a'; g.font = `800 92px ${disp}`;
+  g.fillText($('ovTitle').textContent, 56, 205, W - 112);
+  g.fillStyle = '#eef2e2'; g.font = `400 32px ${mono}`;
+  g.fillText((won ? '' : `${fmt(endT - startT)} s · `) + $('ovBody').textContent, 60, 262, W - 120);
+  paintBoard(g, (W - bw) / 2, 320, s, 2, Infinity);
+  g.textAlign = 'center'; g.fillStyle = '#7f9ea8'; g.font = `600 34px ${mono}`;
+  g.fillText(SHARE_URL, W / 2, H - 62);
+  cv.toBlob(b => { if (b) { shareFile = new File([b], 'sounding.png', { type: 'image/png' }); $('shareBtn').disabled = false; } }, 'image/png');
+}
+function share() {
+  if (!shareFile) return;
+  const secs = fmt(endT - startT);
+  const text = `Sounding: ${$('ovTitle').textContent.toLowerCase()} ${status === 'won' ? 'in' : 'after'} ${secs} s on ${C}×${R}. https://${SHARE_URL}`;
+  if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+    navigator.share({ files: [shareFile], text }).catch(e => { if (e.name !== 'AbortError') saveShare(); });
+  } else saveShare();
+}
+function saveShare() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(shareFile); a.download = shareFile.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
 /* ---------- frame loop ---------- */

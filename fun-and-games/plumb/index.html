@@ -110,6 +110,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
   color: var(--ink); border-color: var(--brass); }
 .row { display: flex; gap: 10px; flex-wrap: wrap; }
 .row button { flex: 1; }
+.row #shareBtn { flex: none; }
 .status { font-size: 11px; color: var(--dim); display: grid; gap: 2px; }
 .status b { color: var(--fg); font-weight: 600; }
 .big { font: 800 56px/1 var(--display); font-variant-numeric: tabular-nums; }
@@ -179,7 +180,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
       <span>Effects: <b id="stGpu">starting…</b></span>
       <span>Motion: <b id="stMotion">asks when you press Start</b></span>
       <span>Best: <b id="stBest">0</b></span>
-      <span>Version: <b>8 (self-updating)</b></span>
+      <span>Version: <b>9 (self-updating)</b></span>
     </div>
   </section>
 
@@ -202,7 +203,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
     <h2>Out of plumb</h2>
     <div class="big" id="finalScore">0</div>
     <p class="tag" id="finalLine">Lines 0 · level 1</p>
-    <div class="row"><button class="go" type="button" id="againBtn">PLAY AGAIN</button></div>
+    <div class="row"><button class="go" type="button" id="againBtn">PLAY AGAIN</button><button type="button" id="shareBtn" disabled>Share</button></div>
     <div class="row"><button type="button" id="overMenuBtn">Settings</button></div>
   </section>
 </div>
@@ -386,7 +387,66 @@ function gameOver() {
   $('#finalLine').textContent = `Lines ${lines} · level ${level} · best ${best.toLocaleString()}`;
   beep(220, 0.5, 'sawtooth', 0.04, 0.4);
   buzz([60, 40, 120]);
+  buildShare();
   setMode('over');
+}
+
+/* ---------- share card ---------- */
+// A PNG of the final well, the score and the game's address. It is built at game over, so the tap on
+// Share can call navigator.share at once: iOS refuses it after an await.
+const SHARE_URL = 'austegard.com/fun-and-games/plumb/';
+let shareFile = null;
+function buildShare() {
+  shareFile = null; $('#shareBtn').disabled = true;
+  const s = 44, rows = H - HIDDEN, bw = W * s, bh = rows * s, CW = 1080, CH = 400 + bh + 160;
+  const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH;
+  const g = cv.getContext('2d'), disp = '"Big Shoulders Display", "Arial Narrow", sans-serif', mono = '"IBM Plex Mono", ui-monospace, monospace';
+  g.fillStyle = '#0d1a22'; g.fillRect(0, 0, CW, CH);
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  g.font = `800 64px ${disp}`; g.letterSpacing = '6px';
+  g.fillStyle = '#e7eee8'; g.fillText('PLU', 60, 110);
+  const wPLU = g.measureText('PLU').width;
+  g.fillStyle = '#d8b46a'; g.fillText('M', 60 + wPLU, 110);
+  g.fillStyle = '#e7eee8'; g.fillText('B', 60 + wPLU + g.measureText('M').width, 110);
+  g.letterSpacing = '0px'; g.textAlign = 'right'; g.fillStyle = '#86a0a8'; g.font = `400 30px ${mono}`;
+  g.fillText('out of plumb', CW - 60, 108);
+  g.textAlign = 'left'; g.fillStyle = '#e7eee8'; g.font = `800 150px ${disp}`;
+  g.fillText(score.toLocaleString(), 54, 265);
+  g.fillStyle = '#86a0a8'; g.font = `400 32px ${mono}`;
+  g.fillText(`Lines ${lines} · level ${level} · best ${best.toLocaleString()}`, 60, 330, CW - 120);
+  const ox = (CW - bw) / 2, oy = 390;
+  g.fillStyle = 'rgba(8, 19, 26, 0.9)'; g.fillRect(ox, oy, bw, bh);
+  g.strokeStyle = '#1f3a47'; g.lineWidth = 1.5; g.beginPath();
+  for (let x = 1; x < W; x++) { g.moveTo(ox + x * s, oy); g.lineTo(ox + x * s, oy + bh); }
+  for (let y = 1; y < rows; y++) { g.moveTo(ox, oy + y * s); g.lineTo(ox + bw, oy + y * s); }
+  g.stroke();
+  const box = (x, y, w, h, r) => { g.beginPath(); if (g.roundRect) g.roundRect(x, y, w, h, r); else g.rect(x, y, w, h); };
+  for (let y = HIDDEN; y < H; y++) for (let x = 0; x < W; x++) {
+    const v = grid[y][x];
+    if (!v) continue;
+    const px = ox + x * s + 2, py = oy + (y - HIDDEN) * s + 2, d = s - 4;
+    const grad = g.createLinearGradient(px, py, px, py + d);
+    grad.addColorStop(0, mix(COLORS[v], '#ffffff', 0.32)); grad.addColorStop(0.55, COLORS[v]); grad.addColorStop(1, mix(COLORS[v], '#0d1a22', 0.3));
+    g.fillStyle = grad; box(px, py, d, d, 7); g.fill();
+    g.strokeStyle = 'rgba(255, 255, 255, 0.22)'; g.lineWidth = 2; g.stroke();
+  }
+  g.strokeStyle = 'rgba(216, 180, 106, 0.55)'; g.lineWidth = 3; box(ox, oy, bw, bh, 6); g.stroke();
+  g.textAlign = 'center'; g.fillStyle = '#86a0a8'; g.font = `600 34px ${mono}`;
+  g.fillText(SHARE_URL, CW / 2, CH - 62);
+  cv.toBlob(b => { if (b) { shareFile = new File([b], 'plumb.png', { type: 'image/png' }); $('#shareBtn').disabled = false; } }, 'image/png');
+}
+function share() {
+  if (!shareFile) return;
+  const text = `Plumb: ${score.toLocaleString()} points, ${lines} lines, level ${level}. https://${SHARE_URL}`;
+  if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+    navigator.share({ files: [shareFile], text }).catch(e => { if (e.name !== 'AbortError') saveShare(); });
+  } else saveShare();
+}
+function saveShare() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(shareFile); a.download = shareFile.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
 }
 
 /* ---------- motion ---------- */
@@ -1136,6 +1196,7 @@ $('#replumbBtn').addEventListener('click', () => askPlumb(resume));
 $('#resumeBtn').addEventListener('click', resume);
 $('#restartBtn').addEventListener('click', newGame);
 $('#againBtn').addEventListener('click', () => { unlockAudio(); newGame(); });
+$('#shareBtn').addEventListener('click', share);
 $('#menuBtn').addEventListener('click', () => setMode('title'));
 $('#overMenuBtn').addEventListener('click', () => setMode('title'));
 $('#pauseBtn').addEventListener('click', pause);
