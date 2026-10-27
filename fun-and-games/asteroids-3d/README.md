@@ -8,7 +8,7 @@ First-person Asteroids: the rocks are all around you, and you fly through them.
 
 - **Tilt** to steer. Hold the phone at whatever angle is comfortable and press Launch; that angle counts as level. Tilt the top toward you to climb, away to dive, and rock it side to side (or turn it like a steering wheel in landscape) to turn. The crosshair button re-levels. "Invert pitch" in the menu flips the climb direction.
 - **Tap** anywhere to fire; hold for rapid fire. The two guns alternate. When a rock sits inside the orange brackets, shots lead it so they arrive where it will be.
-- **Slide** the bar on the right up to thrust and down to brake. It springs back to the middle when you let go, and the ship keeps coasting.
+- **Slide** the bar on the right up to thrust and down to brake. It springs back to the middle when you let go, and the ship keeps coasting. "Throttle on the left" in the menu moves it to the other side.
 
 On a keyboard: arrows or WASD steer, Space fires, R thrusts, F brakes, P pauses, M mutes.
 
