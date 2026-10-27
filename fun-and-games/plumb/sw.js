@@ -1,5 +1,5 @@
 // Plumb service worker: precache the app shell, serve it cache-first, refresh in the background.
-const VERSION = 'plumb-v5';
+const VERSION = 'plumb-v6';
 const CORE = ['./', 'index.html', 'manifest.json', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 

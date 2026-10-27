@@ -20,10 +20,11 @@ motion access then), and use Add to Home Screen to install it full-screen and of
 After Start, hold the phone the way you want to play (sitting up, lying down, on your side) and
 press **Plumb**: that pose becomes level. The card shows the screen's angle from flat and the roll
 while you hold it. The tip soft-drop starts 20° steeper than plumb. Pause has **Plumb again** for
-when you change position, and tapping the spirit-level vial mid-game re-plumbs on the spot. The vial
-is a two-axis level centred on the plumbed pose: left-right is roll, with ticks at the steering dead
-zone and the ends at full speed; up-down is tip, and the red band along the top marks where the tip
-soft-drop starts. The tilt readout turns brass and reads FAST while the
+when you change position, and tapping the spirit-level vial mid-game re-plumbs on the spot. Two
+spirit levels, both centred on the plumbed pose: the one in the header shows roll, with ticks at the
+steering dead zone and the ends at full speed; a tall one beside the board shows tip, with the bubble
+rising as you tip steeper and a red cap where the tip soft-drop starts (hidden when tip-to-drop is
+off). Tapping either re-plumbs. The tilt readout turns brass and reads FAST while the
 tip soft-drop is on. Roll and tip are read from gravity's components along the screen's own axes
 (cos β · sin γ and sin β), not from the raw γ angle, which flips sign once the screen faces the floor. Keyboard works on a desktop: arrows, X/Z, space, C, P.
 
