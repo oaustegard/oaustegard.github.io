@@ -12,7 +12,19 @@ First-person Asteroids: the rocks are all around you, and you fly through them.
 
 On a keyboard: arrows or WASD steer, Space fires, R thrusts, F brakes, P pauses, M mutes.
 
-Big rocks split into two medium ones, medium into two small, small ones vanish (20, 50 and 100 points). Clearing a wave scores 500 times the wave number and the next wave has two more rocks. A rock hitting you costs a ship; you get three and an extra one every 10,000 points. At game over, Share sends a PNG card with the last view of the field and your score through the share sheet, or downloads it.
+Pick a level in the menu; the choice is remembered and each level keeps its own best score.
+
+| | Easy (default) | Advanced |
+|---|---|---|
+| Rock speed | under half | full |
+| Rocks per wave | 3 + wave, up to 12 | 5 + 2 × wave, up to 19 |
+| Aim assist cone | 16° | 7.5° |
+| Hits | shots count a near miss, rocks must come closer to hit you | exact |
+| Ships | 5, extra every 5,000 | 3, extra every 10,000 |
+| Shield after respawn | 5 s | 3 s |
+| Steering | 75% turn rate, full turn at 30° tilt | full rate at 24° |
+
+Big rocks split into two medium ones, medium into two small, small ones vanish (20, 50 and 100 points). Clearing a wave scores 500 times the wave number and the next wave has two more rocks. A rock hitting you costs a ship. At game over, Share sends a PNG card with the last view of the field and your score through the share sheet, or downloads it.
 
 The radar at the bottom maps every rock by direction: the centre is dead ahead, the dashed ring is level with you, the rim is straight behind. Red dots are close.
 

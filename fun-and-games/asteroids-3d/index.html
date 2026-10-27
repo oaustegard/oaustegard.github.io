@@ -146,6 +146,12 @@ h2 { font-size: 26px; color: var(--red); text-shadow: 0 0 18px #ff4a5c66; }
   border: 1px solid var(--line); border-radius: 999px; padding: 12px 18px;
 }
 .ghost:disabled { opacity: .45; cursor: default; }
+.seg { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border: 1px solid var(--line); border-radius: 999px; padding: 3px; }
+.seg input { position: absolute; opacity: 0; pointer-events: none; }
+.seg label { text-align: center; padding: 9px 10px; border-radius: 999px; cursor: pointer; font-family: var(--display); font-size: 13px; letter-spacing: .12em; color: var(--muted); }
+.seg label small { display: block; font-family: var(--body); font-size: 13px; letter-spacing: 0; text-transform: none; margin-top: 2px; }
+.seg input:checked + label { background: #59f0ff1f; color: var(--cyan); box-shadow: inset 0 0 0 1px #59f0ff66; }
+.seg input:focus-visible + label { outline: 2px solid var(--cyan); outline-offset: 2px; }
 label.opt { display: flex; align-items: center; gap: 8px; font-size: 15px; color: var(--muted); cursor: pointer; }
 label.opt input { accent-color: var(--cyan); width: 18px; height: 18px; }
 @media (prefers-reduced-motion: reduce) { .pop { animation-duration: .01s; } }
@@ -191,6 +197,10 @@ label.opt input { accent-color: var(--cyan); width: 18px; height: 18px; }
         <dt>TAP</dt><dd>Fire. Hold for rapid fire. Shots bend toward the rock in the brackets.</dd>
         <dt>SLIDE</dt><dd>Push the slider up to thrust, down to brake. Let go to coast.</dd>
       </dl>
+      <div class="seg" role="radiogroup" aria-label="Level">
+        <input type="radio" name="level" id="lv-easy" value="easy"><label for="lv-easy">EASY<small>slow rocks, more aim help</small></label>
+        <input type="radio" name="level" id="lv-advanced" value="advanced"><label for="lv-advanced">ADVANCED<small>the full arcade field</small></label>
+      </div>
       <label class="opt"><input type="checkbox" id="invert"> Invert pitch (tilt the top away to climb)</label>
       <div class="acts"><button class="primary" id="start" type="button">Launch</button></div>
       <p class="fine" id="howto">Hold the phone how you like before you launch; that angle counts as level. Landscape with headphones is best. On a keyboard: arrows or WASD steer, Space fires, R thrusts, F brakes.</p>
@@ -258,8 +268,18 @@ const wrapV = a => [wr(a[0]), wr(a[1]), wr(a[2])];
 const SIZES = [10, 5.5, 2.8], POINTS = [20, 50, 100], SPEEDS = [[3, 8], [7, 13], [11, 19]];
 const BULLET_SPEED = 240, BULLET_LIFE = 0.7;
 const VMAX = 55, ACCEL = 34, BRAKE = 2.4;
+// Easy slows the rocks and thins the waves, widens the aim-assist cone, forgives near hits and
+// softens the steering. Advanced is the arcade-hard original.
+const LEVELS = {
+  easy: { name: 'Easy', rockSpeed: 0.45, wave: w => Math.min(3 + w, 12), lockDeg: 16, lockRange: 175, hitR: 1.3, shipR: [0.7, 1.0],
+    lives: 5, lifeEvery: 5000, invuln: 5, turn: 0.75, tiltFull: 30, clear: 90 },
+  advanced: { name: 'Advanced', rockSpeed: 1, wave: w => Math.min(5 + w * 2, 19), lockDeg: 7.5, lockRange: 165, hitR: 0.95, shipR: [0.85, 1.6],
+    lives: 3, lifeEvery: 10000, invuln: 3, turn: 1, tiltFull: 24, clear: 70 },
+};
+let level = 'easy';
+try { if (LEVELS[localStorage.getItem('asteroids3d-level')]) level = localStorage.getItem('asteroids3d-level'); } catch {}
+let LV = LEVELS[level], LOCK_COS = Math.cos(LV.lockDeg * Math.PI / 180);
 const YAW_MAX = 1.55, PITCH_MAX = 1.3;
-const LOCK_COS = Math.cos(7.5 * Math.PI / 180), LOCK_RANGE = 165;
 const SUN = norm([0.55, 0.35, -0.75]);
 const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -499,7 +519,7 @@ function onOrient(ev) {
 }
 function tiltAxes() {
   if (!tilt.ok) return [0, 0];
-  const DZ = 2.5, FULL = 24;
+  const DZ = 2.5, FULL = LV.tiltFull;
   const f = v => { const m = Math.abs(v); if (m < DZ) return 0; const x = Math.min(1, (m - DZ) / (FULL - DZ)); return Math.sign(v) * (0.35 * x + 0.65 * x * x); };
   return [f(tilt.steer), f(tilt.pitch) * (invertPitch ? -1 : 1)];
 }
@@ -564,7 +584,18 @@ window.addEventListener('blur', () => { keys.clear(); firing.clear(); });
 const key = (...c) => c.some(k => keys.has(k)) ? 1 : 0;
 
 // ---------- Game state ----------
-let hi = 0; try { hi = +localStorage.getItem('asteroids3d-hi') || 0; } catch {}
+// Each level keeps its own best; Advanced keeps the key the game launched with.
+const hiKey = () => level === 'advanced' ? 'asteroids3d-hi' : `asteroids3d-hi-${level}`;
+let hi = 0;
+const loadHi = () => { try { hi = +localStorage.getItem(hiKey()) || 0; } catch { hi = 0; } };
+loadHi();
+function setLevel(l) {
+  level = l; LV = LEVELS[l]; LOCK_COS = Math.cos(LV.lockDeg * Math.PI / 180);
+  try { localStorage.setItem('asteroids3d-level', l); } catch {}
+  loadHi(); hud();
+}
+$('lv-' + level).checked = true;
+document.querySelectorAll('input[name=level]').forEach(r => r.addEventListener('change', e => setLevel(e.target.value)));
 const game = { phase: 'menu', paused: false, score: 0, wave: 1, lives: 3, nextLife: 10000, t: 0, phaseT: 0,
   fireCd: 0, fireHeld: 0, side: 1, beatT: 1, beatHi: false, waveTotal: 1, shots: 0, hits: 0, kills: 0,
   shake: 0, hurt: 0, invuln: 0, lock: null, lockPrev: null, shotT: 0, shotFrozen: false };
@@ -577,14 +608,14 @@ const rel = p => wrapV(sub(p, ship.p));
 
 function makeRock(size, p, v) {
   const [s0, s1] = SPEEDS[size];
-  return { size, r: SIZES[size] * rnd(0.85, 1.15), p, v: v || mul(rdir(), rnd(s0, s1)),
+  return { size, r: SIZES[size] * rnd(0.85, 1.15), p, v: v || mul(rdir(), rnd(s0, s1) * LV.rockSpeed),
     q: qnorm([rnd(-1, 1), rnd(-1, 1), rnd(-1, 1), rnd(-1, 1)]), ax: rdir(), spin: rnd(0.1, 0.9) * (size + 1) * 0.5,
     seed: Math.random() * 97 + 1, flash: 0, near: false };
 }
 function spawnWave() {
-  const n = Math.min(5 + game.wave * 2, 19);
+  const n = LV.wave(game.wave);
   for (let i = 0; i < n; i++) {
-    let p; do { p = [rnd(-HALF, HALF), rnd(-HALF, HALF), rnd(-HALF, HALF)]; } while (len(rel(p)) < 70);
+    let p; do { p = [rnd(-HALF, HALF), rnd(-HALF, HALF), rnd(-HALF, HALF)]; } while (len(rel(p)) < LV.clear);
     rocks.push(makeRock(0, p));
   }
   game.waveTotal = n * 7; game.beatT = 1;
@@ -597,8 +628,8 @@ function attractField() {
 function startGame() {
   Sound.init(); enableTilt(); wakeLock();
   tilt.base = null;
-  Object.assign(game, { phase: 'play', paused: false, score: 0, wave: 1, lives: 3, nextLife: 10000, phaseT: 0, shots: 0, hits: 0, kills: 0,
-    invuln: 2.5, hurt: 0, lock: null, shotT: 0, shotFrozen: false });
+  Object.assign(game, { phase: 'play', paused: false, score: 0, wave: 1, lives: LV.lives, nextLife: LV.lifeEvery, phaseT: 0, shots: 0, hits: 0, kills: 0,
+    invuln: Math.max(2.5, LV.invuln - 1), hurt: 0, lock: null, shotT: 0, shotFrozen: false });
   Object.assign(ship, { p: [0, 0, 0], v: [0, 0, 0], q: [0, 0, 0, 1], wy: 0, wx: 0 });
   rocks = []; bullets = []; sparks = []; debris = []; lights = []; flashes = [];
   spawnWave();
@@ -664,7 +695,7 @@ function hitRock(i, dir, rammed) {
     const perp = norm(cross(dir, rdir()));
     for (const s of [-1, 1]) {
       const [s0, s1] = SPEEDS[k.size + 1];
-      const nv = add(add(k.v, mul(perp, s * rnd(s0, s1))), mul(dir, rnd(1, 4)));
+      const nv = add(add(k.v, mul(perp, s * rnd(s0, s1) * LV.rockSpeed)), mul(dir, rnd(1, 4) * LV.rockSpeed));
       rocks.push(makeRock(k.size + 1, wrapV(add(k.p, mul(perp, s * k.r * 0.5))), nv));
     }
   }
@@ -673,8 +704,8 @@ function hitRock(i, dir, rammed) {
 
 function addScore(n) {
   game.score += n;
-  if (game.score >= game.nextLife) { game.lives++; game.nextLife += 10000; Sound.bells([76, 83, 88], 0.07); showMsg('EXTRA SHIP', 1.4); }
-  if (game.score > hi) { hi = game.score; try { localStorage.setItem('asteroids3d-hi', hi); } catch {} }
+  if (game.score >= game.nextLife) { game.lives++; game.nextLife += LV.lifeEvery; Sound.bells([76, 83, 88], 0.07); showMsg('EXTRA SHIP', 1.4); }
+  if (game.score > hi) { hi = game.score; try { localStorage.setItem(hiKey(), hi); } catch {} }
 }
 
 function shipHit(k) {
@@ -691,11 +722,11 @@ function shipHit(k) {
 function respawn() {
   // Clear a bubble around the ship by moving nearby rocks to the far side of the torus.
   for (const k of rocks) { const d = rel(k.p); if (len(d) < 40) k.p = wrapV(add(k.p, [HALF, HALF * 0.5, 0])); }
-  ship.v = [0, 0, 0]; ship.wx = ship.wy = 0; game.invuln = 3; game.phase = 'play';
+  ship.v = [0, 0, 0]; ship.wx = ship.wy = 0; game.invuln = LV.invuln; game.phase = 'play';
   Sound.rise(); showMsg(`${game.lives} ${game.lives === 1 ? 'SHIP' : 'SHIPS'} LEFT`, 1.4);
 }
 
-const statLine = acc => `Wave ${game.wave} · ${game.kills} ${game.kills === 1 ? 'rock' : 'rocks'} · ${acc}% accuracy · best ${hi.toLocaleString()}`;
+const statLine = acc => `${LV.name} · wave ${game.wave} · ${game.kills} ${game.kills === 1 ? 'rock' : 'rocks'} · ${acc}% accuracy · best ${hi.toLocaleString()}`;
 function gameOver() {
   game.phase = 'over';
   $('finalScore').textContent = game.score.toLocaleString();
@@ -730,8 +761,8 @@ function step(dt) {
   } else {
     steer = 0.25; pitch = 0.1;
   }
-  ship.wy += (-steer * YAW_MAX - ship.wy) * Math.min(1, dt * 7);
-  ship.wx += (pitch * PITCH_MAX - ship.wx) * Math.min(1, dt * 7);
+  ship.wy += (-steer * YAW_MAX * LV.turn - ship.wy) * Math.min(1, dt * 7);
+  ship.wx += (pitch * PITCH_MAX * LV.turn - ship.wx) * Math.min(1, dt * 7);
   ship.bank += (ship.wy * 0.22 - ship.bank) * Math.min(1, dt * 4);
   ship.q = qnorm(qmul(ship.q, qmul(qaxis([0, 1, 0], ship.wy * dt), qaxis([1, 0, 0], ship.wx * dt))));
   const B = basis(ship.q);
@@ -756,7 +787,7 @@ function step(dt) {
     for (let j = 0; j < rocks.length; j++) {
       const k = rocks[j], r0 = wrapV(sub(b.p, k.p));
       const t = clamp(-dot(r0, seg) / dot(seg, seg), 0, 1);
-      if (len(add(r0, mul(seg, t))) < k.r * 0.95) { hit = j; break; }
+      if (len(add(r0, mul(seg, t))) < k.r * LV.hitR) { hit = j; break; }
     }
     b.p = wrapV(add(b.p, seg));
     if (hit >= 0) { sparks.push({ p: [...b.p], v: [0, 0, 0], life: 0.12, max: 0.12, w: 2.2, flash: true, cool: true }); hitRock(hit, b.dir); bullets.splice(i, 1); }
@@ -766,7 +797,7 @@ function step(dt) {
   if (live) {
     for (const k of rocks) {
       const d = rel(k.p), dl = len(d);
-      if (game.invuln <= 0 && dl < k.r * 0.85 + 1.6) { shipHit(k); break; }
+      if (game.invuln <= 0 && dl < k.r * LV.shipR[0] + LV.shipR[1]) { shipHit(k); break; }
       if (!k.near && dl < k.r + 13) { k.near = true; Sound.whoosh(d, sub(k.v, ship.v), clamp(k.r / 8, 0.35, 1)); }
       else if (k.near && dl > k.r + 30) k.near = false;
     }
@@ -800,7 +831,7 @@ function updateLock() {
   if (game.phase !== 'play') { game.lock = null; return; }
   const f = basis(ship.q).f; let best = null, bc = LOCK_COS;
   for (const k of rocks) {
-    const d = rel(k.p), dl = len(d); if (dl > LOCK_RANGE) continue;
+    const d = rel(k.p), dl = len(d); if (dl > LV.lockRange) continue;
     const c = dot(d, f) / dl + Math.min(0.02, k.r / dl * 0.3);
     if (c > bc) { bc = c; best = k; }
   }
