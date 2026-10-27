@@ -177,6 +177,7 @@ body.mode-tilt .dpad, body.mode-tilt .meters, body.mode-tilt .actions, body.mode
 /* Tilt mode runs edge to edge: the water fills the visible viewport (dvh leaves Safari's toolbar clear)
    under the status bar, notch and home indicator, the HUD floats on top, and the script keeps the play
    grid inside the safe area and below the HUD. */
+body.mode-tilt, html:has(body.mode-tilt) { background: #07283a; }
 body.mode-tilt .stage { position: fixed; left: 0; right: 0; top: 0; height: 100vh; height: 100dvh; border: 0; border-radius: 0; }
 body.mode-tilt .hud {
   position: fixed; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none;
@@ -1112,8 +1113,21 @@ $('#levelBtn').addEventListener('click', () => { tilt.neutral = null; tilt.axis 
 const isPhone = matchMedia('(pointer: coarse)').matches && typeof DeviceOrientationEvent !== 'undefined';
 let ctl = load('lantern-eel-controls', isPhone ? 'tilt' : 'arrows');
 let side = load('lantern-eel-arrows-side', 'left');
+// iOS home-screen apps with a translucent status bar draw from the top of the screen but report a
+// viewport that is the screen minus the status bar, so 100dvh and inset:0 both stop a status bar's
+// height short of the bottom. Installed, the stage is sized from the screen itself; in a browser tab
+// 100dvh is right and keeps Safari's toolbar clear. iOS keeps screen.width/height in portrait terms.
+const installed = () => navigator.standalone === true || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
+function fitStage() {
+  if (ctl !== 'tilt' || !installed()) { stage.style.height = ''; return; }
+  const landscape = (screen.orientation ? screen.orientation.type.startsWith('landscape') : Math.abs(window.orientation || 0) === 90);
+  const full = landscape ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
+  stage.style.height = Math.max(innerHeight, full) + 'px';
+}
+addEventListener('resize', fitStage);
 function applyControls() {
   document.body.classList.toggle('mode-tilt', ctl === 'tilt');
+  fitStage();
   document.body.classList.toggle('pad-right', side === 'right');
   $('#levelBtn').hidden = ctl !== 'tilt';
   document.querySelectorAll('[data-ctl]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ctl === ctl)));
@@ -1131,7 +1145,7 @@ document.querySelectorAll('[data-side]').forEach(b => b.addEventListener('click'
   side = b.dataset.side; save('lantern-eel-arrows-side', side); applyControls();
 }));
 
-addEventListener('orientationchange', () => { tilt.neutral = null; });
+addEventListener('orientationchange', () => { tilt.neutral = null; setTimeout(fitStage, 300); });
 
 /* ---------- boot ---------- */
 // resizing clears the canvas, so redraw at once rather than show a blank frame until the next tick
