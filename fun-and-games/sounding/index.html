@@ -295,6 +295,7 @@ function hud() {
 }
 function showOverlay(delay) {
   clearTimeout(overlayTimer);
+  setTimeout(applyUpdate, delay * 1000 + 50);
   overlayTimer = setTimeout(() => { $('overlay').hidden = false; $('againBtn').focus({ preventScroll: true }); }, delay * 1000);
 }
 function tickClock() {
@@ -978,8 +979,23 @@ if (DEBUG) {
   newGame(level);
   requestAnimationFrame(frame);
 })();
-if ('serviceWorker' in navigator && location.protocol === 'https:') {
-  addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+/* Updates, as in Plumb: a home-screen app usually resumes rather than reloads, so ask the service worker
+   to check on every return to the foreground and every 30 minutes, and reload into a new version only
+   while no game is in progress. */
+let updateReady = false, swReg = null;
+function applyUpdate() { if (updateReady && status !== 'play') location.reload(); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && swReg) swReg.update().catch(() => {}); });
+if ('serviceWorker' in navigator && isSecureContext && location.hostname !== 'localhost') {
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    updateReady = true; applyUpdate();
+  });
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(r => { swReg = r; setInterval(() => r.update().catch(() => {}), 30 * 60 * 1000); })
+      .catch(() => {});
+  });
 }
 })();
 </script>
