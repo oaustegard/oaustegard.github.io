@@ -166,6 +166,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
     <div class="opts" role="group" aria-label="Options">
       <button class="chip" type="button" id="optTilt" data-key="tilt">Tilt steering</button>
       <button class="chip" type="button" id="optPour" data-key="pour">Tip to drop</button>
+      <button class="chip" type="button" id="optMusic" data-key="music">Music</button>
       <button class="chip" type="button" id="optSound" data-key="sound">Sound</button>
       <button class="chip" type="button" id="optHaptics" data-key="haptics">Haptics</button>
     </div>
@@ -178,7 +179,7 @@ dl.keys dd { margin: 0; color: var(--fg); }
       <span>Effects: <b id="stGpu">starting…</b></span>
       <span>Motion: <b id="stMotion">asks when you press Start</b></span>
       <span>Best: <b id="stBest">0</b></span>
-      <span>Version: <b>6 (tip level beside the board)</b></span>
+      <span>Version: <b>7 (Korobeiniki)</b></span>
     </div>
   </section>
 
@@ -225,7 +226,7 @@ const store = {
   set(k, v) { try { localStorage.setItem('plumb.' + k, JSON.stringify(v)); } catch {} }
 };
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-const settings = Object.assign({ tilt: true, pour: true, sound: true, haptics: true, range: 24 }, store.get('settings', {}));
+const settings = Object.assign({ tilt: true, pour: true, music: true, sound: true, haptics: true, range: 24 }, store.get('settings', {}));
 let best = store.get('best', 0);
 
 /* ---------- pieces ---------- */
@@ -288,6 +289,7 @@ function newGame() {
   grid = Array.from({ length: H }, () => Array(W).fill(0));
   queue = []; bag = []; held = null; holdUsed = false;
   score = 0; lines = 0; level = 1; clearing = null;
+  music.reset();
   refill(); spawn();
   drawLocked(); drawHud(); drawMinis();
   setMode('play');
@@ -490,6 +492,111 @@ function beep(freq, dur = 0.08, type = 'sine', vol = 0.05, slide = 0) {
   g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
   o.connect(g).connect(actx.destination); o.start(t); o.stop(t + dur + 0.02);
 }
+/* ---------- music: Korobeiniki ----------
+   The Tetris theme is the Russian folk song "Korobeiniki" (Nekrasov's 1861 poem, traditional
+   melody), which is in the public domain. Game arrangements of it are not, so this is an original
+   chiptune setting of the folk tune: a 25%-duty pulse lead, a triangle bass bouncing between octaves
+   on the chord roots, and noise-channel hats and snare. Everything is synthesized; tempo rises with
+   the level. Beats are quarter notes; null is a rest. */
+const MELODY_A = [['E5',1],['B4',.5],['C5',.5],['D5',1],['C5',.5],['B4',.5],
+                  ['A4',1],['A4',.5],['C5',.5],['E5',1],['D5',.5],['C5',.5],
+                  ['B4',1.5],['C5',.5],['D5',1],['E5',1],
+                  ['C5',1],['A4',1],['A4',2]];
+const MELODY_B = [[null,.5],['D5',1],['F5',.5],['A5',1],['G5',.5],['F5',.5],
+                  ['E5',1.5],['C5',.5],['E5',1],['D5',.5],['C5',.5],
+                  ['B4',1],['B4',.5],['C5',.5],['D5',1],['E5',1],
+                  ['C5',1],['A4',1],['A4',1],[null,1]];
+const CHORDS_A = ['E2', 'A2', 'E2', 'A2'], CHORDS_B = ['D2', 'C2', 'E2', 'A2'];   // one root per 4-beat bar
+const FORM = [[MELODY_A, CHORDS_A], [MELODY_A, CHORDS_A], [MELODY_B, CHORDS_B], [MELODY_A, CHORDS_A]];
+const freqOf = n => {
+  const m = /^([A-G])(#?)(\d)$/.exec(n);
+  const midi = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 }[m[1]] + (m[2] ? 1 : 0) + (+m[3] + 1) * 12;
+  return 440 * Math.pow(2, (midi - 69) / 12);
+};
+const SCORE = (() => {
+  const ev = []; let base = 0;
+  for (const [mel, chords] of FORM) {
+    let t = base;
+    for (const [n, d] of mel) { if (n) ev.push({ t, d, v: 'lead', f: freqOf(n) }); t += d; }
+    chords.forEach((root, bar) => {
+      const f = freqOf(root);
+      for (let k = 0; k < 8; k++) {
+        const t8 = base + bar * 4 + k * 0.5;
+        ev.push({ t: t8, d: 0.45, v: 'bass', f: k % 2 ? f * 2 : f });
+        ev.push({ t: t8, d: 0.05, v: k % 4 === 2 ? 'snare' : 'hat' });
+      }
+    });
+    base += 16;
+  }
+  ev.sort((a, b) => a.t - b.t);
+  return { ev, length: base };
+})();
+const music = {
+  i: 0, next: 0, playing: false, gain: null, pulse: null, noise: null, scheduled: 0,
+  bpm() { return Math.min(200, 132 + (level - 1) * 6); },
+  init() {
+    if (this.gain || !actx) return;
+    this.gain = actx.createGain(); this.gain.gain.value = 0; this.gain.connect(actx.destination);
+    const n = 32, real = new Float32Array(n + 1), imag = new Float32Array(n + 1);
+    for (let k = 1; k <= n; k++) imag[k] = 2 / (k * Math.PI) * Math.sin(k * Math.PI * 0.25);
+    this.pulse = actx.createPeriodicWave(real, imag);
+    this.noise = actx.createBuffer(1, actx.sampleRate * 0.2, actx.sampleRate);
+    const data = this.noise.getChannelData(0);
+    for (let k = 0; k < data.length; k++) data[k] = Math.random() * 2 - 1;
+  },
+  reset() { this.i = 0; this.next = 0; },
+  start() {
+    if (!actx) return;
+    this.init();
+    this.playing = true;
+    this.next = Math.max(this.next, actx.currentTime + 0.06);
+    this.gain.gain.setTargetAtTime(settings.music ? 0.9 : 0, actx.currentTime, 0.02);
+  },
+  stop() {
+    if (!this.playing) return;
+    this.playing = false;
+    this.gain.gain.setTargetAtTime(0, actx.currentTime, 0.03);
+  },
+  voice(e, t, dur) {
+    const g = actx.createGain();
+    g.connect(this.gain);
+    if (e.v === 'lead' || e.v === 'bass') {
+      const o = actx.createOscillator();
+      if (e.v === 'lead') o.setPeriodicWave(this.pulse); else o.type = 'triangle';
+      o.frequency.value = e.f;
+      const peak = e.v === 'lead' ? 0.075 : 0.14, end = t + dur * (e.v === 'lead' ? 0.92 : 0.8);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(peak, t + 0.006);
+      g.gain.setValueAtTime(peak * 0.8, Math.max(t + 0.007, end - 0.03));
+      g.gain.exponentialRampToValueAtTime(0.0001, end);
+      o.connect(g); o.start(t); o.stop(end + 0.02);
+    } else {
+      const src = actx.createBufferSource(), f = actx.createBiquadFilter();
+      src.buffer = this.noise;
+      const snare = e.v === 'snare', len = snare ? 0.12 : 0.035;
+      f.type = snare ? 'bandpass' : 'highpass'; f.frequency.value = snare ? 1800 : 7000;
+      g.gain.setValueAtTime(snare ? 0.07 : 0.025, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+      src.connect(f).connect(g); src.start(t); src.stop(t + len + 0.01);
+    }
+    this.scheduled++;
+  },
+  // Called every frame: schedule everything due in the next 0.25 s. Tempo changes take effect
+  // from the next note, since each gap is converted at the current bpm.
+  tick() {
+    if (!this.playing || !actx) return;
+    if (this.next < actx.currentTime) this.next = actx.currentTime + 0.03;   // resumed after a stall
+    const spb = 60 / this.bpm(), ev = SCORE.ev;
+    while (this.next < actx.currentTime + 0.25) {
+      const e = ev[this.i], nxt = ev[(this.i + 1) % ev.length];
+      if (settings.music) this.voice(e, this.next, e.d * spb);
+      let gap = nxt.t - e.t; if (gap < 0) gap += SCORE.length;
+      this.next += gap * spb;
+      this.i = (this.i + 1) % ev.length;
+    }
+  }
+};
+
 // No browser on iOS has navigator.vibrate. Since iOS 18, toggling an <input type=checkbox switch>
 // plays the system haptic tick, so clicking a hidden one stands in. iOS only honours it inside a tap,
 // so on iPhone you feel taps, swipes and the drops they cause, not pieces that land on their own.
@@ -869,6 +976,7 @@ function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now; clock += dt;
   update(dt);
+  music.tick();
   drawPiece();
   drawVial(dt);
   if (motion.ok && !reduced && mode === 'play') {
@@ -960,7 +1068,7 @@ function setMode(m) {
   $('#pauseCard').hidden = m !== 'pause';
   $('#overCard').hidden = m !== 'over';
   $('#plumbCard').hidden = m !== 'plumb';
-  if (m === 'play') wake();
+  if (m === 'play') { wake(); music.start(); } else music.stop();
   if (m === 'title') { $('#stBest').textContent = best.toLocaleString(); updateStatus(); }
   const focus = { title: '#startBtn', pause: '#resumeBtn', over: '#againBtn', plumb: '#plumbBtn' }[m];
   if (focus) setTimeout(() => { try { $(focus).focus({ preventScroll: true }); } catch {} }, 0);
@@ -1005,6 +1113,10 @@ function syncOptions() {
 document.querySelectorAll('.chip[data-key]').forEach(b => b.addEventListener('click', () => {
   settings[b.dataset.key] = !settings[b.dataset.key];
   store.set('settings', settings); syncOptions();
+  if (b.dataset.key === 'music') {
+    if (settings.music) unlockAudio();
+    if (music.playing && music.gain) music.gain.gain.setTargetAtTime(settings.music ? 0.9 : 0, actx.currentTime, 0.02);
+  }
 }));
 $('#rangeIn').addEventListener('input', e => {
   settings.range = +e.target.value; store.set('settings', settings); syncOptions();
@@ -1046,6 +1158,8 @@ requestAnimationFrame(frame);
 // ?debug exposes the rules engine to the Playwright harness in plumb/test_plumb.js.
 if (new URLSearchParams(location.search).has('debug')) {
   window.__plumb = { grid: () => grid, piece: () => piece, stats: () => ({ score, lines, level, mode }),
+    music: () => ({ playing: music.playing, scheduled: music.scheduled, bpm: music.bpm(), beats: SCORE.length }),
+    musicOut: () => music.gain,
     place(t, x, r = 0) { piece = { t, r, x, y: 1 }; pieceKey = ''; }, hardDrop, rotate, hold, tryMove };
 }
 if ('serviceWorker' in navigator && location.protocol === 'https:') {

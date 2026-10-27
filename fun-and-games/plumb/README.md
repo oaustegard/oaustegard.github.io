@@ -46,6 +46,14 @@ tip soft-drop is on. Roll and tip are read from gravity's components along the s
   the GPU work stops. Without WebGPU, or after a device loss, a Canvas 2D version does the same.
   This replaced an ambient dust field that, having no particle-to-particle forces, collapsed onto
   the flow lines of its own noise field and drew streaks.
+- **Music.** The Tetris theme is the Russian folk song "Korobeiniki" (Nekrasov's 1861 poem, sung
+  to a traditional melody), which is in the public domain; game arrangements of it, such as
+  Hirokazu Tanaka's 1989 Game Boy version, are not. This is an original chiptune setting of the folk
+  tune in the form A A B A: a 25%-duty pulse-wave lead (built with `createPeriodicWave`), a triangle
+  bass bouncing between octaves on one chord root per bar, noise-channel hats on the eighths and a
+  snare on 2 and 4. All of it is synthesized in Web Audio with no audio files, scheduled a quarter
+  second ahead from the frame loop. Tempo starts at 132 bpm and gains 6 bpm per level, up to 200.
+  It stops on pause and game over and has its own toggle, separate from the sound effects.
 - **PWA**: `manifest.json` (fullscreen, portrait), `sw.js` precaches the shell and refreshes it in
   the background (the page itself is network-first, so an update shows on the next load), screen wake lock while playing.
 - **Sound and haptics on iOS.** Web Audio is muted by the silent switch unless the page sets
