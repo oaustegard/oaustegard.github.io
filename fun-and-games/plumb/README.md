@@ -14,7 +14,7 @@ motion access then), and use Add to Home Screen to install it full-screen and of
 | roll left / right | steers; speed scales with the angle past a 4° dead zone, up to 15.5 columns/s at the "full speed" angle (default 24°) | drag sideways, one column per cell width |
 | tip the top toward you | soft drop, up to 20×: a steeper well falls faster | drag down |
 | jab the phone forward | hard drop: a spike along the screen normal over 15 m/s², dominant over the other axes | swipe down |
-| shake sideways | hold: three alternating x-axis spikes inside 700 ms | swipe up |
+| shake sideways | hold: three alternating x-axis spikes inside 700 ms. Hold puts the falling piece in the Hold box for later, or swaps it with the one there; once per piece | swipe up, or tap the Hold box |
 | tap | rotate clockwise; left third of the well rotates counter-clockwise | same |
 
 After Start, hold the phone the way you want to play (sitting up, lying down, on your side) and
