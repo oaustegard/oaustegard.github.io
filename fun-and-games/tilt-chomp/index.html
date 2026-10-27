@@ -102,6 +102,13 @@ button {
   border-radius: 999px; padding: 12px 18px; box-shadow: 0 0 22px #ffd21f66;
 }
 #start:active { transform: translateY(1px); }
+.acts { display: flex; gap: 10px; }
+.acts #start { flex: 1; }
+#shareBtn {
+  font-family: var(--display); font-size: 18px; letter-spacing: .06em; color: var(--ink);
+  border: 1px solid #3a4699; border-radius: 999px; padding: 12px 18px;
+}
+#shareBtn:disabled { opacity: .45; cursor: default; }
 button:focus-visible { outline: 2px solid #7ff3ff; outline-offset: 3px; }
 .controls { display: flex; align-items: center; gap: 10px; }
 .chip {
@@ -146,7 +153,7 @@ button:focus-visible { outline: 2px solid #7ff3ff; outline-offset: 3px; }
         <div class="legend" aria-label="Ghost chain points">
           <div><b>200</b>1st ghost</div><div><b>400</b>2nd</div><div><b>800</b>3rd</div><div><b>1600</b>4th</div>
         </div>
-        <button id="start" type="button">Start</button>
+        <div class="acts"><button id="start" type="button">Start</button><button id="shareBtn" type="button" hidden disabled>Share</button></div>
         <p class="fine" id="howto">Hold the phone at a comfortable angle before you press Start; that angle counts as level. Swipe or use the arrow keys if tilt isn't available.</p>
       </div>
     </div>
@@ -445,7 +452,7 @@ function pacStep(dt) {
   if (c >= 0 && c < W) {
     const i = r * W + c, v = pellets[i];
     if (v) {
-      pellets[i] = 0; pelletsDirty = true; game.dotsLeft--; game.dotsEaten++; game.idle = 0;
+      pellets[i] = 0; pelletsDirty = true; game.dotsLeft--; game.dotsEaten++; game.eatenTotal++; game.idle = 0;
       addScore(v === 2 ? 50 : 10);
       if (v === 2) startFright(); else Sound.waka();
       const g = ghosts.slice(1).find(g => g.state === 'house'); if (g) g.dots++;
@@ -616,6 +623,7 @@ function setPhase(p) {
   else if (p === 'gameover') {
     showMsg('GAME OVER', '#ff3b5c');
     try { localStorage.setItem('tiltchomp.hi', hi); } catch {}
+    buildShare();
   }
   else if (p === 'menu') { showMsg(''); menuEl.hidden = false; $('start').textContent = 'Play again'; $('start').focus(); }
   else showMsg('');
@@ -624,7 +632,8 @@ function startGame() {
   Sound.init(); enableTilt(); tilt.base = null;
   try { navigator.wakeLock?.request('screen').catch(() => {}); } catch {}
   menuEl.hidden = true;
-  Object.assign(game, { level: 1, score: 0, lives: 2, bonusGiven: false, firstReady: true, paused: false });
+  Object.assign(game, { level: 1, score: 0, lives: 2, bonusGiven: false, firstReady: true, paused: false, eatenTotal: 0 });
+  $('shareBtn').hidden = true;
   newLevel(); setPhase('ready');
   setTimeout(() => {
     if (tilt.ok) return;
@@ -853,21 +862,22 @@ async function initGPU(sdfField) {
 }
 
 // ---------- Canvas 2D fallback ----------
+// The maze walls as an image from the distance field: the 2D renderer and the share card both draw it.
+function wallImage(sdfField, flash) {
+  const c = document.createElement('canvas'); c.width = sdfField.w; c.height = sdfField.h;
+  const cx = c.getContext('2d'), img = cx.createImageData(sdfField.w, sdfField.h), wc = flash ? [230, 235, 255] : [44, 64, 255];
+  sdfField.data.forEach((d, i) => {
+    const ld = Math.abs(d + .3), core = ld < .06 ? 1 : 0, glow = Math.exp(-ld * 10) * .42, fillv = d < -.3 ? 1 : 0;
+    img.data[i * 4] = Math.min(255, 3 + fillv * 3 + wc[0] * (core + glow) + 140 * core * .3);
+    img.data[i * 4 + 1] = Math.min(255, 4 + fillv * 5 + wc[1] * (core + glow) + 166 * core * .3);
+    img.data[i * 4 + 2] = Math.min(255, 11 + fillv * 18 + wc[2] * (core + glow));
+    img.data[i * 4 + 3] = 255;
+  });
+  cx.putImageData(img, 0, 0); return c;
+}
 function init2D(sdfField) {
   const g = canvas.getContext('2d'); if (!g) return null;
-  const mk = flash => {
-    const c = document.createElement('canvas'); c.width = sdfField.w; c.height = sdfField.h;
-    const cx = c.getContext('2d'), img = cx.createImageData(sdfField.w, sdfField.h), wc = flash ? [230, 235, 255] : [44, 64, 255];
-    sdfField.data.forEach((d, i) => {
-      const ld = Math.abs(d + .3), core = ld < .06 ? 1 : 0, glow = Math.exp(-ld * 10) * .42, fillv = d < -.3 ? 1 : 0;
-      img.data[i * 4] = Math.min(255, 3 + fillv * 3 + wc[0] * (core + glow) + 140 * core * .3);
-      img.data[i * 4 + 1] = Math.min(255, 4 + fillv * 5 + wc[1] * (core + glow) + 166 * core * .3);
-      img.data[i * 4 + 2] = Math.min(255, 11 + fillv * 18 + wc[2] * (core + glow));
-      img.data[i * 4 + 3] = 255;
-    });
-    cx.putImageData(img, 0, 0); return c;
-  };
-  const walls = mk(false), wallsFlash = mk(true);
+  const walls = wallImage(sdfField, false), wallsFlash = wallImage(sdfField, true);
   const GC = ['#ff1a1f', '#ff9ef2', '#26f2ff', '#ffa840'];
   return function draw(time, n, flash, blink) {
     const s = view.s * view.dpr, ox = view.ox * view.dpr, oy = view.oy * view.dpr;
@@ -911,6 +921,57 @@ function init2D(sdfField) {
     return true;
   };
 }
+
+// ---------- Share card ----------
+// A PNG of the maze as the game ended, the score and the game's address. It is built at game over,
+// so the tap on Share can call navigator.share at once: iOS refuses it after an await.
+const SHARE_URL = 'austegard.com/fun-and-games/tilt-chomp/';
+let shareFile = null;
+function buildShare() {
+  shareFile = null; const btn = $('shareBtn'); btn.hidden = false; btn.disabled = true;
+  const s = 36, bw = W * s, bh = H * s, CW = 1080, CH = 360 + bh + 150;
+  const cv = document.createElement('canvas'); cv.width = CW; cv.height = CH;
+  const g = cv.getContext('2d'), disp = '"Tilt Warp", "Arial Black", sans-serif', body = '"Tilt Neon", "Trebuchet MS", sans-serif';
+  g.fillStyle = '#05060f'; g.fillRect(0, 0, CW, CH);
+  g.textBaseline = 'alphabetic'; g.textAlign = 'left';
+  g.font = `400 60px ${disp}`; g.fillStyle = '#ffd21f'; g.shadowColor = '#ffb800'; g.shadowBlur = 24;
+  g.fillText('Tilt', 60, 106);
+  const wT = g.measureText('Tilt ').width;
+  g.fillStyle = '#2b3dff'; g.shadowColor = '#2b3dff'; g.fillText('Chomp', 60 + wT, 106);
+  g.shadowBlur = 0; g.textAlign = 'right'; g.fillStyle = '#8d93c4'; g.font = `400 32px ${body}`;
+  g.fillText(`level ${game.level}`, CW - 60, 104);
+  g.textAlign = 'left'; g.fillStyle = '#e9ecff'; g.font = `400 140px ${disp}`;
+  g.fillText(game.score.toLocaleString(), 54, 255);
+  g.fillStyle = '#8d93c4'; g.font = `400 34px ${body}`;
+  g.fillText(`${game.eatenTotal.toLocaleString()} pellets · ${game.dotsLeft} left on level ${game.level} · best ${hi.toLocaleString()}`, 60, 318, CW - 120);
+  const ox = (CW - bw) / 2, oy = 360;
+  g.save(); g.translate(ox, oy); g.scale(s, s);
+  g.drawImage(wallImage(SDF, false), 0, 0, W, H);
+  g.fillStyle = '#ff99d9'; g.fillRect(13, 12.48, 2, .14);
+  g.fillStyle = '#ffbf9e';
+  for (let r = 0; r < H; r++) for (let c = 0; c < W; c++) {
+    const v = pellets[r * W + c]; if (!v) continue;
+    g.beginPath(); g.arc(c + .5, r + .5, v === 2 ? .36 : .12, 0, 7); g.fill();
+  }
+  g.restore();
+  g.textAlign = 'center'; g.fillStyle = '#8d93c4'; g.font = `400 34px ${body}`;
+  g.fillText(SHARE_URL, CW / 2, CH - 56);
+  cv.toBlob(b => { if (b) { shareFile = new File([b], 'tilt-chomp.png', { type: 'image/png' }); btn.disabled = false; } }, 'image/png');
+}
+function share() {
+  if (!shareFile) return;
+  const text = `Tilt Chomp: ${game.score.toLocaleString()} points, level ${game.level}. https://${SHARE_URL}`;
+  if (navigator.canShare && navigator.canShare({ files: [shareFile] })) {
+    navigator.share({ files: [shareFile], text }).catch(e => { if (e.name !== 'AbortError') saveShare(); });
+  } else saveShare();
+}
+function saveShare() {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(shareFile); a.download = shareFile.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+}
+$('shareBtn').addEventListener('click', share);
 
 // ---------- Main loop ----------
 let draw = null, acc = 0, last = performance.now();

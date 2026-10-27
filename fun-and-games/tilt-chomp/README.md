@@ -10,6 +10,8 @@ Hold the phone at whatever angle is comfortable and press Start; that angle coun
 
 Without a motion sensor, swipe on the maze or use the arrow keys (or WASD). `P` or `Esc` pauses, `M` mutes.
 
+At game over, Share sends a PNG card with your score, level, pellets eaten and the maze as you left it, through the phone's share sheet; browsers without file sharing download it instead.
+
 ## What's in it
 
 - The classic 28×31 maze with 240 pellets, 4 power pellets and the side tunnel.
