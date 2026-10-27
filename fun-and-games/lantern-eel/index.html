@@ -174,6 +174,19 @@ body.pad-right #app { grid-template-areas: "hud hud hud" "stage stage stage" "ac
 }
 body.mode-tilt #app { max-width: none; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); grid-template-areas: "hud" "stage"; }
 body.mode-tilt .dpad, body.mode-tilt .meters, body.mode-tilt .actions, body.mode-tilt .side-setting { display: none; }
+/* Tilt mode runs edge to edge: the water fills the visible viewport (dvh leaves Safari's toolbar clear)
+   under the status bar, notch and home indicator, the HUD floats on top, and the script keeps the play
+   grid inside the safe area and below the HUD. */
+body.mode-tilt .stage { position: fixed; left: 0; right: 0; top: 0; height: 100vh; height: 100dvh; border: 0; border-radius: 0; }
+body.mode-tilt .hud {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none;
+  padding: calc(env(safe-area-inset-top, 0px) + 6px) max(14px, env(safe-area-inset-right, 0px)) 10px max(14px, env(safe-area-inset-left, 0px));
+  background: linear-gradient(rgba(3, 16, 26, .6), rgba(3, 16, 26, 0));
+}
+body.mode-tilt .hud button { pointer-events: auto; }
+body.mode-tilt .overlay { padding-top: calc(env(safe-area-inset-top, 0px) + 60px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); }
+body.mode-tilt .combo { top: calc(env(safe-area-inset-top, 0px) + 58px); }
+#safe { position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
 
 @media (prefers-reduced-motion: reduce) { .toast, .zone-banner, .combo { transition: none; } }
 </style>
@@ -265,6 +278,7 @@ body.mode-tilt .dpad, body.mode-tilt .meters, body.mode-tilt .actions, body.mode
   </div>
 </div>
 <div class="toast" id="toast" role="status"></div>
+<div id="safe" aria-hidden="true"></div>
 
 <script>
 (() => {
@@ -291,14 +305,29 @@ const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
 const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
 const ANG = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 };
 
+// In tilt mode the stage is the whole screen, so the grid keeps clear of the floating HUD and the
+// safe-area insets (status bar, notch, home indicator); the water itself still runs to every edge.
+let inset = { t: 0, r: 0, b: 0, l: 0 };
+function measureInsets() {
+  if (typeof ctl === 'undefined' || ctl !== 'tilt') { inset = { t: 0, r: 0, b: 0, l: 0 }; return; }
+  const cs = getComputedStyle(document.getElementById('safe'));
+  const safe = k => parseFloat(cs['padding' + k]) || 0;
+  const hud = document.querySelector('.hud').getBoundingClientRect(), st = stage.getBoundingClientRect();
+  inset = { t: Math.max(hud.bottom - st.top - 4, safe('Top')), r: safe('Right') + 4, b: safe('Bottom') + 4, l: safe('Left') + 4 };
+}
+const area = () => [Math.max(1, W - inset.l - inset.r), Math.max(1, H - inset.t - inset.b)];
 function pickRows() {
-  const r = stage.getBoundingClientRect();
-  COLS = r.width < 520 && r.height > r.width ? 16 : 20;
-  ROWS = clamp(Math.round(COLS * r.height / Math.max(1, r.width)), 13, 34);
+  measureInsets();
+  const [aw, ah] = area();
+  COLS = aw < 520 && ah > aw ? 16 : 20;
+  // as many rows as fit at the column width, so the grid fills the height without letterboxing
+  ROWS = clamp(Math.floor(ah / (aw / COLS)), 13, 40);
 }
 function layoutBoard() {
-  cell = Math.min(W / COLS, H / ROWS);
-  ox = (W - cell * COLS) / 2; oy = (H - cell * ROWS) / 2;
+  measureInsets();
+  const [aw, ah] = area();
+  cell = Math.min(aw / COLS, ah / ROWS);
+  ox = inset.l + (aw - cell * COLS) / 2; oy = inset.t + (ah - cell * ROWS) / 2;
 }
 function resize() {
   const r = stage.getBoundingClientRect();
@@ -678,9 +707,13 @@ function render(now) {
   bg.addColorStop(0, mix('#1a6a80', '#060d1e', d)); bg.addColorStop(1, mix('#07283a', '#010308', d));
   ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
 
+  // the water's extent: the whole screen in tilt mode, the board otherwise
+  const full = ctl === 'tilt';
+  const wx = full ? 0 : ox, wy = full ? 0 : oy, ww = full ? W : cell * COLS, wh = full ? H : cell * ROWS;
+
   ctx.save();
   if (S.shake > 0) ctx.translate(rand(-1, 1) * S.shake * cell * 0.4, rand(-1, 1) * S.shake * cell * 0.4);
-  ctx.save(); boardPath(); ctx.clip();
+  ctx.save(); if (!full) { boardPath(); ctx.clip(); }
 
   // water: faint grid of sediment points
   ctx.fillStyle = `rgba(160,230,230,${0.07 * (1 - d * 0.6)})`;
@@ -693,22 +726,23 @@ function render(now) {
     for (let i = 0; i < 4; i++) {
       const sway = reduced ? 0 : Math.sin(t * 0.25 + i * 1.7) * W * 0.05;
       const x0 = W * (0.15 + i * 0.24) + sway, w0 = W * 0.05, w1 = W * 0.16;
-      const g = ctx.createLinearGradient(0, oy, 0, oy + cell * ROWS);
+      const g = ctx.createLinearGradient(0, wy, 0, wy + wh);
       g.addColorStop(0, `rgba(200,255,250,${shaftA})`); g.addColorStop(1, 'rgba(200,255,250,0)');
       ctx.fillStyle = g;
-      ctx.beginPath(); ctx.moveTo(x0 - w0, oy); ctx.lineTo(x0 + w0, oy); ctx.lineTo(x0 + w1 + W * 0.12, oy + cell * ROWS); ctx.lineTo(x0 - w1 + W * 0.12, oy + cell * ROWS); ctx.fill();
+      ctx.beginPath(); ctx.moveTo(x0 - w0, wy); ctx.lineTo(x0 + w0, wy); ctx.lineTo(x0 + w1 + W * 0.12, wy + wh); ctx.lineTo(x0 - w1 + W * 0.12, wy + wh); ctx.fill();
     }
     ctx.globalCompositeOperation = 'source-over';
   }
 
   // marine snow
   for (const f of snow) {
-    const x = ox + (f.x + Math.sin(t * 0.6 + f.ph) * 0.006) * cell * COLS, y = oy + f.y * cell * ROWS;
+    const x = wx + (f.x + Math.sin(t * 0.6 + f.ph) * 0.006) * ww, y = wy + f.y * wh;
     ctx.fillStyle = `rgba(210,240,240,${0.22 * f.s * (1 - d * 0.5)})`;
     ctx.fillRect(x, y, f.s * 1.4, f.s * 1.4);
   }
 
-  // creatures
+  // creatures, clipped to the grid so a wrap across an edge does not show in the margin
+  if (full) { ctx.save(); ctx.beginPath(); ctx.rect(ox, oy, cell * COLS, cell * ROWS); ctx.clip(); }
   for (const j of S.jellies) drawJelly(j, t);
   if (S.food) drawPlankton(S.food, t);
   if (S.pearl) drawPearl(S.pearl, t);
@@ -719,6 +753,7 @@ function render(now) {
   ctx.globalCompositeOperation = 'lighter';
   for (const p of S.parts) { const a = clamp(p.life / p.max, 0, 1); ctx.fillStyle = rgba(p.c, a * 0.9); circle(p.x, p.y, p.r * (0.5 + a)); }
   ctx.globalCompositeOperation = 'source-over';
+  if (full) ctx.restore();
 
   // the dark: only your lure and living light cut through it
   const dark = clamp((m - 120) / 1300, 0, 0.93);
@@ -726,7 +761,7 @@ function render(now) {
     const [hx, hy] = S.lure, R = cell * (lerp(9, 2.8, dark / 0.93) + (S.boosting ? 1.5 : 0) + 0.3 * Math.sin(t * 5));
     const g = ctx.createRadialGradient(hx, hy, R * 0.2, hx, hy, R * 1.5);
     g.addColorStop(0, 'rgba(1,4,12,0)'); g.addColorStop(1, `rgba(1,4,12,${dark})`);
-    ctx.fillStyle = g; ctx.fillRect(ox, oy, cell * COLS, cell * ROWS);
+    ctx.fillStyle = g; ctx.fillRect(wx, wy, ww, wh);
     ctx.globalCompositeOperation = 'lighter';
     const k = dark * 1.1;
     if (S.food) drawPlankton(S.food, t, true, k);
@@ -737,7 +772,17 @@ function render(now) {
   }
   ctx.restore(); // clip
 
-  ctx.strokeStyle = rgba(LUME, 0.14); ctx.lineWidth = 1; boardPath(); ctx.stroke();
+  // the grid's edge: a faint frame on the board, only hairline corners when the water runs full-bleed
+  if (!full) { ctx.strokeStyle = rgba(LUME, 0.14); ctx.lineWidth = 1; boardPath(); ctx.stroke(); }
+  else {
+    ctx.strokeStyle = rgba(LUME, 0.22); ctx.lineWidth = 1.5;
+    const L = cell * 0.7, x1 = ox, y1 = oy, x2 = ox + cell * COLS, y2 = oy + cell * ROWS;
+    ctx.beginPath();
+    for (const [cx, cy, sx, sy] of [[x1, y1, 1, 1], [x2, y1, -1, 1], [x1, y2, 1, -1], [x2, y2, -1, -1]]) {
+      ctx.moveTo(cx + sx * L, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + sy * L);
+    }
+    ctx.stroke();
+  }
 
   if (ctl === 'tilt' && state !== 'title') {
     const bw = Math.min(cell * COLS * 0.32, 130), bx = ox + 12, by = oy + cell * ROWS - 12;
