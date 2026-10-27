@@ -64,6 +64,11 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <option value="960x600">960 × 600</option>
       <option value="1280x800">1280 × 800</option>
     </select></label>
+    <div id="tiltOpts" hidden>
+      <label>Turn by turning the phone <input type="checkbox" id="tilt" checked></label>
+      <label>Tilt speed <input type="range" id="tiltSpeed" min="0.5" max="3" step="0.1" value="1.4"></label>
+      <label>Reverse tilt direction <input type="checkbox" id="tiltRev"></label>
+    </div>
     <label>Your own WAD <input type="file" id="wadfile" accept=".wad,.WAD"></label>
     <div id="status" class="mute"></div>
     <button class="go" id="play" disabled>Loading…</button>
@@ -74,7 +79,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <b>space / E</b><span>open doors, press switches</span>
       <b>alt + ← →</b><span>strafe with the arrows</span>
       <b>esc</b><span>this menu</span>
-      <b>touch</b><span>left thumb moves, right thumb turns, USE button</span>
+      <b>phone</b><span>turn the phone to look around; drag the left thumb to walk and strafe, drag the right thumb to fine-tune the turn; USE button</span>
     </div>
   </div>
 </div>
@@ -186,9 +191,40 @@ canvas.addEventListener("click", () => { if (running && !isTouch) canvas.request
 addEventListener("mousemove", (e) => { if (document.pointerLockElement === canvas) mouseDX += e.movementX; });
 
 // touch: left half is a floating stick, right half drags to turn
+// gyro look: the rotation rate projected on gravity is the yaw rate, whatever way the phone is held
+const gyro = { on: false, turn: 0, last: 0, g: [0, 0, -1] };
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity, r = e.rotationRate;
+  if (a && a.x != null) {
+    const m = Math.hypot(a.x, a.y, a.z) || 1;
+    // low-pass the gravity direction so hand shake doesn't leak into it
+    for (const [i, v] of [a.x, a.y, a.z].entries()) gyro.g[i] = gyro.g[i] * 0.8 + (v / m) * 0.2;
+  }
+  const now = performance.now();
+  const dt = gyro.last ? Math.min((now - gyro.last) / 1000, 0.1) : 0;
+  gyro.last = now;
+  if (!gyro.on || !running || !r || r.alpha == null) return;
+  const gm = Math.hypot(...gyro.g) || 1;
+  const yaw = (r.beta * gyro.g[0] + r.gamma * gyro.g[1] + r.alpha * gyro.g[2]) / gm; // deg/s
+  const sign = (isIOS ? -1 : 1) * ($("tiltRev").checked ? -1 : 1);
+  if (Math.abs(yaw) > 1.5) gyro.turn += sign * yaw * dt * Math.PI / 180 * +$("tiltSpeed").value;
+}
+async function enableGyro() {
+  gyro.on = false;
+  if (!isTouch || !$("tilt").checked || typeof DeviceMotionEvent === "undefined") return;
+  try {
+    if (typeof DeviceMotionEvent.requestPermission === "function" && (await DeviceMotionEvent.requestPermission()) !== "granted") return;
+    if (!enableGyro.added) { addEventListener("devicemotion", onMotion); enableGyro.added = true; }
+    gyro.on = true;
+  } catch { /* permission refused: drag to turn still works */ }
+}
+$("tilt").addEventListener("change", enableGyro);
+
 const touch = { stickId: null, sx: 0, sy: 0, dx: 0, dy: 0, turnId: null, tx: 0, use: false };
 if (isTouch) {
   $("touch").hidden = false;
+  $("tiltOpts").hidden = false;
   const stick = $("stick"), nub = $("nub");
   addEventListener("touchstart", (e) => {
     if (!running) return;
@@ -244,8 +280,8 @@ function readInput() {
   if (touch.stickId !== null) {
     forward += -touch.dy * 50; side += touch.dx * 40;
   }
-  const mouseturn = -mouseDX * 0.0028;
-  mouseDX = 0;
+  const mouseturn = -mouseDX * 0.0028 + gyro.turn;
+  mouseDX = 0; gyro.turn = 0;
   const use = k("Space", "KeyE", "Enter") || touch.use;
   const w = weaponKey; weaponKey = 0;
   return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, weapon: w };
@@ -291,10 +327,11 @@ function frame(now) {
   lastTime = now;
   let tics = Math.floor(ticAccum);
   ticAccum -= tics;
+  if (tics === 0) return; // nothing changed; the canvas keeps the last frame and input keeps accumulating
   if (tics > 4) tics = 4;
   const input = readInput();
   const enc = device.createCommandEncoder();
-  engine.encodeFrame(enc, tics, tics ? input : { ...input, use: false, forward: 0, side: 0, turn: 0 });
+  engine.encodeFrame(enc, tics, input);
   engine.present(enc, context.getCurrentTexture().createView());
   const rb = engine.readWorld(enc);
   const t0 = performance.now();
@@ -340,6 +377,7 @@ function hideMenu() { $("menu").hidden = true; }
 $("play").addEventListener("click", async () => {
   if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
   audio?.resume?.();
+  await enableGyro();
   const [w, h] = $("res").value.split("x").map(Number);
   if (w !== res[0] || h !== res[1]) { await buildEngine(); engine.map = null; }
   const m = $("map").value;

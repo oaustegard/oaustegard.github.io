@@ -17,9 +17,9 @@ Edge or Safari.
 | space, E | open doors and press switches |
 | alt + ← → | strafe with the arrow keys |
 | esc | menu |
-| touch | the left thumb is a floating stick, the right thumb drags to turn, USE button on the right |
+| phone | turn the phone to look around (gyroscope); the left thumb drags a floating stick to walk and strafe; the right thumb drags to fine-tune the turn; USE button on the right |
 
-A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
+On a phone, the menu has a tilt speed slider and a switch that reverses the tilt direction. The view turns by the phone's rotation rate projected on gravity, so it works the same in portrait and landscape. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
 `doom.wad` or `doom2.wad`.
 
 ## How it is built
