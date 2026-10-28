@@ -64,6 +64,13 @@ level.
   status bar passes, and copies 1 KB of the world buffer back to the CPU. That readback carries the
   sound queue and the level-exit flag.
 
+## Releasing
+
+Run `python3 fun-and-games/doom/stamp.py` before committing a change to any of the modules. It
+stamps every `import` with one version. GitHub Pages lets a browser cache each file for ten
+minutes on its own clock, so without the stamp a phone can run a new `index.html` against an old
+`engine.js`.
+
 ## Not done yet
 
 The automap, menus, the intermission screens and the status bar face. Monster behaviour is a
