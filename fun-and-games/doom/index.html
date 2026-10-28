@@ -106,7 +106,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
 </div>
 
 <script type="module">
-import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028014734";
+import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028015152";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -239,8 +239,15 @@ addEventListener("mousemove", (e) => { if (document.pointerLockElement === canva
 // with the opposite sign to the spec, so "up" flips there.
 const gyro = { on: false, turn: 0, last: 0, g: [0, 0, -1], pitch: 0, roll: 0, pitch0: null, roll0: null };
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-function screenAxes() {
-  const th = ((screen.orientation?.angle ?? window.orientation ?? 0) * Math.PI) / 180;
+// Screen axes in device coordinates. When the orientation API is missing (an installed home-screen
+// app can report none) or disagrees with the window's shape, gravity says which edge is up.
+function screenAxes(up) {
+  let deg = screen.orientation?.angle ?? window.orientation;
+  const landscape = innerWidth > innerHeight;
+  if (deg == null || (Math.abs(deg % 180) === 90) !== landscape) {
+    deg = landscape ? (up[0] > 0 ? 90 : 270) : (up[1] >= 0 ? 0 : 180);
+  }
+  const th = (deg * Math.PI) / 180;
   return { right: [Math.cos(th), -Math.sin(th), 0], up: [Math.sin(th), Math.cos(th), 0] };
 }
 const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
@@ -248,15 +255,17 @@ function onMotion(e) {
   const a = e.accelerationIncludingGravity, r = e.rotationRate;
   if (a && a.x != null) {
     const m = Math.hypot(a.x, a.y, a.z) || 1;
-    // low-pass the gravity direction so hand shake doesn't leak into it
-    for (const [i, v] of [a.x, a.y, a.z].entries()) gyro.g[i] = gyro.g[i] * 0.85 + (v / m) * 0.15;
+    // low-pass the gravity direction so hand shake doesn't leak into it; a recentre takes the raw
+    // sample, because a half-settled average would make the level pose wrong and steer forever
+    const k = gyro.pitch0 === null ? 1 : 0.15;
+    for (const [i, v] of [a.x, a.y, a.z].entries()) gyro.g[i] = gyro.g[i] * (1 - k) + (v / m) * k;
   }
   const now = performance.now();
   const dt = gyro.last ? Math.min((now - gyro.last) / 1000, 0.1) : 0;
   gyro.last = now;
   const gm = Math.hypot(...gyro.g) || 1;
   const up = gyro.g.map((v) => (isIOS ? -v : v) / gm);
-  const ax = screenAxes();
+  const ax = screenAxes(up);
   gyro.pitch = Math.asin(Math.max(-1, Math.min(1, -up[2])));
   gyro.roll = Math.asin(Math.max(-1, Math.min(1, dot3(ax.right, up))));
   if (gyro.pitch0 === null) { gyro.pitch0 = gyro.pitch; gyro.roll0 = gyro.roll; }
