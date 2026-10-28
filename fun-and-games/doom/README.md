@@ -20,7 +20,7 @@ Edge or Safari.
 | ctrl, F, click | fire |
 | 1 – 7 | weapons |
 | tab, M | automap; + and − or the mouse wheel zoom it (MAP and +/− buttons on a phone) |
-| esc | menu |
+| esc | DOOM's menu: New Game picks the episode and skill, Options holds resolution, tilt and level warp |
 | phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn |
 
 On a phone, the pose at Play is level: the back camera's elevation against gravity sets the look pitch, the screen's roll steers, and swivel (the rotation rate projected on gravity) turns directly. The menu switches each one on or off and sets the turn speed. Looking up and down shears the view by moving the horizon row, as later source ports do; the original engine could not. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
@@ -73,6 +73,11 @@ level.
   the same way. Mouse, gyro and drag turns reach the view on the next frame and the following tic
   takes their sum, so turning is not delayed to tic rate. A frame without a tic costs about 1 ms
   on an iPhone.
+- **Menus and intermission.** DOOM's menus (`m_menu.c`) and level-end screens (`wi_stuff.c`) are
+  drawn on a 2D canvas from the WAD's own `M_` and `WI` graphics, at DOOM's 320×200 coordinates.
+  Skill sets which things spawn (the map's per-skill flags), halves damage and doubles ammo on the
+  easiest skill, and on Nightmare doubles ammo, halves the demons' run and bite tics, speeds up
+  imp, cacodemon and baron fireballs, and zeroes monster reaction time.
 - **What JavaScript does each frame.** It writes the input, encodes N tics plus the render and
   status bar passes, and copies 1 KB of the world buffer back to the CPU. That readback carries the
   sound queue and the level-exit flag.
@@ -86,7 +91,7 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Not done yet
 
-Menus, skill selection, the intermission screens and music. Monster behaviour is a
+Music, and Nightmare's monster respawning. Monster behaviour is a
 port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had little play-testing.
 
 ## Licences

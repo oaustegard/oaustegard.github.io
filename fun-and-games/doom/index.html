@@ -49,6 +49,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 #bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
 #stick { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
 #nub { position: absolute; left: 50px; top: 50px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
+#dmenu { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; touch-action: none; cursor: pointer; }
+#dmenu[hidden] { display: none; }
 #banner { position: fixed; left: 0; right: 0; top: 38%; text-align: center; font-size: 20px; color: #f0c060; text-shadow: 2px 2px 0 #000, 0 0 8px #000; pointer-events: none; }
 #banner small { display: block; font-size: 14px; color: var(--ink); margin-top: 6px; }
 #fps { position: fixed; left: 50%; transform: translateX(-50%); top: max(6px, env(safe-area-inset-top)); font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; white-space: nowrap; }
@@ -69,13 +71,15 @@ button.go:disabled { opacity: .5; cursor: wait; }
   <div class="tbtn am" id="bZoomOut" hidden>−</div>
 </div>
 
+<canvas id="dmenu" hidden></canvas>
+
 <div class="overlay" id="menu">
   <div class="card">
     <h1>gPu(doom)</h1>
     <p class="mute">The probability of Doom, running on a GPU near you: 1.</p>
     <p>The Doom engine rewritten as WebGPU compute shaders. One GPU thread per screen column walks the BSP tree and draws walls, floors and sprites; the game tic (movement, collision, doors, lifts, pickups) runs in GPU kernels too. JavaScript reads the WAD, passes keys and plays sounds.</p>
     <p class="mute">Playing Freedoom's first episode (BSD licence).</p>
-    <label>Level <select id="map"></select></label>
+    <label>Warp to a level <span><select id="map"></select> <button id="warp" type="button">Go</button></span></label>
     <label>Resolution <select id="res">
       <option value="200">200 lines (original)</option>
       <option value="400" selected>400 lines</option>
@@ -93,6 +97,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
     <label>Your own WAD <input type="file" id="wadfile" accept=".wad,.WAD"></label>
     <div id="status" class="mute"></div>
     <button class="go" id="play" disabled>Loading…</button>
+    <p class="mute">Esc or Back returns to the menu; New Game there picks the episode and skill.</p>
     <div class="keys">
       <b>W A S D / arrows</b><span>move and turn (A/D strafe)</span>
       <b>mouse</b><span>turn and look up or down (click the screen to capture it)</span>
@@ -102,22 +107,15 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <b>tab / M</b><span>automap; + and − or the mouse wheel zoom it</span>
       <b>space / E</b><span>open doors, press switches</span>
       <b>alt + ← →</b><span>strafe with the arrows</span>
-      <b>esc</b><span>this menu</span>
+      <b>esc</b><span>the menu (arrows and enter, or click or tap)</span>
       <b>phone</b><span>swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb walks and strafes, the right thumb drags to turn</span>
     </div>
   </div>
 </div>
 
-<div class="overlay" id="done" hidden>
-  <div class="card">
-    <h1 id="doneTitle">LEVEL COMPLETE</h1>
-    <p id="doneStats"></p>
-    <button class="go" id="next">Continue</button>
-  </div>
-</div>
 
 <script type="module">
-import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028021823";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028031646";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -192,7 +190,6 @@ async function start(mapName, carry = freshPlayer()) {
   status("");
   loading = false;
   $("play").disabled = false;
-  $("play").textContent = "Resume";
   hideMenu();
   recentre();
   running = true;
@@ -238,7 +235,8 @@ const zoomMap = (f) => { amzoom = Math.max(0.15, Math.min(8, amzoom * f)); };
 addEventListener("wheel", (e) => { if (running && automap) zoomMap(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: true });
 const isTouch = matchMedia("(pointer: coarse)").matches;
 addEventListener("keydown", (e) => {
-  if (e.code === "Escape") { if (running) { running = false; showMenu(); } else if (engine?.map) { hideMenu(); running = true; lastTime = performance.now(); } return; }
+  if (menuKey(e)) return;
+  if (e.code === "Escape") { if (running) showMenu(); return; }
   if (/^Digit[1-9]$/.test(e.code)) weaponKey = +e.code.slice(5);
   if (running && (e.code === "Tab" || e.code === "KeyM")) { toggleMap(); e.preventDefault(); return; }
   if (running && automap && (e.code === "Equal" || e.code === "NumpadAdd")) zoomMap(1.25);
@@ -368,7 +366,7 @@ if (isTouch) {
   $("bMap").addEventListener("touchstart", (e) => { toggleMap(); e.preventDefault(); e.stopPropagation(); });
   $("bZoomIn").addEventListener("touchstart", (e) => { zoomMap(1.4); e.preventDefault(); e.stopPropagation(); });
   $("bZoomOut").addEventListener("touchstart", (e) => { zoomMap(1 / 1.4); e.preventDefault(); e.stopPropagation(); });
-  $("bMenu").addEventListener("touchstart", (e) => { running = false; showMenu(); e.preventDefault(); e.stopPropagation(); });
+  $("bMenu").addEventListener("touchstart", (e) => { showMenu(); e.preventDefault(); e.stopPropagation(); });
 }
 
 // Turning from the mouse, gyro and right thumb since the last frame. Applied to the view at once;
@@ -433,7 +431,7 @@ function playSound(ev, view) {
 }
 
 // ---------------------------------------------------------------- loop
-let lastTime = 0, ticAccum = 0, frames = 0, fpsT = 0, gpuMs = 0;
+let lastTime = 0, ticAccum = 0, frames = 0, fpsT = 0;
 const NEXT = { E1M1: "E1M2", E1M2: "E1M3", E1M3: "E1M4", E1M4: "E1M5", E1M5: "E1M6", E1M6: "E1M7", E1M7: "E1M8", E1M9: "E1M4",
   E2M1: "E2M2", E2M2: "E2M3", E2M3: "E2M4", E2M4: "E2M5", E2M5: "E2M6", E2M6: "E2M7", E2M7: "E2M8", E2M9: "E2M6",
   E3M1: "E3M2", E3M2: "E3M3", E3M3: "E3M4", E3M4: "E3M5", E3M5: "E3M6", E3M6: "E3M7", E3M7: "E3M8", E3M9: "E3M7" };
@@ -464,10 +462,8 @@ function frame(now) {
   engine.encodeFrame(enc, tics, input);
   engine.present(enc, context.getCurrentTexture().createView());
   const rb = engine.readWorld(enc);
-  const t0 = performance.now();
   device.queue.submit([enc.finish()]);
   if (rb) engine.finishRead(rb).then(onWorld);
-  device.queue.onSubmittedWorkDone().then(() => { gpuMs = gpuMs * 0.9 + (performance.now() - t0) * 0.1; });
   frames++;
 }
 requestAnimationFrame(frame);
@@ -476,7 +472,7 @@ requestAnimationFrame(frame);
 setInterval(() => {
   applySize(); // a once-a-second safety net for missed resize events
   const t = performance.now(), secs = Math.max((t - fpsT) / 1000, 0.001);
-  $("fps").textContent = running ? `${Math.round(frames / secs)} fps · ${res[0]}×${res[1]} · gpu ${gpuMs.toFixed(1)} ms` : "";
+  $("fps").textContent = running ? `${res[0]}x${res[1]} @ ${Math.round(frames / secs)} Hz` : "";
   frames = 0; fpsT = t;
 }, 1000);
 
@@ -487,40 +483,337 @@ function onWorld(buf) {
   const exit = wu[W.exit];
   if (wu[W.dead] && !exit) banner(`YOU DIED<small>${isTouch ? "tap FIRE or USE" : "press fire or use"} to restart the level</small>`);
   else if (!loading) banner("");
-  if (exit && !pendingExit && running) {
+  if (exit && !inter && running) {
     running = false;
     document.exitPointerLock?.();
     const cur = engine.mapName;
     if (exit === 3) { pendingExit = { map: cur, carry: freshPlayer() }; start(cur, freshPlayer()).then(() => { pendingExit = null; }); return; }
     const next = exit === 2 ? SECRET[cur] || NEXT[cur] : NEXT[cur] || (/^MAP(\d\d)$/.test(cur) ? "MAP" + String(+cur.slice(3) + 1).padStart(2, "0") : null);
-    const carry = engine.playerFrom(buf);
-    const secs = Math.floor(wu[W.leveltime] / 35);
-    $("doneTitle").textContent = `${cur} COMPLETE`;
-    $("doneStats").innerHTML = `Kills ${wi[W.killcount]} / ${wi[W.totalkills]}<br>Items ${wi[W.itemcount]} / ${wi[W.totalitems]}<br>Secrets ${wi[W.secretcount]} / ${wi[W.totalsecrets]}<br>Time ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
     const ok = next && engine.maps().includes(next);
-    $("next").textContent = ok ? `Continue to ${next}` : "The end of the episode — play again";
-    pendingExit = { map: ok ? next : engine.maps()[0], carry: ok ? carry : freshPlayer() };
-    $("done").hidden = false;
+    startIntermission({
+      last: cur, next: ok ? next : null, carry: ok ? engine.playerFrom(buf) : freshPlayer(),
+      kills: wi[W.killcount], maxkills: wi[W.totalkills], items: wi[W.itemcount], maxitems: wi[W.totalitems],
+      secret: wi[W.secretcount], maxsecret: wi[W.totalsecrets], time: wu[W.leveltime],
+    });
   }
 }
-$("next").addEventListener("click", async () => {
-  $("done").hidden = true;
-  const p = pendingExit;
-  await start(p.map, p.carry);
-  pendingExit = null;
+
+// ---------------------------------------------------------------- DOOM's intermission (wi_stuff.c)
+// Stats count up on the episode map with pistol ticks and a barrel blast per line, then the
+// "entering" screen marks the next level. Fire, use, enter, a click or a tap skips ahead.
+const PARS = [[30, 75, 120, 90, 165, 180, 180, 30, 165], [90, 90, 90, 120, 90, 360, 240, 30, 170], [90, 45, 90, 150, 90, 90, 165, 30, 135]];
+const CPARS = [30, 90, 120, 120, 90, 150, 120, 120, 270, 90, 210, 150, 150, 150, 210, 150, 420, 150, 210, 150, 240, 150, 180, 150, 150, 300, 330, 420, 300, 180, 120, 30];
+const LNODES = [
+  [[185, 164], [148, 143], [69, 122], [209, 102], [116, 89], [166, 55], [71, 56], [135, 29], [71, 24]],
+  [[254, 25], [97, 50], [188, 64], [128, 78], [214, 92], [133, 130], [208, 136], [148, 140], [235, 158]],
+  [[156, 168], [48, 154], [174, 95], [265, 75], [130, 48], [279, 23], [198, 48], [140, 25], [281, 136]],
+];
+let inter = null, interTimer = 0;
+const levelOf = (name) => { const e = /^E(\d)M(\d)$/.exec(name), m = /^MAP(\d\d)$/.exec(name); return e ? { ep: +e[1] - 1, map: +e[2] - 1 } : m ? { ep: -1, map: +m[1] - 1 } : null; };
+function startIntermission(info) {
+  const L = levelOf(info.last);
+  const pct = (a, b) => Math.floor((a * 100) / Math.max(b, 1));
+  inter = { ...info, L, nextL: info.next && levelOf(info.next), state: 1, pause: 35, bcnt: 0, accel: false,
+    target: { kills: pct(info.kills, info.maxkills), items: pct(info.items, info.maxitems), secret: pct(info.secret, info.maxsecret), time: Math.floor(info.time / 35),
+      par: L && L.ep >= 0 && L.ep < 3 ? PARS[L.ep][L.map] : L && L.ep < 0 ? CPARS[L.map] ?? -1 : -1 },
+    cnt: { kills: -1, items: -1, secret: -1, time: -1, par: -1 } };
+  menu = null; // the menu's skull timer must not draw over the intermission
+  $("menu").hidden = true;
+  dmenu.hidden = false;
+  clearInterval(interTimer);
+  interTimer = setInterval(interTick, 1000 / 35);
+}
+function interAccelerate() { if (inter) { ensureAudio(); inter.accel = true; } }
+function interTick() {
+  const w = inter;
+  if (!w) return;
+  w.bcnt++;
+  const T = w.target, C = w.cnt;
+  if (w.state <= 10) {
+    if (w.accel && w.state !== 10) {
+      w.accel = false;
+      Object.assign(C, T);
+      uiSound("barexp");
+      w.state = 10;
+    } else if (w.state === 10) {
+      if (w.accel) { w.accel = false; uiSound("sgcock"); w.state = 11; w.loc = 140; w.pointer = true; }
+    } else if (w.state & 1) {
+      if (--w.pause <= 0) { w.state++; w.pause = 35; if (w.state === 2) C.kills = 0; if (w.state === 4) C.items = 0; if (w.state === 6) C.secret = 0; if (w.state === 8) { C.time = 0; C.par = 0; } }
+    } else {
+      const key = { 2: "kills", 4: "items", 6: "secret" }[w.state];
+      if (!(w.bcnt & 3)) uiSound("pistol");
+      if (key) {
+        C[key] += 2;
+        if (C[key] >= T[key]) { C[key] = T[key]; uiSound("barexp"); w.state++; }
+      } else {
+        C.time = Math.min(C.time + 3, T.time); C.par = Math.min(C.par + 3, T.par);
+        if (C.time >= T.time && C.par >= T.par) { uiSound("barexp"); w.state++; }
+      }
+    }
+  } else if (w.state === 11) {
+    // the next level's spot blinks for four seconds, or until skipped
+    if (!(w.loc & 31)) w.pointer = !w.pointer;
+    if (--w.loc <= 0 || w.accel || !w.next) { w.accel = false; finishIntermission(); return; }
+  }
+  drawIntermission();
+}
+async function finishIntermission() {
+  const w = inter;
+  clearInterval(interTimer);
+  inter = null;
+  dmenu.hidden = true;
+  if (w.next) { await start(w.next, w.carry); if (!isTouch) canvas.requestPointerLock?.(); }
+  else { engine.map = null; showMenu(); } // end of the episode: back to the menu
+}
+function interNum(x, y, n, digits = -1) {
+  const w = getPatch("WINUM0")?.w ?? 11;
+  if (digits < 0) digits = n === 0 ? 1 : String(n).length;
+  for (let i = 0; i < digits; i++) { x -= w; drawPatchAt("WINUM" + (n % 10), x, y); n = Math.floor(n / 10); }
+  return x;
+}
+function interTime(x, y, t) {
+  if (t < 0) return;
+  if (t > 61 * 59) { const p = getPatch("WISUCKS"); if (p) drawPatchAt("WISUCKS", x - p.w, y); return; }
+  const colon = getPatch("WICOLON")?.w ?? 6;
+  let div = 1;
+  do {
+    const n = Math.floor(t / div) % 60;
+    x = interNum(x, y, n, 2) - colon;
+    div *= 60;
+    if (div === 60 || Math.floor(t / div)) drawPatchAt("WICOLON", x, y);
+  } while (Math.floor(t / div));
+}
+function drawIntermission() {
+  const w = inter;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (dmenu.width !== W || dmenu.height !== H) { dmenu.width = W; dmenu.height = H; }
+  dctx.imageSmoothingEnabled = false;
+  dctx.fillStyle = "#000"; dctx.fillRect(0, 0, W, H);
+  const ep = w.L?.ep ?? -1;
+  drawPatchAt(ep >= 0 && ep < 3 && getPatch(`WIMAP${ep}`) ? `WIMAP${ep}` : "INTERPIC", 0, 0);
+  const levelName = (L) => L ? (L.ep >= 0 ? `WILV${L.ep}${L.map}` : `CWILV${String(L.map).padStart(2, "0")}`) : null;
+  const centred = (name, y) => { const p = getPatch(name); if (p) drawPatchAt(name, (320 - p.w) / 2, y); return p?.h ?? 0; };
+  if (w.state <= 10) {
+    // "E1M1 finished": the level's name patch, then FINISHED, or plain text when the WAD lacks them
+    const h = centred(levelName(w.L), 2) || (drawText(w.last, 160 - drawText(w.last, 0, 0, true) / 2, 2), 10);
+    if (!centred("WIF", 2 + (5 * h) / 4)) drawText("FINISHED", 130, 2 + (5 * h) / 4);
+    const lh = ((getPatch("WINUM0")?.h ?? 12) * 3) / 2;
+    const C = w.cnt;
+    const row = (name, label, y, v) => {
+      if (!drawPatchAt(name, 50, y)) drawText(label, 50, y);
+      if (v >= 0) { drawPatchAt("WIPCNT", 270, y); interNum(270, y, v); }
+    };
+    row("WIOSTK", "KILLS", 50, C.kills);
+    row("WIOSTI", "ITEMS", 50 + lh, C.items);
+    row("WISCRT2", "SECRET", 50 + 2 * lh, C.secret);
+    if (!drawPatchAt("WITIME", 16, 168)) drawText("TIME", 16, 168);
+    interTime(160 - 16, 168, C.time);
+    if (w.target.par >= 0) { if (!drawPatchAt("WIPAR", 160 + 16, 168)) drawText("PAR", 176, 168); interTime(320 - 16, 168, C.par); }
+  } else {
+    // "Entering" the next level, with splats on the levels done and a blinking pointer on the next
+    const h = centred("WIENTER", 2) || (drawText("ENTERING", 130, 2), 10);
+    if (!centred(levelName(w.nextL), 2 + (5 * h) / 4)) drawText(w.next || "", 140, 2 + (5 * h) / 4);
+    if (ep >= 0 && ep < 3 && w.nextL?.ep === ep) {
+      for (let i = 0; i <= w.L.map && i < 9; i++) drawPatchAt("WISPLAT", LNODES[ep][i][0], LNODES[ep][i][1]);
+      if (w.pointer) {
+        const [nx, ny] = LNODES[ep][w.nextL.map];
+        // WIURH0 points one way, WIURH1 the other; use the one that fits on the screen
+        const fits = (name) => { const p = getPatch(name); return p && nx - p.left >= 0 && nx - p.left + p.w < 320 && ny - p.top >= 0 && ny - p.top + p.h < 200; };
+        drawPatchAt(fits("WIURH0") ? "WIURH0" : "WIURH1", nx, ny);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- DOOM's menu
+// Drawn on a 2D canvas from the WAD's own M_ graphics, laid out at DOOM's 320x200 coordinates
+// (m_menu.c) inside a 4:3 box. The options screen is the HTML card.
+const dmenu = $("dmenu"), dctx = dmenu.getContext("2d");
+let menu = null; // { screen, item, epi }
+const patchCache = new Map();
+function getPatch(name) {
+  if (patchCache.has(name)) return patchCache.get(name);
+  const p = engine && decodePatch(engine.wad, name);
+  let out = null;
+  if (p && p.w > 0 && p.h > 0) {
+    const pal = engine.gfx.words, po = engine.gfx.layout.PAL;
+    const img = new ImageData(p.w, p.h);
+    for (let x = 0; x < p.w; x++) for (let y = 0; y < p.h; y++) {
+      const t = p.pix[x * p.h + y];
+      if (!(t & 0x100)) continue;
+      const c = pal[po + (t & 255)], i = 4 * (y * p.w + x);
+      img.data[i] = c & 255; img.data[i + 1] = (c >> 8) & 255; img.data[i + 2] = (c >> 16) & 255; img.data[i + 3] = 255;
+    }
+    const cv = document.createElement("canvas");
+    cv.width = p.w; cv.height = p.h;
+    cv.getContext("2d").putImageData(img, 0, 0);
+    out = { cv, w: p.w, h: p.h, left: p.left, top: p.top };
+  }
+  patchCache.set(name, out);
+  return out;
+}
+const episodes = () => engine ? [1, 2, 3, 4].filter((e) => engine.maps().includes(`E${e}M1`)) : [];
+const commercial = () => engine?.maps().includes("MAP01");
+const MENUS = {
+  main: { x: 97, y: 64, pics: [["M_DOOM", 94, 2]],
+    items: () => [{ patch: "M_NGAME", act: () => go(!commercial() && episodes().length > 1 ? "episode" : "skill", 2) },
+                  { patch: "M_OPTION", act: openOptions },
+                  ...(engine?.map ? [{ text: "RESUME", act: resume }] : [])],
+    back: () => { if (engine?.map) resume(); } },
+  episode: { x: 48, y: 63, pics: [["M_EPISOD", 54, 38]],
+    items: () => episodes().map((e) => ({ patch: `M_EPI${e}`, act: () => { menu.epi = e; go("skill", 2); } })),
+    back: () => go("main") },
+  skill: { x: 48, y: 63, pics: [["M_NEWG", 96, 14], ["M_SKILL", 54, 38]],
+    items: () => ["M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE"].map((p, i) => ({ patch: p, act: () => (i === 4 ? go("nightmare") : newGame(i)) })),
+    back: () => go(!commercial() && episodes().length > 1 ? "episode" : "main") },
+  nightmare: { message: "ARE YOU SURE? THIS SKILL LEVEL\nISN'T EVEN REMOTELY FAIR.\n\nPRESS Y OR N.", x: 120, y: 130,
+    items: () => [{ text: "YES", act: () => newGame(4) }, { text: "NO", act: () => go("skill", 4) }],
+    back: () => go("skill", 4) },
+};
+function go(screen, item = 0) {
+  const epi = menu?.epi ?? episodes()[0] ?? 1;
+  menu = { screen, item, epi };
+  drawMenu();
+}
+function showMenu() {
+  running = false;
+  document.exitPointerLock?.();
+  $("menu").hidden = true;
+  dmenu.hidden = false;
+  go("main");
+}
+function hideMenu() { menu = null; dmenu.hidden = true; $("menu").hidden = true; }
+function openOptions() { dmenu.hidden = true; $("menu").hidden = false; }
+function resume() { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); }
+function ensureAudio() { if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } } audio?.resume?.(); }
+function uiSound(name) { if (engine) playSound({ sfx: name, x: 0, y: 0 }, { x: 0, y: 0, angle: 0 }); }
+
+async function newGame(skillIndex) {
+  ensureAudio();
+  await enableGyro();
+  const map = commercial() ? "MAP01" : `E${menu?.epi ?? 1}M1`;
+  hideMenu();
+  engine.skill = skillIndex + 1;
+  applySize();
+  await start(map, freshPlayer());
+  if (!isTouch) canvas.requestPointerLock?.();
+}
+
+// 320x200 virtual coordinates in a 4:3 box centred in the window
+function menuBox() {
+  const W = dmenu.width, H = dmenu.height;
+  const bw = Math.min(W, H * 4 / 3), bh = bw * 3 / 4;
+  return { x0: (W - bw) / 2, y0: (H - bh) / 2, sx: bw / 320, sy: bh / 200 };
+}
+function drawPatchAt(name, x, y) {
+  const p = getPatch(name), b = menuBox();
+  if (!p) return null;
+  const px = x - p.left, py = y - p.top;
+  dctx.drawImage(p.cv, b.x0 + px * b.sx, b.y0 + py * b.sy, p.w * b.sx, p.h * b.sy);
+  return { x: px, y: py, w: p.w, h: p.h };
+}
+// STCFN font, upper case like DOOM's M_WriteText; returns the width in virtual pixels
+function drawText(str, x, y, measureOnly = false) {
+  let cx = x, cy = y;
+  for (const ch0 of str) {
+    if (ch0 === "\n") { cx = x; cy += 11; continue; }
+    const c = ch0.toUpperCase().charCodeAt(0);
+    const name = "STCFN" + String(c).padStart(3, "0");
+    const p = c > 32 && c < 96 ? getPatch(name) : null;
+    if (!p) { cx += 4; continue; }
+    if (!measureOnly) { const b = menuBox(); dctx.drawImage(p.cv, b.x0 + cx * b.sx, b.y0 + cy * b.sy, p.w * b.sx, p.h * b.sy); }
+    cx += p.w;
+  }
+  return cx - x;
+}
+let skullFrame = 0;
+setInterval(() => { if (menu) { skullFrame ^= 1; drawMenu(); } }, 229); // DOOM flips the skull every 8 tics
+const itemRects = [];
+function drawMenu() {
+  if (!menu) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (dmenu.width !== W || dmenu.height !== H) { dmenu.width = W; dmenu.height = H; }
+  dctx.imageSmoothingEnabled = false;
+  dctx.clearRect(0, 0, W, H);
+  if (engine?.map) { dctx.fillStyle = "rgba(0,0,0,0.55)"; dctx.fillRect(0, 0, W, H); }
+  else {
+    dctx.fillStyle = "#000"; dctx.fillRect(0, 0, W, H);
+    drawPatchAt("TITLEPIC", 0, 0);
+    // the title art is busy behind the menu text; dim it except on the bare main screen's logo area
+    dctx.fillStyle = menu.screen === "main" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.7)";
+    dctx.fillRect(0, 0, W, H);
+  }
+  const m = MENUS[menu.screen];
+  for (const [n, x, y] of m.pics || []) drawPatchAt(n, x, y);
+  if (m.message) drawText(m.message, 160 - drawText(m.message.split("\n")[0], 0, 0, true) / 2, 80);
+  itemRects.length = 0;
+  m.items().forEach((it, i) => {
+    const y = m.message ? m.y : m.y + 16 * i;
+    const x = m.message ? m.x + 60 * i : m.x;
+    let r = null;
+    if (it.patch) r = drawPatchAt(it.patch, x, y);
+    if (!r) { const w = drawText(it.text || it.patch.replace(/^M_/, ""), x, y + 4); r = { x, y, w, h: 16 }; }
+    itemRects.push({ x: x - 8, y: y - 2, w: Math.max(r.w, 40) + 16, h: 16 });
+  });
+  const it = itemRects[menu.item];
+  if (it) {
+    const sx = m.message ? it.x - 16 : m.x - 32;
+    drawPatchAt(skullFrame ? "M_SKULL2" : "M_SKULL1", sx, (m.message ? m.y : m.y + 16 * menu.item) - 5);
+  }
+}
+addEventListener("resize", () => (inter ? drawIntermission() : drawMenu()));
+
+function menuActivate(i) {
+  const items = MENUS[menu.screen].items();
+  if (!items[i]) return;
+  ensureAudio();
+  uiSound("pistol");
+  items[i].act();
+}
+function menuBack() { uiSound("swtchx"); MENUS[menu.screen].back(); }
+// keys while the menu is up; true when the key was the menu's
+function menuKey(e) {
+  if (inter) { if (["Space", "Enter", "KeyE", "ControlLeft", "ControlRight", "KeyF", "Escape"].includes(e.code)) { interAccelerate(); e.preventDefault(); } return true; }
+  if (!$("menu").hidden && e.code === "Escape") { openMenuFromOptions(); return true; }
+  if (!menu || !$("menu").hidden) return false;
+  const n = MENUS[menu.screen].items().length;
+  if (e.code === "ArrowDown") { menu.item = (menu.item + 1) % n; uiSound("pstop"); drawMenu(); }
+  else if (e.code === "ArrowUp") { menu.item = (menu.item + n - 1) % n; uiSound("pstop"); drawMenu(); }
+  else if (e.code === "Enter" || e.code === "Space") menuActivate(menu.item);
+  else if (e.code === "Escape" || e.code === "Backspace") menuBack();
+  else if (menu.screen === "nightmare" && e.code === "KeyY") menuActivate(0);
+  else if (menu.screen === "nightmare" && e.code === "KeyN") menuActivate(1);
+  else return true;
+  e.preventDefault();
+  return true;
+}
+function openMenuFromOptions() { $("menu").hidden = true; dmenu.hidden = false; go("main", 1); }
+function hitItem(ev) {
+  const dpr = dmenu.width / innerWidth, b = menuBox();
+  const vx = (ev.clientX * dpr - b.x0) / b.sx, vy = (ev.clientY * dpr - b.y0) / b.sy;
+  return itemRects.findIndex((r) => vx >= r.x && vx < r.x + r.w && vy >= r.y && vy < r.y + r.h);
+}
+dmenu.addEventListener("pointermove", (ev) => {
+  if (!menu || ev.pointerType === "touch") return;
+  const i = hitItem(ev);
+  if (i >= 0 && i !== menu.item) { menu.item = i; drawMenu(); }
+});
+dmenu.addEventListener("click", (ev) => {
+  if (inter) { interAccelerate(); return; }
+  if (!menu) return;
+  const i = hitItem(ev);
+  if (i >= 0) { menu.item = i; menuActivate(i); }
+  else menuBack(); // a tap outside the items goes back, the touch version of Esc
 });
 
-function showMenu() { $("menu").hidden = false; document.exitPointerLock?.(); }
-function hideMenu() { $("menu").hidden = true; }
-
-$("play").addEventListener("click", async () => {
-  if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
-  audio?.resume?.();
+$("play").addEventListener("click", () => openMenuFromOptions());
+$("warp").addEventListener("click", async () => {
+  ensureAudio();
   await enableGyro();
   applySize();
-  const m = $("map").value;
-  if (engine.map && engine.mapName === m) { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); return; }
-  await start(m);
+  await start($("map").value, freshPlayer());
   if (!isTouch) canvas.requestPointerLock?.();
 });
 $("wadfile").addEventListener("change", async (e) => {
@@ -531,10 +824,13 @@ $("wadfile").addEventListener("change", async (e) => {
     wadBuf = await unpackWad(await f.arrayBuffer());
     await buildEngine();
     engine.map = null;
-    $("play").textContent = "Play";
-    status(f.name + " loaded.");
+    patchCache.clear();
+    status(f.name + " loaded. Back to the menu and New Game to play it.");
   } catch (err) { status("Could not load that WAD: " + err.message); }
 });
+
+// ?debug exposes the intermission to headless tests
+if (location.search.includes("debug")) window.gpuDoomDebug = { startIntermission, interAccelerate, getPatch, state: () => inter && { state: inter.state, pointer: inter.pointer, ep: inter.L, next: inter.nextL } };
 
 (async () => {
   try {
@@ -543,7 +839,8 @@ $("wadfile").addEventListener("change", async (e) => {
     await buildEngine();
     status("");
     $("play").disabled = false;
-    $("play").textContent = "Play";
+    $("play").textContent = "Back to the menu";
+    showMenu();
   } catch (err) {
     status(err.message);
     console.error(err);

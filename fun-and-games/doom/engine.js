@@ -2,9 +2,9 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs } from "./wad.js?v=20261028021823";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028021823";
-import { STATES, SFX } from "./info.js?v=20261028021823";
+import { readWad, buildGfx, buildMap, spawnMobjs, decodePatch } from "./wad.js?v=20261028031646";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028031646";
+import { STATES, SFX } from "./info.js?v=20261028031646";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -21,6 +21,8 @@ export const W = { // World word offsets (see struct World)
 export function freshPlayer() {
   return { health: 100, armor: 0, armortype: 0, weapons: 0b11, readyweapon: 1, ammo: [50, 0, 0, 0], maxammo: [200, 50, 300, 50], backpack: 0 };
 }
+
+export { decodePatch };
 
 export async function unpackWad(bytes) {
   const u8 = new Uint8Array(bytes);

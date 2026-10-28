@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028021823";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028021823";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028031646";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028031646";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -76,6 +76,15 @@ function drawPatch(p, dst, w, h, ox, oy) {
       o += len + 4;
     }
   }
+}
+
+// One patch as palette indices (0x100 set where opaque), for the menu drawn on the CPU.
+export function decodePatch(wad, name) {
+  if (!wad.has(name)) return null;
+  const p = wad.get(name), info = patchInfo(p);
+  const pix = new Uint16Array(info.w * info.h);
+  drawPatch(p, pix, info.w, info.h, 0, 0);
+  return { w: info.w, h: info.h, left: info.left, top: info.top, pix };
 }
 
 export function buildGfx(wad) {
@@ -358,7 +367,7 @@ export function buildMap(wad, gfx, mapName, skill = 3) {
     shareware: !wad.has("E2M1") && !wad.has("MAP01") && !wad.has("E4M1"),
     counts: { verts: nv, lines: nl, sides: nsd, segs: nseg, ssecs: nss, nodes: nn, sectors: nsec },
     bmap: { x: bmx, y: bmy, w: bmw, h: bmh },
-    sectors, lines, sides, things, player, spawnSector, pointInSubsector,
+    sectors, lines, sides, things, player, spawnSector, pointInSubsector, skill,
   };
 }
 
@@ -379,7 +388,7 @@ export function spawnMobjs(map, mobjWords, capacity) {
     f[o + 7] = s.floor; f[o + 8] = s.ceil; f[o + 9] = info[16]; f[o + 10] = info[17];
     u[o + 11] = mt; u[o + 12] = info[1]; i32[o + 13] = STATES[info[1]][2]; u[o + 14] = flags; i32[o + 15] = info[2];
     u[o + 16] = sec; i32[o + 17] = -1; i32[o + 18] = -1; i32[o + 19] = 8; // movedir DI_NODIR
-    i32[o + 21] = info[5]; // reactiontime
+    i32[o + 21] = map.skill >= 5 ? 0 : info[5]; // reactiontime; Nightmare monsters react at once
     u[o + 24] = 1; // in use
     u[o + 26] = 0xffffffff; // no state request
     f[o + 28] = f[o]; f[o + 29] = f[o + 1]; f[o + 30] = f[o + 2]; // previous-tic position

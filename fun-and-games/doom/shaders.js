@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028021823";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028021823";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028031646";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028031646";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -1860,7 +1860,7 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     m.floorz = S[m.sector].floorh; m.ceilingz = S[m.sector].ceilh;
     m.z = z;
     if (z == ONFLOORZ) { m.z = m.floorz; }
-    m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = gi(mi + 5u);
+    m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
     m.req = NOREQ; m.inuse = 1u;
     m.px = m.x; m.py = m.y; m.pz = m.z;
     O[j] = m;
@@ -1893,7 +1893,9 @@ fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
   let ss = info(ty, MI_SEESOUND);
   if (ss != 0) { mobjSound(t, u32(ss)); }
   O[t].targ = i32(src);
-  let speed = f32(info(ty, MI_SPEED));
+  var speed = f32(info(ty, MI_SPEED));
+  // Nightmare: imp, cacodemon and baron fireballs fly at 20
+  if (P.skill == 4 && (ty == MT_BRUISERSHOT || ty == MT_HEADSHOT || ty == MT_TROOPSHOT)) { speed = 20.0; }
   var an = an0;
   if (dst >= 0) {
     an = angleTo(mpos(src), mpos(u32(dst)));
@@ -2399,6 +2401,8 @@ fn setMobjState(mi: u32, st0: u32) -> bool {
     if (st == S_NULL) { O[mi].inuse = 0u; return false; }
     O[mi].state = st;
     O[mi].tics = gi(G_STATES + 8u * st + 2u);
+    // Nightmare: demons run and bite at double speed (DOOM halves these states' tics)
+    if (P.skill == 4 && st >= S_SARG_RUN1 && st <= S_SARG_PAIN2) { O[mi].tics = O[mi].tics >> 1u; }
     O[mi].req = NOREQ;
     let act = G[G_STATES + 8u * st + 3u];
     if (act != 0u) { callAction(mi, act); }
