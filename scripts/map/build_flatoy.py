@@ -10,7 +10,8 @@ Sources (all Kartverket / Geonorge, CC BY 4.0, "Kartdata (c) Kartverket"):
   - Nasjonal hoydemodell DTM (1 m LiDAR grid) via WCS
     (wcs.geonorge.no/skwms1/wcs.hoyde-dtm-nhm-25832): contours.
   - wms.geonorge.no/skwms1/wms.fkb layers `bygning` (building footprints) and
-    `veg` (road areas), rendered by the WMS and vectorised here. FKB-Bygning as
+    `veg` (road areas), rendered by the WMS and vectorised here; for the inset also
+    `vann_omrade` (the sea, so moles and coves show) and `bygnanleggomrade` (quays). FKB-Bygning as
     a download is restricted, and N50 leaves out most houses on Flatoy.
   - api.kartverket.no/stedsnavn (place names, for labels in meta.json).
 
@@ -81,7 +82,7 @@ SHEETS = {
                  cint=10, cidx=50, dtm_px=5, smooth=1.6, ctol=6.0, ltol=3.5, ftol=6.0, fpx=3,
                  min_lake=2500, min_forest=12000, min_hole=8000, min_ct=110, min_road=70, min_bld_px=6,
                  road='n50', bld='dots', stroke=dict(ct=.45, ci=.8, shore=1.1, rd=1.1, rd2=.6, bd=1.8, bd2=2.6)),
-    'inset': dict(file='austegarden-inset.svg', c=FARM, w=1200, h=1200, unit=0.5,
+    'inset': dict(file='austegarden-inset.svg', c=FARM, w=1200, h=1200, unit=0.5, sea='fkb',
                   cint=5, cidx=25, dtm_px=1, smooth=2.5, ctol=1.8, ltol=1.5, ftol=2.5, fpx=1,
                   min_lake=150, min_forest=600, min_hole=300, min_ct=24, min_road=8, min_bld_px=0,
                   road='fkb', bld='plan', stroke=dict(ct=.6, ci=1.0, shore=1.3, rd=1.4, rd2=.9, bd=0, bd2=0, trk=.7)),
@@ -514,6 +515,37 @@ def mask_rings(mask, origin, px, tol, min_outer, min_hole, blur=1.0):
     return out
 
 
+FKB_WATER_RGB = (224, 255, 255)   # wms.fkb vann_omrade fill
+FKB_QUAY_RGB = (130, 130, 130)    # wms.fkb bygnanleggomrade, objtype KaiBrygge (stairs and the rest render lighter)
+
+
+def fkb_sea(cache, bbox, px=0.25):
+    """Sea from FKB (wms.fkb vann_omrade, rendered and vectorised): the water that reaches the sheet's edge.
+    N50's coast is generalised for 1:50 000 and smooths away moles, spits and small coves; FKB keeps them."""
+    # traced with a margin and clipped back, so the sea runs cleanly to the sheet's edge
+    g = 20
+    big = (bbox[0] - g, bbox[1] - g, bbox[2] + g, bbox[3] + g)
+    a = wms_mosaic_rgba(cache, 'wms.fkb', 'vann_omrade', big, px, tile=400)
+    d = np.abs(a[..., :3].astype(int) - np.array(FKB_WATER_RGB)).sum(-1)
+    m = ndi.binary_closing((a[..., 3] > 128) & (d < 24), iterations=1)
+    lab, _ = ndi.label(m)
+    # the closing erodes a pixel or two at the image border, so look for the edge a few pixels in
+    edge = np.setdiff1d(np.unique(np.concatenate([lab[:3].ravel(), lab[-3:].ravel(), lab[:, :3].ravel(), lab[:, -3:].ravel()])), [0])
+    sea = None
+    for r in mask_rings(np.isin(lab, edge), (big[0], big[3]), px, 0.3, 20, 20, blur=0.8):
+        p = Polygon(r).buffer(0)
+        sea = p if sea is None else sea.symmetric_difference(p)
+    return sea.intersection(box(*bbox))
+
+
+def fkb_quays(cache, bbox, px=0.25):
+    """Quays, piers and moles (FKB KaiBrygge, from the wms.fkb bygnanleggomrade render) as polygons."""
+    a = wms_mosaic_rgba(cache, 'wms.fkb', 'bygnanleggomrade', bbox, px, tile=400)
+    d = np.abs(a[..., :3].astype(int) - np.array(FKB_QUAY_RGB)).sum(-1)
+    m = ((a[..., 3] > 128) & (d < 12)).astype(np.uint8) * 255
+    return building_footprints(m, (bbox[0], bbox[3]), px, 4.0)
+
+
 def forest_rings(cache, bbox, s):
     px = s['fpx']
     a = wms_mosaic_rgba(cache, 'wms.topo', 'ar5', bbox, px)
@@ -594,7 +626,8 @@ CSS = ('svg{--w:#2d6477;--wl:#2d6477;--o:#5d6d3b;--ol:#5d6d3b;--c:#666963;--i:#2
        '.tk{stroke:var(--c);stroke-opacity:.8;stroke-width:%(trk)spx;stroke-dasharray:3 2.5}'
        '.bd,.b2{stroke:var(--i);stroke-opacity:var(--bo);stroke-linecap:square}'
        '.bd{stroke-width:%(bd)spx}.b2{stroke-width:%(bd2)spx}'
-       '.bp{fill:var(--i);fill-opacity:var(--bo)}')
+       '.bp{fill:var(--i);fill-opacity:var(--bo)}'
+       '.kq{fill:var(--c);fill-opacity:.45;stroke:var(--i);stroke-opacity:.55;stroke-width:.6px}')
 
 
 def svg_doc(enc, layers, stroke):
@@ -613,8 +646,12 @@ def build_sheet(name, s, data, cache, log):
     bbox = sheet_box(s)
     enc = Enc(bbox, s['unit'])
     bb = box(*bbox)
-    # --- sea / land from N50 Havflate
-    sea = unary_union([p for g, a in data['Havflate'] for p in polys_of(g)]).buffer(0.5).buffer(-0.5)
+    # --- sea / land from N50 Havflate, or FKB where the sheet asks for it (the inset: moles and coves show)
+    fkb = s.get('sea') == 'fkb'
+    if fkb:
+        sea = fkb_sea(cache, bbox)
+    else:
+        sea = unary_union([p for g, a in data['Havflate'] for p in polys_of(g)]).buffer(0.5).buffer(-0.5)
     sea_c = sea.intersection(bb)
     land = bb.difference(sea_c)
     land = unary_union([p for p in polys_of(land) if p.area > 80])
@@ -625,10 +662,13 @@ def build_sheet(name, s, data, cache, log):
     lake_u = unary_union(lake_polys) if lake_polys else None
     # --- forest: AR5 land cover (WMS layer `ar5`, class Skog) vectorised from the render
     fo_rings = forest_rings(cache, bbox, s)
-    # --- shore (N50 Kystkontur clipped to bbox, merged)
-    kk = [l for g, a in data['Kystkontur'] for l in lines_of(g) if l.intersects(bb)]
+    # --- shore (N50 Kystkontur clipped to bbox, merged; with an FKB sea, the sea's own edge)
     from shapely.ops import linemerge
-    shore = linemerge(unary_union(kk).intersection(bb.buffer(-0.01)))
+    if fkb:
+        shore = linemerge(sea_c.boundary.difference(bb.exterior.buffer(0.3)))
+    else:
+        kk = [l for g, a in data['Kystkontur'] for l in lines_of(g) if l.intersects(bb)]
+        shore = linemerge(unary_union(kk).intersection(bb.buffer(-0.01)))
     shore_l = [l.simplify(s['ltol']) for l in lines_of(shore) if l.length > 12 * s['unit']]
     # --- contours
     dbox = snap_dtm_box(bbox, s['dtm_px'], 60)
@@ -703,9 +743,11 @@ def build_sheet(name, s, data, cache, log):
     def strokes(cls, items):
         return [(cls, d, '') for d in enc.chunks(items, cell=cell)]
 
+    quays = fkb_quays(cache, bbox) if fkb else []
     layers = ([('sea', sea_d, ''),
                ('fo', enc.d(fo_rings, close=True), ' fill-rule="evenodd"'),
-               ('lk', enc.d(lk_rings, close=True), ' fill-rule="evenodd"')]
+               ('lk', enc.d(lk_rings, close=True), ' fill-rule="evenodd"'),
+               ('kq', enc.d([p.exterior.coords for p in quays], close=True), '')]
               + strokes('ct', (l.coords for l in ct))
               + strokes('ci', (l.coords for l in ci))
               + strokes('rd', (l.coords for l in roads_major))
@@ -716,7 +758,7 @@ def build_sheet(name, s, data, cache, log):
     svg = svg_doc(enc, layers, s['stroke'])
     log(f'{name}: {len(svg)/1024:.1f} KB raw, {len(gzip.compress(svg.encode(), 9))/1024:.1f} KB gzip; '
         f'contours {len(ct)}+{len(ci)} lines, roads {len(roads_major)}+{len(roads_minor)}, buildings {nb}, '
-        f'forest rings {len(fo_rings)}, lakes {len(lake_polys)}, shore {len(shore_l)}')
+        f'forest rings {len(fo_rings)}, lakes {len(lake_polys)}, shore {len(shore_l)}, quays {len(quays)}')
     return svg, enc
 
 
@@ -824,7 +866,7 @@ def write_meta(path, built, cache):
         crs='EPSG:25832 (ETRS89 / UTM zone 32N), north up',
         sources=['Kartverket N50 Kartdata (coast, sea, lakes, roads), GML via Geonorge download API',
                  'Kartverket Nasjonal høydemodell DTM, 1 m grid via WCS (contours)',
-                 'Kartverket FKB via WMS wms.fkb: layer bygning (footprints / building positions) and veg (inset roads), vectorised from the render',
+                 'Kartverket FKB via WMS wms.fkb: layer bygning (footprints / building positions) and veg (inset roads), and for the inset vann_omrade (sea and shore) and bygnanleggomrade (quays), vectorised from the render',
                  'Kartverket FKB-AR5 land cover via WMS layer ar5 (forest)',
                  'Kartverket Stedsnavn API (labels)'],
         licence='Kartdata © Kartverket, CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)',
