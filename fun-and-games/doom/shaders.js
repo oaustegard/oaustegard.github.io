@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028045119";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028045119";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028045947";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028045947";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -128,7 +128,8 @@ struct World {
   initmobjs: u32,                           // the map's own things are 1..initmobjs-1; later spawns follow
   playerslot: u32,                          // the player's thinker runs before this thing (its THINGS place)
   spawncursor: u32,                         // where spawnMobj looks first, so new things append
-  pad2: array<u32, 5>,
+  mobjtop: u32,                             // one past the highest thing slot ever used: loops stop there
+  pad2: array<u32, 4>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -774,10 +775,12 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
   numspechit = 0u;
   if ((me.flags & MF_NOCLIP) != 0u) { return true; }
   // things (PIT_CheckThing)
-  for (var j = 0u; j < MAXMOBJS; j++) {
-    if (j == mi) { continue; }
+  let jend = mobjEnd();
+  for (var j = 0u; j < jend; j++) {
+    if (j == mi || O[j].inuse == 0u || (O[j].flags & (MF_SOLID | MF_SPECIAL | MF_SHOOTABLE)) == 0u) { continue; }
+    let pre = O[j].radius + r - 1.0 / 4096.0;
+    if (abs(O[j].x - pos.x) >= pre || abs(O[j].y - pos.y) >= pre) { continue; }
     let th = O[j];
-    if (th.inuse == 0u || (th.flags & (MF_SOLID | MF_SPECIAL | MF_SHOOTABLE)) == 0u) { continue; }
     // a whisker of tolerance: DOOM's positions are exact in fixed point, so two things exactly
     // radius apart (common, monsters step in exact multiples) don't touch there; floats can miss it
     let bd = th.radius + r - 1.0 / 4096.0;
@@ -1122,7 +1125,7 @@ fn touchesSector(mi: u32, sec: u32) -> bool {
 }
 fn changeSector(sec: u32, crush: bool) -> bool {
   var nofit = false;
-  for (var j = 0u; j < MAXMOBJS; j++) {
+  for (var j = 0u; j < mobjEnd(); j++) {
     if (O[j].inuse == 0u || (O[j].flags & MF_NOBLOCKMAP) != 0u) { continue; }
     if (!touchesSector(j, sec)) { continue; }
     let onfloor = O[j].z <= O[j].floorz;
@@ -1620,21 +1623,21 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
   if (side == 1u) { return false; }
   for (var sec = 0u; sec < NUMSECTORS; sec++) {
     if (!tagged(l, sec)) { continue; }
-    for (var j = 0u; j < MAXMOBJS; j++) {
+    for (var j = 0u; j < mobjEnd(); j++) {
       if (O[j].inuse == 0u || O[j].mtype != MT_TELEPORTMAN || O[j].sector != sec) { continue; }
       let old = vec2f(O[mi].x, O[mi].y); let oldz = O[mi].z;
       // P_TeleportMove: walls do not matter; things on the spot are stomped, by the player only
       // (and by monsters on MAP30)
       let dest = vec2f(O[j].x, O[j].y);
       let stomp = mi == 0u || (COMMERCIAL && GAMEMAP == 30);
-      for (var k = 0u; k < MAXMOBJS; k++) {
+      for (var k = 0u; k < mobjEnd(); k++) {
         if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SHOOTABLE) == 0u) { continue; }
         let bd = O[k].radius + O[mi].radius;
         if (abs(O[k].x - dest.x) >= bd || abs(O[k].y - dest.y) >= bd) { continue; }
         if (!stomp) { return false; }
       }
       if (stomp) {
-        for (var k = 0u; k < MAXMOBJS; k++) {
+        for (var k = 0u; k < mobjEnd(); k++) {
           if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SHOOTABLE) == 0u) { continue; }
           let bd = O[k].radius + O[mi].radius;
           if (abs(O[k].x - dest.x) >= bd || abs(O[k].y - dest.y) >= bd) { continue; }
@@ -1922,6 +1925,8 @@ fn fineSin(i: u32) -> f32 { return sin((f32(i & 8191u) + 0.5) * TAU / 8192.0); }
 fn fineCos(i: u32) -> f32 { return fineSin(i + 2048u); }
 fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
 fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
+// loops over things stop at the highest slot in use (a save from before this was kept has 0)
+fn mobjEnd() -> u32 { return select(min(P.mobjtop, MAXMOBJS), MAXMOBJS, P.mobjtop == 0u); }
 fn mpos(i: u32) -> vec2f { return vec2f(O[i].x, O[i].y); }
 
 // ---- sight (P_CheckSight): REJECT, then DOOM's walk of the BSP from eye to target (p_sight.c).
@@ -2033,6 +2038,7 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     let j = 1u + (max(P.spawncursor, 1u) - 1u + probe - 1u) % (MAXMOBJS - 1u);
     if (O[j].inuse != 0u) { continue; }
     P.spawncursor = j + 1u;
+    P.mobjtop = max(P.mobjtop, j + 1u);
     let mi = G_MOBJINFO + 24u * ty;
     var m: Mobj;
     m.x = x; m.y = y; m.angle = 0.0;
@@ -2164,7 +2170,7 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
 }
 
 fn radiusAttack(spot: u32, source: i32, damage: i32) {
-  for (var j = 0u; j < MAXMOBJS; j++) {
+  for (var j = 0u; j < mobjEnd(); j++) {
     if (O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
     if (O[j].mtype == MT_CYBORG || O[j].mtype == MT_SPIDER) { continue; }
     let d = abs(mpos(j) - mpos(spot));
@@ -2200,7 +2206,7 @@ fn trace(mi: u32, angle: f32, range: f32, mode: u32, slope0: f32, damage: i32) -
     while (k > 0u && fr[k - 1u] > t) { fr[k] = fr[k - 1u]; ids[k] = ids[k - 1u]; k -= 1u; }
     fr[k] = t; ids[k] = l; n = min(n + 1u, 64u);
   }
-  for (var j = 0u; j < MAXMOBJS; j++) {
+  for (var j = 0u; j < mobjEnd(); j++) {
     if (j == mi || O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
     let r = O[j].radius;
     let c = mpos(j);
@@ -2481,7 +2487,7 @@ fn bossDeath(mi: u32) {
     }
   }
   if (!ok || P.health <= 0) { return; }
-  for (var j = 1u; j < MAXMOBJS; j++) {
+  for (var j = 1u; j < mobjEnd(); j++) {
     if (j != mi && O[j].inuse != 0u && O[j].mtype == ty && O[j].health > 0) { return; }
   }
   if (COMMERCIAL) {
@@ -3038,7 +3044,8 @@ fn viewSetup() {
 // movement among them), then the light thinkers P_SpawnSpecials made, then everything spawned since.
 fn ticMobjs() {
   if (P.exit != 0u) { return; }
-  for (var i = 1u; i < MAXMOBJS; i++) {
+  let iend = max(mobjEnd(), P.initmobjs + 1u);
+  for (var i = 1u; i < iend; i++) {
     if (i == P.playerslot) { playerMobjThink(); }
     if (i == P.initmobjs) { for (var s = 0u; s < NUMSECTORS; s++) { lightThink(s); } }
     if (O[i].inuse != 0u) { mobjThink(i); }

@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028045119";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028045119";
-import { STATES, SFX } from "./info.js?v=20261028045119";
-import { MSG } from "./specials.js?v=20261028045119";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028045947";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028045947";
+import { STATES, SFX } from "./info.js?v=20261028045947";
+import { MSG } from "./specials.js?v=20261028045947";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -16,7 +16,7 @@ export const W = { // World word offsets (see struct World)
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
-  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311, initmobjs: 312, playerslot: 313, spawncursor: 314,
+  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311, initmobjs: 312, playerslot: 313, spawncursor: 314, mobjtop: 315,
 };
 
 export function freshPlayer() {
@@ -191,7 +191,7 @@ export class Engine {
     wu[W.rng] = rng;
     // the thinker order: map things, the player's place among them, then later spawns
     this.order = { initmobjs: mobjs.count, playerslot: mobjs.playerSlot };
-    wu[W.initmobjs] = mobjs.count; wu[W.playerslot] = mobjs.playerSlot; wu[W.spawncursor] = mobjs.count;
+    wu[W.initmobjs] = mobjs.count; wu[W.playerslot] = mobjs.playerSlot; wu[W.spawncursor] = mobjs.count; wu[W.mobjtop] = mobjs.count;
     wu[W.lastframe] = 0xffffffff;
     wi[W.health] = player.health; wi[W.armor] = player.armor; wi[W.armortype] = player.armortype;
     wu[W.weapons] = player.weapons; wi[W.readyweapon] = player.readyweapon; wi[W.pendingweapon] = -1; wu[W.backpack] = player.backpack;
