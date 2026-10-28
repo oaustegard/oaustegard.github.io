@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028161355";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028161355";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028170147";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028170147";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -804,14 +804,9 @@ fn checkPosition(mi: u32, pos: vec2i) -> bool {
     let bd = fixedOf(O[j].radius) + ri;
     if (abs(O[j].x - pos.x) >= bd || abs(O[j].y - pos.y) >= bd) { continue; }
     let th = O[j];
-    if ((me.flags & MF_SKULLFLY) != 0u) {
-      damageMobj(j, i32(mi), i32(mi), (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
-      O[mi].flags &= ~MF_SKULLFLY;
-      O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
-      O[mi].req = u32(info(me.mtype, MI_SPAWNSTATE));
-      return false;
-    }
-    if ((me.flags & MF_MISSILE) != 0u) {
+    // a lost soul's slam and a missile's hit share one damageMobj call site (every call is inlined)
+    let skull = (me.flags & MF_SKULLFLY) != 0u;
+    if (!skull && (me.flags & MF_MISSILE) != 0u) {
       if (me.z > th.z + th.height || me.z + me.height < th.z) { continue; }
       if (me.targ >= 0) {
         let st = O[me.targ].mtype;
@@ -824,7 +819,14 @@ fn checkPosition(mi: u32, pos: vec2i) -> bool {
         if ((th.flags & MF_SOLID) != 0u) { return false; }
         continue;
       }
-      damageMobj(j, i32(mi), me.targ, (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
+    }
+    if (skull || (me.flags & MF_MISSILE) != 0u) {
+      damageMobj(j, i32(mi), select(me.targ, i32(mi), skull), (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
+      if (skull) {
+        O[mi].flags &= ~MF_SKULLFLY;
+        O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
+        O[mi].req = u32(info(me.mtype, MI_SPAWNSTATE));
+      }
       return false;
     }
     if ((th.flags & MF_SPECIAL) != 0u) {
@@ -981,17 +983,26 @@ fn hitSlideLine(l: u32, mv: vec2f) -> vec2f {
   return vec2f(f32(fxMul(nl, fineCosFx(lf))), f32(fxMul(nl, fineSinFx(lf)))) / 65536.0;
 }
 
-// The player's P_XYMovement with P_SlideMove, as a state machine around one tryMove call site
-// (the shader compiler inlines every call). States: 0 step, 1 find the wall (P_SlideMove's retry),
-// 2 moved up to the wall?, 3 slide the remainder, 4 slid?, 5 stairstep y, 6 stairstep x, 7 next step.
-fn playerXY(hasCmd: bool) {
-  O[0].momx = clamp(O[0].momx, -MAXMOVE, MAXMOVE); O[0].momy = clamp(O[0].momy, -MAXMOVE, MAXMOVE);
-  if (O[0].momx == 0.0 && O[0].momy == 0.0) { return; }
-  var xmove = fixedOf(O[0].momx); var ymove = fixedOf(O[0].momy);
+// P_XYMovement for the player and every other thing, as a state machine around one tryMove call site
+// (the shader compiler inlines every call). A thing's blocked step ends its move; the player's goes
+// on into P_SlideMove. States: 0 step, 1 find the wall (P_SlideMove's retry), 2 moved up to the wall?,
+// 3 slide the remainder, 4 slid?, 5 stairstep y, 6 stairstep x, 7 next step.
+fn xyMovement(mi: u32, isPlayer: bool, hasCmd: bool) {
+  var m0 = vec2f(O[mi].momx, O[mi].momy);
+  if (m0.x == 0.0 && m0.y == 0.0) {
+    if (!isPlayer && (O[mi].flags & MF_SKULLFLY) != 0u) {
+      O[mi].flags &= ~MF_SKULLFLY; O[mi].momz = 0.0;
+      O[mi].req = u32(info(O[mi].mtype, MI_SPAWNSTATE));
+    }
+    return;
+  }
+  m0 = clamp(m0, vec2f(-MAXMOVE), vec2f(MAXMOVE));
+  O[mi].momx = m0.x; O[mi].momy = m0.y;
+  var xmove = fixedOf(m0.x); var ymove = fixedOf(m0.y);
   var st = 0u; var hit = 0;
   for (var guard = 0; guard < 48; guard++) {
-    let pos = ipos(0u);
-    let mom = fxv(vec2f(O[0].momx, O[0].momy));
+    let pos = ipos(mi);
+    let mom = fxv(vec2f(O[mi].momx, O[mi].momy));
     var tgt = pos; var tryNow = false;
     if (st == 7u) {
       if (xmove == 0 && ymove == 0) { break; }
@@ -1007,7 +1018,7 @@ fn playerXY(hasCmd: bool) {
       hit += 1;
       if (hit == 3) { st = 5u; }
       else {
-        let r = fixedOf(O[0].radius);
+        let r = fixedOf(O[mi].radius);
         let lead = pos + vec2i(select(-r, r, mom.x > 0), select(-r, r, mom.y > 0));
         let trail = pos - vec2i(select(-r, r, mom.x > 0), select(-r, r, mom.y > 0));
         bestslidefrac = 65537; bestslideline = -1;
@@ -1027,24 +1038,42 @@ fn playerXY(hasCmd: bool) {
       if (rem <= 0) { st = 7u; }
       else {
         let tm = hitSlideLine(u32(bestslideline), vec2f(f32(fxMul(mom.x, rem)), f32(fxMul(mom.y, rem))) / 65536.0);
-        O[0].momx = tm.x; O[0].momy = tm.y;
+        O[mi].momx = tm.x; O[mi].momy = tm.y;
         tgt = pos + fxv(tm); tryNow = true; st = 4u;
       }
     }
     if (st == 5u && !tryNow) { tgt = vec2i(pos.x, pos.y + mom.y); tryNow = true; }
     else if (st == 6u && !tryNow) { tgt = vec2i(pos.x + mom.x, pos.y); tryNow = true; }
     if (!tryNow) { continue; }
-    let ok = tryMove(0u, tgt);
-    if (st == 0u) { if (ok) { st = 7u; } else { hit = 0; st = 1u; } }
+    let ok = tryMove(mi, tgt);
+    if (st == 0u) {
+      if (ok) { st = 7u; }
+      else if (isPlayer) { hit = 0; st = 1u; }
+      else {
+        if ((O[mi].flags & MF_MISSILE) != 0u) {
+          // hitting a sky wall makes the missile vanish instead of exploding
+          if (tmceilline >= 0) {
+            let bk = lineBack(u32(tmceilline));
+            if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { removeMobj(mi); return; }
+          }
+          explodeMissile(mi);
+        } else {
+          O[mi].momx = 0.0; O[mi].momy = 0.0;
+        }
+        break;
+      }
+    }
     else if (st == 2u) { st = select(5u, 3u, ok); }
     else if (st == 4u) { st = select(1u, 7u, ok); }
     else if (st == 5u) { st = select(6u, 7u, ok); }
     else if (st == 6u) { st = 7u; }
   }
-  if (O[0].z > O[0].floorz || corpseSlides(0u)) { return; }
-  let m2 = vec2f(O[0].momx, O[0].momy);
-  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && !hasCmd) { O[0].momx = 0.0; O[0].momy = 0.0; }
-  else { O[0].momx = friction(m2.x); O[0].momy = friction(m2.y); }
+  if (!isPlayer && (O[mi].flags & (MF_MISSILE | MF_SKULLFLY)) != 0u) { return; }
+  if (O[mi].z > O[mi].floorz || corpseSlides(mi)) { return; }
+  let m2 = vec2f(O[mi].momx, O[mi].momy);
+  // the player keeps sliding while a move is held
+  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && !(isPlayer && hasCmd)) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
+  else { O[mi].momx = friction(m2.x); O[mi].momy = friction(m2.y); }
 }
 
 // a corpse with some momentum keeps sliding while it hangs half off a step
@@ -1060,46 +1089,6 @@ fn explodeMissile(mi: u32) {
   O[mi].flags &= ~MF_MISSILE;
   let s = info(O[mi].mtype, MI_DEATHSOUND);
   if (s != 0) { mobjSound(mi, u32(s)); }
-}
-
-// P_XYMovement for everything but the player.
-fn thingXY(mi: u32) {
-  var mom = vec2f(O[mi].momx, O[mi].momy);
-  if (mom.x == 0.0 && mom.y == 0.0) {
-    if ((O[mi].flags & MF_SKULLFLY) != 0u) {
-      O[mi].flags &= ~MF_SKULLFLY; O[mi].momz = 0.0;
-      O[mi].req = u32(info(O[mi].mtype, MI_SPAWNSTATE));
-    }
-    return;
-  }
-  mom = clamp(mom, vec2f(-MAXMOVE), vec2f(MAXMOVE));
-  O[mi].momx = mom.x; O[mi].momy = mom.y;
-  var xmove = fixedOf(mom.x); var ymove = fixedOf(mom.y);
-  for (var guard = 0; guard < 8; guard++) {
-    // as for the player: only a positive move is halved
-    var step = vec2i(xmove, ymove);
-    if (xmove > HALFMOVE || ymove > HALFMOVE) { step = vec2i(xmove / 2, ymove / 2); xmove >>= 1u; ymove >>= 1u; }
-    else { xmove = 0; ymove = 0; }
-    if (!tryMove(mi, ipos(mi) + step)) {
-      if ((O[mi].flags & MF_MISSILE) != 0u) {
-        // hitting a sky wall makes the missile vanish instead of exploding
-        if (tmceilline >= 0) {
-          let bk = lineBack(u32(tmceilline));
-          if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { removeMobj(mi); return; }
-        }
-        explodeMissile(mi);
-      } else {
-        O[mi].momx = 0.0; O[mi].momy = 0.0;
-      }
-      break;
-    }
-    if (xmove == 0 && ymove == 0) { break; }
-  }
-  if ((O[mi].flags & (MF_MISSILE | MF_SKULLFLY)) != 0u) { return; }
-  if (O[mi].z > O[mi].floorz || corpseSlides(mi)) { return; }
-  let m2 = vec2f(O[mi].momx, O[mi].momy);
-  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
-  else { O[mi].momx = friction(m2.x); O[mi].momy = friction(m2.y); }
 }
 
 fn zMovement(mi: u32, isPlayer: bool) {
@@ -1197,58 +1186,54 @@ fn changeSector(sec: u32, crush: bool) -> bool {
   return nofit;
 }
 
-// T_MovePlane: 0 ok, 1 crushed, 2 pastdest
+// T_MovePlane: 0 ok, 1 crushed, 2 pastdest. The shader compiler inlines every call, so P_ChangeSector
+// has one call site here: the move, then a second pass when DOOM puts the plane back where it was.
 fn movePlane(sec: u32, speed: f32, dest: f32, crush: bool, ceiling: bool, dir: i32) -> i32 {
-  if (!ceiling) {
-    let last = S[sec].floorh;
-    if (dir < 0) {
-      if (last - speed < dest) {
-        S[sec].floorh = dest;
-        if (changeSector(sec, crush)) { S[sec].floorh = last; _ = changeSector(sec, crush); }
-        return 2;
-      }
-      S[sec].floorh = last - speed;
-      if (changeSector(sec, crush)) { S[sec].floorh = last; _ = changeSector(sec, crush); return 1; }
-    } else {
-      if (last + speed > dest) {
-        S[sec].floorh = dest;
-        if (changeSector(sec, crush)) { S[sec].floorh = last; _ = changeSector(sec, crush); }
-        return 2;
-      }
-      S[sec].floorh = last + speed;
-      if (changeSector(sec, crush)) {
-        if (crush) { return 1; }
-        S[sec].floorh = last; _ = changeSector(sec, crush); return 1;
-      }
+  let last = select(S[sec].floorh, S[sec].ceilh, ceiling);
+  let next = select(last + speed, last - speed, dir < 0);
+  let pastdest = select(next > dest, next < dest, dir < 0);
+  var h = select(next, dest, pastdest);
+  var res = select(0, 2, pastdest);
+  let closing = ceiling == (dir < 0); // a floor going up or a ceiling coming down
+  for (var round = 0u; round < 2u; round++) {
+    if (ceiling) { S[sec].ceilh = h; } else { S[sec].floorh = h; }
+    if (!changeSector(sec, crush) || round == 1u) { break; }
+    if (!pastdest) {
+      if (ceiling && dir > 0) { break; } // a rising ceiling ignores what doesn't fit
+      res = 1;
+      if (closing && crush) { break; } // a crusher stays put and keeps crushing
     }
-    return 0;
+    h = last;
   }
-  let last = S[sec].ceilh;
-  if (dir < 0) {
-    if (last - speed < dest) {
-      S[sec].ceilh = dest;
-      if (changeSector(sec, crush)) { S[sec].ceilh = last; _ = changeSector(sec, crush); }
-      return 2;
+  return res;
+}
+
+// What a mover's T_ thinker would pass to T_MovePlane this tic, so ticWorld has one movePlane call site
+struct MovePlan { moves: bool, dest: f32, crush: bool, ceiling: bool, dir: i32 }
+fn moverPlan(sec: u32) -> MovePlan {
+  let s = S[sec];
+  let crush = s.mcrush != 0u;
+  switch (s.mtype) {
+    case 1u: { // door
+      if (s.mdir == -1) { return MovePlan(true, s.floorh, false, true, -1); }
+      if (s.mdir == 1) { return MovePlan(true, s.mtop, false, true, 1); }
     }
-    S[sec].ceilh = last - speed;
-    if (changeSector(sec, crush)) {
-      if (crush) { return 1; }
-      S[sec].ceilh = last; _ = changeSector(sec, crush); return 1;
+    case 2u: { return MovePlan(true, s.mbottom, crush, false, s.mdir); } // floor
+    case 3u: { // plat
+      if (s.mstatus == 0) { return MovePlan(true, s.mtop, crush, false, 1); }
+      if (s.mstatus == 1) { return MovePlan(true, s.mbottom, false, false, -1); }
     }
-  } else {
-    if (last + speed > dest) {
-      S[sec].ceilh = dest;
-      if (changeSector(sec, crush)) { S[sec].ceilh = last; _ = changeSector(sec, crush); }
-      return 2;
+    case 4u: { // ceiling
+      if (s.mdir == 1) { return MovePlan(true, s.mtop, false, true, 1); }
+      if (s.mdir == -1) { return MovePlan(true, s.mbottom, crush, true, -1); }
     }
-    S[sec].ceilh = last + speed;
-    _ = changeSector(sec, crush);
+    default: {}
   }
-  return 0;
+  return MovePlan(false, 0.0, false, false, 0);
 }
 
 // ---- movers (mtype: 1 door, 2 floor, 3 plat, 4 ceiling)
-fn doorThink(sec: u32) {
+fn doorThink(sec: u32, res: i32) {
   let ty = S[sec].msub;
   switch (S[sec].mdir) {
     case 0: {
@@ -1264,7 +1249,6 @@ fn doorThink(sec: u32) {
       if (S[sec].mcount <= 0 && ty == DOOR_raiseIn5Mins) { S[sec].mdir = 1; S[sec].msub = DOOR_normal; sectorSound(sec, SFX_doropn); }
     }
     case -1: {
-      let res = movePlane(sec, S[sec].mspeed, S[sec].floorh, false, true, -1);
       if (res == 2) {
         if (ty == DOOR_blazeRaise || ty == DOOR_blazeClose) { S[sec].mtype = 0u; sectorSound(sec, SFX_bdcls); }
         else if (ty == DOOR_normal || ty == DOOR_close) { S[sec].mtype = 0u; }
@@ -1274,7 +1258,6 @@ fn doorThink(sec: u32) {
       }
     }
     case 1: {
-      let res = movePlane(sec, S[sec].mspeed, S[sec].mtop, false, true, 1);
       if (res == 2) {
         if (ty == DOOR_blazeRaise || ty == DOOR_normal) { S[sec].mdir = 0; S[sec].mcount = S[sec].mwait; }
         else { S[sec].mtype = 0u; }
@@ -1284,8 +1267,7 @@ fn doorThink(sec: u32) {
   }
 }
 
-fn floorThink(sec: u32) {
-  let res = movePlane(sec, S[sec].mspeed, S[sec].mbottom, S[sec].mcrush != 0u, false, S[sec].mdir);
+fn floorThink(sec: u32, res: i32) {
   if ((P.leveltime & 7u) == 0u) { sectorSound(sec, SFX_stnmov); }
   if (res == 2) {
     let ty = S[sec].msub;
@@ -1296,11 +1278,10 @@ fn floorThink(sec: u32) {
   }
 }
 
-fn platThink(sec: u32) {
+fn platThink(sec: u32, res: i32) {
   let ty = S[sec].msub;
   switch (S[sec].mstatus) {
     case 0: { // up
-      let res = movePlane(sec, S[sec].mspeed, S[sec].mtop, S[sec].mcrush != 0u, false, 1);
       if ((ty == PLAT_raiseAndChange24 || ty == PLAT_raiseAndChange32 || ty == PLAT_raiseToNearestAndChange) && (P.leveltime & 7u) == 0u) { sectorSound(sec, SFX_stnmov); }
       if (res == 1 && S[sec].mcrush == 0u) { S[sec].mcount = S[sec].mwait; S[sec].mstatus = 1; sectorSound(sec, SFX_pstart); }
       else if (res == 2) {
@@ -1309,7 +1290,6 @@ fn platThink(sec: u32) {
       }
     }
     case 1: { // down
-      let res = movePlane(sec, S[sec].mspeed, S[sec].mbottom, false, false, -1);
       if (res == 2) { S[sec].mcount = S[sec].mwait; S[sec].mstatus = 2; sectorSound(sec, SFX_pstop); }
     }
     case 2: { // waiting
@@ -1323,10 +1303,9 @@ fn platThink(sec: u32) {
   }
 }
 
-fn ceilingThink(sec: u32) {
+fn ceilingThink(sec: u32, res: i32) {
   let ty = S[sec].msub;
   if (S[sec].mdir == 1) {
-    let res = movePlane(sec, S[sec].mspeed, S[sec].mtop, false, true, 1);
     if ((P.leveltime & 7u) == 0u && ty != CEIL_silentCrushAndRaise) { sectorSound(sec, SFX_stnmov); }
     if (res == 2) {
       if (ty == CEIL_raiseToHighest) { S[sec].mtype = 0u; }
@@ -1334,7 +1313,6 @@ fn ceilingThink(sec: u32) {
       else if (ty == CEIL_fastCrushAndRaise || ty == CEIL_crushAndRaise) { S[sec].mdir = -1; }
     }
   } else if (S[sec].mdir == -1) {
-    let res = movePlane(sec, S[sec].mspeed, S[sec].mbottom, S[sec].mcrush != 0u, true, -1);
     if ((P.leveltime & 7u) == 0u && ty != CEIL_silentCrushAndRaise) { sectorSound(sec, SFX_stnmov); }
     if (res == 2) {
       if (ty == CEIL_silentCrushAndRaise) { sectorSound(sec, SFX_pstop); S[sec].mspeed = 1.0; S[sec].mdir = 1; }
@@ -1705,11 +1683,13 @@ fn runAction(l: u32, mi: u32, side: u32, spec: u32) -> bool {
   let ac = (spec >> 8u) & 0xffu;
   let arg = i32((spec >> 16u) & 0xfffu);
   let key = spec >> 28u;
+  // doors, floors and ceilings each have one call site below (every call is inlined)
+  var door = -1; var floor = -1; var ceil = -1;
   switch (ac) {
-    case 1u: { return evDoDoor(l, arg); }
-    case 2u: { return evDoFloor(l, arg); }
+    case 1u: { door = arg; }
+    case 2u: { floor = arg; }
     case 3u: { return evDoPlat(l, arg); }
-    case 4u: { return evDoCeiling(l, arg); }
+    case 4u: { ceil = arg; }
     case 5u: { return evBuildStairs(l, arg == 1); }
     case 6u: { evLightTurnOn(l, arg); return true; }
     case 7u: { evStrobe(l); return true; }
@@ -1723,12 +1703,17 @@ fn runAction(l: u32, mi: u32, side: u32, spec: u32) -> bool {
     case 15u: {
       if (mi != 0u) { return false; }
       if (!hasKey(key)) { setMessage(${msgId("YOU NEED A BLUE KEY TO ACTIVATE THIS OBJECT")} + i32(key) - 1); mobjSound(0u, SFX_oof); return false; }
-      return evDoDoor(l, arg);
+      door = arg;
     }
-    case 16u: { let a = evDoCeiling(l, CEIL_raiseToHighest); let b = evDoFloor(l, FLOOR_lowerFloorToLowest); return a || b; }
+    case 16u: { ceil = CEIL_raiseToHighest; floor = FLOOR_lowerFloorToLowest; }
     case 17u: { return evDonut(l); }
     default: { return false; }
   }
+  var did = false;
+  if (ceil >= 0) { did = evDoCeiling(l, ceil); }
+  if (floor >= 0) { let b = evDoFloor(l, floor); did = did || b; }
+  if (door >= 0) { did = evDoDoor(l, door); }
+  return did;
 }
 
 fn changeSwitchTexture(l: u32, useAgain: bool) {
@@ -1765,11 +1750,11 @@ fn useSpecialLine(l: u32, side: u32, mi: u32) -> bool {
     if ((lineFlags(l) & ML_SECRET) != 0u) { return false; }
     if (((spec >> 4u) & 1u) == 0u) { return false; }
   }
-  if (tr == TR_D) { return runAction(l, mi, side, spec); }
-  if (tr != TR_S) { return false; }
+  if (tr != TR_D && tr != TR_S) { return false; }
+  let did = runAction(l, mi, side, spec); // one call site for both kinds: every call is inlined
+  if (tr == TR_D) { return did; }
   let rep = ((spec >> 3u) & 1u) != 0u;
   let ac = (spec >> 8u) & 0xffu;
-  let did = runAction(l, mi, side, spec);
   if (did || ac == AC_EXIT || ac == AC_SECRETEXIT || ac == AC_LIGHT) {
     changeSwitchTexture(l, rep);
   }
@@ -2583,47 +2568,63 @@ fn pMove(mi: u32) -> bool {
 // P_NewChaseDir: the candidate directions in DOOM's order, walked with one P_TryWalk call site.
 // The random numbers are drawn where vanilla draws them: the first only once the direct diagonal
 // has failed, the second only when it falls back to searching every direction.
-fn newChaseDir(mi: u32) {
-  let t = O[mi].targ;
-  if (t < 0) { return; }
-  let olddir = O[mi].movedir;
-  let turnaround = select(8, (olddir + 4) % 8, olddir < 8);
-  let delta = mpos(u32(t)) - mpos(mi);
-  var d1 = 8; var d2 = 8;
-  if (delta.x > 10.0) { d1 = 0; } else if (delta.x < -10.0) { d1 = 4; }
-  if (delta.y < -10.0) { d2 = 6; } else if (delta.y > 10.0) { d2 = 2; }
+// With tryMovedir, A_Chase's own P_Move in the current direction goes first through the same call
+// site (the shader compiler inlines every call), and the search runs only if that step fails.
+fn newChaseDir(mi: u32, tryMovedir: bool) {
+  var trying = tryMovedir;
+  var started = false;
+  var olddir = 8; var turnaround = 8; var delta = vec2f(0.0); var d1 = 8; var d2 = 8;
   var cands: array<i32, 16>; var nc = 0; var pos = 0; var phase = 0u;
-  if (d1 != 8 && d2 != 8) {
-    var diags = array<i32, 4>(3, 1, 5, 7);
-    let dg = diags[select(0, 2, delta.y < 0.0) + select(0, 1, delta.x > 0.0)];
-    if (dg != turnaround) { cands[0] = dg; nc = 1; }
-  }
-  for (var guard = 0; guard < 24; guard++) {
-    if (pos >= nc) {
-      if (phase == 0u) {
-        phase = 1u;
-        if (P_Random() > 200 || abs(delta.y) > abs(delta.x)) { let tmp = d1; d1 = d2; d2 = tmp; }
-        if (d1 == turnaround) { d1 = 8; }
-        if (d2 == turnaround) { d2 = 8; }
-        if (d1 != 8) { cands[nc] = d1; nc += 1; }
-        if (d2 != 8) { cands[nc] = d2; nc += 1; }
-        if (olddir != 8) { cands[nc] = olddir; nc += 1; }
-        continue;
-      }
-      if (phase == 1u) {
-        phase = 2u;
-        let fwd = (P_Random() & 1) != 0;
-        for (var i = 0; i < 8; i++) {
-          let td = select(7 - i, i, fwd);
-          if (td != turnaround) { cands[nc] = td; nc += 1; }
+  for (var guard = 0; guard < 25; guard++) {
+    if (!trying) {
+      if (!started) {
+        // set up after the first step failed, which may have changed movedir
+        started = true;
+        let t = O[mi].targ;
+        if (t < 0) { return; }
+        olddir = O[mi].movedir;
+        turnaround = select(8, (olddir + 4) % 8, olddir < 8);
+        delta = mpos(u32(t)) - mpos(mi);
+        if (delta.x > 10.0) { d1 = 0; } else if (delta.x < -10.0) { d1 = 4; }
+        if (delta.y < -10.0) { d2 = 6; } else if (delta.y > 10.0) { d2 = 2; }
+        if (d1 != 8 && d2 != 8) {
+          var diags = array<i32, 4>(3, 1, 5, 7);
+          let dg = diags[select(0, 2, delta.y < 0.0) + select(0, 1, delta.x > 0.0)];
+          if (dg != turnaround) { cands[0] = dg; nc = 1; }
         }
-        if (turnaround != 8) { cands[nc] = turnaround; nc += 1; }
-        continue;
       }
-      break;
+      if (pos >= nc) {
+        if (phase == 0u) {
+          phase = 1u;
+          if (P_Random() > 200 || abs(delta.y) > abs(delta.x)) { let tmp = d1; d1 = d2; d2 = tmp; }
+          if (d1 == turnaround) { d1 = 8; }
+          if (d2 == turnaround) { d2 = 8; }
+          if (d1 != 8) { cands[nc] = d1; nc += 1; }
+          if (d2 != 8) { cands[nc] = d2; nc += 1; }
+          if (olddir != 8) { cands[nc] = olddir; nc += 1; }
+          continue;
+        }
+        if (phase == 1u) {
+          phase = 2u;
+          let fwd = (P_Random() & 1) != 0;
+          for (var i = 0; i < 8; i++) {
+            let td = select(7 - i, i, fwd);
+            if (td != turnaround) { cands[nc] = td; nc += 1; }
+          }
+          if (turnaround != 8) { cands[nc] = turnaround; nc += 1; }
+          continue;
+        }
+        break;
+      }
+      O[mi].movedir = cands[pos]; pos += 1;
     }
-    O[mi].movedir = cands[pos]; pos += 1;
-    if (pMove(mi)) { O[mi].movecount = P_Random() & 15; return; }
+    let moved = pMove(mi);
+    if (trying) {
+      if (moved) { return; } // A_Chase's step worked: no new direction
+      trying = false;
+      continue;
+    }
+    if (moved) { O[mi].movecount = P_Random() & 15; return; }
   }
   O[mi].movedir = 8;
 }
@@ -2669,7 +2670,7 @@ fn chase(mi: u32) {
     O[mi].req = u32(info(ty, MI_SPAWNSTATE));
     return;
   }
-  var needDir = false; var chased = false;
+  var needDir = false; var chased = false; var tryMovedir = false;
   if ((O[mi].flags & MF_JUSTATTACKED) != 0u) {
     O[mi].flags &= ~MF_JUSTATTACKED;
     if (P.skill != 4) { needDir = true; }
@@ -2687,11 +2688,12 @@ fn chase(mi: u32) {
       O[mi].flags |= MF_JUSTATTACKED;
       return;
     }
+    // a step in movedir, unless movecount ran out, and a new direction if that fails
     O[mi].movecount -= 1;
-    if (O[mi].movecount < 0 || !pMove(mi)) { needDir = true; }
+    needDir = true; tryMovedir = O[mi].movecount >= 0;
     chased = true;
   }
-  if (needDir) { newChaseDir(mi); }
+  if (needDir) { newChaseDir(mi, tryMovedir); }
   // the active sound's draw comes after the new direction's, and not after an attack
   let act = info(ty, MI_ACTIVESOUND);
   if (chased && act != 0 && P_Random() < 3) { mobjSound(mi, u32(act)); }
@@ -2714,13 +2716,15 @@ fn bossDeath(mi: u32) {
   for (var j = 1u; j < mobjEnd(); j++) {
     if (j != mi && O[j].inuse != 0u && O[j].mtype == ty && O[j].health > 0) { return; }
   }
+  // the floors that move share one evDoFloor call site (every call is inlined)
+  var floor = -1;
   if (COMMERCIAL) {
-    if (ty == MT_FATSO) { actTag = 666; _ = evDoFloor(0u, FLOOR_lowerFloorToLowest); return; }
-    actTag = 667; _ = evDoFloor(0u, FLOOR_raiseToTexture); return;
+    if (ty == MT_FATSO) { actTag = 666; floor = FLOOR_lowerFloorToLowest; }
+    else { actTag = 667; floor = FLOOR_raiseToTexture; }
   }
-  if (GAMEEPISODE == 1) { actTag = 666; _ = evDoFloor(0u, FLOOR_lowerFloorToLowest); return; }
-  if (GAMEEPISODE == 4 && GAMEMAP == 6) { actTag = 666; _ = evDoDoor(0u, DOOR_blazeOpen); return; }
-  if (GAMEEPISODE == 4 && GAMEMAP == 8) { actTag = 666; _ = evDoFloor(0u, FLOOR_lowerFloorToLowest); return; }
+  else if (GAMEEPISODE == 1 || (GAMEEPISODE == 4 && GAMEMAP == 8)) { actTag = 666; floor = FLOOR_lowerFloorToLowest; }
+  else if (GAMEEPISODE == 4 && GAMEMAP == 6) { actTag = 666; _ = evDoDoor(0u, DOOR_blazeOpen); return; }
+  if (floor >= 0) { _ = evDoFloor(0u, floor); return; }
   P.exit = 1u;
 }
 
@@ -2731,7 +2735,7 @@ fn callAction(mi: u32, act: u32) {
   var doLook = false; var doChase = false; var preSound = 0u;
   var face = false; var shots = 0; var shotSound = 0u; var dmgMod = 5; var dmgMul = 3;
   var meleeMod = 0; var meleeMul = 0; var meleeSound = 0u;
-  var missile = -1;
+  var missile = -1; var bfg = false;
   switch (act) {
     case A_Look: { doLook = true; }
     case A_Chase, A_VileChase: { doChase = true; }
@@ -2787,41 +2791,45 @@ fn callAction(mi: u32, act: u32) {
     case A_Explode: { radiusAttack(mi, O[mi].targ, 128); return; }
     case A_BossDeath: { bossDeath(mi); return; }
     case A_KeenDie: { O[mi].flags &= ~MF_SOLID; return; }
-    case A_BFGSpray: {
-      let src = O[mi].targ;
-      if (src < 0) { return; }
-      for (var i = 0; i < 40; i++) {
-        let an = O[mi].angle - ANG90 / 2u + ANG90 / 40u * u32(i);
-        _ = trace(u32(src), an, 1024.0, 0u, 0.0, 0);
-        if (linetarget < 0) { continue; }
-        let lt = u32(linetarget);
-        _ = spawnMobjI(ipos(lt), O[lt].z + O[lt].height / 4.0, MT_EXTRABFG);
-        var dmg = 0;
-        for (var k = 0; k < 15; k++) { dmg += (P_Random() & 7) + 1; }
-        damageMobj(lt, src, src, dmg);
-      }
-      return;
-    }
+    case A_BFGSpray: { if (O[mi].targ < 0) { return; } bfg = true; }
     default: { return; }
   }
-  if (preSound != 0u) { mobjSound(mi, preSound); }
-  if (doLook) { look(mi); return; }
-  if (doChase) { chase(mi); return; }
-  let t = O[mi].targ;
-  if (t < 0) { return; }
-  if (face) { faceTarget(mi); }
-  if (meleeMul > 0 && checkMeleeRange(mi)) {
-    if (meleeSound != 0u) { mobjSound(mi, meleeSound); }
-    damageMobj(u32(t), i32(mi), i32(mi), (P_Random() % meleeMod + 1) * meleeMul);
-    return;
+  // The hits below share one trace and one damageMobj call site (the shader compiler inlines every
+  // call): A_BFGSpray's 40 tracers, a melee hit, or a hitscan attack's aim and then its pellets.
+  var steps = 0; var melee = false;
+  if (bfg) { steps = 40; }
+  else {
+    if (preSound != 0u) { mobjSound(mi, preSound); }
+    if (doLook) { look(mi); return; }
+    if (doChase) { chase(mi); return; }
+    let t = O[mi].targ;
+    if (t < 0) { return; }
+    if (face) { faceTarget(mi); }
+    if (meleeMul > 0 && checkMeleeRange(mi)) {
+      if (meleeSound != 0u) { mobjSound(mi, meleeSound); }
+      melee = true; steps = 1;
+    } else if (missile >= 0) { spawnMissile(mi, t, u32(missile), 0u, 0.0); return; }
+    else if (shots > 0) { mobjSound(mi, shotSound); steps = 1 + shots; }
   }
-  if (missile >= 0) { spawnMissile(mi, t, u32(missile), 0u, 0.0); return; }
-  if (shots > 0) {
-    mobjSound(mi, shotSound);
-    let slope = trace(mi, O[mi].angle, MISSILERANGE, 0u, 0.0, 0);
-    for (var i = 0; i < shots; i++) {
-      _ = trace(mi, O[mi].angle + bitcast<u32>(subRandomI() << 20u), MISSILERANGE, 1u, slope, (P_Random() % dmgMod + 1) * dmgMul);
+  var slope = 0.0;
+  for (var k = 0; k < steps; k++) {
+    var victim = -1; var attacker = i32(mi); var dmg = 0;
+    if (melee) { victim = O[mi].targ; dmg = (P_Random() % meleeMod + 1) * meleeMul; }
+    else {
+      // A_BFGSpray traces from whoever fired the BFG; a hitscan attack aims, then shoots each pellet
+      var src = mi; var an = O[mi].angle; var range = MISSILERANGE; var mode = 0u; var tdmg = 0;
+      if (bfg) { src = u32(O[mi].targ); an = O[mi].angle - ANG90 / 2u + ANG90 / 40u * u32(k); range = 1024.0; }
+      else if (k > 0) { an = O[mi].angle + bitcast<u32>(subRandomI() << 20u); mode = 1u; tdmg = (P_Random() % dmgMod + 1) * dmgMul; }
+      let r = trace(src, an, range, mode, slope, tdmg);
+      if (!bfg && k == 0) { slope = r; }
+      if (bfg && linetarget >= 0) {
+        let lt = u32(linetarget);
+        _ = spawnMobjI(ipos(lt), O[lt].z + O[lt].height / 4.0, MT_EXTRABFG);
+        for (var j = 0; j < 15; j++) { dmg += (P_Random() & 7) + 1; }
+        victim = linetarget; attacker = i32(src);
+      }
     }
+    if (victim >= 0) { damageMobj(u32(victim), attacker, attacker, dmg); }
   }
 }
 
@@ -2867,12 +2875,15 @@ fn nightmareRespawn(mi: u32) {
   removeMobj(mi);
 }
 
-fn mobjThink(mi: u32) {
+// P_MobjThinker. The player (mi 0) only moves here: its state and weapons run in ticPlayer.
+fn mobjThink(mi: u32, isPlayer: bool) {
   numcross = 0u;
-  if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (O[mi].flags & MF_SKULLFLY) != 0u) { thingXY(mi); processCrossings(mi); }
+  if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (!isPlayer && (O[mi].flags & MF_SKULLFLY) != 0u)) {
+    xyMovement(mi, isPlayer, P.cmdmove != 0u); processCrossings(mi);
+  }
   if (O[mi].inuse == 0u) { return; }
-  if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, false); }
-  if (O[mi].inuse == 0u) { return; }
+  if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, isPlayer); }
+  if (isPlayer || O[mi].inuse == 0u) { return; }
   var next = NOREQ;
   // a state asked for from outside (damage, death, an explosion): DOOM had already set it, so after
   // setting it here this think also counts its first tic, as P_MobjThinker would have
@@ -3047,56 +3058,66 @@ fn playerShoot() {
   let kind = shotKind;
   shotKind = 0u;
   if (kind == 0u) { return; }
-  var an = O[0].angle;
-  if (kind >= 3u) {
-    var dmg = (P_Random() % 10 + 1) * 2;
+  let melee = kind >= 3u;
+  var an = O[0].angle; var dmg = 0; var range = 1024.0;
+  if (melee) {
+    dmg = (P_Random() % 10 + 1) * 2;
     if (kind == 3u && P.powers[1] != 0) { dmg *= 10; }
     an += bitcast<u32>(subRandomI() << 18u);
-    let range = select(MELEERANGE, MELEERANGE + 1.0, kind == 4u);
-    let slope = trace(0u, an, range, 0u, 0.0, 0);
-    let lt = linetarget;
-    _ = trace(0u, an, range, 1u, slope, dmg);
-    if (lt < 0) { if (kind == 4u) { mobjSound(0u, SFX_sawful); } return; }
-    mobjSound(0u, select(SFX_punch, SFX_sawhit, kind == 4u));
-    let want = pointToAngle(ipos(0u), ipos(u32(lt)));
-    if (kind == 3u) { O[0].angle = want; return; }
-    // A_Saw turns toward the target by at most ANG90 / 20 a tic
-    let d = want - O[0].angle;
-    if (d > ANG180) {
-      if (bitcast<i32>(d) < -i32(ANG90 / 20u)) { O[0].angle = want + ANG90 / 21u; } else { O[0].angle -= ANG90 / 20u; }
-    } else {
-      if (d > ANG90 / 20u) { O[0].angle = want - ANG90 / 21u; } else { O[0].angle += ANG90 / 20u; }
-    }
-    O[0].flags |= MF_JUSTATTACKED;
-    return;
+    range = select(MELEERANGE, MELEERANGE + 1.0, kind == 4u);
   }
-  // P_BulletSlope / the aim of P_SpawnPlayerMissile: straight, then 5.6 degrees either side
-  var slope = 0.0;
+  // One trace call site (the shader compiler inlines every call): first the aim, once for a fist or
+  // the saw, and for a gun P_BulletSlope / P_SpawnPlayerMissile's straight, then 5.6 degrees either
+  // side; then the hits. P_GunShot draws the damage before the spread; the super shotgun spreads
+  // twice as wide and also up and down (A_FireShotgun2).
   var offs = array<u32, 3>(0u, 1u << 26u, 0u - (1u << 26u));
-  var found = false;
-  for (var i = 0; i < 3 && !found; i++) {
-    slope = trace(0u, O[0].angle + offs[i], 1024.0, 0u, 0.0, 0);
-    if (linetarget >= 0) { an = O[0].angle + offs[i]; found = true; }
+  let ssg = shotCount == 20;
+  let nshots = select(shotCount, 1, melee);
+  var slope = 0.0; var found = false; var aims = 0; var shots = 0; var lt = -1;
+  for (var guard = 0; guard < 26; guard++) {
+    let aiming = !found && aims < select(3, 1, melee);
+    var ta = an; var tmode = 0u; var tsl = 0.0; var tdmg = 0; var trange = range;
+    if (aiming) {
+      if (!melee) { ta = O[0].angle + offs[aims]; }
+    } else {
+      if (kind == 2u || shots >= nshots) { break; }
+      tmode = 1u; tsl = slope;
+      if (melee) { tdmg = dmg; }
+      else {
+        tdmg = 5 * (P_Random() % 3 + 1);
+        ta = O[0].angle; trange = MISSILERANGE;
+        if (ssg) { ta += bitcast<u32>(subRandomI() << 19u); tsl += f32(subRandomI() << 5u) / 65536.0; }
+        else if (!shotAccurate) { ta += bitcast<u32>(subRandomI() << 18u); }
+      }
+      shots += 1;
+    }
+    let r = trace(0u, ta, trange, tmode, tsl, tdmg);
+    if (aiming) {
+      slope = r; aims += 1;
+      if (melee) { lt = linetarget; }
+      else if (linetarget >= 0) { an = ta; found = true; }
+    }
   }
   if (kind == 2u) {
     if (!found) { an = O[0].angle; slope = 0.0; }
     spawnMissile(0u, -1, shotMissile, an, slope);
     return;
   }
-  // P_GunShot draws the damage before the spread; the super shotgun spreads twice as wide and also
-  // up and down (A_FireShotgun2)
-  let ssg = shotCount == 20;
-  for (var i = 0; i < shotCount; i++) {
-    let dmg = 5 * (P_Random() % 3 + 1);
-    var a = O[0].angle;
-    var sl = slope;
-    if (ssg) { a += bitcast<u32>(subRandomI() << 19u); sl += f32(subRandomI() << 5u) / 65536.0; }
-    else if (!shotAccurate) { a += bitcast<u32>(subRandomI() << 18u); }
-    _ = trace(0u, a, MISSILERANGE, 1u, sl, dmg);
+  if (!melee) { return; }
+  if (lt < 0) { if (kind == 4u) { mobjSound(0u, SFX_sawful); } return; }
+  mobjSound(0u, select(SFX_punch, SFX_sawhit, kind == 4u));
+  let want = pointToAngle(ipos(0u), ipos(u32(lt)));
+  if (kind == 3u) { O[0].angle = want; return; }
+  // A_Saw turns toward the target by at most ANG90 / 20 a tic
+  let d = want - O[0].angle;
+  if (d > ANG180) {
+    if (bitcast<i32>(d) < -i32(ANG90 / 20u)) { O[0].angle = want + ANG90 / 21u; } else { O[0].angle -= ANG90 / 20u; }
+  } else {
+    if (d > ANG90 / 20u) { O[0].angle = want - ANG90 / 21u; } else { O[0].angle += ANG90 / 20u; }
   }
+  O[0].flags |= MF_JUSTATTACKED;
 }
 
-// P_MovePsprites plus the state queue. Every psprite change goes through here.
 fn runPsprites() {
   shotKind = 0u;
   // a level's first tic first does P_SetupPsprites (the weapon's raise state and its first action),
@@ -3209,7 +3230,8 @@ fn playerThink() {
     O[0].flags &= ~MF_JUSTATTACKED;
   }
   P.cmdmove = select(0u, 1u, fwd != 0.0 || side != 0.0);
-  if (P.dead != 0u) {
+  let wasDead = P.dead != 0u;
+  if (wasDead) {
     // fall to the floor, face the killer, wait for use to restart
     if (P.viewheight > 6.0) { P.viewheight -= 1.0; }
     P.deltaviewheight = 0.0;
@@ -3223,37 +3245,38 @@ fn playerThink() {
     let b = U.buttons & 3u;
     if (b != 0u && P.usedown == 0u && P.viewheight <= 6.0) { P.exit = 3u; }
     P.usedown = select(0u, 1u, b != 0u);
-    runPsprites();
-    return;
-  }
-  if (O[0].reactiontime > 0) {
-    O[0].reactiontime -= 1;
   } else {
-    // angleturn << 16: the turn in 1/65536ths of a circle
-    O[0].angle += u32(i32(round(turn / TAU * 65536.0))) << 16u;
-    if (first && turn != 0.0) { P.pva += U.mouseturn; } // not during the lunge, which drops the turn
-    // P_Thrust through DOOM's finesine table: 8192 steps
-    let fa = O[0].angle >> 19u;
-    if (onground) {
-      // P_Thrust: FixedMul(move * 2048, finecosine) is (move * finecosine) >> 5, floored
-      if (fwd != 0.0) { let fm = i32(fwd); O[0].momx += f32((fm * fineCosFx(fa)) >> 5u) / 65536.0; O[0].momy += f32((fm * fineSinFx(fa)) >> 5u) / 65536.0; }
-      if (side != 0.0) { let sm = i32(side); let fs = (fa + 6144u) & 8191u; O[0].momx += f32((sm * fineCosFx(fs)) >> 5u) / 65536.0; O[0].momy += f32((sm * fineSinFx(fs)) >> 5u) / 65536.0; }
+    if (O[0].reactiontime > 0) {
+      O[0].reactiontime -= 1;
+    } else {
+      // angleturn << 16: the turn in 1/65536ths of a circle
+      O[0].angle += u32(i32(round(turn / TAU * 65536.0))) << 16u;
+      if (first && turn != 0.0) { P.pva += U.mouseturn; } // not during the lunge, which drops the turn
+      // P_Thrust through DOOM's finesine table: 8192 steps
+      let fa = O[0].angle >> 19u;
+      if (onground) {
+        // P_Thrust: FixedMul(move * 2048, finecosine) is (move * finecosine) >> 5, floored
+        if (fwd != 0.0) { let fm = i32(fwd); O[0].momx += f32((fm * fineCosFx(fa)) >> 5u) / 65536.0; O[0].momy += f32((fm * fineSinFx(fa)) >> 5u) / 65536.0; }
+        if (side != 0.0) { let sm = i32(side); let fs = (fa + 6144u) & 8191u; O[0].momx += f32((sm * fineCosFx(fs)) >> 5u) / 65536.0; O[0].momy += f32((sm * fineSinFx(fs)) >> 5u) / 65536.0; }
+      }
+    }
+    // P_PlayerThink: the view height follows the thrust, before the thinkers move the player
+    calcHeight(onground);
+    if (O[0].sector < NUMSECTORS && S[O[0].sector].special != 0) { playerInSpecialSector(); }
+    if ((U.buttons & 2u) != 0u) {
+      if (P.usedown == 0u) { useLines(); P.usedown = 1u; }
+    } else { P.usedown = 0u; }
+    if (U.weapon != 0u && U.weapon <= 9u) {
+      var w = i32(U.weapon) - 1;
+      // 1 toggles fist and chainsaw, 3 toggles the shotguns
+      if (w == 0 && (P.weapons & 128u) != 0u && !(P.readyweapon == 7 && P.powers[1] != 0)) { w = 7; }
+      if (w == 2 && COMMERCIAL && (P.weapons & 256u) != 0u && P.readyweapon != 8) { w = 8; }
+      if ((P.weapons & (1u << u32(w))) != 0u && w != P.readyweapon) { P.pendingweapon = w; }
     }
   }
-  // P_PlayerThink: the view height follows the thrust, before the thinkers move the player
-  calcHeight(onground);
-  if (O[0].sector < NUMSECTORS && S[O[0].sector].special != 0) { playerInSpecialSector(); }
-  if ((U.buttons & 2u) != 0u) {
-    if (P.usedown == 0u) { useLines(); P.usedown = 1u; }
-  } else { P.usedown = 0u; }
-  if (U.weapon != 0u && U.weapon <= 9u) {
-    var w = i32(U.weapon) - 1;
-    // 1 toggles fist and chainsaw, 3 toggles the shotguns
-    if (w == 0 && (P.weapons & 128u) != 0u && !(P.readyweapon == 7 && P.powers[1] != 0)) { w = 7; }
-    if (w == 2 && COMMERCIAL && (P.weapons & 256u) != 0u && P.readyweapon != 8) { w = 8; }
-    if ((P.weapons & (1u << u32(w))) != 0u && w != P.readyweapon) { P.pendingweapon = w; }
-  }
+  // dead or alive, one call site (the shader compiler inlines every call); a dead player stops here
   runPsprites();
+  if (wasDead) { return; }
   for (var i = 0; i < 6; i++) {
     if (P.powers[i] > 0 && i != 1 && i != 4) {
       P.powers[i] -= 1;
@@ -3271,14 +3294,6 @@ fn ticPlayer() {
   playerThink();
   if ((P.cheats & 1u) != 0u) { O[0].flags |= MF_NOCLIP; } else { O[0].flags &= ~MF_NOCLIP; }
 }
-// The player's P_MobjThinker: its movement, which DOOM runs at the player's place in the thinker list
-fn playerMobjThink() {
-  let hasCmd = P.cmdmove != 0u;
-  numcross = 0u;
-  if (O[0].momx != 0.0 || O[0].momy != 0.0) { playerXY(hasCmd); processCrossings(0u); }
-  if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
-}
-
 // Start of a tic: remember where everything was, so frames between tics can blend.
 @compute @workgroup_size(64)
 fn ticSave(@builtin(global_invocation_id) gid: vec3u) {
@@ -3303,10 +3318,18 @@ fn viewSetup() {
 fn ticMobjs() {
   if (P.exit != 0u) { return; }
   // the bound is read each pass: a thing spawned this tic was appended to DOOM's list and thinks this tic too
-  for (var i = 1u; i < max(mobjEnd(), P.initmobjs + 1u); i++) {
-    if (i == P.playerslot) { playerMobjThink(); }
-    if (i == P.initmobjs) { for (var s = 0u; s < NUMSECTORS; s++) { lightThink(s); } }
-    if (O[i].inuse != 0u) { mobjThink(i); }
+  // the player gets a pass of its own at its place, so that mobjThink has one call site
+  var playerDue = true;
+  for (var i = 1u; i < max(mobjEnd(), P.initmobjs + 1u);) {
+    var mi = 0u; var isPlayer = false;
+    if (i == P.playerslot && playerDue) { playerDue = false; isPlayer = true; }
+    else {
+      if (i == P.initmobjs) { for (var s = 0u; s < NUMSECTORS; s++) { lightThink(s); } }
+      mi = i;
+      i += 1u;
+      if (O[mi].inuse == 0u) { continue; }
+    }
+    mobjThink(mi, isPlayer);
   }
 }
 
@@ -3438,11 +3461,15 @@ fn amLines(@builtin(global_invocation_id) gid: vec3u) {
 fn ticWorld() {
   if (P.exit != 0u) { return; }
   for (var s = 0u; s < NUMSECTORS; s++) {
+    // the plane moves first, then the thinker reads the result, as each T_ thinker does around its call
+    let plan = moverPlan(s);
+    var res = 0;
+    if (plan.moves) { res = movePlane(s, S[s].mspeed, plan.dest, plan.crush, plan.ceiling, plan.dir); }
     switch (S[s].mtype) {
-      case 1u: { doorThink(s); }
-      case 2u: { floorThink(s); }
-      case 3u: { platThink(s); }
-      case 4u: { ceilingThink(s); }
+      case 1u: { doorThink(s, res); }
+      case 2u: { floorThink(s, res); }
+      case 3u: { platThink(s, res); }
+      case 4u: { ceilingThink(s, res); }
       default: {}
     }
   }

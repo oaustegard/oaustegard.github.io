@@ -63,8 +63,13 @@ level.
   calls `tryMove` from inside `tryMove`, so line activations go through a queue in the world
   buffer. A monster's state action can change its own state, or damage something whose state
   then changes, so actions and damage write a requested state that only the state loop applies.
-  Heavy functions such as `tryMove` and the hitscan trace each have one call site, because the
-  shader compiler inlines every call.
+  Native shader compilers inline every call and unroll loops with a constant bound, so code size
+  decides how long a first load takes: on an RTX 50-series under D3D12, `ticMobjs` once took
+  over four minutes to compile. Every loop's bound therefore comes from a uniform the compiler
+  can't see (`opaqueLoops` in `shaders.js`), and heavy functions are reached through as few call
+  sites as possible: one `movePlane` (P_ChangeSector) for all the movers, one `mobjThink` and one
+  `xyMovement` for the player and every other thing, one hitscan `trace` per kernel, one P_Move
+  shared by A_Chase and P_NewChaseDir.
 - **Specials as data.** `specials.js` encodes Doom's 140-odd line specials as one word each:
   trigger, repeatability, action, argument and key. The WGSL dispatches on the action code.
   `info.js` holds Doom's state and thing tables, generated from `info.c`.
