@@ -144,4 +144,6 @@ Getting there took DOOM's arithmetic rather than an approximation of it:
 
 The engine code is GPL-2.0 (`LICENSE.md`), because it follows id Software's Doom source and its
 tables come from `info.c`. `e1.wad.gz` is Freedoom 0.13.0 cut down to episode one's maps and the
-graphics, sounds and music they use. Freedoom is BSD-licensed (`FREEDOOM-COPYING.txt`).
+graphics, sounds and music they use. Freedoom is BSD-licensed (`FREEDOOM-COPYING.txt`). The app icons
+and the share image use Freedoom's god-mode status-bar face (`STFGOD0`), and the share image a frame
+the engine rendered on E1M2.
