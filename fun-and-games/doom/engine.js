@@ -2,9 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, decodePatch } from "./wad.js?v=20261028040708";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028040708";
-import { STATES, SFX } from "./info.js?v=20261028040708";
+import { readWad, buildGfx, buildMap, spawnMobjs, decodePatch } from "./wad.js?v=20261028042623";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028042623";
+import { STATES, SFX } from "./info.js?v=20261028042623";
+import { MSG } from "./specials.js?v=20261028042623";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -15,7 +16,7 @@ export const W = { // World word offsets (see struct World)
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
-  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277,
+  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310,
 };
 
 export function freshPlayer() {
@@ -193,7 +194,7 @@ export class Engine {
     wu[W.weapons] = player.weapons; wi[W.readyweapon] = player.readyweapon; wi[W.pendingweapon] = -1; wu[W.backpack] = player.backpack;
     for (let k = 0; k < 4; k++) { wi[W.ammo + k] = player.ammo[k]; wi[W.maxammo + k] = player.maxammo[k]; }
     wi[W.totalkills] = kills; wi[W.totalitems] = items; wi[W.totalsecrets] = totalSecrets;
-    wi[W.fixedcolormap] = -1; wi[W.skill] = this.skill - 1; wi[W.attacker] = -1;
+    wi[W.fixedcolormap] = -1; wi[W.skill] = this.skill - 1; wi[W.attacker] = -1; wu[W.cheats] = this.cheats || 0;
     wi[W.oldhealth] = player.health; wi[W.lastattackdown] = -1; wu[W.oldweapons] = player.weapons;
     mi[15] = player.health; // player mobj health
 
@@ -201,7 +202,7 @@ export class Engine {
     this.mapBuf = this.buffer(map.words, GPUBufferUsage.STORAGE);
     this.secBuf = this.buffer(new Uint32Array(sec), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.mobjBuf = this.buffer(new Uint32Array(mobjs.buf), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
-    this.lsBuf = this.buffer(ls, GPUBufferUsage.STORAGE);
+    this.lsBuf = this.buffer(ls, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.worldBuf = this.buffer(new Uint32Array(world), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.bind = d.createBindGroup({ layout: this.layout, entries: [
       this.gfxBuf, this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf, this.fbBuf, this.frameBuf,
@@ -283,6 +284,62 @@ export class Engine {
     rb.busy = false;
     this.lastWorld = copy;
     return copy;
+  }
+
+  // Save games: the level's whole GPU state (sectors, things, line specials, world), read back.
+  async saveState() {
+    const d = this.device, enc = d.createCommandEncoder();
+    const parts = { sec: this.secBuf, mobj: this.mobjBuf, ls: this.lsBuf, world: this.worldBuf };
+    const rbs = Object.entries(parts).map(([k, b]) => {
+      const rb = d.createBuffer({ size: b.size, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+      enc.copyBufferToBuffer(b, 0, rb, 0, b.size);
+      return [k, rb];
+    });
+    d.queue.submit([enc.finish()]);
+    const st = { map: this.mapName, skill: this.skill, cheats: this.cheats || 0 };
+    for (const [k, rb] of rbs) { await rb.mapAsync(GPUMapMode.READ); st[k] = rb.getMappedRange().slice(0); rb.unmap(); rb.destroy(); }
+    return st;
+  }
+  // After loadMap(st.map): put a saved level's state back. False if the buffers don't fit (another WAD).
+  restore(st) {
+    const parts = { sec: this.secBuf, mobj: this.mobjBuf, ls: this.lsBuf, world: this.worldBuf };
+    for (const [k, b] of Object.entries(parts)) if (!st[k] || st[k].byteLength !== b.size) return false;
+    for (const [k, b] of Object.entries(parts)) this.device.queue.writeBuffer(b, 0, st[k]);
+    this.cheats = st.cheats || 0;
+    this.sndSeen = new Uint32Array(st.world)[W.sndcount];
+    this.lastWorld = st.world;
+    return true;
+  }
+  say(m) { this.device.queue.writeBuffer(this.worldBuf, W.message * 4, new Int32Array([MSG[m] ?? 0, 140])); }
+
+  // DOOM's cheat codes that change the player: iddqd, idkfa, idfa, idclip/idspispopd, iddt.
+  // Returns false for anything else (idclev is the page's, since it loads a level).
+  cheat(code) {
+    const q = this.device.queue, wb = this.worldBuf;
+    const put = (field, arr) => q.writeBuffer(wb, W[field] * 4, arr);
+    const say = (m) => this.say(m);
+    const toggle = (bit, on, off) => { this.cheats = (this.cheats || 0) ^ bit; put("cheats", new Uint32Array([this.cheats])); say(this.cheats & bit ? on : off); return this.cheats & bit; };
+    switch (code) {
+      case "iddqd":
+        if (toggle(2, "DEGREELESSNESS MODE ON", "DEGREELESSNESS MODE OFF")) {
+          put("health", new Int32Array([100]));
+          q.writeBuffer(this.mobjBuf, 15 * 4, new Int32Array([100]));
+        }
+        return true;
+      case "idclip": case "idspispopd": toggle(1, "NO CLIPPING MODE ON", "NO CLIPPING MODE OFF"); return true;
+      case "iddt": this.cheats = ((this.cheats || 0) & ~4) | (this.cheats & 4 ? 0 : 4); put("cheats", new Uint32Array([this.cheats])); return true;
+      case "idkfa": case "idfa": {
+        const w = this.lastWorld ? new Int32Array(this.lastWorld) : null;
+        const max = w ? [0, 1, 2, 3].map((k) => w[W.maxammo + k]) : [200, 50, 300, 50];
+        put("armor", new Int32Array([200, 2]));
+        put("weapons", new Uint32Array([this.map.commercial ? 0x1ff : 0xff]));
+        put("ammo", new Int32Array(max));
+        if (code === "idkfa") put("cards", new Uint32Array([0x3f]));
+        say(code === "idkfa" ? "VERY HAPPY AMMO ADDED" : "AMMO (NO KEYS) ADDED");
+        return true;
+      }
+    }
+    return false;
   }
 
   // Sound events since the last call: [{sfx, x, y}]

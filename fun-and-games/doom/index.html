@@ -116,8 +116,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261028040708";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028040708";
+import { Music, musicLumpFor } from "./music.js?v=20261028042623";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028042623";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -181,12 +181,13 @@ async function buildEngine() {
 }
 
 function banner(html) { const b = $("banner"); b.hidden = !html; b.innerHTML = html || ""; }
-async function start(mapName, carry = freshPlayer()) {
+async function start(mapName, carry = freshPlayer(), saved = null) {
   loading = true;
   status(`Compiling shaders for ${mapName}…`);
   if ($("menu").hidden) banner(`Loading ${mapName}…<small>compiling the GPU code</small>`);
   $("play").disabled = true;
   await engine.loadMap(mapName, carry);
+  if (saved && !engine.restore(saved)) status("That save doesn't fit this WAD; the level starts fresh.");
   playSong(musicLumpFor(mapName));
   banner("");
   player = carry;
@@ -237,8 +238,24 @@ function toggleMap() {
 const zoomMap = (f) => { amzoom = Math.max(0.15, Math.min(8, amzoom * f)); };
 addEventListener("wheel", (e) => { if (running && automap) zoomMap(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: true });
 const isTouch = matchMedia("(pointer: coarse)").matches;
+// DOOM's cheat codes, typed while playing
+let typed = "";
+function cheatKey(e) {
+  if (!running || !engine || e.key.length !== 1) return;
+  typed = (typed + e.key.toLowerCase()).slice(-12);
+  const lev = /idclev(\d)(\d)$/.exec(typed);
+  if (lev) {
+    const m = engine.map?.commercial ? `MAP${lev[1]}${lev[2]}` : `E${lev[1]}M${lev[2]}`;
+    if (engine.maps().includes(m)) { typed = ""; start(m, freshPlayer()); }
+    return;
+  }
+  for (const c of ["iddqd", "idkfa", "idfa", "idclip", "idspispopd", "iddt"]) {
+    if (typed.endsWith(c) && engine.cheat(c)) { typed = ""; return; }
+  }
+}
 addEventListener("keydown", (e) => {
   if (menuKey(e)) return;
+  cheatKey(e);
   if (e.code === "Escape") { if (running) showMenu(); return; }
   if (/^Digit[1-9]$/.test(e.code)) weaponKey = +e.code.slice(5);
   if (running && (e.code === "Tab" || e.code === "KeyM")) { toggleMap(); e.preventDefault(); return; }
@@ -663,7 +680,8 @@ const MENUS = {
   main: { x: 97, y: 64, pics: [["M_DOOM", 94, 2]],
     items: () => [{ patch: "M_NGAME", act: () => go(!commercial() && episodes().length > 1 ? "episode" : "skill", 2) },
                   { patch: "M_OPTION", act: openOptions },
-                  ...(engine?.map ? [{ text: "RESUME", act: resume }] : [])],
+                  { patch: "M_LOADG", act: () => openSlots("load") },
+                  ...(engine?.map ? [{ patch: "M_SAVEG", act: () => openSlots("save") }, { text: "RESUME", act: resume }] : [])],
     back: () => { if (engine?.map) resume(); } },
   episode: { x: 48, y: 63, pics: [["M_EPISOD", 54, 38]],
     items: () => episodes().map((e) => ({ patch: `M_EPI${e}`, act: () => { menu.epi = e; go("skill", 2); } })),
@@ -671,6 +689,12 @@ const MENUS = {
   skill: { x: 48, y: 63, pics: [["M_NEWG", 96, 14], ["M_SKILL", 54, 38]],
     items: () => ["M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE"].map((p, i) => ({ patch: p, act: () => (i === 4 ? go("nightmare") : newGame(i)) })),
     back: () => go(!commercial() && episodes().length > 1 ? "episode" : "main") },
+  load: { x: 80, y: 54, pics: [["M_LOADG", 72, 28]],
+    items: () => slots.map((sl, i) => ({ slot: true, text: sl ? sl.name : "EMPTY SLOT", act: () => loadGame(i) })),
+    back: () => go("main", 2) },
+  save: { x: 80, y: 54, pics: [["M_SAVEG", 72, 28]],
+    items: () => slots.map((sl, i) => ({ slot: true, text: sl ? sl.name : "EMPTY SLOT", act: () => saveGame(i) })),
+    back: () => go("main", 3) },
   nightmare: { message: "ARE YOU SURE? THIS SKILL LEVEL\nISN'T EVEN REMOTELY FAIR.\n\nPRESS Y OR N.", x: 120, y: 130,
     items: () => [{ text: "YES", act: () => newGame(4) }, { text: "NO", act: () => go("skill", 4) }],
     back: () => go("skill", 4) },
@@ -708,6 +732,52 @@ async function ensureMusic() {
 function playSong(lump) { wantSong = lump; music?.play(lump); }
 $("musicVol").addEventListener("input", () => music?.setVolume(+$("musicVol").value));
 function uiSound(name) { if (engine) playSound({ sfx: name, x: 0, y: 0 }, { x: 0, y: 0, angle: 0 }); }
+
+// Save games: DOOM's six slots, kept in IndexedDB with the level's GPU state
+let slots = new Array(6).fill(null);
+function saveDB() {
+  return new Promise((ok, no) => {
+    const r = indexedDB.open("gpu-doom", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("saves");
+    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  });
+}
+async function dbDo(mode, fn) {
+  const db = await saveDB();
+  return new Promise((ok, no) => {
+    const tx = db.transaction("saves", mode), req = fn(tx.objectStore("saves"));
+    tx.oncomplete = () => ok(req?.result); tx.onerror = () => no(tx.error);
+  });
+}
+const wadKey = () => engine.maps().join(",");
+async function openSlots(screen) {
+  try {
+    const all = await dbDo("readonly", (st) => st.getAll(), null);
+    const keys = await dbDo("readonly", (st) => st.getAllKeys(), null);
+    slots = new Array(6).fill(null);
+    keys.forEach((k, i) => { if (k >= 0 && k < 6 && all[i]?.wad === wadKey()) slots[k] = all[i]; });
+  } catch (err) { console.warn("saves", err); }
+  go(screen, 0);
+}
+async function saveGame(i) {
+  const st = await engine.saveState();
+  const t = new Date();
+  const name = `${engine.mapName} ${["ITYTD", "HNTR", "HMP", "UV", "NM"][engine.skill - 1]} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+  try { await dbDo("readwrite", (s) => s.put({ name, wad: wadKey(), state: st }, i)); engine.say("GAME SAVED."); }
+  catch (err) { status("Could not save: " + err.message); }
+  resume();
+}
+async function loadGame(i) {
+  const sl = slots[i];
+  if (!sl) return;
+  ensureAudio();
+  await enableGyro();
+  hideMenu();
+  engine.skill = sl.state.skill;
+  applySize();
+  await start(sl.state.map, freshPlayer(), sl.state);
+  if (!isTouch) canvas.requestPointerLock?.();
+}
 
 async function newGame(skillIndex) {
   ensureAudio();
@@ -773,6 +843,13 @@ function drawMenu() {
     const y = m.message ? m.y : m.y + 16 * i;
     const x = m.message ? m.x + 60 * i : m.x;
     let r = null;
+    if (it.slot) {
+      drawPatchAt("M_LSLEFT", x - 8, y + 7);
+      for (let k = 0; k < 24; k++) drawPatchAt("M_LSCNTR", x + 8 * k, y + 7);
+      drawPatchAt("M_LSRGHT", x + 8 * 24, y + 7);
+      drawText(it.text, x, y);
+      r = { x, y, w: 8 * 24, h: 16 };
+    }
     if (it.patch) r = drawPatchAt(it.patch, x, y);
     if (!r) { const w = drawText(it.text || it.patch.replace(/^M_/, ""), x, y + 4); r = { x, y, w, h: 16 }; }
     itemRects.push({ x: x - 8, y: y - 2, w: Math.max(r.w, 40) + 16, h: 16 });

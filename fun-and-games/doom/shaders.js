@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028040708";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028040708";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028042623";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028042623";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -112,7 +112,7 @@ struct World {
   killcount: i32, itemcount: i32, secretcount: i32, message: i32,
   messagetics: i32, viscount: atomic<u32>, sndcount: u32, nummobjs: u32,
   totalkills: i32, totalitems: i32, totalsecrets: i32, onground: u32,
-  fixedcolormap: i32, skill: i32, nact: u32, act: array<u32, 9>,
+  fixedcolormap: i32, skill: i32, nact: u32, pad1: array<u32, 9>,
   snd: array<vec4<f32>, 32>,
   buttons: array<vec4<i32>, 16>,
   pspstate: array<u32, 2>,
@@ -122,7 +122,9 @@ struct World {
   lastattackdown: i32, oldweapons: u32,
   pvx: f32, pvy: f32, pvz: f32, pva: f32,   // the view at the previous tic
   rx: f32, ry: f32, rz: f32, ra: f32,       // the view drawn this frame, between the two
-  pad2: array<u32, 42>,
+  act: array<u32, 32>,                     // line activations waiting for the activate kernel
+  cheats: u32,                              // 1 idclip, 2 iddqd, 4 iddt
+  pad2: array<u32, 9>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -860,44 +862,144 @@ fn tryMove(mi: u32, pos: vec2f) -> bool {
 // Specials crossed during movement run after it, which keeps the call graph acyclic.
 // Activations wait in World until the activate kernel runs: line | side<<16 | kind<<17 | mobj<<19.
 fn queueActivation(l: u32, side: u32, kind: u32, mi: u32) {
-  if (P.nact < 9u) { P.act[P.nact] = l | (side << 16u) | (kind << 17u) | (mi << 19u); P.nact += 1u; }
+  if (P.nact < 32u) { P.act[P.nact] = l | (side << 16u) | (kind << 17u) | (mi << 19u); P.nact += 1u; }
 }
 fn processCrossings(mi: u32) {
   let n = numcross; numcross = 0u;
   for (var k = 0u; k < n; k++) { queueActivation(crossq[k].x, crossq[k].y, 0u, mi); }
 }
 
-// The player's move: one tryMove call site in a loop over candidates, so the
-// collision code is compiled once. Candidates: the full step, the step slid
-// along the blocking wall, then DOOM's stairstep (y alone, x alone).
+// ---- P_SlideMove's wall search: P_PathTraverse over the blockmap with PTR_SlideTraverse
+var<private> bestslidefrac: f32;
+var<private> bestslideline: i32;
+// P_PointOnDivlineSide
+fn divlineSide(pt: vec2f, o: vec2f, d: vec2f) -> u32 {
+  if (d.x == 0.0) { if (pt.x <= o.x) { return select(0u, 1u, d.y > 0.0); } return select(0u, 1u, d.y < 0.0); }
+  if (d.y == 0.0) { if (pt.y <= o.y) { return select(0u, 1u, d.x < 0.0); } return select(0u, 1u, d.x > 0.0); }
+  let left = d.y * (pt.x - o.x); let right = (pt.y - o.y) * d.x;
+  return select(1u, 0u, right < left);
+}
+// P_AddLineIntercepts' crossing test and P_InterceptVector, then PTR_SlideTraverse
+fn slideCheckLine(l: u32, p: vec2f, d: vec2f) {
+  let a = lineA(l); let dl = lineB(l) - a;
+  var s1 = 0u; var s2 = 0u;
+  if (abs(d.x) > 16.0 || abs(d.y) > 16.0) { s1 = divlineSide(a, p, d); s2 = divlineSide(a + dl, p, d); }
+  else { s1 = pointOnLineSide(p, l); s2 = pointOnLineSide(p + d, l); }
+  if (s1 == s2) { return; }
+  let den = dl.y * d.x - dl.x * d.y;
+  var frac = 0.0;
+  if (den != 0.0) { frac = ((a.x - p.x) * dl.y + (p.y - a.y) * dl.x) / den; }
+  if (frac < 0.0 || frac > 1.0 || frac >= bestslidefrac) { return; }
+  if ((lineFlags(l) & ML_TWOSIDED) == 0u || lineBack(l) < 0) {
+    if (pointOnLineSide(mpos(0u), l) != 0u) { return; } // don't hit the back side
+  } else {
+    let F = S[lineFront(l)]; let B = S[lineBack(l)];
+    let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
+    let fits = opentop - openbottom >= O[0].height && opentop - O[0].z >= O[0].height && openbottom - O[0].z <= 24.0;
+    if (fits) { return; }
+  }
+  bestslidefrac = frac; bestslideline = i32(l);
+}
+fn slideTrace(p: vec2f, d: vec2f) {
+  // every vanilla blockmap list starts with line 0, so P_BlockLinesIterator visits it in each block
+  slideCheckLine(0u, p, d);
+  let q = p + d;
+  let lo = min(p, q); let hi = max(p, q);
+  let x0 = max(i32(floor((lo.x - BM_X) / 128.0)), 0); let x1 = min(i32(floor((hi.x - BM_X) / 128.0)), BM_W - 1);
+  let y0 = max(i32(floor((lo.y - BM_Y) / 128.0)), 0); let y1 = min(i32(floor((hi.y - BM_Y) / 128.0)), BM_H - 1);
+  for (var by = y0; by <= y1; by++) {
+    for (var bx = x0; bx <= x1; bx++) {
+      // only the blocks the trace passes through (Liang-Barsky against the block)
+      let c0 = vec2f(BM_X + f32(bx) * 128.0, BM_Y + f32(by) * 128.0); let c1 = c0 + vec2f(128.0);
+      var t0 = 0.0; var t1 = 1.0;
+      for (var ax = 0; ax < 2; ax++) {
+        let dd = d[ax]; let pp = p[ax];
+        if (dd == 0.0) { if (pp < c0[ax] || pp > c1[ax]) { t0 = 2.0; } }
+        else {
+          var ta = (c0[ax] - pp) / dd; var tb = (c1[ax] - pp) / dd;
+          if (ta > tb) { let tt = ta; ta = tb; tb = tt; }
+          t0 = max(t0, ta); t1 = min(t1, tb);
+        }
+      }
+      if (t0 > t1) { continue; }
+      let cell = M_BMCELL + 2u * u32(by * BM_W + bx);
+      let start = M[cell]; let n = M[cell + 1u];
+      for (var k = 0u; k < n; k++) { slideCheckLine(M[M_BMLIST + start + k], p, d); }
+    }
+  }
+}
+// P_HitSlideLine: the move along the wall, with DOOM's approximate length
+fn hitSlideLine(l: u32, mv: vec2f) -> vec2f {
+  let dl = lineB(l) - lineA(l);
+  if (dl.y == 0.0) { return vec2f(mv.x, 0.0); }
+  if (dl.x == 0.0) { return vec2f(0.0, mv.y); }
+  var la = atan2(dl.y, dl.x);
+  if (pointOnLineSide(mpos(0u), l) == 1u) { la += PI; }
+  var da = atan2(mv.y, mv.x) - la;
+  da -= TAU * floor(da / TAU);
+  if (da > PI) { da += PI; }
+  let nl = approxDist(mv) * cos(da);
+  return vec2f(nl * cos(la), nl * sin(la));
+}
+
+// The player's P_XYMovement with P_SlideMove, as a state machine around one tryMove call site
+// (the shader compiler inlines every call). States: 0 step, 1 find the wall (P_SlideMove's retry),
+// 2 moved up to the wall?, 3 slide the remainder, 4 slid?, 5 stairstep y, 6 stairstep x, 7 next step.
 fn playerXY(hasCmd: bool) {
-  var mom = clamp(vec2f(O[0].momx, O[0].momy), vec2f(-MAXMOVE), vec2f(MAXMOVE));
-  if (mom.x == 0.0 && mom.y == 0.0) { return; }
-  O[0].momx = mom.x; O[0].momy = mom.y;
-  var mv = mom;
-  for (var guard = 0; guard < 8; guard++) {
-    var step = mv;
-    if (abs(mv.x) > MAXMOVE / 2.0 || abs(mv.y) > MAXMOVE / 2.0) { step = mv * 0.5; }
-    mv -= step;
-    var moved = false;
-    var slideDir = vec2f(0.0);
-    for (var c = 0; c < 4 && !moved; c++) {
-      var t = step;
-      if (c == 1) {
-        if (tmblockline < 0) { continue; }
-        slideDir = normalize(lineB(u32(tmblockline)) - lineA(u32(tmblockline)));
-        t = slideDir * dot(step, slideDir);
-      } else if (c == 2) { t = vec2f(0.0, step.y); }
-      else if (c == 3) { t = vec2f(step.x, 0.0); }
-      if (tryMove(0u, vec2f(O[0].x, O[0].y) + t)) {
-        moved = true;
-        if (c == 1) { let m = slideDir * dot(vec2f(O[0].momx, O[0].momy), slideDir); O[0].momx = m.x; O[0].momy = m.y; }
-        else if (c == 2) { O[0].momx = 0.0; }
-        else if (c == 3) { O[0].momy = 0.0; }
+  O[0].momx = clamp(O[0].momx, -MAXMOVE, MAXMOVE); O[0].momy = clamp(O[0].momy, -MAXMOVE, MAXMOVE);
+  if (O[0].momx == 0.0 && O[0].momy == 0.0) { return; }
+  var xmove = O[0].momx; var ymove = O[0].momy;
+  var st = 0u; var hit = 0;
+  for (var guard = 0; guard < 48; guard++) {
+    let pos = mpos(0u);
+    let mom = vec2f(O[0].momx, O[0].momy);
+    var tgt = pos; var tryNow = false;
+    if (st == 7u) {
+      if (xmove == 0.0 && ymove == 0.0) { break; }
+      st = 0u;
+    }
+    if (st == 0u) {
+      // vanilla halves only a positive move (no abs here), so a fast move west or south goes in one step
+      if (xmove > MAXMOVE / 2.0 || ymove > MAXMOVE / 2.0) { xmove *= 0.5; ymove *= 0.5; tgt = pos + vec2f(xmove, ymove); }
+      else { tgt = pos + vec2f(xmove, ymove); xmove = 0.0; ymove = 0.0; }
+      tryNow = true;
+    } else if (st == 1u) {
+      hit += 1;
+      if (hit == 3) { st = 5u; }
+      else {
+        let r = O[0].radius;
+        let lead = pos + vec2f(select(-r, r, mom.x > 0.0), select(-r, r, mom.y > 0.0));
+        let trail = pos - vec2f(select(-r, r, mom.x > 0.0), select(-r, r, mom.y > 0.0));
+        bestslidefrac = 1.0 + 1.0 / 65536.0; bestslideline = -1;
+        slideTrace(lead, mom);
+        slideTrace(vec2f(trail.x, lead.y), mom);
+        slideTrace(vec2f(lead.x, trail.y), mom);
+        if (bestslideline < 0) { st = 5u; }
+        else {
+          bestslidefrac -= 1.0 / 32.0; // fudge a bit to make sure it doesn't hit
+          if (bestslidefrac > 0.0) { tgt = pos + mom * bestslidefrac; tryNow = true; st = 2u; }
+          else { st = 3u; }
+        }
       }
     }
-    if (!moved) { O[0].momx = 0.0; O[0].momy = 0.0; break; }
-    if (mv.x == 0.0 && mv.y == 0.0) { break; }
+    if (st == 3u && !tryNow) {
+      let rem = min(1.0 - (bestslidefrac + 1.0 / 32.0), 1.0);
+      if (rem <= 0.0) { st = 7u; }
+      else {
+        let tm = hitSlideLine(u32(bestslideline), mom * rem);
+        O[0].momx = tm.x; O[0].momy = tm.y;
+        tgt = pos + tm; tryNow = true; st = 4u;
+      }
+    }
+    if (st == 5u && !tryNow) { tgt = vec2f(pos.x, pos.y + mom.y); tryNow = true; }
+    else if (st == 6u && !tryNow) { tgt = vec2f(pos.x + mom.x, pos.y); tryNow = true; }
+    if (!tryNow) { continue; }
+    let ok = tryMove(0u, tgt);
+    if (st == 0u) { if (ok) { st = 7u; } else { hit = 0; st = 1u; } }
+    else if (st == 2u) { st = select(5u, 3u, ok); }
+    else if (st == 4u) { st = select(1u, 7u, ok); }
+    else if (st == 5u) { st = select(6u, 7u, ok); }
+    else if (st == 6u) { st = 7u; }
   }
   if (O[0].z > O[0].floorz) { return; }
   let m2 = vec2f(O[0].momx, O[0].momy);
@@ -1506,10 +1608,27 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
     for (var j = 0u; j < MAXMOBJS; j++) {
       if (O[j].inuse == 0u || O[j].mtype != MT_TELEPORTMAN || O[j].sector != sec) { continue; }
       let old = vec2f(O[mi].x, O[mi].y); let oldz = O[mi].z;
-      O[mi].flags |= MF_TELEPORT;
-      let ok = tryMove(mi, vec2f(O[j].x, O[j].y));
-      O[mi].flags &= ~MF_TELEPORT;
-      if (!ok) { return false; }
+      // P_TeleportMove: walls do not matter; things on the spot are stomped, by the player only
+      // (and by monsters on MAP30)
+      let dest = vec2f(O[j].x, O[j].y);
+      let stomp = mi == 0u || (COMMERCIAL && GAMEMAP == 30);
+      for (var k = 0u; k < MAXMOBJS; k++) {
+        if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SHOOTABLE) == 0u) { continue; }
+        let bd = O[k].radius + O[mi].radius;
+        if (abs(O[k].x - dest.x) >= bd || abs(O[k].y - dest.y) >= bd) { continue; }
+        if (!stomp) { return false; }
+      }
+      if (stomp) {
+        for (var k = 0u; k < MAXMOBJS; k++) {
+          if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SHOOTABLE) == 0u) { continue; }
+          let bd = O[k].radius + O[mi].radius;
+          if (abs(O[k].x - dest.x) >= bd || abs(O[k].y - dest.y) >= bd) { continue; }
+          damageMobj(k, i32(mi), i32(mi), 10000);
+        }
+      }
+      let dsec = sectorAt(dest);
+      O[mi].x = dest.x; O[mi].y = dest.y; O[mi].sector = dsec;
+      O[mi].floorz = S[dsec].floorh; O[mi].ceilingz = S[dsec].ceilh; O[mi].dropoffz = S[dsec].floorh;
       O[mi].z = O[mi].floorz;
       if (mi == 0u) { P.viewz = O[mi].z + P.viewheight; }
       _ = spawnMobj(old.x, old.y, oldz, MT_TFOG);
@@ -1953,7 +2072,7 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
   }
   if (tgt == 0u) {
     if (S[O[0].sector].special == 11 && damage >= O[0].health) { damage = O[0].health - 1; }
-    if (damage < 1000 && P.powers[0] > 0) { return; }
+    if (damage < 1000 && (P.powers[0] > 0 || (P.cheats & 2u) != 0u)) { return; }
     if (P.armortype != 0) {
       var saved = select(damage / 2, damage / 3, P.armortype == 1);
       if (P.armor <= saved) { saved = P.armor; P.armortype = 0; }
@@ -2683,7 +2802,8 @@ fn calcHeight(onground: bool) {
     P.viewz = min(m.z + VIEWHEIGHT, m.ceilingz - 4.0);
     return;
   }
-  let b = bob / 2.0 * sin(TAU * f32(P.leveltime % 20u) / 20.0);
+  // FINEANGLES/20 truncates to 409, so the bob's period is not quite 20 tics
+  let b = bob / 2.0 * sin(TAU * f32((409u * P.leveltime) & 8191u) / 8192.0);
   if (P.dead == 0u) {
     P.viewheight += P.deltaviewheight;
     if (P.viewheight > VIEWHEIGHT) { P.viewheight = VIEWHEIGHT; P.deltaviewheight = 0.0; }
@@ -2752,6 +2872,8 @@ fn playerThink() {
       if (U.side != 0.0) { O[0].momx += sin(a) * U.side / 32.0; O[0].momy -= cos(a) * U.side / 32.0; }
     }
   }
+  // P_PlayerThink: the view height follows the thrust, before the thinkers move the player
+  calcHeight(onground);
   if (O[0].sector < NUMSECTORS && S[O[0].sector].special != 0) { playerInSpecialSector(); }
   if ((U.buttons & 2u) != 0u) {
     if (P.usedown == 0u) { useLines(); P.usedown = 1u; }
@@ -2779,11 +2901,11 @@ fn playerThink() {
 fn ticPlayer() {
   if (P.exit != 0u) { return; }
   playerThink();
+  if ((P.cheats & 1u) != 0u) { O[0].flags |= MF_NOCLIP; } else { O[0].flags &= ~MF_NOCLIP; }
   let hasCmd = U.forward != 0.0 || U.side != 0.0;
   numcross = 0u;
   if (O[0].momx != 0.0 || O[0].momy != 0.0) { playerXY(hasCmd); processCrossings(0u); }
   if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
-  calcHeight(O[0].z <= O[0].floorz);
 }
 
 // Start of a tic: remember where everything was, so frames between tics can blend.
@@ -2823,7 +2945,7 @@ fn ticMobjs() {
 
 @compute @workgroup_size(1)
 fn ticActivate() {
-  let n = min(P.nact, 9u);
+  let n = min(P.nact, 32u);
   P.nact = 0u;
   if (P.exit != 0u) { return; }
   for (var k = 0u; k < n; k++) {
@@ -2912,8 +3034,9 @@ fn amLines(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i < NUMLINES) {
     let flags = lineFlags(i);
-    if ((flags & 128u) != 0u) { return; } // ML_DONTDRAW
-    let mapped = (LS[i] & 0x80000000u) != 0u || (flags & 256u) != 0u;
+    let cheating = (P.cheats & 4u) != 0u;
+    if ((flags & 128u) != 0u && !cheating) { return; } // ML_DONTDRAW
+    let mapped = (LS[i] & 0x80000000u) != 0u || (flags & 256u) != 0u || cheating;
     var c = 0u;
     if (mapped) {
       let bk = lineBack(i);

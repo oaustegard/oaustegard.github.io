@@ -20,7 +20,8 @@ Edge or Safari.
 | ctrl, F, click | fire |
 | 1 – 7 | weapons |
 | tab, M | automap; + and − or the mouse wheel zoom it (MAP and +/− buttons on a phone) |
-| esc | DOOM's menu: New Game picks the episode and skill, Options holds resolution, tilt and level warp |
+| esc | DOOM's menu: New Game picks the episode and skill, Load Game and Save Game use six slots kept in the browser, Options holds resolution, tilt and level warp |
+| iddqd, idkfa, idfa, idclip, iddt, idclevXY | DOOM's cheats, typed while playing |
 | phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn |
 
 On a phone, the pose at Play is level: the back camera's elevation against gravity sets the look pitch, the screen's roll steers, and swivel (the rotation rate projected on gravity) turns directly. The menu switches each one on or off and sets the turn speed. Looking up and down shears the view by moving the horizon row, as later source ports do; the original engine could not. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
@@ -83,6 +84,8 @@ level.
   plays them in an AudioWorklet through an OPL-style FM synthesizer: 18 two-operator voices with
   OPL2 waveforms, envelope rates and feedback, set from the WAD's GENMIDI patches with DOOM's
   volume and frequency curves from Chocolate Doom's `i_oplmusic.c`.
+- **Save games.** A save reads back the four state buffers (sectors, things, line specials and
+  the world block) into IndexedDB; a load compiles the level and writes them back.
 - **What JavaScript does each frame.** It writes the input, encodes N tics plus the render and
   status bar passes, and copies 1 KB of the world buffer back to the CPU. That readback carries the
   sound queue and the level-exit flag.
@@ -96,10 +99,15 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Not done yet
 
-Monster behaviour is a port of DOOM's `A_Look`, `A_Chase` and attack functions. It has been
-checked by scripted runs on E1M1 and E1M2: waking on sight and sound, chasing, attacks, teleport
-closets, and sight against a CPU copy of `P_CheckSight`. It has not been compared tic for tic
-with Chocolate Doom. The music synth has been checked by its spectrum, not by ear.
+Player movement has been compared tic for tic with Chocolate Doom: the same scripted inputs go into
+a demo lump for Chocolate Doom, patched to print the player every tic, and into the GPU engine.
+Thrust, friction, wall sliding (`P_SlideMove`, ported with its blockmap quirks) and the view bob
+agree to within a few units over a 365-tic walk; the rest of the difference is floats against
+DOOM's fixed point. Monsters can't be compared that way yet, because the GPU engine's random
+numbers don't follow DOOM's table in DOOM's call order. Their behaviour has been checked by
+scripted runs on E1M1 and E1M2 instead: waking on sight and sound, chasing, attacks, teleport
+closets, and sight against a CPU copy of `P_CheckSight`. The music synth has been checked by its
+spectrum, not by ear.
 
 ## Licences
 
