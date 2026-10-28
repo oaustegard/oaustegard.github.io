@@ -1,4 +1,4 @@
-# Doom on the GPU
+# gPu(doom)
 
 The Doom engine rewritten as WebGPU compute shaders, playing Freedoom's first episode. The renderer
 and the game simulation both run on the GPU. JavaScript reads the WAD, writes the keys into a
