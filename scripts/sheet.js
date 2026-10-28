@@ -1,5 +1,6 @@
 /* sheet.js: the map layer of body[data-sheet="full"] pages (home).
-   Pans the fixed map plane with scroll so Austegarden sits behind #place, keeps the
+   Pans the fixed map plane with scroll so Austegarden sits behind #place (its offset is left on the plane as
+   p.x / p.y for weather.js, which hooks p.onmove), keeps the
    left-margin kilometre numbers true, and focuses the search box on "/".
    Plane: 2800 x 2000 px, 2.5 m per px, top left = UTM 32N E 291500 / N 6719600.
    The map image is not in the HTML: it is added after the window load event, when the browser is idle, so
@@ -44,15 +45,16 @@
   function draw() {
     raf = 0;
     if (a === undefined) return;
-    ty = -(a + b * (window.pageYOffset || 0));
-    p.style.transform = 'translate3d(' + clamp(fx - MX, vw - W, 0) + 'px,' + clamp(ty, vh - H, 0).toFixed(1) + 'px,0)';
-    ty = clamp(ty, vh - H, 0);
+    ty = +clamp(-(a + b * (window.pageYOffset || 0)), vh - H, 0).toFixed(1);
+    p.x = clamp(fx - MX, vw - W, 0); p.y = ty;
+    p.style.transform = 'translate3d(' + p.x + 'px,' + ty + 'px,0)';
     ticks();
+    if (p.onmove) p.onmove();   /* weather.js redraws the sea in the same frame */
   }
 
   function measure() {
     vw = innerWidth; vh = innerHeight;
-    if (still) { ty = new DOMMatrix(getComputedStyle(p).transform).m42; ticks(); return; }
+    if (still) { var m = new DOMMatrix(getComputedStyle(p).transform); p.x = m.m41; p.y = ty = m.m42; ticks(); if (p.onmove) p.onmove(); return; }
     var r = pl ? pl.getBoundingClientRect() : null,
         smax = Math.max(1, d.documentElement.scrollHeight - vh),
         sp = r ? clamp(r.top + (window.pageYOffset || 0) + r.height * .5458 - vh / 2, 1, smax) : smax,

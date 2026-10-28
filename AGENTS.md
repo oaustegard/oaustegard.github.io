@@ -105,7 +105,7 @@ The repository is organized into thematic subdirectories containing standalone w
 - `/data/`: `tool-notes.json` is edited by hand (curated titles, blurbs, featured flags, and the `added` date that orders the Newest view: run `python3 scripts/build_tools.py --stamp-dates` in a full clone after adding a tool to fill it from git); `tools.json` is generated from it and the pages on disk, and feeds the search on `/tools.html`.
 - `/fonts/`: Self-hosted woff2 subsets of Fraunces, DM Sans and JetBrains Mono. Declared in `styles/style.css`; no other fonts and no Google Fonts.
 - `/images/`: Site-wide images and assets. `images/map/` holds the three generated map SVGs (see Do / Don't); `images/plates/` holds engravings used as CSS masks; `images/og-austegard.png` is the link-preview image.
-- `/scripts/`: Shared JavaScript files or scripts used by multiple pages. `build_site.py` runs the two generators, `build_tools.py` and `build_blog.py` (flags `--check`, `--dry-run`); `map/build_flatoy.py` regenerates the map; `sheet.js` is the map layer of the home page.
+- `/scripts/`: Shared JavaScript files or scripts used by multiple pages. `build_site.py` runs the two generators, `build_tools.py` and `build_blog.py` (flags `--check`, `--dry-run`); `map/build_flatoy.py` regenerates the map; `sheet.js` is the map layer of the home page. `weather.js` puts the weather now at Austegarden (MET Norway locationforecast, cached in localStorage until the response's Expires) on every `full` and `band` page: a one-line readout (`#wx` in the home cartouche, after the coordinates in the sheet bar elsewhere), fog fading the map, and, with WebGPU, wave lines, crest dashes, rain rings, snow and hatched cloud shadows drawn under the map lines. Every `band` page loads it (`blog/_template.html` and `scripts/build_blog.py` carry the tag); add it to a new one. `?wx=ws:12,wd:200,cl:90,pr:2,fog:0,t:8,sym:rain` previews any weather. Headless Chromium destroys a WebGPU device that draws to a canvas, so check it headful under `xvfb-run`.
 - `/styles/`: CSS stylesheets. `style.css` is shared and site-wide (tokens, type, components), `home.css` is the home page only, `blog.css` is article reading styles. `/style-guide.html` documents them.
 
 ## Development Workflow
@@ -127,7 +127,7 @@ The repository is organized into thematic subdirectories containing standalone w
 - **Do**: Run `python3 scripts/build_site.py --check` after adding, renaming or removing a tool page or a post; it exits 1 and lists what is stale.
 - **Do**: Keep `Kartdata © Kartverket (CC BY 4.0)` in the footer of every page with `data-sheet="band"` or `"full"`, and in any caption that shows map data. The map SVGs are Kartverket open data under CC BY 4.0, so this is a licence requirement. Regenerate them with `python3 scripts/map/build_flatoy.py`, never by hand.
 - **Don't**: Rewrite tool pages to use the shared CSS. They stay self-contained with their own styles. Any change to `styles/style.css` must keep the pages that do link it looking right, and the legacy custom-property names (`--grouch`, `--bg`, `--link` and so on) must keep working.
-- **Don't**: Add fonts, a font service or a third-party request to pages that use the shared CSS. Fonts are local, in `/fonts`.
+- **Don't**: Add fonts, a font service or a third-party request to pages that use the shared CSS. Fonts are local, in `/fonts`. The one exception is `weather.js`'s request to `api.met.no` (CORS-open, credited as MET Norway in the readout).
 
 ## PR Instructions
 

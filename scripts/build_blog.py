@@ -286,6 +286,7 @@ def generate_index(posts, config):
 <link rel="preload" href="/fonts/fraunces-roman.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="preload" href="/fonts/dm-sans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/styles/style.css">
+<script src="/scripts/weather.js" defer></script>
 <link rel="stylesheet" href="/styles/blog.css">
 <link rel="alternate" type="application/atom+xml" title="{feed_title}" href="/feed.xml">
 </head>
