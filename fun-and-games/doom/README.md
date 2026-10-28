@@ -113,8 +113,8 @@ the random number index and the player's position, to the last 1/65536 of a unit
 tic. On the seven E1 and Doom II demos that also track monsters, their positions and health agree
 on all 467,670 monster-tics. Their states differ on 7 of them, each a pain or death state set by another
 thing's attack showing one tic late, because a state change requested from outside is applied at
-the monster's next think. One demo stops agreeing where the player dies and Chocolate's demo
-respawns them, which the comparison harness doesn't do.
+the monster's next think. Two demos (E2M1 and MAP09) are compared only up to tic 565, where the
+player has died and Chocolate's demo respawns them; the comparison harness doesn't restart levels.
 
 Getting there took DOOM's arithmetic rather than an approximation of it:
 
