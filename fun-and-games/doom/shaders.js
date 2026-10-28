@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028055125";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028055125";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028060626";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028060626";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -190,14 +190,24 @@ fn animFlat(t: u32) -> u32 {
   return t;
 }
 
+// R_PointOnSide (quick = its sign-bit shortcut) and P_PointOnLineSide: the line's integer delta times
+// the 16.16 offset, each product truncated to whole map units by FixedMul, so a point within about
+// 1/64 unit of a line can land on its back side
+fn lineSideFx(p: vec2f, a: vec2f, d: vec2f, quick: bool) -> u32 {
+  if (d.x == 0.0) { if (p.x <= a.x) { return select(0u, 1u, d.y > 0.0); } return select(0u, 1u, d.y < 0.0); }
+  if (d.y == 0.0) { if (p.y <= a.y) { return select(0u, 1u, d.x < 0.0); } return select(0u, 1u, d.x > 0.0); }
+  let dx = fixedOf(p.x) - fixedOf(a.x); let dy = fixedOf(p.y) - fixedOf(a.y);
+  let ldx = i32(d.x); let ldy = i32(d.y);
+  if (quick && (ldy ^ ldx ^ dx ^ dy) < 0) { return select(0u, 1u, (ldy ^ dx) < 0); }
+  return select(1u, 0u, fxMul(dy, ldx) < fxMul(ldy, dx));
+}
 fn pointInSubsector(p: vec2f) -> u32 {
   if (NUMNODES == 0u) { return 0u; }
   var n = max(NUMNODES, 1u) - 1u;
   for (var guard = 0; guard < 256; guard++) {
     if ((n & 0x8000u) != 0u) { return n & 0x7fffu; }
     let o = M_NODE + 14u * n;
-    let side = select(0u, 1u, (p.y - mf(o + 1u)) * mf(o + 2u) >= mf(o + 3u) * (p.x - mf(o)));
-    n = M[o + 12u + side];
+    n = M[o + 12u + lineSideFx(p, vec2f(mf(o), mf(o + 1u)), vec2f(mf(o + 2u), mf(o + 3u)), true)];
   }
   return 0u;
 }
@@ -725,13 +735,7 @@ fn findMinSurroundingLight(sec: u32, maxl: i32) -> i32 {
 }
 
 // ---- geometry for movement
-fn pointOnLineSide(p: vec2f, l: u32) -> u32 {
-  let a = lineA(l); let dl = lineB(l) - a;
-  if (dl.x == 0.0) { if (p.x <= a.x) { return select(0u, 1u, dl.y > 0.0); } return select(0u, 1u, dl.y < 0.0); }
-  if (dl.y == 0.0) { if (p.y <= a.y) { return select(0u, 1u, dl.x < 0.0); } return select(0u, 1u, dl.x > 0.0); }
-  let left = dl.y * (p.x - a.x); let right = (p.y - a.y) * dl.x;
-  return select(1u, 0u, right < left);
-}
+fn pointOnLineSide(p: vec2f, l: u32) -> u32 { let a = lineA(l); return lineSideFx(p, a, lineB(l) - a, false); }
 // P_BoxOnLineSide: -1 if the box crosses the line, else the side. Axis-aligned lines compare
 // strictly, so a box edge lying on the line doesn't cross it; sloped lines test two corners.
 fn boxOnLineSide(lo: vec2f, hi: vec2f, l: u32) -> i32 {
@@ -912,8 +916,10 @@ var<private> bestslideline: i32;
 fn divlineSide(pt: vec2f, o: vec2f, d: vec2f) -> u32 {
   if (d.x == 0.0) { if (pt.x <= o.x) { return select(0u, 1u, d.y > 0.0); } return select(0u, 1u, d.y < 0.0); }
   if (d.y == 0.0) { if (pt.y <= o.y) { return select(0u, 1u, d.x < 0.0); } return select(0u, 1u, d.x > 0.0); }
-  let left = d.y * (pt.x - o.x); let right = (pt.y - o.y) * d.x;
-  return select(1u, 0u, right < left);
+  let dx = fixedOf(pt.x) - fixedOf(o.x); let dy = fixedOf(pt.y) - fixedOf(o.y);
+  let ldx = fixedOf(d.x); let ldy = fixedOf(d.y);
+  if ((ldy ^ ldx ^ dx ^ dy) < 0) { return select(0u, 1u, (ldy ^ dx) < 0); }
+  return select(1u, 0u, fxMul(dy >> 8u, ldx >> 8u) < fxMul(ldy >> 8u, dx >> 8u));
 }
 // P_AddLineIntercepts' crossing test and P_InterceptVector, then PTR_SlideTraverse
 fn slideCheckLine(l: u32, p: vec2f, d: vec2f) {
@@ -2059,8 +2065,8 @@ fn sightSide(p: vec2f, o: vec2f, d: vec2f) -> u32 {
     if (p.y <= o.y) { return select(0u, 1u, d.x < 0.0); }
     return select(0u, 1u, d.x > 0.0);
   }
-  let left = i32(floor(d.y)) * i32(floor(p.x - o.x));
-  let right = i32(floor(p.y - o.y)) * i32(floor(d.x));
+  let left = (fixedOf(d.y) >> 16u) * ((fixedOf(p.x) - fixedOf(o.x)) >> 16u);
+  let right = ((fixedOf(p.y) - fixedOf(o.y)) >> 16u) * (fixedOf(d.x) >> 16u);
   if (right < left) { return 0u; }
   if (left == right) { return 2u; }
   return 1u;
@@ -3121,6 +3127,9 @@ fn playerThink() {
     O[0].angle = O[0].angle + U.turn + select(0.0, U.mouseturn, first);
     if (first) { P.pva += U.mouseturn; }
     O[0].angle = O[0].angle - TAU * floor(O[0].angle / TAU);
+    // every turn is angleturn << 16 BAM: snap to that grid so f32 rounding can't build up and tip
+    // the finesine index (fineAngle) across a step, as it did 145 tics into E1M6
+    O[0].angle = f32(u32(round(O[0].angle / TAU * 65536.0)) & 0xffffu) * (TAU / 65536.0);
     // P_Thrust through DOOM's finesine table: 8192 steps, each sampled half a step in
     let fa = fineAngle(O[0].angle);
     if (onground) {
