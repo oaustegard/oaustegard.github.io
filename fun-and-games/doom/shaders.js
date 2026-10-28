@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028052252";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028052252";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028053106";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028053106";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -906,7 +906,7 @@ fn processCrossings(mi: u32) {
 }
 
 // ---- P_SlideMove's wall search: P_PathTraverse over the blockmap with PTR_SlideTraverse
-var<private> bestslidefrac: f32;
+var<private> bestslidefrac: i32; // 16.16
 var<private> bestslideline: i32;
 // P_PointOnDivlineSide
 fn divlineSide(pt: vec2f, o: vec2f, d: vec2f) -> u32 {
@@ -922,10 +922,13 @@ fn slideCheckLine(l: u32, p: vec2f, d: vec2f) {
   if (abs(d.x) > 16.0 || abs(d.y) > 16.0) { s1 = divlineSide(a, p, d); s2 = divlineSide(a + dl, p, d); }
   else { s1 = pointOnLineSide(p, l); s2 = pointOnLineSide(p + d, l); }
   if (s1 == s2) { return; }
-  let den = dl.y * d.x - dl.x * d.y;
-  var frac = 0.0;
-  if (den != 0.0) { frac = ((a.x - p.x) * dl.y + (p.y - a.y) * dl.x) / den; }
-  if (frac < 0.0 || frac > 1.0 || frac >= bestslidefrac) { return; }
+  // P_InterceptVector in 16.16, with its >> 8 pre-shifts
+  let ax = fixedOf(a.x); let ay = fixedOf(a.y); let ldx = fixedOf(dl.x); let ldy = fixedOf(dl.y);
+  let px = fixedOf(p.x); let py = fixedOf(p.y); let tdx = fixedOf(d.x); let tdy = fixedOf(d.y);
+  let den = fxMul(ldy >> 8u, tdx) - fxMul(ldx >> 8u, tdy);
+  var frac = 0;
+  if (den != 0) { frac = fxDiv(fxMul((ax - px) >> 8u, ldy) + fxMul((py - ay) >> 8u, ldx), den); }
+  if (frac < 0 || frac > 65536 || frac >= bestslidefrac) { return; }
   if ((lineFlags(l) & ML_TWOSIDED) == 0u || lineBack(l) < 0) {
     if (pointOnLineSide(mpos(0u), l) != 0u) { return; } // don't hit the back side
   } else {
@@ -969,13 +972,13 @@ fn hitSlideLine(l: u32, mv: vec2f) -> vec2f {
   let dl = lineB(l) - lineA(l);
   if (dl.y == 0.0) { return vec2f(mv.x, 0.0); }
   if (dl.x == 0.0) { return vec2f(0.0, mv.y); }
-  var la = atan2(dl.y, dl.x);
-  if (pointOnLineSide(mpos(0u), l) == 1u) { la += PI; }
-  var da = atan2(mv.y, mv.x) - la;
-  da -= TAU * floor(da / TAU);
-  if (da > PI) { da += PI; }
-  let nl = approxDist(mv) * cos(da);
-  return vec2f(nl * cos(la), nl * sin(la));
+  var la = pointToAngle(vec2f(0.0), dl);
+  if (pointOnLineSide(mpos(0u), l) == 1u) { la += 0x80000000u; }
+  var da = pointToAngle(vec2f(0.0), mv) - la;
+  if (da > 0x80000000u) { da += 0x80000000u; }
+  let nl = fxMul(approxDistFx(vec2f(0.0), mv), fineCosFx(da >> 19u));
+  let lf = la >> 19u;
+  return vec2f(f32(fxMul(nl, fineCosFx(lf))), f32(fxMul(nl, fineSinFx(lf)))) / 65536.0;
 }
 
 // The player's P_XYMovement with P_SlideMove, as a state machine around one tryMove call site
@@ -1006,23 +1009,23 @@ fn playerXY(hasCmd: bool) {
         let r = O[0].radius;
         let lead = pos + vec2f(select(-r, r, mom.x > 0.0), select(-r, r, mom.y > 0.0));
         let trail = pos - vec2f(select(-r, r, mom.x > 0.0), select(-r, r, mom.y > 0.0));
-        bestslidefrac = 1.0 + 1.0 / 65536.0; bestslideline = -1;
+        bestslidefrac = 65537; bestslideline = -1;
         slideTrace(lead, mom);
         slideTrace(vec2f(trail.x, lead.y), mom);
         slideTrace(vec2f(lead.x, trail.y), mom);
         if (bestslideline < 0) { st = 5u; }
         else {
-          bestslidefrac -= 1.0 / 32.0; // fudge a bit to make sure it doesn't hit
-          if (bestslidefrac > 0.0) { tgt = pos + mom * bestslidefrac; tryNow = true; st = 2u; }
+          bestslidefrac -= 0x800; // fudge a bit to make sure it doesn't hit
+          if (bestslidefrac > 0) { tgt = pos + vec2f(f32(fxMul(fixedOf(mom.x), bestslidefrac)), f32(fxMul(fixedOf(mom.y), bestslidefrac))) / 65536.0; tryNow = true; st = 2u; }
           else { st = 3u; }
         }
       }
     }
     if (st == 3u && !tryNow) {
-      let rem = min(1.0 - (bestslidefrac + 1.0 / 32.0), 1.0);
-      if (rem <= 0.0) { st = 7u; }
+      let rem = min(65536 - (bestslidefrac + 0x800), 65536);
+      if (rem <= 0) { st = 7u; }
       else {
-        let tm = hitSlideLine(u32(bestslideline), mom * rem);
+        let tm = hitSlideLine(u32(bestslideline), vec2f(f32(fxMul(fixedOf(mom.x), rem)), f32(fxMul(fixedOf(mom.y), rem))) / 65536.0);
         O[0].momx = tm.x; O[0].momy = tm.y;
         tgt = pos + tm; tryNow = true; st = 4u;
       }
@@ -1040,7 +1043,7 @@ fn playerXY(hasCmd: bool) {
   if (O[0].z > O[0].floorz) { return; }
   let m2 = vec2f(O[0].momx, O[0].momy);
   if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && !hasCmd) { O[0].momx = 0.0; O[0].momy = 0.0; }
-  else { O[0].momx = m2.x * FRICTION; O[0].momy = m2.y * FRICTION; }
+  else { O[0].momx = friction(m2.x); O[0].momy = friction(m2.y); }
 }
 
 fn explodeMissile(mi: u32) {
@@ -1088,7 +1091,7 @@ fn thingXY(mi: u32) {
   if (O[mi].z > O[mi].floorz) { return; }
   let m2 = vec2f(O[mi].momx, O[mi].momy);
   if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
-  else { O[mi].momx = m2.x * FRICTION; O[mi].momy = m2.y * FRICTION; }
+  else { O[mi].momx = friction(m2.x); O[mi].momy = friction(m2.y); }
 }
 
 fn zMovement(mi: u32, isPlayer: bool) {
@@ -1980,6 +1983,23 @@ fn approxDistFx(a: vec2f, b: vec2f) -> i32 {
   return dx + dy - (min(dx, dy) >> 1u);
 }
 fn subRandomI() -> i32 { let r = P_Random(); return r - P_Random(); }
+// FixedMul without 64 bits: split both factors into 16-bit halves; wraps like DOOM's (int) cast
+fn fxMul(a: i32, b: i32) -> i32 {
+  let ah = a >> 16u; let al = u32(a & 0xffff); let bh = b >> 16u; let bl = u32(b & 0xffff);
+  return a * bh + ah * i32(bl) + i32((al * bl) >> 16u);
+}
+fn fx(v: f32) -> f32 { return f32(fixedOf(v)) / 65536.0; }
+// FixedDiv: (a << 16) / b truncated, saturating when the quotient overflows, by long division
+fn fxDiv(a: i32, b: i32) -> i32 {
+  let ua = u32(abs(a)); let ub = u32(abs(b));
+  let neg = (a ^ b) < 0;
+  if ((ua >> 14u) >= ub) { return select(0x7fffffff, i32(-2147483647 - 1), neg); }
+  var q = ua / ub; var r = ua % ub;
+  for (var k = 0; k < 16; k++) { r <<= 1u; q <<= 1u; if (r >= ub) { r -= ub; q |= 1u; } }
+  return select(i32(q), -i32(q), neg);
+}
+// FixedMul(mom, FRICTION = 0xe800), exact: 0xe800 = 232 << 8
+fn friction(m: f32) -> f32 { return f32((fixedOf(m) * 232) >> 8u) / 65536.0; }
 fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
 fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
 // loops over things stop at the highest slot in use (a save from before this was kept has 0)
@@ -3097,8 +3117,9 @@ fn playerThink() {
     // P_Thrust through DOOM's finesine table: 8192 steps, each sampled half a step in
     let fa = fineAngle(O[0].angle);
     if (onground) {
-      if (U.forward != 0.0) { O[0].momx += fineCos(fa) * U.forward / 32.0; O[0].momy += fineSin(fa) * U.forward / 32.0; }
-      if (U.side != 0.0) { let fs = (fa + 6144u) & 8191u; O[0].momx += fineCos(fs) * U.side / 32.0; O[0].momy += fineSin(fs) * U.side / 32.0; }
+      // P_Thrust: FixedMul(move * 2048, finecosine) is (move * finecosine) >> 5, floored
+      if (U.forward != 0.0) { let fm = i32(U.forward); O[0].momx += f32((fm * fineCosFx(fa)) >> 5u) / 65536.0; O[0].momy += f32((fm * fineSinFx(fa)) >> 5u) / 65536.0; }
+      if (U.side != 0.0) { let sm = i32(U.side); let fs = (fa + 6144u) & 8191u; O[0].momx += f32((sm * fineCosFx(fs)) >> 5u) / 65536.0; O[0].momy += f32((sm * fineSinFx(fs)) >> 5u) / 65536.0; }
     }
   }
   // P_PlayerThink: the view height follows the thrust, before the thinkers move the player
