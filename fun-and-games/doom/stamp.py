@@ -10,7 +10,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 version = time.strftime("%Y%m%d%H%M%S", time.gmtime())
-for f in ["index.html", "engine.js", "shaders.js", "wad.js", "specials.js", "info.js"]:
+for f in ["index.html", "engine.js", "shaders.js", "wad.js", "specials.js", "info.js", "music.js"]:
     p = HERE / f
     s = p.read_text()
     t = re.sub(r'from "\./(\w+)\.js(?:\?v=\w+)?"', rf'from "./\1.js?v={version}"', s)

@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028031646";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028031646";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028033804";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028033804";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -39,7 +39,7 @@ const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS
 const G_ANIMTEX = ${G.ANIMTEX}u; const G_ANIMFLAT = ${G.ANIMFLAT}u; const G_SWITCH = ${G.SWITCH}u;
 const G_MSGDIR = ${G.MSGDIR}u; const G_MSGCHARS = ${G.MSGCHARS}u;
 const M_VERT = ${M.VERT}u; const M_LINE = ${M.LINE}u; const M_SIDE = ${M.SIDE}u; const M_SEG = ${M.SEG}u; const M_SSEC = ${M.SSEC}u;
-const M_NODE = ${M.NODE}u; const M_REJECT = ${M.REJECT}u; const M_BMCELL = ${M.BMCELL}u; const M_BMLIST = ${M.BMLIST}u; const M_SECLINE = ${M.SECLINE}u; const M_SECLIST = ${M.SECLIST}u;
+const M_NODE = ${M.NODE}u; const M_REJECT = ${M.REJECT}u; const M_THINGS = ${M.THINGS}u; const M_BMCELL = ${M.BMCELL}u; const M_BMLIST = ${M.BMLIST}u; const M_SECLINE = ${M.SECLINE}u; const M_SECLIST = ${M.SECLIST}u;
 const NUMLINES = ${c.lines}u; const NUMSIDES = ${c.sides}u; const NUMSECTORS = ${c.sectors}u; const NUMNODES = ${c.nodes}u;
 const BM_X = ${map.bmap.x}.0; const BM_Y = ${map.bmap.y}.0; const BM_W = ${map.bmap.w}; const BM_H = ${map.bmap.h};
 const MAXMOBJS = ${maxMobjs}u; const MAXVIS = ${MAXVIS}u;
@@ -96,7 +96,7 @@ struct Mobj {
   sector: u32, targ: i32, tracer: i32, movedir: i32,
   movecount: i32, reactiontime: i32, threshold: i32, lastlook: i32,
   inuse: u32, dropoffz: f32, req: u32, seeplayer: u32,
-  px: f32, py: f32, pz: f32, pad5: u32, // position at the previous tic
+  px: f32, py: f32, pz: f32, spawnidx: u32, // position at the previous tic; map thing it spawned from
 }
 struct World {
   viewx: f32, viewy: f32, viewz: f32, viewangle: f32,
@@ -1861,7 +1861,7 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     m.z = z;
     if (z == ONFLOORZ) { m.z = m.floorz; }
     m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
-    m.req = NOREQ; m.inuse = 1u;
+    m.req = NOREQ; m.inuse = 1u; m.spawnidx = NOREQ;
     m.px = m.x; m.py = m.y; m.pz = m.z;
     O[j] = m;
     return i32(j);
@@ -2414,6 +2414,27 @@ fn setMobjState(mi: u32, st0: u32) -> bool {
   return true;
 }
 
+// P_NightmareRespawn
+fn nightmareRespawn(mi: u32) {
+  let t = M_THINGS + 4u * O[mi].spawnidx;
+  let sp = vec2f(mf(t), mf(t + 1u));
+  if (!checkPosition(mi, sp)) { return; }
+  let f1 = spawnMobj(O[mi].x, O[mi].y, S[O[mi].sector].floorh, MT_TFOG);
+  if (f1 >= 0) { mobjSound(u32(f1), SFX_telept); }
+  let f2 = spawnMobj(sp.x, sp.y, ONFLOORZ, MT_TFOG);
+  if (f2 >= 0) { mobjSound(u32(f2), SFX_telept); }
+  let ty = O[mi].mtype;
+  let n = spawnMobj(sp.x, sp.y, ONFLOORZ, ty);
+  if (n >= 0) {
+    if ((O[n].flags & MF_SPAWNCEILING) != 0u) { O[n].z = O[n].ceilingz - O[n].height; O[n].pz = O[n].z; }
+    O[n].spawnidx = O[mi].spawnidx;
+    O[n].angle = floor(mf(t + 2u) / 45.0) * PI / 4.0;
+    if ((M[t + 3u] & 8u) != 0u) { O[n].flags |= MF_AMBUSH; }
+    O[n].reactiontime = 18;
+  }
+  O[mi].inuse = 0u;
+}
+
 fn mobjThink(mi: u32) {
   // sight to a non-player target, once per think
   sightTarget = false;
@@ -2429,6 +2450,10 @@ fn mobjThink(mi: u32) {
   else if (O[mi].tics != -1) {
     O[mi].tics -= 1;
     if (O[mi].tics <= 0) { next = stateNext(O[mi].state); }
+  } else if (P.skill == 4 && (O[mi].flags & MF_COUNTKILL) != 0u && O[mi].spawnidx != NOREQ) {
+    // Nightmare: a corpse that has lain 12 seconds may rise at its spawn point
+    O[mi].movecount += 1;
+    if (O[mi].movecount >= 12 * 35 && (P.leveltime & 31u) == 0u && P_Random() <= 4) { nightmareRespawn(mi); return; }
   }
   if (next != NOREQ) { _ = setMobjState(mi, next); }
 }

@@ -87,6 +87,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <option value="800">800 lines</option>
     </select></label>
     <label>Widescreen (fit the screen's shape) <input type="checkbox" id="wide" checked></label>
+    <label>Music volume <input type="range" id="musicVol" min="0" max="1" step="0.05" value="0.6"></label>
     <div id="tiltOpts" hidden>
       <label>Swivel to turn <input type="checkbox" id="tilt" checked></label>
       <label>Tilt sideways to turn <input type="checkbox" id="tiltRoll" checked></label>
@@ -115,7 +116,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028031646";
+import { Music, musicLumpFor } from "./music.js?v=20261028033804";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028033804";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -185,6 +187,7 @@ async function start(mapName, carry = freshPlayer()) {
   if ($("menu").hidden) banner(`Loading ${mapName}…<small>compiling the GPU code</small>`);
   $("play").disabled = true;
   await engine.loadMap(mapName, carry);
+  playSong(musicLumpFor(mapName));
   banner("");
   player = carry;
   status("");
@@ -518,6 +521,7 @@ function startIntermission(info) {
       par: L && L.ep >= 0 && L.ep < 3 ? PARS[L.ep][L.map] : L && L.ep < 0 ? CPARS[L.map] ?? -1 : -1 },
     cnt: { kills: -1, items: -1, secret: -1, time: -1, par: -1 } };
   menu = null; // the menu's skull timer must not draw over the intermission
+  playSong(commercial() ? "D_DM2INT" : "D_INTER");
   $("menu").hidden = true;
   dmenu.hidden = false;
   clearInterval(interTimer);
@@ -674,6 +678,7 @@ const MENUS = {
 function go(screen, item = 0) {
   const epi = menu?.epi ?? episodes()[0] ?? 1;
   menu = { screen, item, epi };
+  if (!engine?.map) playSong(commercial() ? "D_DM2TTL" : "D_INTRO");
   drawMenu();
 }
 function showMenu() {
@@ -686,7 +691,22 @@ function showMenu() {
 function hideMenu() { menu = null; dmenu.hidden = true; $("menu").hidden = true; }
 function openOptions() { dmenu.hidden = true; $("menu").hidden = false; }
 function resume() { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); }
-function ensureAudio() { if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } } audio?.resume?.(); }
+function ensureAudio() {
+  if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
+  audio?.resume?.();
+  ensureMusic();
+}
+// DOOM's music through the OPL-style synth; it needs the AudioContext, so it starts on the first click or key
+let music = null, musicLoading = false, wantSong = null;
+async function ensureMusic() {
+  if (music || musicLoading || !audio || !engine) return;
+  musicLoading = true;
+  try { music = await Music.create(audio, engine.wad); } catch (err) { console.warn("music", err); }
+  musicLoading = false;
+  if (music) { music.setVolume(+$("musicVol").value); if (wantSong) music.play(wantSong); }
+}
+function playSong(lump) { wantSong = lump; music?.play(lump); }
+$("musicVol").addEventListener("input", () => music?.setVolume(+$("musicVol").value));
 function uiSound(name) { if (engine) playSound({ sfx: name, x: 0, y: 0 }, { x: 0, y: 0, angle: 0 }); }
 
 async function newGame(skillIndex) {
@@ -825,6 +845,7 @@ $("wadfile").addEventListener("change", async (e) => {
     await buildEngine();
     engine.map = null;
     patchCache.clear();
+    if (music) { music.wad = engine.wad; music.current = null; }
     status(f.name + " loaded. Back to the menu and New Game to play it.");
   } catch (err) { status("Could not load that WAD: " + err.message); }
 });

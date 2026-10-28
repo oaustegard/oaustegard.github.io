@@ -77,7 +77,12 @@ level.
   drawn on a 2D canvas from the WAD's own `M_` and `WI` graphics, at DOOM's 320×200 coordinates.
   Skill sets which things spawn (the map's per-skill flags), halves damage and doubles ammo on the
   easiest skill, and on Nightmare doubles ammo, halves the demons' run and bite tics, speeds up
-  imp, cacodemon and baron fireballs, and zeroes monster reaction time.
+  imp, cacodemon and baron fireballs, zeroes monster reaction time, and lets a corpse that has lain
+  12 seconds rise again at its spawn point (`P_NightmareRespawn`).
+- **Music.** `music.js` reads DOOM's MUS songs and the standard MIDI files Freedoom ships, and
+  plays them in an AudioWorklet through an OPL-style FM synthesizer: 18 two-operator voices with
+  OPL2 waveforms, envelope rates and feedback, set from the WAD's GENMIDI patches with DOOM's
+  volume and frequency curves from Chocolate Doom's `i_oplmusic.c`.
 - **What JavaScript does each frame.** It writes the input, encodes N tics plus the render and
   status bar passes, and copies 1 KB of the world buffer back to the CPU. That readback carries the
   sound queue and the level-exit flag.
@@ -91,11 +96,11 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Not done yet
 
-Music, and Nightmare's monster respawning. Monster behaviour is a
-port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had little play-testing.
+Monster behaviour is a port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had
+little play-testing, and the music synth has been checked by its spectrum, not by ear.
 
 ## Licences
 
 The engine code is GPL-2.0 (`LICENSE.md`), because it follows id Software's Doom source and its
 tables come from `info.c`. `e1.wad.gz` is Freedoom 0.13.0 cut down to episode one's maps and the
-graphics and sounds they use. Freedoom is BSD-licensed (`FREEDOOM-COPYING.txt`).
+graphics, sounds and music they use. Freedoom is BSD-licensed (`FREEDOOM-COPYING.txt`).

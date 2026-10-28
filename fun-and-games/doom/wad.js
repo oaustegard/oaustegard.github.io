@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028031646";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028031646";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028033804";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028033804";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -360,9 +360,14 @@ export function buildMap(wad, gfx, mapName, skill = 3) {
     things.push({ ...t, mt });
   }
   const spawnSector = (x, y) => ssecs[pointInSubsector(x, y)].sector;
+  // spawn points for Nightmare respawns: x, y, angle in degrees, flags; indexed by mobj.spawnidx
+  L.THINGS = W.n;
+  for (const t of things) { W.fl(t.x); W.fl(t.y); W.fl(t.angle); W.u(t.flags); }
+  W.u(0);
+  const words = W.done();
   const em = /^E(\d)M(\d)$/.exec(mapName), mm = /^MAP(\d\d)$/.exec(mapName);
   return {
-    name: mapName, words: W.done(), layout: L,
+    name: mapName, words, layout: L,
     episode: em ? +em[1] : 1, mapnum: em ? +em[2] : mm ? +mm[1] : 1, commercial: !!mm,
     shareware: !wad.has("E2M1") && !wad.has("MAP01") && !wad.has("E4M1"),
     counts: { verts: nv, lines: nl, sides: nsd, segs: nseg, ssecs: nss, nodes: nn, sectors: nsec },
@@ -376,7 +381,7 @@ export function spawnMobjs(map, mobjWords, capacity) {
   const buf = new ArrayBuffer(capacity * mobjWords * 4);
   const u = new Uint32Array(buf), i32 = new Int32Array(buf), f = new Float32Array(buf);
   let n = 0;
-  const spawn = (mt, x, y, angleDeg, flagsExtra = 0) => {
+  const spawn = (mt, x, y, angleDeg, flagsExtra = 0, spawnIndex = 0xffffffff) => {
     const info = MOBJINFO[mt];
     const sec = map.spawnSector(x, y);
     const s = map.sectors[sec];
@@ -391,12 +396,13 @@ export function spawnMobjs(map, mobjWords, capacity) {
     i32[o + 21] = map.skill >= 5 ? 0 : info[5]; // reactiontime; Nightmare monsters react at once
     u[o + 24] = 1; // in use
     u[o + 26] = 0xffffffff; // no state request
+    u[o + 31] = spawnIndex; // where a Nightmare respawn puts it back
     f[o + 28] = f[o]; f[o + 29] = f[o + 1]; f[o + 30] = f[o + 2]; // previous-tic position
     n++;
     return o;
   };
   const p = map.player || { x: 0, y: 0, angle: 0 };
   spawn(MT.PLAYER, p.x, p.y, p.angle);
-  for (const t of map.things) spawn(t.mt, t.x, t.y, t.angle, t.flags & 8 ? MF.AMBUSH : 0);
+  map.things.forEach((t, k) => spawn(t.mt, t.x, t.y, t.angle, t.flags & 8 ? MF.AMBUSH : 0, k));
   return { buf, count: n };
 }
