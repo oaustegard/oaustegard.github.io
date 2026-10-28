@@ -30,7 +30,8 @@ export async function unpackWad(bytes) {
 }
 
 export class Engine {
-  static async create(device, wadBuffer, { width = 640, height = 400, format = null, skill = 3 } = {}) {
+  // maxWidth and maxHeight size the framebuffer once; resize() moves within them without recompiling
+  static async create(device, wadBuffer, { width = 640, height = 400, format = null, skill = 3, maxWidth = 2400, maxHeight = 800 } = {}) {
     const e = new Engine();
     e.device = device; e.width = width; e.height = height; e.skill = skill;
     e.viewh = Math.round(height * 168 / 200);
@@ -38,10 +39,12 @@ export class Engine {
     e.gfx = buildGfx(e.wad);
     e.format = format;
     e.gfxBuf = e.buffer(e.gfx.words, GPUBufferUsage.STORAGE);
-    e.fbBuf = device.createBuffer({ size: (2 * width * height + 8 * MAXVIS) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    const fbW = Math.max(maxWidth, width), fbH = Math.max(maxHeight, height);
+    e.fbBuf = device.createBuffer({ size: (2 * fbW * fbH + 8 * MAXVIS) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+    e.fbMax = fbW * fbH;
     e.frameBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     e.infoBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(e.infoBuf, 0, new Uint32Array([width, height, e.gfx.layout.PAL, 0]));
+    e.resize(width, height);
     e.layout = device.createBindGroupLayout({ entries: [
       { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
       { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
@@ -67,6 +70,13 @@ export class Engine {
     return e;
   }
 
+  resize(width, height) {
+    if (width * height > this.fbMax) throw new Error(`${width}x${height} is larger than the framebuffer`);
+    this.width = width; this.height = height;
+    this.viewh = Math.round(height * 168 / 200);
+    this.device.queue.writeBuffer(this.infoBuf, 0, new Uint32Array([width, height, this.gfx.layout.PAL, 0]));
+  }
+
   buffer(data, usage) {
     const b = this.device.createBuffer({ size: Math.max(16, Math.ceil(data.byteLength / 16) * 16), usage: usage | GPUBufferUsage.COPY_DST });
     this.device.queue.writeBuffer(b, 0, data.buffer, data.byteOffset, data.byteLength);
@@ -82,7 +92,20 @@ export class Engine {
     this.mapName = name;
     this.maxMobjs = map.things.length + 1 + 768;
 
-    const code = makeWGSL({ gfx: this.gfx, map, maxMobjs: this.maxMobjs, width: this.width, height: this.height, viewh: this.viewh });
+    const code = makeWGSL({ gfx: this.gfx, map, maxMobjs: this.maxMobjs });
+    // restarting a level produces the same WGSL: reuse its pipelines instead of compiling again
+    this.pipeCache ||= new Map();
+    const cached = this.pipeCache.get(code);
+    if (cached) Object.assign(this, cached);
+    else await this.compile(code);
+    this.pipeCache.set(code, { renderPipe: this.renderPipe, projectPipe: this.projectPipe, hudPipe: this.hudPipe, ticPipes: this.ticPipes });
+    if (this.pipeCache.size > 3) this.pipeCache.delete(this.pipeCache.keys().next().value);
+    this.initLevel(map, player);
+    return map;
+  }
+
+  async compile(code) {
+    const d = this.device;
     const mod = d.createShaderModule({ code });
     const info = await mod.getCompilationInfo();
     const errs = info.messages.filter((m) => m.type === "error");
@@ -101,6 +124,10 @@ export class Engine {
     this.hudPipe = await mk("hud");
     this.ticPipes = [];
     for (const k of ["ticPlayer", "ticSight", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
+  }
+
+  initLevel(map, player) {
+    const d = this.device;
 
     // sectors with P_SpawnSpecials applied
     const ns = map.sectors.length;
@@ -179,7 +206,6 @@ export class Engine {
     this.sndSeen = 0;
     this.readbacks = [0, 1].map(() => ({ buf: d.createBuffer({ size: WORLD_WORDS * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST }), busy: false }));
     this.lastWorld = null;
-    return map;
   }
 
   // input: {forward, side, turn (radians per tic), mouseturn (radians), use, fire, weapon}

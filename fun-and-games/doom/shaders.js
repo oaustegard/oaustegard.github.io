@@ -24,7 +24,7 @@ export const MAXVIS = 256;
 const constBlock = (prefix, obj, type = "u32") =>
   Object.entries(obj).map(([k, v]) => `const ${prefix}${k.replace(/[^A-Za-z0-9_]/g, "_")}: ${type} = ${v}${type === "u32" ? "u" : ""};`).join("\n");
 
-export function makeWGSL({ gfx, map, maxMobjs, width, height, viewh }) {
+export function makeWGSL({ gfx, map, maxMobjs }) {
   const G = gfx.layout, M = map.layout, c = map.counts;
   const spr = Object.fromEntries(SPRNAMES.map((n, i) => [n, i]));
   const sfx = Object.fromEntries(SFX.map((n, i) => [n, i]));
@@ -45,10 +45,9 @@ const BM_X = ${map.bmap.x}.0; const BM_Y = ${map.bmap.y}.0; const BM_W = ${map.b
 const MAXMOBJS = ${maxMobjs}u; const MAXVIS = ${MAXVIS}u;
 const SKYFLAT = ${gfx.skyFlat}u; const SKYTEX = ${gfx.texIndex.get("SKY1") ?? 0}u;
 const NOTEX = 0xffffu;
-const WIDTH = ${width}u; const HEIGHT = ${height}u; const VIEWH = ${viewh}u;
-// the width a 4:3 screen of this height would have; wider screens see more to the sides
-const BASEW = ${(height * 1.6).toFixed(3)}; const BORDERFLAT = ${gfx.flatIndex.get("FLOOR7_2") ?? gfx.flatIndex.get("GRNROCK") ?? 0xffff}u;
-const FB_DEPTH = ${width * height}u; const FB_VIS = ${2 * width * height}u;
+// The screen size comes from the frame uniform (U.width, U.height, U.viewh), so turning the
+// phone resizes the view without recompiling. FB holds colours, then depth, then the sprite list.
+const BORDERFLAT = ${gfx.flatIndex.get("FLOOR7_2") ?? gfx.flatIndex.get("GRNROCK") ?? 0xffff}u;
 const PI = 3.14159265358979;
 const TAU = 6.28318530717959;
 
@@ -227,11 +226,11 @@ fn rayBox(p: vec2f, d: vec2f, o: u32) -> bool {
 }
 
 fn putPixel(x: u32, y: i32, c: u32, depth: f32) {
-  let i = u32(y) * WIDTH + x;
+  let i = u32(y) * U.width + x;
   FB[i] = c;
-  FB[FB_DEPTH + i] = bitcast<u32>(depth);
+  FB[(U.width * U.height) + i] = bitcast<u32>(depth);
 }
-fn pixelDepth(x: u32, y: i32) -> f32 { return bitcast<f32>(FB[FB_DEPTH + u32(y) * WIDTH + x]); }
+fn pixelDepth(x: u32, y: i32) -> f32 { return bitcast<f32>(FB[(U.width * U.height) + u32(y) * U.width + x]); }
 
 fn drawWall(x: u32, y0: i32, y1: i32, tex: u32, u: f32, texmid: f32, scale: f32, level: u32, depth: f32) {
   if (y0 > y1) { return; }
@@ -260,7 +259,7 @@ fn drawPlane(x: u32, y0: i32, y1: i32, h: f32, pic: u32, light: i32, depth: f32,
     let base = G[td + 2u] + u32(col * sh);
     let lvl = select(0u, u32(max(P.fixedcolormap, 0)), P.fixedcolormap > 0);
     for (var y = y0; y <= y1; y++) {
-      let v = 100.0 + (f32(y) + 0.5 - U.centery) * 320.0 / BASEW;
+      let v = 100.0 + (f32(y) + 0.5 - U.centery) * 320.0 / (f32(U.height) * 1.6);
       putPixel(x, y, cmap(lvl, texel(base + u32(imod(i32(floor(v)), sh)))), 1e30);
     }
     return;
@@ -281,8 +280,8 @@ fn drawPlane(x: u32, y0: i32, y1: i32, h: f32, pic: u32, light: i32, depth: f32,
 @compute @workgroup_size(64)
 fn render(@builtin(global_invocation_id) gid: vec3u) {
   let x = gid.x;
-  if (x >= WIDTH) { return; }
-  let VH = i32(VIEWH);
+  if (x >= U.width) { return; }
+  let VH = i32(U.viewh);
   let p = vec2f(P.viewx, P.viewy);
   let vz = P.viewz;
   let ang = P.viewangle;
@@ -423,7 +422,7 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
   // sprites, depth tested
   let nv = min(atomicLoad(&P.viscount), MAXVIS);
   for (var i = 0u; i < nv; i++) {
-    let o = FB_VIS + 8u * i;
+    let o = (2u * U.width * U.height) + 8u * i;
     let xs = bitcast<i32>(FB[o + 6u]); let xe = bitcast<i32>(FB[o + 7u]);
     if (i32(x) < xs || i32(x) > xe) { continue; }
     let x1 = bitcast<f32>(FB[o]); let scale = bitcast<f32>(FB[o + 1u]); let texmid = bitcast<f32>(FB[o + 2u]);
@@ -443,7 +442,7 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
       if ((tx & 0x100u) != 0u && tz < pixelDepth(x, y)) {
         if (shadow == 1u) {
           let yy = clamp(y + select(-1, 1, ((u32(y) * 7u + x * 13u + P.leveltime) & 2u) != 0u), 0, VH - 1);
-          FB[u32(y) * WIDTH + x] = cmap(6u, FB[u32(yy) * WIDTH + x]);
+          FB[u32(y) * U.width + x] = cmap(6u, FB[u32(yy) * U.width + x]);
         } else {
           putPixel(x, y, cmap(level, tx), tz);
         }
@@ -485,14 +484,14 @@ fn project(@builtin(global_invocation_id) gid: vec3u) {
   let scale = U.proj / tz;
   let x1 = U.centerx + (tx - left) * scale;
   let x2 = x1 + sw * scale;
-  let xs = max(0, rowOf(x1)); let xe = min(i32(WIDTH) - 1, rowOf(x2) - 1);
+  let xs = max(0, rowOf(x1)); let xe = min(i32(U.width) - 1, rowOf(x2) - 1);
   if (xs > xe) { return; }
   var level = 0u;
   if ((frame & 0x8000u) == 0u) { level = wallLevel((S[m.sector].light >> 4u) + P.extralight, tz); }
   else if (P.fixedcolormap > 0) { level = u32(P.fixedcolormap); }
   let slot = atomicAdd(&P.viscount, 1u);
   if (slot >= MAXVIS) { return; }
-  let o = FB_VIS + 8u * slot;
+  let o = (2u * U.width * U.height) + 8u * slot;
   FB[o] = bitcast<u32>(x1); FB[o + 1u] = bitcast<u32>(scale); FB[o + 2u] = bitcast<u32>(m.z + top - P.viewz);
   FB[o + 3u] = lump | (flip << 16u) | (select(0u, 1u, (m.flags & MF_SHADOW) != 0u) << 17u);
   FB[o + 4u] = level; FB[o + 5u] = bitcast<u32>(tz);
@@ -542,11 +541,11 @@ fn hudNum(n: i32, digits: i32, x: f32, y: f32, vx: f32, vy: f32, big: bool) -> u
 @compute @workgroup_size(8, 8)
 fn hud(@builtin(global_invocation_id) gid: vec3u) {
   let x = gid.x; let y = gid.y;
-  if (x >= WIDTH || y >= HEIGHT) { return; }
+  if (x >= U.width || y >= U.height) { return; }
   // status bar coordinates: the original 320 columns, centred
-  let vx = (f32(x) + 0.5 - (f32(WIDTH) - BASEW) / 2.0) * 320.0 / BASEW;
-  let vy = (f32(y) + 0.5) * 200.0 / f32(HEIGHT);
-  if (y >= VIEWH) {
+  let vx = (f32(x) + 0.5 - (f32(U.width) - (f32(U.height) * 1.6)) / 2.0) * 320.0 / (f32(U.height) * 1.6);
+  let vy = (f32(y) + 0.5) * 200.0 / f32(U.height);
+  if (y >= U.viewh) {
     if (vx < 0.0 || vx >= 320.0) {
       // tile a flat beside the bar, like the border around a shrunken view
       var c = 0u;
@@ -554,7 +553,7 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
         let tx = u32(i32(floor(vx)) & 63); let ty = u32(i32(floor(vy)) & 63);
         c = texel(G[G_FLATDIR + BORDERFLAT] + ty * 64u + tx) & 255u;
       }
-      FB[y * WIDTH + x] = c;
+      FB[y * U.width + x] = c;
       return;
     }
     var t = hudPatch(HUD_STBAR, 0.0, 168.0, vx, vy);
@@ -585,11 +584,11 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
       if (o == 0u) { o = hudNum(P.maxammo[k], 3, 314.0, ammoY[k], vx, vy, false); }
     }
     if (o != 0u) { t = o; }
-    FB[y * WIDTH + x] = t & 255u;
+    FB[y * U.width + x] = t & 255u;
     return;
   }
   // message line at the top of the view
-  let mx = (f32(x) + 0.5) * 320.0 / BASEW;
+  let mx = (f32(x) + 0.5) * 320.0 / (f32(U.height) * 1.6);
   if (P.messagetics > 0 && P.message > 0 && vy < 9.0) {
     let md = G_MSGDIR + 2u * u32(P.message);
     let start = G[md]; let len = G[md + 1u];
@@ -600,7 +599,7 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
       let idx = HUD_FONT[ch - 33u];
       if (idx == 0xffffu) { cx += 4.0; continue; }
       let t = hudPatch(idx, cx, 1.0, mx, vy);
-      if (t != 0u) { FB[y * WIDTH + x] = t & 255u; return; }
+      if (t != 0u) { FB[y * U.width + x] = t & 255u; return; }
       cx += hudWidth(idx);
       if (cx > mx) { break; }
     }
@@ -618,9 +617,9 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
     let lump = w & 0x7fffu; let flip = (w >> 15u) & 1u;
     let sd = G_SPRDIR + 6u * lump;
     let sw = i32(G[sd]); let sh = i32(G[sd + 1u]);
-    let s = BASEW / 320.0;
-    let x1 = f32(WIDTH) / 2.0 + (P.pspsx - 160.0 - f32(gi(sd + 2u))) * s;
-    let ytop = f32(VIEWH) / 2.0 - (100.5 - (P.pspsy - f32(gi(sd + 3u)))) * s;
+    let s = (f32(U.height) * 1.6) / 320.0;
+    let x1 = f32(U.width) / 2.0 + (P.pspsx - 160.0 - f32(gi(sd + 2u))) * s;
+    let ytop = f32(U.viewh) / 2.0 - (100.5 - (P.pspsy - f32(gi(sd + 3u)))) * s;
     var col = i32(floor((f32(x) + 0.5 - x1) / s));
     let row = i32(floor((f32(y) + 0.5 - ytop) / s));
     if (flip == 1u) { col = sw - 1 - col; }
@@ -630,7 +629,7 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
     var level = 0u;
     if (P.fixedcolormap >= 0) { level = u32(P.fixedcolormap); }
     else if ((frame & 0x8000u) == 0u) { level = u32(max(startmap(S[O[0].sector].light) - 23, 0)); }
-    FB[y * WIDTH + x] = cmap(level, tx);
+    FB[y * U.width + x] = cmap(level, tx);
     return;
   }
 }
@@ -2686,8 +2685,10 @@ fn playerThink() {
       let d = wrapPi(want - O[0].angle);
       if (abs(d) < BAM26 / 2.0) { O[0].angle = want; } else { O[0].angle += sign(d) * BAM26 / 2.0; }
     }
-    if ((U.buttons & 2u) != 0u && P.usedown == 0u) { P.exit = 3u; }
-    P.usedown = select(0u, 1u, (U.buttons & 2u) != 0u);
+    // once on the floor, a fresh press of use or fire restarts the level (P_DeathThink takes use only)
+    let b = U.buttons & 3u;
+    if (b != 0u && P.usedown == 0u && P.viewheight <= 6.0) { P.exit = 3u; }
+    P.usedown = select(0u, 1u, b != 0u);
     runPsprites();
     return;
   }

@@ -43,12 +43,15 @@ button.go:disabled { opacity: .5; cursor: wait; }
 #bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
 #stick { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
 #nub { position: absolute; left: 50px; top: 50px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
-#fps { position: fixed; left: 8px; top: 6px; font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; }
+#banner { position: fixed; left: 0; right: 0; top: 38%; text-align: center; font-size: 20px; color: #f0c060; text-shadow: 2px 2px 0 #000, 0 0 8px #000; pointer-events: none; }
+#banner small { display: block; font-size: 14px; color: var(--ink); margin-top: 6px; }
+#fps { position: fixed; left: max(8px, env(safe-area-inset-left)); top: max(6px, env(safe-area-inset-top)); font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="screen" width="640" height="400"></canvas></div>
 <div id="fps"></div>
+<div id="banner" hidden></div>
 <div id="touch" hidden>
   <div id="stick"><div id="nub"></div></div>
   <div class="tbtn" id="bUse">USE</div>
@@ -166,11 +169,14 @@ async function buildEngine() {
   if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
 }
 
+function banner(html) { const b = $("banner"); b.hidden = !html; b.innerHTML = html || ""; }
 async function start(mapName, carry = freshPlayer()) {
   loading = true;
   status(`Compiling shaders for ${mapName}…`);
+  if ($("menu").hidden) banner(`Loading ${mapName}…<small>compiling the GPU code</small>`);
   $("play").disabled = true;
   await engine.loadMap(mapName, carry);
+  banner("");
   player = carry;
   status("");
   loading = false;
@@ -191,7 +197,20 @@ function fit() {
   canvas.style.width = Math.floor(w) + "px";
   canvas.style.height = Math.floor(h) + "px";
 }
-addEventListener("resize", fit); fit();
+// the render size follows the window: turning the phone just resizes the framebuffer in use
+function applySize() {
+  if (!engine) { fit(); return; }
+  const [w, h] = renderSize();
+  if (w !== res[0] || h !== res[1]) {
+    engine.resize(w, h);
+    res = [w, h];
+    canvas.width = w; canvas.height = h;
+  }
+  fit();
+}
+addEventListener("resize", applySize); fit();
+$("res").addEventListener("change", applySize);
+$("wide").addEventListener("change", applySize);
 
 // ---------------------------------------------------------------- input
 const keys = new Set();
@@ -396,15 +415,23 @@ function frame(now) {
   if (rb) engine.finishRead(rb).then(onWorld);
   device.queue.onSubmittedWorkDone().then(() => { gpuMs = gpuMs * 0.9 + (performance.now() - t0) * 0.1; });
   frames++;
-  if (now - fpsT > 1000) { $("fps").textContent = `${frames} fps · ${res[0]}×${res[1]} · gpu ${gpuMs.toFixed(1)} ms`; frames = 0; fpsT = now; }
 }
 requestAnimationFrame(frame);
+// The meter runs on its own timer, so a stalled loop reads 0 instead of freezing. Doom simulates
+// 35 tics a second and a frame is drawn only when a tic has passed, so 35 is the ceiling.
+setInterval(() => {
+  const t = performance.now(), secs = Math.max((t - fpsT) / 1000, 0.001);
+  $("fps").textContent = running ? `${Math.round(frames / secs)} fps · ${res[0]}×${res[1]} · gpu ${gpuMs.toFixed(1)} ms` : "";
+  frames = 0; fpsT = t;
+}, 1000);
 
 function onWorld(buf) {
   const wf = new Float32Array(buf), wi = new Int32Array(buf), wu = new Uint32Array(buf);
   const view = { x: wf[W.viewx], y: wf[W.viewy], angle: wf[W.viewangle] };
   for (const ev of engine.soundEvents(buf)) playSound(ev, view);
   const exit = wu[W.exit];
+  if (wu[W.dead] && !exit) banner(`YOU DIED<small>${isTouch ? "tap FIRE or USE" : "press fire or use"} to restart the level</small>`);
+  else if (!loading) banner("");
   if (exit && !pendingExit && running) {
     running = false;
     document.exitPointerLock?.();
@@ -435,8 +462,7 @@ $("play").addEventListener("click", async () => {
   if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
   audio?.resume?.();
   await enableGyro();
-  const [w, h] = renderSize();
-  if (w !== res[0] || h !== res[1]) { await buildEngine(); engine.map = null; fit(); }
+  applySize();
   const m = $("map").value;
   if (engine.map && engine.mapName === m) { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); return; }
   await start(m);
