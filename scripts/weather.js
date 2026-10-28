@@ -499,7 +499,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
         return { x: -x, y: -y, scale: 1 };
       }, [2.5, 0, 0], function (g) { plane.onmove = function () { g.render(); }; });
     }
-    /* the lenses on the inset map (the loupe, the beach in the weather report): data-view is the map units at the
+    /* the lenses on the inset map (the loupe, the fjære in the weather report): data-view is the map units at the
        top left and the units across; data-detail draws the surf. Each starts when it comes near the window */
     [].forEach.call(d.querySelectorAll('.lens[data-view]'), function (lens) {
       var v = lens.getAttribute('data-view').split(' ').map(Number), go = function () {
