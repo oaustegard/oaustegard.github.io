@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028061718";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028061718";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028062655";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028062655";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -416,7 +416,7 @@ export function spawnMobjs(map, mobjWords, capacity, opts = {}) {
     const flags = info[21] | flagsExtra;
     i32[o + 0] = x * 65536; i32[o + 1] = y * 65536; // 16.16, as DOOM keeps positions
     f[o + 2] = flags & MF.SPAWNCEILING ? s.ceil - info[17] : s.floor;
-    f[o + 3] = angleDeg * Math.PI / 180;
+    u[o + 3] = (Math.trunc(angleDeg / 45) * 0x20000000) >>> 0; // ANG45 * (angle / 45): map things face the eight directions only
     f[o + 7] = s.floor; f[o + 8] = s.ceil; f[o + 9] = info[16]; f[o + 10] = info[17];
     u[o + 11] = mt; u[o + 12] = info[1]; i32[o + 13] = STATES[info[1]][2]; u[o + 14] = flags; i32[o + 15] = info[2];
     u[o + 16] = sec; i32[o + 17] = -1; i32[o + 18] = -1; i32[o + 19] = 0; // movedir DI_EAST: P_SpawnMobj zeroes the mobj

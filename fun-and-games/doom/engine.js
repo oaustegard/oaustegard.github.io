@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028061718";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028061718";
-import { STATES, SFX, MF } from "./info.js?v=20261028061718";
-import { MSG } from "./specials.js?v=20261028061718";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028062655";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028062655";
+import { STATES, SFX, MF } from "./info.js?v=20261028062655";
+import { MSG } from "./specials.js?v=20261028062655";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -204,7 +204,7 @@ export class Engine {
     const world = new ArrayBuffer(WORLD_WORDS * 4);
     const wu = new Uint32Array(world), wi = new Int32Array(world), wf = new Float32Array(world);
     const pf = new Float32Array(mobjs.buf);
-    wf[W.viewx] = pf[0]; wf[W.viewy] = pf[1]; wf[W.viewangle] = pf[3]; wf[W.viewheight] = 41; wf[W.viewz] = pf[2] + 41;
+    wf[W.viewx] = mi[0] / 65536; wf[W.viewy] = mi[1] / 65536; wf[W.viewangle] = mu[3] / 4294967296 * 2 * Math.PI; wf[W.viewheight] = 41; wf[W.viewz] = pf[2] + 41;
     for (const [a, b] of [["pvx", "viewx"], ["pvy", "viewy"], ["pvz", "viewz"], ["pva", "viewangle"], ["rx", "viewx"], ["ry", "viewy"], ["rz", "viewz"], ["ra", "viewangle"]]) wf[W[a]] = wf[W[b]];
     wu[W.rng] = rng;
     // the thinker order: map things, the player's place among them, then later spawns

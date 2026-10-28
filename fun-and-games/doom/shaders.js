@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028061718";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028061718";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028062655";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028062655";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -59,6 +59,7 @@ ${constBlock("S_", ST)}
 ${constBlock("A_", Object.fromEntries(ACTIONS.map((n, i) => [n, i])))}
 const NOREQ = 0xffffffffu; const ONFLOORZ = -32768.0;
 const MELEERANGE = 64.0; const MISSILERANGE = 2048.0;
+const ANG45 = 0x20000000u; const ANG90 = 0x40000000u; const ANG180 = 0x80000000u; const ANG270 = 0xc0000000u; const ANG5 = 59652323u; // ANG90 / 18
 const BAM18 = TAU / 16384.0; const BAM20 = TAU / 4096.0; const BAM21 = TAU / 2048.0; const BAM26 = TAU / 64.0;
 const MI_SPAWNSTATE = 1u; const MI_SPAWNHEALTH = 2u; const MI_SEESTATE = 3u; const MI_SEESOUND = 4u; const MI_ATTACKSOUND = 6u;
 const MI_PAINSTATE = 7u; const MI_PAINCHANCE = 8u; const MI_PAINSOUND = 9u; const MI_MELEESTATE = 10u; const MI_MISSILESTATE = 11u;
@@ -89,7 +90,7 @@ struct Sector {
   pad0: u32, pf: f32, pc: f32, pad3: u32, // pf, pc: floor and ceiling at the previous tic, for drawing between tics
 }
 struct Mobj {
-  x: i32, y: i32, z: f32, angle: f32, // x and y in DOOM's 16.16, so movement adds up exactly as vanilla's
+  x: i32, y: i32, z: f32, angle: u32, // x and y in DOOM's 16.16, angle a 32-bit BAM, so both add up exactly as vanilla's
   momx: f32, momy: f32, momz: f32, floorz: f32,
   ceilingz: f32, radius: f32, height: f32, mtype: u32,
   state: u32, tics: i32, flags: u32, health: i32,
@@ -504,7 +505,7 @@ fn project(@builtin(global_invocation_id) gid: vec3u) {
   let sf = G_SPRFRAMES + 2u * sprite;
   if (fr >= G[sf + 1u]) { return; }
   let a = atan2(rel.y, rel.x);
-  let rot = u32(floor(fract1((a - m.angle) / TAU + 9.0 / 16.0) * 8.0)) & 7u;
+  let rot = u32(floor(fract1((a - bamToRad(m.angle)) / TAU + 9.0 / 16.0) * 8.0)) & 7u;
   let w = G[G_FRAMEROT + (G[sf] + fr) * 8u + rot];
   if (w == 0xffffffffu) { return; }
   let lump = w & 0x7fffu; let flip = (w >> 15u) & 1u;
@@ -924,17 +925,7 @@ fn divlineSide(pt: vec2i, o: vec2i, d: vec2i) -> u32 {
 }
 // P_AddLineIntercepts' crossing test and P_InterceptVector, then PTR_SlideTraverse
 fn slideCheckLine(l: u32, p: vec2i, d: vec2i) {
-  let a = fxv(lineA(l)); let dl = fxv(lineB(l)) - a;
-  var s1 = 0u; var s2 = 0u;
-  if (abs(d.x) > 0x100000 || abs(d.y) > 0x100000) { s1 = divlineSide(a, p, d); s2 = divlineSide(a + dl, p, d); }
-  else { s1 = pointOnLineSide(p, l); s2 = pointOnLineSide(p + d, l); }
-  if (s1 == s2) { return; }
-  // P_InterceptVector in 16.16, with its >> 8 pre-shifts
-  let ax = a.x; let ay = a.y; let ldx = dl.x; let ldy = dl.y;
-  let px = p.x; let py = p.y; let tdx = d.x; let tdy = d.y;
-  let den = fxMul(ldy >> 8u, tdx) - fxMul(ldx >> 8u, tdy);
-  var frac = 0;
-  if (den != 0) { frac = fxDiv(fxMul((ax - px) >> 8u, ldy) + fxMul((py - ay) >> 8u, ldx), den); }
+  let frac = lineIntercept(l, p, d);
   if (frac < 0 || frac > 65536 || frac >= bestslidefrac) { return; }
   if ((lineFlags(l) & ML_TWOSIDED) == 0u || lineBack(l) < 0) {
     if (pointOnLineSide(ipos(0u), l) != 0u) { return; } // don't hit the back side
@@ -1694,13 +1685,13 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
       _ = spawnMobjI(old, oldz, MT_TFOG);
       startSound(SFX_telept, fxf(old.x), fxf(old.y));
       let a = O[j].angle;
-      let fa = fineAngle(a);
+      let fa = a >> 19u;
       _ = spawnMobjI(dest + vec2i(20 * fineCosFx(fa), 20 * fineSinFx(fa)), O[mi].z, MT_TFOG);
       startSound(SFX_telept, fxf(dest.x), fxf(dest.y));
       if (mi == 0u) { O[mi].reactiontime = 18; }
       O[mi].angle = a; O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
       O[mi].px = fxf(O[mi].x); O[mi].py = fxf(O[mi].y); O[mi].pz = O[mi].z;
-      if (mi == 0u) { P.pvx = O[mi].px; P.pvy = O[mi].py; P.pvz = P.viewz; P.pva = a; }
+      if (mi == 0u) { P.pvx = O[mi].px; P.pvy = O[mi].py; P.pvz = P.viewz; P.pva = bamToRad(a); }
       return true;
     }
   }
@@ -1810,7 +1801,7 @@ fn shootSpecialLine(l: u32, mi: u32) {
 // P_UseLines: walk the lines crossed by the use trace, nearest first.
 fn useLines() {
   let me = O[0];
-  let a = me.angle;
+  let a = bamToRad(me.angle);
   let p0 = mpos(0u);
   let p1 = p0 + vec2f(cos(a), sin(a)) * USERANGE;
   var last = -1.0;
@@ -2174,7 +2165,7 @@ fn spawnMobjI(p: vec2i, z: f32, ty: u32) -> i32 {
     P.mobjtop = max(P.mobjtop, j + 1u);
     let mi = G_MOBJINFO + 24u * ty;
     var m: Mobj;
-    m.x = p.x; m.y = p.y; m.angle = 0.0;
+    m.x = p.x; m.y = p.y; m.angle = 0u;
     m.radius = f32(gi(mi + 16u)); m.height = f32(gi(mi + 17u));
     m.mtype = ty; m.state = G[mi + 1u]; m.tics = gi(G_STATES + 8u * m.state + 2u);
     m.flags = G[mi + 21u]; m.health = gi(mi + 2u);
@@ -2192,15 +2183,15 @@ fn spawnMobjI(p: vec2i, z: f32, ty: u32) -> i32 {
   }
   return -1;
 }
-fn spawnPuff(p: vec2f, z0: f32, melee: bool) {
-  let th = spawnMobj(p.x, p.y, z0 + subRandom() / 64.0, MT_PUFF);
+fn spawnPuff(p: vec2i, z0: f32, melee: bool) {
+  let th = spawnMobjI(p, z0 + subRandom() / 64.0, MT_PUFF);
   if (th < 0) { return; }
   O[th].momz = 1.0;
   O[th].tics = max(O[th].tics - (P_Random() & 3), 1);
   if (melee) { O[th].state = S_PUFF3; O[th].tics = gi(G_STATES + 8u * S_PUFF3 + 2u); }
 }
-fn spawnBlood(p: vec2f, z0: f32, damage: i32) {
-  let th = spawnMobj(p.x, p.y, z0 + subRandom() / 64.0, MT_BLOOD);
+fn spawnBlood(p: vec2i, z0: f32, damage: i32) {
+  let th = spawnMobjI(p, z0 + subRandom() / 64.0, MT_BLOOD);
   if (th < 0) { return; }
   O[th].momz = 2.0;
   O[th].tics = max(O[th].tics - (P_Random() & 3), 1);
@@ -2210,7 +2201,7 @@ fn spawnBlood(p: vec2f, z0: f32, damage: i32) {
 }
 
 // P_SpawnMissile / P_SpawnPlayerMissile in one: aimed at dst, or along angle and slope when dst < 0.
-fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
+fn spawnMissile(src: u32, dst: i32, ty: u32, an0: u32, slope: f32) {
   let th = spawnMobjI(ipos(src), O[src].z + 32.0, ty);
   if (th < 0) { return; }
   let t = u32(th);
@@ -2220,18 +2211,18 @@ fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
   var speed = f32(info(ty, MI_SPEED));
   // Nightmare: imp, cacodemon and baron fireballs fly at 20
   if (P.skill == 4 && (ty == MT_BRUISERSHOT || ty == MT_HEADSHOT || ty == MT_TROOPSHOT)) { speed = 20.0; }
-  var fa = fineAngle(an0);
+  var fa = an0 >> 19u;
   if (dst >= 0) {
     // DOOM's own arithmetic: a BAM angle from tantoangle, speeds from finesine, an integer tic count for momz
     var an = pointToAngle(ipos(src), ipos(u32(dst)));
     if ((O[dst].flags & MF_SHADOW) != 0u) { an += bitcast<u32>(subRandomI() << 20u); }
     fa = an >> 19u;
-    O[t].angle = bamToRad(an);
+    O[t].angle = an;
     let dist = max(approxDistFx(ipos(src), ipos(u32(dst))) / (i32(speed) << 16u), 1);
     O[t].momz = f32((fixedOf(O[dst].z) - fixedOf(O[src].z)) / dist) / 65536.0;
   } else {
     O[t].angle = an0;
-    O[t].momz = speed * slope;
+    O[t].momz = fxf(fxMul(i32(speed) << 16u, fixedOf(slope)));
   }
   O[t].momx = f32(i32(speed) * fineCosFx(fa)) / 65536.0; O[t].momy = f32(i32(speed) * fineSinFx(fa)) / 65536.0;
   // P_CheckMissileSpawn: step half a tic forward (momx >> 1 in 16.16) so a point-blank shot still hits
@@ -2323,97 +2314,167 @@ fn radiusAttack(spot: u32, source: i32, damage: i32) {
   }
 }
 
-// ---- hitscan: P_AimLineAttack (mode 0) and P_LineAttack (mode 1) over sorted intercepts
+// ---- hitscan: P_AimLineAttack (mode 0) and P_LineAttack (mode 1), walked as P_PathTraverse walks
+// the blockmap: blocks along the trace, each block's lines then its things, sorted by 16.16 fraction
 var<private> linetarget: i32;
-fn trace(mi: u32, angle: f32, range: f32, mode: u32, slope0: f32, damage: i32) -> f32 {
-  let p0 = mpos(mi);
-  let p1 = p0 + vec2f(cos(angle), sin(angle)) * range;
-  let dd = p1 - p0;
-  let shootz = O[mi].z + O[mi].height * 0.5 + 8.0;
-  var top = 100.0 / 160.0; var bot = -100.0 / 160.0;
-  let aimslope = slope0;
+var<private> icFrac: array<i32, 128>;
+var<private> icId: array<u32, 128>;
+var<private> icN: u32;
+var<private> icSeen: array<u32, (NUMLINES + 31u) / 32u>; // validcount: each line is tested once a trace
+var<private> trP: vec2i;
+var<private> trD: vec2i;
+// the crossing test (P_PointOnDivlineSide for a long trace, P_PointOnLineSide for a short one) and
+// P_InterceptVector, shared with slides; -1 when the line isn't crossed
+fn lineIntercept(l: u32, p: vec2i, d: vec2i) -> i32 {
+  let a = fxv(lineA(l)); let dl = fxv(lineB(l)) - a;
+  var s1 = 0u; var s2 = 0u;
+  if (abs(d.x) > 0x100000 || abs(d.y) > 0x100000) { s1 = divlineSide(a, p, d); s2 = divlineSide(a + dl, p, d); }
+  else { s1 = pointOnLineSide(p, l); s2 = pointOnLineSide(p + d, l); }
+  if (s1 == s2) { return -1; }
+  return interceptVector(p, d, a, dl);
+}
+// P_InterceptVector in 16.16, with its >> 8 pre-shifts
+fn interceptVector(p: vec2i, d: vec2i, a: vec2i, dl: vec2i) -> i32 {
+  let den = fxMul(dl.y >> 8u, d.x) - fxMul(dl.x >> 8u, d.y);
+  if (den == 0) { return 0; }
+  return fxDiv(fxMul((a.x - p.x) >> 8u, dl.y) + fxMul((p.y - a.y) >> 8u, dl.x), den);
+}
+// PIT_AddThingIntercepts: the thing's corner-to-corner diagonal across the trace
+fn thingIntercept(j: u32, p: vec2i, d: vec2i) -> i32 {
+  let r = fixedOf(O[j].radius); let c = ipos(j);
+  var a = vec2i(c.x - r, c.y - r); var b = vec2i(c.x + r, c.y + r);
+  if ((d.x ^ d.y) > 0) { a = vec2i(c.x - r, c.y + r); b = vec2i(c.x + r, c.y - r); }
+  if (divlineSide(a, p, d) == divlineSide(b, p, d)) { return -1; }
+  return interceptVector(p, d, a, b - a);
+}
+fn addIntercept(frac: i32, id: u32) {
+  if (frac < 0 || icN >= 128u) { return; }
+  icFrac[icN] = frac; icId[icN] = id; icN += 1u;
+}
+fn blockIntercepts(bx: i32, by: i32) {
+  if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { return; }
+  let cell = M_BMCELL + 2u * u32(by * BM_W + bx);
+  let start = M[cell]; let n = M[cell + 1u];
+  // every vanilla block list starts with line 0
+  for (var k = 0u; k <= n; k++) {
+    var l = 0u;
+    if (k > 0u) { l = M[M_BMLIST + start + k - 1u]; }
+    let bit = 1u << (l & 31u);
+    if ((icSeen[l >> 5u] & bit) != 0u) { continue; }
+    icSeen[l >> 5u] |= bit;
+    addIntercept(lineIntercept(l, trP, trD), l);
+  }
+  var cur = LS[BLOCKHEADS + u32(by * BM_W + bx)];
+  for (var guard = 0; guard < 1024 && cur != 0u; guard++) {
+    let j = cur - 1u;
+    cur = u32(O[j].bnext);
+    addIntercept(thingIntercept(j, trP, trD), j | 0x80000000u);
+  }
+}
+// P_PathTraverse's block walk, intercepts only
+fn pathTraverse(p1: vec2i, p2: vec2i) {
+  icN = 0u;
+  for (var k = 0u; k < (NUMLINES + 31u) / 32u; k++) { icSeen[k] = 0u; }
+  let bmo = vec2i(i32(BM_X) << 16u, i32(BM_Y) << 16u);
+  var x1 = p1.x; var y1 = p1.y;
+  // don't side exactly on a line
+  if (((x1 - bmo.x) & 0x7fffff) == 0) { x1 += 65536; }
+  if (((y1 - bmo.y) & 0x7fffff) == 0) { y1 += 65536; }
+  trP = vec2i(x1, y1); trD = p2 - trP;
+  let ax1 = x1 - bmo.x; let ay1 = y1 - bmo.y; let ax2 = p2.x - bmo.x; let ay2 = p2.y - bmo.y;
+  let xt1 = ax1 >> 23u; let yt1 = ay1 >> 23u; let xt2 = ax2 >> 23u; let yt2 = ay2 >> 23u;
+  var mapxstep = 0; var mapystep = 0; var partial = 65536; var ystep = 256 << 16u; var xstep = 256 << 16u;
+  if (xt2 > xt1) { mapxstep = 1; partial = 65536 - ((ax1 >> 7u) & 0xffff); ystep = fxDiv(ay2 - ay1, abs(ax2 - ax1)); }
+  else if (xt2 < xt1) { mapxstep = -1; partial = (ax1 >> 7u) & 0xffff; ystep = fxDiv(ay2 - ay1, abs(ax2 - ax1)); }
+  var yintercept = (ay1 >> 7u) + fxMul(partial, ystep);
+  partial = 65536;
+  if (yt2 > yt1) { mapystep = 1; partial = 65536 - ((ay1 >> 7u) & 0xffff); xstep = fxDiv(ax2 - ax1, abs(ay2 - ay1)); }
+  else if (yt2 < yt1) { mapystep = -1; partial = (ay1 >> 7u) & 0xffff; xstep = fxDiv(ax2 - ax1, abs(ay2 - ay1)); }
+  var xintercept = (ax1 >> 7u) + fxMul(partial, xstep);
+  var mapx = xt1; var mapy = yt1;
+  for (var count = 0; count < 64; count++) {
+    blockIntercepts(mapx, mapy);
+    if (mapx == xt2 && mapy == yt2) { break; }
+    if ((yintercept >> 16u) == mapy) { yintercept += ystep; mapx += mapxstep; }
+    else if ((xintercept >> 16u) == mapx) { xintercept += xstep; mapy += mapystep; }
+  }
+}
+// P_TraverseIntercepts: the nearest unvisited intercept (the first added among equals), -1 past the end
+fn nextIntercept() -> i32 {
+  var dist = 0x7fffffff; var best = -1;
+  for (var k = 0u; k < icN; k++) { if (icFrac[k] < dist) { dist = icFrac[k]; best = i32(k); } }
+  if (best < 0 || dist > 65536) { return -1; }
+  return best;
+}
+fn trace(mi: u32, angle: u32, range: f32, mode: u32, slope0: f32, damage: i32) -> f32 {
+  let fa = angle >> 19u;
+  let dist0 = i32(range);
+  let attackrange = dist0 << 16u;
+  let p0 = ipos(mi);
+  pathTraverse(p0, p0 + vec2i(dist0 * fineCosFx(fa), dist0 * fineSinFx(fa)));
+  let shootz = fixedOf(O[mi].z) + (fixedOf(O[mi].height) >> 1u) + (8 << 16u);
+  // can't aim outside the view: (SCREENHEIGHT / 2) * FRACUNIT / (SCREENWIDTH / 2)
+  var topslope = 40960; var bottomslope = -40960;
+  let aimslope = fixedOf(slope0);
+  let melee = attackrange == (i32(MELEERANGE) << 16u);
   linetarget = -1;
-  var fr: array<f32, 64>; var ids: array<u32, 64>; var n = 0u;
-  let lo = min(p0, p1); let hi = max(p0, p1);
-  for (var l = 0u; l < NUMLINES; l++) {
-    let la = lineA(l); let lb = lineB(l);
-    if (max(la.x, lb.x) < lo.x || min(la.x, lb.x) > hi.x || max(la.y, lb.y) < lo.y || min(la.y, lb.y) > hi.y) { continue; }
-    let e = lb - la;
-    let den = dd.x * e.y - dd.y * e.x;
-    if (abs(den) < 1e-9) { continue; }
-    let ap = la - p0;
-    let t = (ap.x * e.y - ap.y * e.x) / den;
-    let s = (ap.x * dd.y - ap.y * dd.x) / den;
-    if (t < 0.0 || t > 1.0 || s < 0.0 || s > 1.0) { continue; }
-    var k = min(n, 63u);
-    while (k > 0u && fr[k - 1u] > t) { fr[k] = fr[k - 1u]; ids[k] = ids[k - 1u]; k -= 1u; }
-    fr[k] = t; ids[k] = l; n = min(n + 1u, 64u);
-  }
-  for (var j = 0u; j < mobjEnd(); j++) {
-    if (j == mi || O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
-    let r = O[j].radius;
-    let c = mpos(j);
-    // segment against the thing's box: entry fraction
-    var t0 = 0.0; var t1 = 1.0;
-    for (var ax = 0; ax < 2; ax++) {
-      let o = select(p0.y, p0.x, ax == 0); let dv = select(dd.y, dd.x, ax == 0); let cc = select(c.y, c.x, ax == 0);
-      if (abs(dv) < 1e-9) { if (o < cc - r || o > cc + r) { t0 = 2.0; } }
-      else { let a1 = (cc - r - o) / dv; let a2 = (cc + r - o) / dv; t0 = max(t0, min(a1, a2)); t1 = min(t1, max(a1, a2)); }
-    }
-    if (t0 > t1 || t0 > 1.0) { continue; }
-    var k = min(n, 63u);
-    while (k > 0u && fr[k - 1u] > t0) { fr[k] = fr[k - 1u]; ids[k] = ids[k - 1u]; k -= 1u; }
-    fr[k] = t0; ids[k] = j | 0x80000000u; n = min(n + 1u, 64u);
-  }
-  for (var k = 0u; k < n; k++) {
-    let f = fr[k];
-    let dist = max(range * f, 1.0);
-    if ((ids[k] & 0x80000000u) == 0u) {
-      let l = ids[k];
+  for (var guard = 0u; guard < 128u; guard++) {
+    let k = nextIntercept();
+    if (k < 0) { break; }
+    let frac = icFrac[k];
+    icFrac[k] = 0x7fffffff;
+    let id = icId[k];
+    let dist = fxMul(attackrange, frac);
+    if ((id & 0x80000000u) == 0u) {
+      let l = id;
       if (mode == 1u && lineSpecial(l) != 0u) { queueActivation(l, 0u, 2u, mi); }
       let bk = lineBack(l);
-      var hit = false;
-      if (bk < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) {
-        if (mode == 0u) { return 0.0; }
-        hit = true;
-      } else {
+      var hit = bk < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u;
+      if (mode == 0u && hit) { return 0.0; }
+      if (!hit) {
         let F = S[lineFront(l)]; let B = S[bk];
-        let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
+        let opentop = fixedOf(min(F.ceilh, B.ceilh)); let openbottom = fixedOf(max(F.floorh, B.floorh));
         if (mode == 0u) {
           if (openbottom >= opentop) { return 0.0; }
-          if (F.floorh != B.floorh) { bot = max(bot, (openbottom - shootz) / dist); }
-          if (F.ceilh != B.ceilh) { top = min(top, (opentop - shootz) / dist); }
-          if (top <= bot) { return 0.0; }
+          if (F.floorh != B.floorh) { bottomslope = max(bottomslope, fxDiv(openbottom - shootz, dist)); }
+          if (F.ceilh != B.ceilh) { topslope = min(topslope, fxDiv(opentop - shootz, dist)); }
+          if (topslope <= bottomslope) { return 0.0; }
           continue;
         }
-        if (F.floorh != B.floorh && (openbottom - shootz) / dist > aimslope) { hit = true; }
-        if (F.ceilh != B.ceilh && (opentop - shootz) / dist < aimslope) { hit = true; }
+        if (F.floorh != B.floorh && fxDiv(openbottom - shootz, dist) > aimslope) { hit = true; }
+        if (F.ceilh != B.ceilh && fxDiv(opentop - shootz, dist) < aimslope) { hit = true; }
       }
       if (!hit) { continue; }
-      let f2 = f - 4.0 / range;
-      let hp = p0 + dd * f2;
-      let z = shootz + aimslope * f2 * range;
+      // position a bit closer
+      let f2 = frac - fxDiv(4 << 16u, attackrange);
+      let hp = trP + vec2i(fxMul(trD.x, f2), fxMul(trD.y, f2));
+      let z = fxf(shootz + fxMul(aimslope, fxMul(f2, attackrange)));
       let F = S[lineFront(l)];
       if (F.ceilpic == SKYFLAT) {
+        // don't shoot the sky
         if (z > F.ceilh) { return 0.0; }
         if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { return 0.0; }
       }
-      spawnPuff(hp, z, range <= MELEERANGE + 1.0);
+      spawnPuff(hp, z, melee);
       return 0.0;
     }
-    let j = ids[k] & 0x7fffffffu;
-    let tts = (O[j].z + O[j].height - shootz) / dist;
-    let tbs = (O[j].z - shootz) / dist;
+    let j = id & 0x7fffffffu;
+    if (j == mi || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
+    var tts = fxDiv(fixedOf(O[j].z + O[j].height) - shootz, dist);
     if (mode == 0u) {
-      if (tts < bot || tbs > top) { continue; }
+      if (tts < bottomslope) { continue; }
+      var tbs = fxDiv(fixedOf(O[j].z) - shootz, dist);
+      if (tbs > topslope) { continue; }
+      tts = min(tts, topslope); tbs = max(tbs, bottomslope);
       linetarget = i32(j);
-      return (min(tts, top) + max(tbs, bot)) / 2.0;
+      return fxf((tts + tbs) / 2);
     }
-    if (tts < aimslope || tbs > aimslope) { continue; }
-    let f2 = f - 10.0 / range;
-    let hp = p0 + dd * f2;
-    let z = shootz + aimslope * f2 * range;
-    if ((O[j].flags & MF_NOBLOOD) != 0u) { spawnPuff(hp, z, range <= MELEERANGE + 1.0); }
+    if (tts < aimslope) { continue; }
+    if (fxDiv(fixedOf(O[j].z) - shootz, dist) > aimslope) { continue; }
+    let f2 = frac - fxDiv(10 << 16u, attackrange);
+    let hp = trP + vec2i(fxMul(trD.x, f2), fxMul(trD.y, f2));
+    let z = fxf(shootz + fxMul(aimslope, fxMul(f2, attackrange)));
+    if ((O[j].flags & MF_NOBLOOD) != 0u) { spawnPuff(hp, z, melee); }
     else { spawnBlood(hp, z, damage); }
     if (damage > 0) { damageMobj(j, i32(mi), i32(mi), damage); }
     return 0.0;
@@ -2428,7 +2489,7 @@ fn faceTarget(mi: u32) {
   O[mi].flags &= ~MF_AMBUSH;
   var an = pointToAngle(ipos(mi), ipos(u32(t)));
   if ((O[t].flags & MF_SHADOW) != 0u) { an += bitcast<u32>(subRandomI() << 21u); }
-  O[mi].angle = bamToRad(an);
+  O[mi].angle = an;
 }
 // sight to the current target: the per-mobj sight kernel covers the player, else one check per think
 var<private> sightTarget: bool;
@@ -2440,8 +2501,8 @@ fn canSeeTarget(mi: u32) -> bool {
 fn lookForPlayer(mi: u32, allaround: bool) -> bool {
   if (P.health <= 0 || !sightPlayer) { return false; }
   if (!allaround) {
-    let an = wrapPi(angleTo(mpos(mi), mpos(0u)) - O[mi].angle);
-    if (abs(an) > PI / 2.0 && approxDist(mpos(0u) - mpos(mi)) > MELEERANGE) { return false; }
+    let an = pointToAngle(ipos(mi), ipos(0u)) - O[mi].angle;
+    if (an > ANG90 && an < ANG270 && approxDistFx(ipos(mi), ipos(0u)) > (i32(MELEERANGE) << 16u)) { return false; }
   }
   O[mi].targ = 0;
   return true;
@@ -2578,11 +2639,9 @@ fn chase(mi: u32) {
   }
   // turn toward movedir in 45 degree steps
   if (O[mi].movedir < 8) {
-    let q = PI / 4.0;
-    O[mi].angle = floor(O[mi].angle / q + 1e-4) * q;
-    let delta = wrapPi(O[mi].angle - f32(O[mi].movedir) * q);
-    if (delta > 0.01) { O[mi].angle -= q; } else if (delta < -0.01) { O[mi].angle += q; }
-    O[mi].angle -= TAU * floor(O[mi].angle / TAU);
+    O[mi].angle &= 7u << 29u;
+    let delta = bitcast<i32>(O[mi].angle - (u32(O[mi].movedir) << 29u));
+    if (delta > 0) { O[mi].angle -= ANG45; } else if (delta < 0) { O[mi].angle += ANG45; }
   }
   let t = O[mi].targ;
   if (t < 0 || (O[t].flags & MF_SHOOTABLE) == 0u) {
@@ -2687,9 +2746,10 @@ fn callAction(mi: u32, act: u32) {
       let asnd = info(ty, MI_ATTACKSOUND);
       if (asnd != 0) { mobjSound(mi, u32(asnd)); }
       faceTarget(mi);
-      O[mi].momx = 20.0 * cos(O[mi].angle); O[mi].momy = 20.0 * sin(O[mi].angle);
-      let dist = max(approxDist(mpos(u32(t)) - mpos(mi)) / 20.0, 1.0);
-      O[mi].momz = (O[t].z + O[t].height / 2.0 - O[mi].z) / dist;
+      let fa = O[mi].angle >> 19u;
+      O[mi].momx = fxf(20 * fineCosFx(fa)); O[mi].momy = fxf(20 * fineSinFx(fa));
+      let dist = max(approxDistFx(ipos(mi), ipos(u32(t))) / (20 << 16u), 1);
+      O[mi].momz = fxf((fixedOf(O[t].z) + (fixedOf(O[t].height) >> 1u) - fixedOf(O[mi].z)) / dist);
       return;
     }
     case A_Scream: {
@@ -2711,7 +2771,7 @@ fn callAction(mi: u32, act: u32) {
       let src = O[mi].targ;
       if (src < 0) { return; }
       for (var i = 0; i < 40; i++) {
-        let an = O[mi].angle - PI / 4.0 + PI / 2.0 / 40.0 * f32(i);
+        let an = O[mi].angle - ANG90 / 2u + ANG90 / 40u * u32(i);
         _ = trace(u32(src), an, 1024.0, 0u, 0.0, 0);
         if (linetarget < 0) { continue; }
         let lt = u32(linetarget);
@@ -2735,12 +2795,12 @@ fn callAction(mi: u32, act: u32) {
     damageMobj(u32(t), i32(mi), i32(mi), (P_Random() % meleeMod + 1) * meleeMul);
     return;
   }
-  if (missile >= 0) { spawnMissile(mi, t, u32(missile), 0.0, 0.0); return; }
+  if (missile >= 0) { spawnMissile(mi, t, u32(missile), 0u, 0.0); return; }
   if (shots > 0) {
     mobjSound(mi, shotSound);
     let slope = trace(mi, O[mi].angle, MISSILERANGE, 0u, 0.0, 0);
     for (var i = 0; i < shots; i++) {
-      _ = trace(mi, O[mi].angle + subRandom() * BAM20, MISSILERANGE, 1u, slope, (P_Random() % dmgMod + 1) * dmgMul);
+      _ = trace(mi, O[mi].angle + bitcast<u32>(subRandomI() << 20u), MISSILERANGE, 1u, slope, (P_Random() % dmgMod + 1) * dmgMul);
     }
   }
 }
@@ -2780,7 +2840,7 @@ fn nightmareRespawn(mi: u32) {
   if (n >= 0) {
     if ((O[n].flags & MF_SPAWNCEILING) != 0u) { O[n].z = O[n].ceilingz - O[n].height; O[n].pz = O[n].z; }
     O[n].spawnidx = O[mi].spawnidx;
-    O[n].angle = floor(mf(t + 2u) / 45.0) * PI / 4.0;
+    O[n].angle = ANG45 * u32(i32(mf(t + 2u)) / 45);
     if ((M[t + 3u] & 8u) != 0u) { O[n].flags |= MF_AMBUSH; }
     O[n].reactiontime = 18;
   }
@@ -2971,19 +3031,28 @@ fn playerShoot() {
   if (kind >= 3u) {
     var dmg = (P_Random() % 10 + 1) * 2;
     if (kind == 3u && P.powers[1] != 0) { dmg *= 10; }
-    an += subRandom() * BAM18;
+    an += bitcast<u32>(subRandomI() << 18u);
     let range = select(MELEERANGE, MELEERANGE + 1.0, kind == 4u);
     let slope = trace(0u, an, range, 0u, 0.0, 0);
     let lt = linetarget;
     _ = trace(0u, an, range, 1u, slope, dmg);
     if (lt < 0) { if (kind == 4u) { mobjSound(0u, SFX_sawful); } return; }
     mobjSound(0u, select(SFX_punch, SFX_sawhit, kind == 4u));
-    O[0].angle = angleTo(mpos(0u), mpos(u32(lt)));
+    let want = pointToAngle(ipos(0u), ipos(u32(lt)));
+    if (kind == 3u) { O[0].angle = want; return; }
+    // A_Saw turns toward the target by at most ANG90 / 20 a tic
+    let d = want - O[0].angle;
+    if (d > ANG180) {
+      if (bitcast<i32>(d) < -i32(ANG90 / 20u)) { O[0].angle = want + ANG90 / 21u; } else { O[0].angle -= ANG90 / 20u; }
+    } else {
+      if (d > ANG90 / 20u) { O[0].angle = want - ANG90 / 21u; } else { O[0].angle += ANG90 / 20u; }
+    }
+    O[0].flags |= MF_JUSTATTACKED;
     return;
   }
   // P_BulletSlope / the aim of P_SpawnPlayerMissile: straight, then 5.6 degrees either side
   var slope = 0.0;
-  var offs = array<f32, 3>(0.0, BAM26, -BAM26);
+  var offs = array<u32, 3>(0u, 1u << 26u, 0u - (1u << 26u));
   var found = false;
   for (var i = 0; i < 3 && !found; i++) {
     slope = trace(0u, O[0].angle + offs[i], 1024.0, 0u, 0.0, 0);
@@ -3001,8 +3070,8 @@ fn playerShoot() {
     let dmg = 5 * (P_Random() % 3 + 1);
     var a = O[0].angle;
     var sl = slope;
-    if (ssg) { a += subRandom() * BAM18 * 2.0; sl += subRandom() * 32.0 / 65536.0; }
-    else if (!shotAccurate) { a += subRandom() * BAM18; }
+    if (ssg) { a += bitcast<u32>(subRandomI() << 19u); sl += f32(subRandomI() << 5u) / 65536.0; }
+    else if (!shotAccurate) { a += bitcast<u32>(subRandomI() << 18u); }
     _ = trace(0u, a, MISSILERANGE, 1u, sl, dmg);
   }
 }
@@ -3119,9 +3188,9 @@ fn playerThink() {
     P.deltaviewheight = 0.0;
     calcHeight(onground);
     if (P.attacker > 0 && O[P.attacker].inuse != 0u) {
-      let want = angleTo(mpos(0u), mpos(u32(P.attacker)));
-      let d = wrapPi(want - O[0].angle);
-      if (abs(d) < BAM26 / 2.0) { O[0].angle = want; } else { O[0].angle += sign(d) * BAM26 / 2.0; }
+      let want = pointToAngle(ipos(0u), ipos(u32(P.attacker)));
+      let d = want - O[0].angle;
+      if (d < ANG5 || d > 0u - ANG5) { O[0].angle = want; } else if (d < ANG180) { O[0].angle += ANG5; } else { O[0].angle -= ANG5; }
     }
     // once on the floor, a fresh press of use or fire restarts the level (P_DeathThink takes use only)
     let b = U.buttons & 3u;
@@ -3133,14 +3202,12 @@ fn playerThink() {
   if (O[0].reactiontime > 0) {
     O[0].reactiontime -= 1;
   } else {
-    O[0].angle = O[0].angle + U.turn + select(0.0, U.mouseturn, first);
+    // angleturn << 16: the turn in 1/65536ths of a circle
+    let turn = U.turn + select(0.0, U.mouseturn, first);
+    O[0].angle += u32(i32(round(turn / TAU * 65536.0))) << 16u;
     if (first) { P.pva += U.mouseturn; }
-    O[0].angle = O[0].angle - TAU * floor(O[0].angle / TAU);
-    // every turn is angleturn << 16 BAM: snap to that grid so f32 rounding can't build up and tip
-    // the finesine index (fineAngle) across a step, as it did 145 tics into E1M6
-    O[0].angle = f32(u32(round(O[0].angle / TAU * 65536.0)) & 0xffffu) * (TAU / 65536.0);
-    // P_Thrust through DOOM's finesine table: 8192 steps, each sampled half a step in
-    let fa = fineAngle(O[0].angle);
+    // P_Thrust through DOOM's finesine table: 8192 steps
+    let fa = O[0].angle >> 19u;
     if (onground) {
       // P_Thrust: FixedMul(move * 2048, finecosine) is (move * finecosine) >> 5, floored
       if (U.forward != 0.0) { let fm = i32(U.forward); O[0].momx += f32((fm * fineCosFx(fa)) >> 5u) / 65536.0; O[0].momy += f32((fm * fineSinFx(fa)) >> 5u) / 65536.0; }
@@ -3249,7 +3316,7 @@ fn updateFace() {
     pri = 7;
     if (P.oldhealth - P.health > 20) { P.face = painOffset() + 5; }
     else {
-      let d = wrapPi(angleTo(mpos(0u), mpos(u32(P.attacker))) - O[0].angle);
+      let d = wrapPi(angleTo(mpos(0u), mpos(u32(P.attacker))) - bamToRad(O[0].angle));
       if (abs(d) < PI / 4.0) { P.face = painOffset() + 7; }
       else if (d > 0.0) { P.face = painOffset() + 4; }
       else { P.face = painOffset() + 3; }
@@ -3372,7 +3439,7 @@ fn ticWorld() {
   P.fixedcolormap = -1;
   if (P.powers[0] > 4 * 32 || (P.powers[0] & 8) != 0) { P.fixedcolormap = 32; }
   else if (P.powers[5] > 4 * 32 || (P.powers[5] & 8) != 0) { P.fixedcolormap = 1; }
-  P.viewx = fxf(O[0].x); P.viewy = fxf(O[0].y); P.viewangle = O[0].angle;
+  P.viewx = fxf(O[0].x); P.viewy = fxf(O[0].y); P.viewangle = bamToRad(O[0].angle);
   P.leveltime += 1u;
 }
 `;
