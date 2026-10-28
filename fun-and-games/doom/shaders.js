@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028060626";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028060626";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028061718";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028061718";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -89,7 +89,7 @@ struct Sector {
   pad0: u32, pf: f32, pc: f32, pad3: u32, // pf, pc: floor and ceiling at the previous tic, for drawing between tics
 }
 struct Mobj {
-  x: f32, y: f32, z: f32, angle: f32,
+  x: i32, y: i32, z: f32, angle: f32, // x and y in DOOM's 16.16, so movement adds up exactly as vanilla's
   momx: f32, momy: f32, momz: f32, floorz: f32,
   ceilingz: f32, radius: f32, height: f32, mtype: u32,
   state: u32, tics: i32, flags: u32, health: i32,
@@ -193,15 +193,16 @@ fn animFlat(t: u32) -> u32 {
 // R_PointOnSide (quick = its sign-bit shortcut) and P_PointOnLineSide: the line's integer delta times
 // the 16.16 offset, each product truncated to whole map units by FixedMul, so a point within about
 // 1/64 unit of a line can land on its back side
-fn lineSideFx(p: vec2f, a: vec2f, d: vec2f, quick: bool) -> u32 {
-  if (d.x == 0.0) { if (p.x <= a.x) { return select(0u, 1u, d.y > 0.0); } return select(0u, 1u, d.y < 0.0); }
-  if (d.y == 0.0) { if (p.y <= a.y) { return select(0u, 1u, d.x < 0.0); } return select(0u, 1u, d.x > 0.0); }
-  let dx = fixedOf(p.x) - fixedOf(a.x); let dy = fixedOf(p.y) - fixedOf(a.y);
+fn lineSideFx(p: vec2i, a: vec2f, d: vec2f, quick: bool) -> u32 {
+  let ax = i32(a.x) << 16u; let ay = i32(a.y) << 16u;
+  if (d.x == 0.0) { if (p.x <= ax) { return select(0u, 1u, d.y > 0.0); } return select(0u, 1u, d.y < 0.0); }
+  if (d.y == 0.0) { if (p.y <= ay) { return select(0u, 1u, d.x < 0.0); } return select(0u, 1u, d.x > 0.0); }
+  let dx = p.x - ax; let dy = p.y - ay;
   let ldx = i32(d.x); let ldy = i32(d.y);
   if (quick && (ldy ^ ldx ^ dx ^ dy) < 0) { return select(0u, 1u, (ldy ^ dx) < 0); }
   return select(1u, 0u, fxMul(dy, ldx) < fxMul(ldy, dx));
 }
-fn pointInSubsector(p: vec2f) -> u32 {
+fn pointInSubsector(p: vec2i) -> u32 {
   if (NUMNODES == 0u) { return 0u; }
   var n = max(NUMNODES, 1u) - 1u;
   for (var guard = 0; guard < 256; guard++) {
@@ -211,7 +212,7 @@ fn pointInSubsector(p: vec2f) -> u32 {
   }
   return 0u;
 }
-fn sectorAt(p: vec2f) -> u32 { return M[M_SSEC + 4u * pointInSubsector(p) + 2u]; }
+fn sectorAt(p: vec2i) -> u32 { return M[M_SSEC + 4u * pointInSubsector(p) + 2u]; }
 
 // light level -> colormap row, DOOM's zlight and scalelight tables
 fn startmap(light: i32) -> i32 { let ln = clamp((light >> 4u) + P.extralight, 0, 15); return (15 - ln) * 4; }
@@ -488,13 +489,13 @@ fn project(@builtin(global_invocation_id) gid: vec3u) {
   if (i == 0u || i >= MAXMOBJS) { return; }
   var m = O[i];
   if (m.inuse == 0u) { return; }
-  m.x = mix(m.px, m.x, U.frac); m.y = mix(m.py, m.y, U.frac); m.z = mix(m.pz, m.z, U.frac);
+  let mx = mix(m.px, fxf(m.x), U.frac); let my = mix(m.py, fxf(m.y), U.frac); m.z = mix(m.pz, m.z, U.frac);
   let st = G_STATES + 8u * m.state;
   let sprite = G[st]; let frame = G[st + 1u];
   let p = vec2f(P.rx, P.ry);
   let fw = vec2f(cos(P.ra), sin(P.ra));
   let rt = vec2f(sin(P.ra), -cos(P.ra));
-  let rel = vec2f(m.x, m.y) - p;
+  let rel = vec2f(mx, my) - p;
   let tz = dot(rel, fw);
   if (tz < 4.0) { return; }
   let tx = dot(rel, rt);
@@ -677,7 +678,7 @@ fn startSound(sfx: u32, x: f32, y: f32) {
   P.snd[i] = vec4f(f32(sfx), x, y, 0.0);
   P.sndcount += 1u;
 }
-fn mobjSound(mi: u32, sfx: u32) { startSound(sfx, O[mi].x, O[mi].y); }
+fn mobjSound(mi: u32, sfx: u32) { startSound(sfx, fxf(O[mi].x), fxf(O[mi].y)); }
 fn sectorSound(sec: u32, sfx: u32) {
   // sector centre from its first line, good enough for panning
   let sl = M_SECLINE + 2u * sec;
@@ -735,22 +736,23 @@ fn findMinSurroundingLight(sec: u32, maxl: i32) -> i32 {
 }
 
 // ---- geometry for movement
-fn pointOnLineSide(p: vec2f, l: u32) -> u32 { let a = lineA(l); return lineSideFx(p, a, lineB(l) - a, false); }
+fn pointOnLineSide(p: vec2i, l: u32) -> u32 { let a = lineA(l); return lineSideFx(p, a, lineB(l) - a, false); }
 // P_BoxOnLineSide: -1 if the box crosses the line, else the side. Axis-aligned lines compare
 // strictly, so a box edge lying on the line doesn't cross it; sloped lines test two corners.
-fn boxOnLineSide(lo: vec2f, hi: vec2f, l: u32) -> i32 {
+fn boxOnLineSide(lo: vec2i, hi: vec2i, l: u32) -> i32 {
   let a = lineA(l); let d = lineB(l) - a;
+  let ax = i32(a.x) << 16u; let ay = i32(a.y) << 16u;
   var p1 = 0u; var p2 = 0u;
   if (d.y == 0.0) {
-    p1 = select(0u, 1u, hi.y > a.y); p2 = select(0u, 1u, lo.y > a.y);
+    p1 = select(0u, 1u, hi.y > ay); p2 = select(0u, 1u, lo.y > ay);
     if (d.x < 0.0) { p1 ^= 1u; p2 ^= 1u; }
   } else if (d.x == 0.0) {
-    p1 = select(0u, 1u, hi.x < a.x); p2 = select(0u, 1u, lo.x < a.x);
+    p1 = select(0u, 1u, hi.x < ax); p2 = select(0u, 1u, lo.x < ax);
     if (d.y < 0.0) { p1 ^= 1u; p2 ^= 1u; }
   } else if ((d.x > 0.0) == (d.y > 0.0)) {
-    p1 = pointOnLineSide(vec2f(lo.x, hi.y), l); p2 = pointOnLineSide(vec2f(hi.x, lo.y), l);
+    p1 = pointOnLineSide(vec2i(lo.x, hi.y), l); p2 = pointOnLineSide(vec2i(hi.x, lo.y), l);
   } else {
-    p1 = pointOnLineSide(vec2f(hi.x, hi.y), l); p2 = pointOnLineSide(vec2f(lo.x, lo.y), l);
+    p1 = pointOnLineSide(vec2i(hi.x, hi.y), l); p2 = pointOnLineSide(vec2i(lo.x, lo.y), l);
   }
   if (p1 == p2) { return i32(p1); }
   return -1;
@@ -769,18 +771,21 @@ var<private> floatok: bool;
 var<private> actTag: i32;
 var<private> crossq: array<vec2u, 16>;
 
-fn checkPosition(mi: u32, pos: vec2f) -> bool {
+fn checkPosition(mi: u32, pos: vec2i) -> bool {
   let me = O[mi];
   let r = me.radius;
-  let lo = pos - vec2f(r, r); let hi = pos + vec2f(r, r);
+  let ri = fixedOf(r);
+  let lo = pos - vec2i(ri); let hi = pos + vec2i(ri);
+  let bmo = vec2i(i32(BM_X) << 16u, i32(BM_Y) << 16u);
   let sec = sectorAt(pos);
   tmfloorz = S[sec].floorh; tmdropoffz = tmfloorz; tmceilingz = S[sec].ceilh;
   tmblockline = -1; tmceilline = -1; tmfloorline = -1;
   numspechit = 0u;
   if ((me.flags & MF_NOCLIP) != 0u) { return true; }
   // things (PIT_CheckThing)
-  let tx0 = max(i32(floor((lo.x - BM_X - 32.0) / 128.0)), 0); let tx1 = min(i32(floor((hi.x - BM_X + 32.0) / 128.0)), BM_W - 1);
-  let ty0 = max(i32(floor((lo.y - BM_Y - 32.0) / 128.0)), 0); let ty1 = min(i32(floor((hi.y - BM_Y + 32.0) / 128.0)), BM_H - 1);
+  // MAPBLOCKSHIFT 23: 128 units in 16.16; MAXRADIUS 32 reaches things whose centre is in a neighbouring block
+  let tx0 = max((lo.x - bmo.x - 0x200000) >> 23u, 0); let tx1 = min((hi.x - bmo.x + 0x200000) >> 23u, BM_W - 1);
+  let ty0 = max((lo.y - bmo.y - 0x200000) >> 23u, 0); let ty1 = min((hi.y - bmo.y + 0x200000) >> 23u, BM_H - 1);
   let ncell = max(tx1 - tx0 + 1, 0) * max(ty1 - ty0 + 1, 0);
   var cellk = 0; var cur = 0u;
   for (var guard = 0; guard < 8192; guard++) {
@@ -794,13 +799,9 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
     let j = cur - 1u;
     cur = u32(O[j].bnext);
     if (j == mi || O[j].inuse == 0u || (O[j].flags & (MF_SOLID | MF_SPECIAL | MF_SHOOTABLE)) == 0u) { continue; }
-    let pre = O[j].radius + r - 1.0 / 4096.0;
-    if (abs(O[j].x - pos.x) >= pre || abs(O[j].y - pos.y) >= pre) { continue; }
+    let bd = fixedOf(O[j].radius) + ri;
+    if (abs(O[j].x - pos.x) >= bd || abs(O[j].y - pos.y) >= bd) { continue; }
     let th = O[j];
-    // a whisker of tolerance: DOOM's positions are exact in fixed point, so two things exactly
-    // radius apart (common, monsters step in exact multiples) don't touch there; floats can miss it
-    let bd = th.radius + r - 1.0 / 4096.0;
-    if (abs(th.x - pos.x) >= bd || abs(th.y - pos.y) >= bd) { continue; }
     if ((me.flags & MF_SKULLFLY) != 0u) {
       damageMobj(j, i32(mi), i32(mi), (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
       O[mi].flags &= ~MF_SKULLFLY;
@@ -831,8 +832,8 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
     if ((th.flags & MF_SOLID) != 0u) { return false; }
   }
   // lines via the blockmap
-  let x0 = max(i32(floor((lo.x - BM_X) / 128.0)), 0); let x1 = min(i32(floor((hi.x - BM_X) / 128.0)), BM_W - 1);
-  let y0 = max(i32(floor((lo.y - BM_Y) / 128.0)), 0); let y1 = min(i32(floor((hi.y - BM_Y) / 128.0)), BM_H - 1);
+  let x0 = max((lo.x - bmo.x) >> 23u, 0); let x1 = min((hi.x - bmo.x) >> 23u, BM_W - 1);
+  let y0 = max((lo.y - bmo.y) >> 23u, 0); let y1 = min((hi.y - bmo.y) >> 23u, BM_H - 1);
   // P_CheckPosition's order: columns of blocks, each block's list from its first entry. Every vanilla
   // list starts with line 0, so line 0 is tested first (validcount keeps it to once).
   var line0 = x0 <= x1 && y0 <= y1;
@@ -843,7 +844,7 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
       for (var k = 0u; k <= n; k++) {
         var l = 0u;
         if (k == 0u) { if (!line0) { continue; } line0 = false; } else { l = M[M_BMLIST + start + k - 1u]; }
-        let a = lineA(l); let b = lineB(l);
+        let a = fxv(lineA(l)); let b = fxv(lineB(l));
         if (hi.x <= min(a.x, b.x) || lo.x >= max(a.x, b.x) || hi.y <= min(a.y, b.y) || lo.y >= max(a.y, b.y)) { continue; }
         if (boxOnLineSide(lo, hi, l) != -1) { continue; }
         let back = lineBack(l);
@@ -870,7 +871,7 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
   return true;
 }
 
-fn tryMove(mi: u32, pos: vec2f) -> bool {
+fn tryMove(mi: u32, pos: vec2i) -> bool {
   floatok = false;
   if (!checkPosition(mi, pos)) { return false; }
   let me = O[mi];
@@ -881,7 +882,7 @@ fn tryMove(mi: u32, pos: vec2f) -> bool {
     if ((me.flags & MF_TELEPORT) == 0u && tmfloorz - me.z > 24.0) { tmblockline = tmfloorline; return false; }
     if ((me.flags & (MF_DROPOFF | MF_FLOAT)) == 0u && tmfloorz - tmdropoffz > 24.0) { tmblockline = tmfloorline; return false; }
   }
-  let old = vec2f(me.x, me.y);
+  let old = vec2i(me.x, me.y);
   O[mi].floorz = tmfloorz; O[mi].ceilingz = tmceilingz; O[mi].dropoffz = tmdropoffz;
   unlinkThing(mi);
   O[mi].x = pos.x; O[mi].y = pos.y;
@@ -913,30 +914,30 @@ fn processCrossings(mi: u32) {
 var<private> bestslidefrac: i32; // 16.16
 var<private> bestslideline: i32;
 // P_PointOnDivlineSide
-fn divlineSide(pt: vec2f, o: vec2f, d: vec2f) -> u32 {
-  if (d.x == 0.0) { if (pt.x <= o.x) { return select(0u, 1u, d.y > 0.0); } return select(0u, 1u, d.y < 0.0); }
-  if (d.y == 0.0) { if (pt.y <= o.y) { return select(0u, 1u, d.x < 0.0); } return select(0u, 1u, d.x > 0.0); }
-  let dx = fixedOf(pt.x) - fixedOf(o.x); let dy = fixedOf(pt.y) - fixedOf(o.y);
-  let ldx = fixedOf(d.x); let ldy = fixedOf(d.y);
+fn divlineSide(pt: vec2i, o: vec2i, d: vec2i) -> u32 {
+  if (d.x == 0) { if (pt.x <= o.x) { return select(0u, 1u, d.y > 0); } return select(0u, 1u, d.y < 0); }
+  if (d.y == 0) { if (pt.y <= o.y) { return select(0u, 1u, d.x < 0); } return select(0u, 1u, d.x > 0); }
+  let dx = pt.x - o.x; let dy = pt.y - o.y;
+  let ldx = d.x; let ldy = d.y;
   if ((ldy ^ ldx ^ dx ^ dy) < 0) { return select(0u, 1u, (ldy ^ dx) < 0); }
   return select(1u, 0u, fxMul(dy >> 8u, ldx >> 8u) < fxMul(ldy >> 8u, dx >> 8u));
 }
 // P_AddLineIntercepts' crossing test and P_InterceptVector, then PTR_SlideTraverse
-fn slideCheckLine(l: u32, p: vec2f, d: vec2f) {
-  let a = lineA(l); let dl = lineB(l) - a;
+fn slideCheckLine(l: u32, p: vec2i, d: vec2i) {
+  let a = fxv(lineA(l)); let dl = fxv(lineB(l)) - a;
   var s1 = 0u; var s2 = 0u;
-  if (abs(d.x) > 16.0 || abs(d.y) > 16.0) { s1 = divlineSide(a, p, d); s2 = divlineSide(a + dl, p, d); }
+  if (abs(d.x) > 0x100000 || abs(d.y) > 0x100000) { s1 = divlineSide(a, p, d); s2 = divlineSide(a + dl, p, d); }
   else { s1 = pointOnLineSide(p, l); s2 = pointOnLineSide(p + d, l); }
   if (s1 == s2) { return; }
   // P_InterceptVector in 16.16, with its >> 8 pre-shifts
-  let ax = fixedOf(a.x); let ay = fixedOf(a.y); let ldx = fixedOf(dl.x); let ldy = fixedOf(dl.y);
-  let px = fixedOf(p.x); let py = fixedOf(p.y); let tdx = fixedOf(d.x); let tdy = fixedOf(d.y);
+  let ax = a.x; let ay = a.y; let ldx = dl.x; let ldy = dl.y;
+  let px = p.x; let py = p.y; let tdx = d.x; let tdy = d.y;
   let den = fxMul(ldy >> 8u, tdx) - fxMul(ldx >> 8u, tdy);
   var frac = 0;
   if (den != 0) { frac = fxDiv(fxMul((ax - px) >> 8u, ldy) + fxMul((py - ay) >> 8u, ldx), den); }
   if (frac < 0 || frac > 65536 || frac >= bestslidefrac) { return; }
   if ((lineFlags(l) & ML_TWOSIDED) == 0u || lineBack(l) < 0) {
-    if (pointOnLineSide(mpos(0u), l) != 0u) { return; } // don't hit the back side
+    if (pointOnLineSide(ipos(0u), l) != 0u) { return; } // don't hit the back side
   } else {
     let F = S[lineFront(l)]; let B = S[lineBack(l)];
     let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
@@ -945,9 +946,10 @@ fn slideCheckLine(l: u32, p: vec2f, d: vec2f) {
   }
   bestslidefrac = frac; bestslideline = i32(l);
 }
-fn slideTrace(p: vec2f, d: vec2f) {
+fn slideTrace(pi: vec2i, di: vec2i) {
   // every vanilla blockmap list starts with line 0, so P_BlockLinesIterator visits it in each block
-  slideCheckLine(0u, p, d);
+  slideCheckLine(0u, pi, di);
+  let p = fv(pi); let d = fv(di);
   let q = p + d;
   let lo = min(p, q); let hi = max(p, q);
   let x0 = max(i32(floor((lo.x - BM_X) / 128.0)), 0); let x1 = min(i32(floor((hi.x - BM_X) / 128.0)), BM_W - 1);
@@ -969,7 +971,7 @@ fn slideTrace(p: vec2f, d: vec2f) {
       if (t0 > t1) { continue; }
       let cell = M_BMCELL + 2u * u32(by * BM_W + bx);
       let start = M[cell]; let n = M[cell + 1u];
-      for (var k = 0u; k < n; k++) { slideCheckLine(M[M_BMLIST + start + k], p, d); }
+      for (var k = 0u; k < n; k++) { slideCheckLine(M[M_BMLIST + start + k], pi, di); }
     }
   }
 }
@@ -978,11 +980,11 @@ fn hitSlideLine(l: u32, mv: vec2f) -> vec2f {
   let dl = lineB(l) - lineA(l);
   if (dl.y == 0.0) { return vec2f(mv.x, 0.0); }
   if (dl.x == 0.0) { return vec2f(0.0, mv.y); }
-  var la = pointToAngle(vec2f(0.0), dl);
-  if (pointOnLineSide(mpos(0u), l) == 1u) { la += 0x80000000u; }
-  var da = pointToAngle(vec2f(0.0), mv) - la;
+  var la = pointToAngle(vec2i(0), fxv(dl));
+  if (pointOnLineSide(ipos(0u), l) == 1u) { la += 0x80000000u; }
+  var da = pointToAngle(vec2i(0), fxv(mv)) - la;
   if (da > 0x80000000u) { da += 0x80000000u; }
-  let nl = fxMul(approxDistFx(vec2f(0.0), mv), fineCosFx(da >> 19u));
+  let nl = fxMul(approxDistFx(vec2i(0), fxv(mv)), fineCosFx(da >> 19u));
   let lf = la >> 19u;
   return vec2f(f32(fxMul(nl, fineCosFx(lf))), f32(fxMul(nl, fineSinFx(lf)))) / 65536.0;
 }
@@ -996,8 +998,8 @@ fn playerXY(hasCmd: bool) {
   var xmove = fixedOf(O[0].momx); var ymove = fixedOf(O[0].momy);
   var st = 0u; var hit = 0;
   for (var guard = 0; guard < 48; guard++) {
-    let pos = mpos(0u);
-    let mom = vec2f(O[0].momx, O[0].momy);
+    let pos = ipos(0u);
+    let mom = fxv(vec2f(O[0].momx, O[0].momy));
     var tgt = pos; var tryNow = false;
     if (st == 7u) {
       if (xmove == 0 && ymove == 0) { break; }
@@ -1006,24 +1008,24 @@ fn playerXY(hasCmd: bool) {
     if (st == 0u) {
       // vanilla halves only a positive move (no abs here), so a fast move west or south goes in one step;
       // the step is move / 2 (toward zero) and what is left move >> 1 (toward -inf)
-      if (xmove > HALFMOVE || ymove > HALFMOVE) { tgt = pos + vec2f(f32(xmove / 2), f32(ymove / 2)) / 65536.0; xmove >>= 1u; ymove >>= 1u; }
-      else { tgt = pos + vec2f(f32(xmove), f32(ymove)) / 65536.0; xmove = 0; ymove = 0; }
+      if (xmove > HALFMOVE || ymove > HALFMOVE) { tgt = pos + vec2i(xmove / 2, ymove / 2); xmove >>= 1u; ymove >>= 1u; }
+      else { tgt = pos + vec2i(xmove, ymove); xmove = 0; ymove = 0; }
       tryNow = true;
     } else if (st == 1u) {
       hit += 1;
       if (hit == 3) { st = 5u; }
       else {
-        let r = O[0].radius;
-        let lead = pos + vec2f(select(-r, r, mom.x > 0.0), select(-r, r, mom.y > 0.0));
-        let trail = pos - vec2f(select(-r, r, mom.x > 0.0), select(-r, r, mom.y > 0.0));
+        let r = fixedOf(O[0].radius);
+        let lead = pos + vec2i(select(-r, r, mom.x > 0), select(-r, r, mom.y > 0));
+        let trail = pos - vec2i(select(-r, r, mom.x > 0), select(-r, r, mom.y > 0));
         bestslidefrac = 65537; bestslideline = -1;
         slideTrace(lead, mom);
-        slideTrace(vec2f(trail.x, lead.y), mom);
-        slideTrace(vec2f(lead.x, trail.y), mom);
+        slideTrace(vec2i(trail.x, lead.y), mom);
+        slideTrace(vec2i(lead.x, trail.y), mom);
         if (bestslideline < 0) { st = 5u; }
         else {
           bestslidefrac -= 0x800; // fudge a bit to make sure it doesn't hit
-          if (bestslidefrac > 0) { tgt = pos + vec2f(f32(fxMul(fixedOf(mom.x), bestslidefrac)), f32(fxMul(fixedOf(mom.y), bestslidefrac))) / 65536.0; tryNow = true; st = 2u; }
+          if (bestslidefrac > 0) { tgt = pos + vec2i(fxMul(mom.x, bestslidefrac), fxMul(mom.y, bestslidefrac)); tryNow = true; st = 2u; }
           else { st = 3u; }
         }
       }
@@ -1032,13 +1034,13 @@ fn playerXY(hasCmd: bool) {
       let rem = min(65536 - (bestslidefrac + 0x800), 65536);
       if (rem <= 0) { st = 7u; }
       else {
-        let tm = hitSlideLine(u32(bestslideline), vec2f(f32(fxMul(fixedOf(mom.x), rem)), f32(fxMul(fixedOf(mom.y), rem))) / 65536.0);
+        let tm = hitSlideLine(u32(bestslideline), vec2f(f32(fxMul(mom.x, rem)), f32(fxMul(mom.y, rem))) / 65536.0);
         O[0].momx = tm.x; O[0].momy = tm.y;
-        tgt = pos + tm; tryNow = true; st = 4u;
+        tgt = pos + fxv(tm); tryNow = true; st = 4u;
       }
     }
-    if (st == 5u && !tryNow) { tgt = vec2f(pos.x, pos.y + mom.y); tryNow = true; }
-    else if (st == 6u && !tryNow) { tgt = vec2f(pos.x + mom.x, pos.y); tryNow = true; }
+    if (st == 5u && !tryNow) { tgt = vec2i(pos.x, pos.y + mom.y); tryNow = true; }
+    else if (st == 6u && !tryNow) { tgt = vec2i(pos.x + mom.x, pos.y); tryNow = true; }
     if (!tryNow) { continue; }
     let ok = tryMove(0u, tgt);
     if (st == 0u) { if (ok) { st = 7u; } else { hit = 0; st = 1u; } }
@@ -1083,10 +1085,10 @@ fn thingXY(mi: u32) {
   var xmove = fixedOf(mom.x); var ymove = fixedOf(mom.y);
   for (var guard = 0; guard < 8; guard++) {
     // as for the player: only a positive move is halved
-    var step = vec2f(f32(xmove), f32(ymove)) / 65536.0;
-    if (xmove > HALFMOVE || ymove > HALFMOVE) { step = vec2f(f32(xmove / 2), f32(ymove / 2)) / 65536.0; xmove >>= 1u; ymove >>= 1u; }
+    var step = vec2i(xmove, ymove);
+    if (xmove > HALFMOVE || ymove > HALFMOVE) { step = vec2i(xmove / 2, ymove / 2); xmove >>= 1u; ymove >>= 1u; }
     else { xmove = 0; ymove = 0; }
-    if (!tryMove(mi, vec2f(O[mi].x, O[mi].y) + step)) {
+    if (!tryMove(mi, ipos(mi) + step)) {
       if ((O[mi].flags & MF_MISSILE) != 0u) {
         // hitting a sky wall makes the missile vanish instead of exploding
         if (tmceilline >= 0) {
@@ -1118,7 +1120,7 @@ fn zMovement(mi: u32, isPlayer: bool) {
   // floating monsters drift toward their target's height
   if ((flags & MF_FLOAT) != 0u && O[mi].targ >= 0 && (flags & (MF_SKULLFLY | MF_INFLOAT)) == 0u) {
     let t = O[O[mi].targ];
-    let dist = approxDist(vec2f(t.x - O[mi].x, t.y - O[mi].y));
+    let dist = fxf(approxDistFx(ipos(mi), ipos(u32(O[mi].targ))));
     let delta = t.z + O[mi].height / 2.0 - O[mi].z;
     if (delta < 0.0 && dist < -(delta * 3.0)) { O[mi].z -= 4.0; }
     else if (delta > 0.0 && dist < delta * 3.0) { O[mi].z += 4.0; }
@@ -1149,11 +1151,12 @@ fn zMovement(mi: u32, isPlayer: bool) {
 fn touchesSector(mi: u32, sec: u32) -> bool {
   let m = O[mi];
   if (m.sector == sec) { return true; }
-  let lo = vec2f(m.x - m.radius, m.y - m.radius); let hi = vec2f(m.x + m.radius, m.y + m.radius);
+  let r = fixedOf(m.radius);
+  let lo = vec2i(m.x - r, m.y - r); let hi = vec2i(m.x + r, m.y + r);
   let sl = M_SECLINE + 2u * sec;
   for (var i = 0u; i < M[sl + 1u]; i++) {
     let l = M[M_SECLIST + M[sl] + i];
-    let a = lineA(l); let b = lineB(l);
+    let a = fxv(lineA(l)); let b = fxv(lineB(l));
     if (hi.x <= min(a.x, b.x) || lo.x >= max(a.x, b.x) || hi.y <= min(a.y, b.y) || lo.y >= max(a.y, b.y)) { continue; }
     if (boxOnLineSide(lo, hi, l) == -1) { return true; }
   }
@@ -1166,19 +1169,20 @@ fn changeSector(sec: u32, crush: bool) -> bool {
     if (!touchesSector(j, sec)) { continue; }
     let onfloor = O[j].z <= O[j].floorz;
     // P_ThingHeightClip: new floor and ceiling from the lines the thing touches
-    let pos = vec2f(O[j].x, O[j].y);
-    let r = O[j].radius;
-    let lo = pos - vec2f(r, r); let hi = pos + vec2f(r, r);
+    let pos = ipos(j);
+    let r = fixedOf(O[j].radius);
+    let lo = pos - vec2i(r); let hi = pos + vec2i(r);
+    let bmo = vec2i(i32(BM_X) << 16u, i32(BM_Y) << 16u);
     let s0 = sectorAt(pos);
     var fz = S[s0].floorh; var cz = S[s0].ceilh;
-    let x0 = max(i32(floor((lo.x - BM_X) / 128.0)), 0); let x1 = min(i32(floor((hi.x - BM_X) / 128.0)), BM_W - 1);
-    let y0 = max(i32(floor((lo.y - BM_Y) / 128.0)), 0); let y1 = min(i32(floor((hi.y - BM_Y) / 128.0)), BM_H - 1);
+    let x0 = max((lo.x - bmo.x) >> 23u, 0); let x1 = min((hi.x - bmo.x) >> 23u, BM_W - 1);
+    let y0 = max((lo.y - bmo.y) >> 23u, 0); let y1 = min((hi.y - bmo.y) >> 23u, BM_H - 1);
     for (var by = y0; by <= y1; by++) {
       for (var bx = x0; bx <= x1; bx++) {
         let cell = M_BMCELL + 2u * u32(by * BM_W + bx);
         for (var k = 0u; k < M[cell + 1u]; k++) {
           let l = M[M_BMLIST + M[cell] + k];
-          let a = lineA(l); let b = lineB(l);
+          let a = fxv(lineA(l)); let b = fxv(lineB(l));
           if (hi.x <= min(a.x, b.x) || lo.x >= max(a.x, b.x) || hi.y <= min(a.y, b.y) || lo.y >= max(a.y, b.y)) { continue; }
           if (boxOnLineSide(lo, hi, l) != -1) { continue; }
           let back = lineBack(l);
@@ -1661,21 +1665,21 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
     if (!tagged(l, sec)) { continue; }
     for (var j = 0u; j < mobjEnd(); j++) {
       if (O[j].inuse == 0u || O[j].mtype != MT_TELEPORTMAN || O[j].sector != sec) { continue; }
-      let old = vec2f(O[mi].x, O[mi].y); let oldz = O[mi].z;
+      let old = ipos(mi); let oldz = O[mi].z;
       // P_TeleportMove: walls do not matter; things on the spot are stomped, by the player only
       // (and by monsters on MAP30)
-      let dest = vec2f(O[j].x, O[j].y);
+      let dest = ipos(j);
       let stomp = mi == 0u || (COMMERCIAL && GAMEMAP == 30);
       for (var k = 0u; k < mobjEnd(); k++) {
         if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SHOOTABLE) == 0u) { continue; }
-        let bd = O[k].radius + O[mi].radius;
+        let bd = fixedOf(O[k].radius + O[mi].radius);
         if (abs(O[k].x - dest.x) >= bd || abs(O[k].y - dest.y) >= bd) { continue; }
         if (!stomp) { return false; }
       }
       if (stomp) {
         for (var k = 0u; k < mobjEnd(); k++) {
           if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SHOOTABLE) == 0u) { continue; }
-          let bd = O[k].radius + O[mi].radius;
+          let bd = fixedOf(O[k].radius + O[mi].radius);
           if (abs(O[k].x - dest.x) >= bd || abs(O[k].y - dest.y) >= bd) { continue; }
           damageMobj(k, i32(mi), i32(mi), 10000);
         }
@@ -1687,15 +1691,16 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
       O[mi].floorz = S[dsec].floorh; O[mi].ceilingz = S[dsec].ceilh; O[mi].dropoffz = S[dsec].floorh;
       O[mi].z = O[mi].floorz;
       if (mi == 0u) { P.viewz = O[mi].z + P.viewheight; }
-      _ = spawnMobj(old.x, old.y, oldz, MT_TFOG);
-      startSound(SFX_telept, old.x, old.y);
+      _ = spawnMobjI(old, oldz, MT_TFOG);
+      startSound(SFX_telept, fxf(old.x), fxf(old.y));
       let a = O[j].angle;
-      _ = spawnMobj(O[j].x + 20.0 * cos(a), O[j].y + 20.0 * sin(a), O[mi].z, MT_TFOG);
-      startSound(SFX_telept, O[j].x, O[j].y);
+      let fa = fineAngle(a);
+      _ = spawnMobjI(dest + vec2i(20 * fineCosFx(fa), 20 * fineSinFx(fa)), O[mi].z, MT_TFOG);
+      startSound(SFX_telept, fxf(dest.x), fxf(dest.y));
       if (mi == 0u) { O[mi].reactiontime = 18; }
       O[mi].angle = a; O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
-      O[mi].px = O[mi].x; O[mi].py = O[mi].y; O[mi].pz = O[mi].z;
-      if (mi == 0u) { P.pvx = O[0].x; P.pvy = O[0].y; P.pvz = P.viewz; P.pva = a; }
+      O[mi].px = fxf(O[mi].x); O[mi].py = fxf(O[mi].y); O[mi].pz = O[mi].z;
+      if (mi == 0u) { P.pvx = O[mi].px; P.pvy = O[mi].py; P.pvz = P.viewz; P.pva = a; }
       return true;
     }
   }
@@ -1806,7 +1811,7 @@ fn shootSpecialLine(l: u32, mi: u32) {
 fn useLines() {
   let me = O[0];
   let a = me.angle;
-  let p0 = vec2f(me.x, me.y);
+  let p0 = mpos(0u);
   let p1 = p0 + vec2f(cos(a), sin(a)) * USERANGE;
   var last = -1.0;
   for (var iter = 0; iter < 16; iter++) {
@@ -1831,7 +1836,7 @@ fn useLines() {
       if (min(F.ceilh, B.ceilh) - max(F.floorh, B.floorh) <= 0.0) { mobjSound(0u, SFX_noway); return; }
       continue;
     }
-    queueActivation(l, pointOnLineSide(p0, l), 1u, 0u);
+    queueActivation(l, pointOnLineSide(ipos(0u), l), 1u, 0u);
     return;
   }
 }
@@ -1965,12 +1970,15 @@ fn fineSin(i: u32) -> f32 { return f32(fineSinFx(i)) / 65536.0; }
 fn fineCos(i: u32) -> f32 { return fineSin(i + 2048u); }
 // R_PointToAngle2 on 16.16 coordinates: SlopeDiv into tantoangle, by octant, as a 32-bit BAM
 fn fixedOf(v: f32) -> i32 { return i32(round(v * 65536.0)); }
+fn fxf(v: i32) -> f32 { return f32(v) / 65536.0; }
+fn fxv(v: vec2f) -> vec2i { return vec2i(fixedOf(v.x), fixedOf(v.y)); }
+fn fv(v: vec2i) -> vec2f { return vec2f(fxf(v.x), fxf(v.y)); }
 fn bamToRad(b: u32) -> f32 { return f32(b) * (TAU / 4294967296.0); }
 fn slopeDiv(num: u32, den: u32) -> u32 { if (den < 512u) { return 2048u; } return min((num << 3u) / (den >> 8u), 2048u); }
 fn tanToAngle(i: u32) -> u32 { return G[G_TANTOANGLE + i]; }
-fn pointToAngle(a: vec2f, b: vec2f) -> u32 {
-  var x = fixedOf(b.x) - fixedOf(a.x);
-  var y = fixedOf(b.y) - fixedOf(a.y);
+fn pointToAngle(a: vec2i, b: vec2i) -> u32 {
+  var x = b.x - a.x;
+  var y = b.y - a.y;
   if (x == 0 && y == 0) { return 0u; }
   let A90 = 0x40000000u; let A180 = 0x80000000u; let A270 = 0xc0000000u;
   if (x >= 0) {
@@ -1992,8 +2000,8 @@ fn pointToAngle(a: vec2f, b: vec2f) -> u32 {
   return A270 - 1u - tanToAngle(slopeDiv(u32(x), u32(y)));
 }
 // P_AproxDistance in 16.16
-fn approxDistFx(a: vec2f, b: vec2f) -> i32 {
-  let dx = abs(fixedOf(b.x) - fixedOf(a.x)); let dy = abs(fixedOf(b.y) - fixedOf(a.y));
+fn approxDistFx(a: vec2i, b: vec2i) -> i32 {
+  let dx = abs(b.x - a.x); let dy = abs(b.y - a.y);
   return dx + dy - (min(dx, dy) >> 1u);
 }
 fn subRandomI() -> i32 { let r = P_Random(); return r - P_Random(); }
@@ -2018,7 +2026,8 @@ fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
 fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
 // loops over things stop at the highest slot in use (a save from before this was kept has 0)
 fn mobjEnd() -> u32 { return select(min(P.mobjtop, MAXMOBJS), MAXMOBJS, P.mobjtop == 0u); }
-fn mpos(i: u32) -> vec2f { return vec2f(O[i].x, O[i].y); }
+fn mpos(i: u32) -> vec2f { return vec2f(fxf(O[i].x), fxf(O[i].y)); }
+fn ipos(i: u32) -> vec2i { return vec2i(O[i].x, O[i].y); }
 
 // ---- blocklinks (P_SetThingPosition / P_UnsetThingPosition): each blockmap cell keeps a list of
 // the things in it, newest first, so collision looks only at the cells around a move, in DOOM's order.
@@ -2154,7 +2163,8 @@ fn noiseAlert() {
 }
 
 // ---- spawning
-fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
+fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 { return spawnMobjI(fxv(vec2f(x, y)), z, ty); }
+fn spawnMobjI(p: vec2i, z: f32, ty: u32) -> i32 {
   _ = P_Random(); // P_SpawnMobj's lastlook
   // new thinkers go at the end of DOOM's list: take the next free slot after the last one used
   for (var probe = 1u; probe < MAXMOBJS; probe++) {
@@ -2164,18 +2174,18 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     P.mobjtop = max(P.mobjtop, j + 1u);
     let mi = G_MOBJINFO + 24u * ty;
     var m: Mobj;
-    m.x = x; m.y = y; m.angle = 0.0;
+    m.x = p.x; m.y = p.y; m.angle = 0.0;
     m.radius = f32(gi(mi + 16u)); m.height = f32(gi(mi + 17u));
     m.mtype = ty; m.state = G[mi + 1u]; m.tics = gi(G_STATES + 8u * m.state + 2u);
     m.flags = G[mi + 21u]; m.health = gi(mi + 2u);
-    m.sector = sectorAt(vec2f(x, y));
+    m.sector = sectorAt(p);
     m.floorz = S[m.sector].floorh; m.ceilingz = S[m.sector].ceilh;
     m.z = z;
     if (z == ONFLOORZ) { m.z = m.floorz; }
     m.targ = -1; m.tracer = -1; m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
     m.movedir = 0; // DI_EAST, as P_SpawnMobj's zeroed mobj has it
     m.req = NOREQ; m.inuse = 1u; m.spawnidx = NOREQ;
-    m.px = m.x; m.py = m.y; m.pz = m.z;
+    m.px = fxf(m.x); m.py = fxf(m.y); m.pz = m.z;
     O[j] = m;
     linkThing(j);
     return i32(j);
@@ -2201,7 +2211,7 @@ fn spawnBlood(p: vec2f, z0: f32, damage: i32) {
 
 // P_SpawnMissile / P_SpawnPlayerMissile in one: aimed at dst, or along angle and slope when dst < 0.
 fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
-  let th = spawnMobj(O[src].x, O[src].y, O[src].z + 32.0, ty);
+  let th = spawnMobjI(ipos(src), O[src].z + 32.0, ty);
   if (th < 0) { return; }
   let t = u32(th);
   let ss = info(ty, MI_SEESOUND);
@@ -2213,11 +2223,11 @@ fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
   var fa = fineAngle(an0);
   if (dst >= 0) {
     // DOOM's own arithmetic: a BAM angle from tantoangle, speeds from finesine, an integer tic count for momz
-    var an = pointToAngle(mpos(src), mpos(u32(dst)));
+    var an = pointToAngle(ipos(src), ipos(u32(dst)));
     if ((O[dst].flags & MF_SHADOW) != 0u) { an += bitcast<u32>(subRandomI() << 20u); }
     fa = an >> 19u;
     O[t].angle = bamToRad(an);
-    let dist = max(approxDistFx(mpos(src), mpos(u32(dst))) / (i32(speed) << 16u), 1);
+    let dist = max(approxDistFx(ipos(src), ipos(u32(dst))) / (i32(speed) << 16u), 1);
     O[t].momz = f32((fixedOf(O[dst].z) - fixedOf(O[src].z)) / dist) / 65536.0;
   } else {
     O[t].angle = an0;
@@ -2226,9 +2236,9 @@ fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
   O[t].momx = f32(i32(speed) * fineCosFx(fa)) / 65536.0; O[t].momy = f32(i32(speed) * fineSinFx(fa)) / 65536.0;
   // P_CheckMissileSpawn: step half a tic forward (momx >> 1 in 16.16) so a point-blank shot still hits
   O[t].tics = max(O[t].tics - (P_Random() & 3), 1);
-  O[t].x += f32(fixedOf(O[t].momx) >> 1u) / 65536.0; O[t].y += f32(fixedOf(O[t].momy) >> 1u) / 65536.0;
+  O[t].x += fixedOf(O[t].momx) >> 1u; O[t].y += fixedOf(O[t].momy) >> 1u;
   O[t].z += f32(fixedOf(O[t].momz) >> 1u) / 65536.0;
-  if (!tryMove(t, mpos(t))) { explodeMissile(t); }
+  if (!tryMove(t, ipos(t))) { explodeMissile(t); }
 }
 
 // ---- damage
@@ -2255,7 +2265,7 @@ fn killMobj(source: i32, tgt: u32) {
   else if (ty == MT_SHOTGUY) { item = i32(MT_SHOTGUN); }
   else if (ty == MT_CHAINGUY) { item = i32(MT_CHAINGUN); }
   if (item >= 0) {
-    let d = spawnMobj(O[tgt].x, O[tgt].y, ONFLOORZ, u32(item));
+    let d = spawnMobjI(ipos(tgt), ONFLOORZ, u32(item));
     if (d >= 0) { O[d].flags |= MF_DROPPED; }
   }
 }
@@ -2266,7 +2276,7 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
   if ((O[tgt].flags & MF_SKULLFLY) != 0u) { O[tgt].momx = 0.0; O[tgt].momy = 0.0; O[tgt].momz = 0.0; }
   if (tgt == 0u && P.skill == 0) { damage = damage >> 1u; }
   if (inflictor >= 0 && (O[tgt].flags & MF_NOCLIP) == 0u && !(source == 0 && P.readyweapon == 7)) {
-    var ang = pointToAngle(mpos(u32(inflictor)), mpos(tgt));
+    var ang = pointToAngle(ipos(u32(inflictor)), ipos(tgt));
     var thrust = damage * (8192 * 100) / max(info(O[tgt].mtype, MI_MASS), 1); // 16.16
     if (damage < 40 && damage > O[tgt].health && O[tgt].z - O[inflictor].z > 64.0 && (P_Random() & 1) != 0) { ang += 0x80000000u; thrust *= 4; }
     let fa = ang >> 19u;
@@ -2416,7 +2426,7 @@ fn faceTarget(mi: u32) {
   let t = O[mi].targ;
   if (t < 0) { return; }
   O[mi].flags &= ~MF_AMBUSH;
-  var an = pointToAngle(mpos(mi), mpos(u32(t)));
+  var an = pointToAngle(ipos(mi), ipos(u32(t)));
   if ((O[t].flags & MF_SHADOW) != 0u) { an += bitcast<u32>(subRandomI() << 21u); }
   O[mi].angle = bamToRad(an);
 }
@@ -2458,11 +2468,10 @@ fn checkMissileRange(mi: u32) -> bool {
   return P_Random() >= dist;
 }
 
-fn dirVec(d: i32) -> vec2f {
-  // DOOM's xspeed/yspeed: the diagonal is 47000/65536 exactly, which keeps diagonal steps on its grid
-  const D = 47000.0 / 65536.0;
-  var v = array<vec2f, 8>(vec2f(1.0, 0.0), vec2f(D, D), vec2f(0.0, 1.0), vec2f(-D, D),
-                          vec2f(-1.0, 0.0), vec2f(-D, -D), vec2f(0.0, -1.0), vec2f(D, -D));
+fn dirVec(d: i32) -> vec2i {
+  // DOOM's xspeed/yspeed in 16.16: the diagonal is 47000, not FRACUNIT/sqrt(2)
+  var v = array<vec2i, 8>(vec2i(65536, 0), vec2i(47000, 47000), vec2i(0, 65536), vec2i(-47000, 47000),
+                          vec2i(-65536, 0), vec2i(-47000, -47000), vec2i(0, -65536), vec2i(47000, -47000));
   return v[clamp(d, 0, 7)];
 }
 
@@ -2470,8 +2479,8 @@ fn dirVec(d: i32) -> vec2f {
 fn pMove(mi: u32) -> bool {
   let md = O[mi].movedir;
   if (md < 0 || md >= 8) { return false; }
-  let spd = f32(info(O[mi].mtype, MI_SPEED));
-  if (!tryMove(mi, mpos(mi) + dirVec(md) * spd)) {
+  let spd = info(O[mi].mtype, MI_SPEED);
+  if (!tryMove(mi, ipos(mi) + dirVec(md) * spd)) {
     if ((O[mi].flags & MF_FLOAT) != 0u && floatok) {
       O[mi].z += select(-4.0, 4.0, O[mi].z < tmfloorz);
       O[mi].flags |= MF_INFLOAT;
@@ -2706,7 +2715,7 @@ fn callAction(mi: u32, act: u32) {
         _ = trace(u32(src), an, 1024.0, 0u, 0.0, 0);
         if (linetarget < 0) { continue; }
         let lt = u32(linetarget);
-        _ = spawnMobj(O[lt].x, O[lt].y, O[lt].z + O[lt].height / 4.0, MT_EXTRABFG);
+        _ = spawnMobjI(ipos(lt), O[lt].z + O[lt].height / 4.0, MT_EXTRABFG);
         var dmg = 0;
         for (var k = 0; k < 15; k++) { dmg += (P_Random() & 7) + 1; }
         damageMobj(lt, src, src, dmg);
@@ -2761,8 +2770,8 @@ fn setMobjState(mi: u32, st0: u32) -> bool {
 fn nightmareRespawn(mi: u32) {
   let t = M_THINGS + 4u * O[mi].spawnidx;
   let sp = vec2f(mf(t), mf(t + 1u));
-  if (!checkPosition(mi, sp)) { return; }
-  let f1 = spawnMobj(O[mi].x, O[mi].y, S[O[mi].sector].floorh, MT_TFOG);
+  if (!checkPosition(mi, fxv(sp))) { return; }
+  let f1 = spawnMobjI(ipos(mi), S[O[mi].sector].floorh, MT_TFOG);
   if (f1 >= 0) { mobjSound(u32(f1), SFX_telept); }
   let f2 = spawnMobj(sp.x, sp.y, ONFLOORZ, MT_TFOG);
   if (f2 >= 0) { mobjSound(u32(f2), SFX_telept); }
@@ -3183,7 +3192,7 @@ fn ticSave(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (P.exit != 0u) { return; }
   if (i == 0u) { P.pvx = P.viewx; P.pvy = P.viewy; P.pvz = P.viewz; P.pva = P.viewangle; }
-  if (i < MAXMOBJS) { O[i].px = O[i].x; O[i].py = O[i].y; O[i].pz = O[i].z; }
+  if (i < MAXMOBJS) { O[i].px = fxf(O[i].x); O[i].py = fxf(O[i].y); O[i].pz = O[i].z; }
   if (i < NUMSECTORS) { S[i].pf = S[i].floorh; S[i].pc = S[i].ceilh; }
 }
 
@@ -3363,7 +3372,7 @@ fn ticWorld() {
   P.fixedcolormap = -1;
   if (P.powers[0] > 4 * 32 || (P.powers[0] & 8) != 0) { P.fixedcolormap = 32; }
   else if (P.powers[5] > 4 * 32 || (P.powers[5] & 8) != 0) { P.fixedcolormap = 1; }
-  P.viewx = O[0].x; P.viewy = O[0].y; P.viewangle = O[0].angle;
+  P.viewx = fxf(O[0].x); P.viewy = fxf(O[0].y); P.viewangle = O[0].angle;
   P.leveltime += 1u;
 }
 `;

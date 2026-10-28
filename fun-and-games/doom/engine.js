@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028060626";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028060626";
-import { STATES, SFX, MF } from "./info.js?v=20261028060626";
-import { MSG } from "./specials.js?v=20261028060626";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028061718";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028061718";
+import { STATES, SFX, MF } from "./info.js?v=20261028061718";
+import { MSG } from "./specials.js?v=20261028061718";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -22,13 +22,13 @@ export const W = { // World word offsets (see struct World)
 // P_SetThingPosition for every thing in spawn order: each blockmap cell lists its things newest
 // first, as index + 1 in the cell's head and in each thing's bnext word (0 ends a list).
 function linkBlocks(map, mu, ls) {
-  const heads = map.lines.length + 3 * map.sides.length, mf = new Float32Array(mu.buffer);
+  const heads = map.lines.length + 3 * map.sides.length, mi = new Int32Array(mu.buffer);
   ls.fill(0, heads);
   for (let k = 0; k < mu.length / MOBJ_WORDS; k++) {
     const o = k * MOBJ_WORDS;
     mu[o + 23] = 0;
     if (!mu[o + 24] || (mu[o + 14] & MF.NOBLOCKMAP)) continue;
-    const bx = Math.floor((mf[o] - map.bmap.x) / 128), by = Math.floor((mf[o + 1] - map.bmap.y) / 128);
+    const bx = (mi[o] - map.bmap.x * 65536) >> 23, by = (mi[o + 1] - map.bmap.y * 65536) >> 23;
     if (bx < 0 || by < 0 || bx >= map.bmap.w || by >= map.bmap.h) continue;
     const c = heads + by * map.bmap.w + bx;
     mu[o + 23] = ls[c]; ls[c] = k + 1;
@@ -315,13 +315,19 @@ export class Engine {
       return [k, rb];
     });
     d.queue.submit([enc.finish()]);
-    const st = { map: this.mapName, skill: this.skill, cheats: this.cheats || 0 };
+    const st = { map: this.mapName, skill: this.skill, cheats: this.cheats || 0, fixed: 1 };
     for (const [k, rb] of rbs) { await rb.mapAsync(GPUMapMode.READ); st[k] = rb.getMappedRange().slice(0); rb.unmap(); rb.destroy(); }
     return st;
   }
   // After loadMap(st.map): put a saved level's state back. False if the buffers don't fit (another WAD).
   restore(st) {
     const parts = { sec: this.secBuf, mobj: this.mobjBuf, ls: this.lsBuf, world: this.worldBuf };
+    // a save from before positions were 16.16 holds them as floats
+    if (!st.fixed && st.mobj) {
+      const buf = st.mobj.slice(0), f = new Float32Array(buf), i = new Int32Array(buf);
+      for (let o = 0; o < i.length; o += MOBJ_WORDS) { i[o] = Math.round(f[o] * 65536); i[o + 1] = Math.round(f[o + 1] * 65536); }
+      st = { ...st, mobj: buf, fixed: 1 };
+    }
     // a save from before the blockmap lists has a shorter line buffer: pad it and link the things again
     if (st.ls && st.ls.byteLength < parts.ls.size && st.mobj?.byteLength === parts.mobj.size) {
       const ls = new Uint32Array(parts.ls.size / 4); ls.set(new Uint32Array(st.ls));

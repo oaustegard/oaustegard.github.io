@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028060626";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028060626";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028061718";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028061718";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -414,7 +414,7 @@ export function spawnMobjs(map, mobjWords, capacity, opts = {}) {
     const s = map.sectors[sec];
     const o = n * mobjWords;
     const flags = info[21] | flagsExtra;
-    f[o + 0] = x; f[o + 1] = y;
+    i32[o + 0] = x * 65536; i32[o + 1] = y * 65536; // 16.16, as DOOM keeps positions
     f[o + 2] = flags & MF.SPAWNCEILING ? s.ceil - info[17] : s.floor;
     f[o + 3] = angleDeg * Math.PI / 180;
     f[o + 7] = s.floor; f[o + 8] = s.ceil; f[o + 9] = info[16]; f[o + 10] = info[17];
@@ -424,7 +424,7 @@ export function spawnMobjs(map, mobjWords, capacity, opts = {}) {
     u[o + 24] = 1; // in use
     u[o + 26] = 0xffffffff; // no state request
     u[o + 31] = spawnIndex; // where a Nightmare respawn puts it back
-    f[o + 28] = f[o]; f[o + 29] = f[o + 1]; f[o + 30] = f[o + 2]; // previous-tic position
+    f[o + 28] = x; f[o + 29] = y; f[o + 30] = f[o + 2]; // previous-tic position (floats, for drawing)
     n++;
     return o;
   };
