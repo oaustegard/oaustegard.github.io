@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028053106";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028053106";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028055125";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028055125";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -74,7 +74,7 @@ ${constBlock("CEIL_", CEIL, "i32")}
 
 const ML_BLOCKING = 1u; const ML_BLOCKMONSTERS = 2u; const ML_TWOSIDED = 4u; const ML_DONTPEGTOP = 8u; const ML_DONTPEGBOTTOM = 16u; const ML_SECRET = 32u;
 
-const VIEWHEIGHT = 41.0; const MAXMOVE = 30.0; const STOPSPEED = 0.0625; const FRICTION = 0.90625; const GRAVITY = 1.0;
+const VIEWHEIGHT = 41.0; const MAXMOVE = 30.0; const HALFMOVE = 983040; /* MAXMOVE / 2 in 16.16 */ const STOPSPEED = 0.0625; const FRICTION = 0.90625; const GRAVITY = 1.0;
 const MAXBOB = 16.0; const USERANGE = 64.0; const MAXHEALTH = 100;
 
 // ---- data
@@ -987,20 +987,21 @@ fn hitSlideLine(l: u32, mv: vec2f) -> vec2f {
 fn playerXY(hasCmd: bool) {
   O[0].momx = clamp(O[0].momx, -MAXMOVE, MAXMOVE); O[0].momy = clamp(O[0].momy, -MAXMOVE, MAXMOVE);
   if (O[0].momx == 0.0 && O[0].momy == 0.0) { return; }
-  var xmove = O[0].momx; var ymove = O[0].momy;
+  var xmove = fixedOf(O[0].momx); var ymove = fixedOf(O[0].momy);
   var st = 0u; var hit = 0;
   for (var guard = 0; guard < 48; guard++) {
     let pos = mpos(0u);
     let mom = vec2f(O[0].momx, O[0].momy);
     var tgt = pos; var tryNow = false;
     if (st == 7u) {
-      if (xmove == 0.0 && ymove == 0.0) { break; }
+      if (xmove == 0 && ymove == 0) { break; }
       st = 0u;
     }
     if (st == 0u) {
-      // vanilla halves only a positive move (no abs here), so a fast move west or south goes in one step
-      if (xmove > MAXMOVE / 2.0 || ymove > MAXMOVE / 2.0) { xmove *= 0.5; ymove *= 0.5; tgt = pos + vec2f(xmove, ymove); }
-      else { tgt = pos + vec2f(xmove, ymove); xmove = 0.0; ymove = 0.0; }
+      // vanilla halves only a positive move (no abs here), so a fast move west or south goes in one step;
+      // the step is move / 2 (toward zero) and what is left move >> 1 (toward -inf)
+      if (xmove > HALFMOVE || ymove > HALFMOVE) { tgt = pos + vec2f(f32(xmove / 2), f32(ymove / 2)) / 65536.0; xmove >>= 1u; ymove >>= 1u; }
+      else { tgt = pos + vec2f(f32(xmove), f32(ymove)) / 65536.0; xmove = 0; ymove = 0; }
       tryNow = true;
     } else if (st == 1u) {
       hit += 1;
@@ -1040,12 +1041,18 @@ fn playerXY(hasCmd: bool) {
     else if (st == 5u) { st = select(6u, 7u, ok); }
     else if (st == 6u) { st = 7u; }
   }
-  if (O[0].z > O[0].floorz) { return; }
+  if (O[0].z > O[0].floorz || corpseSlides(0u)) { return; }
   let m2 = vec2f(O[0].momx, O[0].momy);
   if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && !hasCmd) { O[0].momx = 0.0; O[0].momy = 0.0; }
   else { O[0].momx = friction(m2.x); O[0].momy = friction(m2.y); }
 }
 
+// a corpse with some momentum keeps sliding while it hangs half off a step
+fn corpseSlides(mi: u32) -> bool {
+  if ((O[mi].flags & MF_CORPSE) == 0u) { return false; }
+  if (abs(O[mi].momx) <= 0.25 && abs(O[mi].momy) <= 0.25) { return false; }
+  return O[mi].floorz != S[O[mi].sector].floorh;
+}
 fn explodeMissile(mi: u32) {
   O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
   O[mi].req = u32(info(O[mi].mtype, MI_DEATHSTATE));
@@ -1067,11 +1074,12 @@ fn thingXY(mi: u32) {
   }
   mom = clamp(mom, vec2f(-MAXMOVE), vec2f(MAXMOVE));
   O[mi].momx = mom.x; O[mi].momy = mom.y;
-  var mv = mom;
+  var xmove = fixedOf(mom.x); var ymove = fixedOf(mom.y);
   for (var guard = 0; guard < 8; guard++) {
-    var step = mv;
-    if (abs(mv.x) > MAXMOVE / 2.0 || abs(mv.y) > MAXMOVE / 2.0) { step = mv * 0.5; }
-    mv -= step;
+    // as for the player: only a positive move is halved
+    var step = vec2f(f32(xmove), f32(ymove)) / 65536.0;
+    if (xmove > HALFMOVE || ymove > HALFMOVE) { step = vec2f(f32(xmove / 2), f32(ymove / 2)) / 65536.0; xmove >>= 1u; ymove >>= 1u; }
+    else { xmove = 0; ymove = 0; }
     if (!tryMove(mi, vec2f(O[mi].x, O[mi].y) + step)) {
       if ((O[mi].flags & MF_MISSILE) != 0u) {
         // hitting a sky wall makes the missile vanish instead of exploding
@@ -1085,10 +1093,10 @@ fn thingXY(mi: u32) {
       }
       break;
     }
-    if (mv.x == 0.0 && mv.y == 0.0) { break; }
+    if (xmove == 0 && ymove == 0) { break; }
   }
   if ((O[mi].flags & (MF_MISSILE | MF_SKULLFLY)) != 0u) { return; }
-  if (O[mi].z > O[mi].floorz) { return; }
+  if (O[mi].z > O[mi].floorz || corpseSlides(mi)) { return; }
   let m2 = vec2f(O[mi].momx, O[mi].momy);
   if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
   else { O[mi].momx = friction(m2.x); O[mi].momy = friction(m2.y); }
@@ -2256,9 +2264,8 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
     var thrust = damage * (8192 * 100) / max(info(O[tgt].mtype, MI_MASS), 1); // 16.16
     if (damage < 40 && damage > O[tgt].health && O[tgt].z - O[inflictor].z > 64.0 && (P_Random() & 1) != 0) { ang += 0x80000000u; thrust *= 4; }
     let fa = ang >> 19u;
-    // FixedMul(thrust, finecosine): the product needs 48 bits, so split thrust into 16.16 halves
-    O[tgt].momx += f32(thrust >> 16u) * f32(fineCosFx(fa)) / 65536.0 + f32(thrust & 0xffff) * f32(fineCosFx(fa)) / 4294967296.0;
-    O[tgt].momy += f32(thrust >> 16u) * f32(fineSinFx(fa)) / 65536.0 + f32(thrust & 0xffff) * f32(fineSinFx(fa)) / 4294967296.0;
+    O[tgt].momx = f32(fixedOf(O[tgt].momx) + fxMul(thrust, fineCosFx(fa))) / 65536.0;
+    O[tgt].momy = f32(fixedOf(O[tgt].momy) + fxMul(thrust, fineSinFx(fa))) / 65536.0;
   }
   if (tgt == 0u) {
     if (S[O[0].sector].special == 11 && damage >= O[0].health) { damage = O[0].health - 1; }
