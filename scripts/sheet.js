@@ -33,7 +33,7 @@
       wrap = p.parentNode, lens = lp && lp.querySelector('.lens'), ln = wrap.querySelectorAll('.leader line');
   /* the ring marks a point a little off the farm (data-at, sheet px): register that point instead */
   var at = (pl.getAttribute('data-at') || '0 0').split(' '), RX = +at[0], RY = +at[1];
-  var vw, vh, a, b, fx, raf = 0, ty = 0;
+  var vw, vh, a, b, fx, lock = Infinity, tl = 0, raf = 0, ty = 0;
 
   function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
@@ -48,7 +48,8 @@
   function draw() {
     raf = 0;
     if (a === undefined) return;
-    ty = +clamp(-(a + b * (window.pageYOffset || 0)), vh - H, 0).toFixed(1);
+    var sy = window.pageYOffset || 0;
+    ty = +clamp(-(sy > lock ? tl + sy - lock : a + b * sy), vh - H, 0).toFixed(1);
     p.x = clamp(fx - MX - RX, vw - W, 0); p.y = ty;
     p.style.transform = 'translate3d(' + p.x + 'px,' + ty + 'px,0)';
     ticks();
@@ -64,19 +65,29 @@
         sp = r ? clamp(r.top + (window.pageYOffset || 0) + r.height * .5 - vh / 2, 1, smax) : smax,
         tp = MY + RY - vh / 2;
     fx = r ? r.left + r.width * .5 : vw / 2;
+    lock = Infinity;
+    if (lens && r) {
+      /* the loupe: the sheet catches up with the page until the stage's top is a fifth of the way down the window,
+         with the farm point on .spot, then scrolls with the page, so the ring stays put beside the lens */
+      var y0 = window.pageYOffset || 0, st = lp.querySelector('.stage').getBoundingClientRect(),
+          spy = r.top + y0 + r.height / 2, ly = Math.min(vh * .2 + spy - (st.top + y0), MY + RY - 1);
+      sp = clamp(spy - ly, 1, smax); tp = MY + RY - (spy - sp); lock = sp; tl = tp;
+    }
     /* top of the window in plane px: a + b * scroll. Marker centred at sp; window stays inside the plane. */
-    b = Math.min(.3, tp / sp, smax > sp ? (H - vh - tp) / (smax - sp) : .3);
+    b = Math.min(.3, tp / sp, lock < Infinity || smax <= sp ? .3 : (H - vh - tp) / (smax - sp));
     a = tp - b * sp;
     draw();
   }
 
-  /* the loupe: while the lens is on screen, show the ring on the sheet and the outer tangents from it to the lens */
+  /* the loupe: while the lens is on screen and the sheet holds the farm point on .spot, show the ring on the sheet
+     and the outer tangents from it to the lens */
   function leader() {
     if (!lens || ln.length < 2 || still) return;
-    var lr = lens.getBoundingClientRect(), on = lr.bottom > 0 && lr.top < vh;
+    var lr = lens.getBoundingClientRect(), sr = pl.getBoundingClientRect(),
+        on = lr.bottom > 0 && lr.top < vh && Math.abs(ty + MY + RY - sr.top - sr.height / 2) < 2 && Math.abs(p.x + MX + RX - sr.left - sr.width / 2) < 2;
     wrap.classList.toggle('loupe-on', on);
     if (!on) return;
-    var x1 = p.x + MX + RX, y1 = ty + MY + RY, r1 = 81,
+    var x1 = p.x + MX + RX, y1 = ty + MY + RY, r1 = 121,
         x2 = lr.left + lr.width / 2, y2 = lr.top + lr.height / 2, r2 = lr.width / 2 + 6,
         dx = x2 - x1, dy = y2 - y1, dd = Math.hypot(dx, dy);
     if (dd <= Math.abs(r1 - r2) + 1) return;
