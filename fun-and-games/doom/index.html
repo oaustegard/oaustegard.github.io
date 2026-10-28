@@ -115,7 +115,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
 </div>
 
 <script type="module">
-import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028020204";
+import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028021823";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -369,6 +369,16 @@ if (isTouch) {
   $("bMenu").addEventListener("touchstart", (e) => { running = false; showMenu(); e.preventDefault(); e.stopPropagation(); });
 }
 
+// Turning from the mouse, gyro and right thumb since the last frame. Applied to the view at once;
+// the next tic takes the sum so the game state catches up.
+function takeTurn() {
+  const t = -mouseDX * 0.0028 + gyro.turn;
+  mousePitch = Math.max(-0.75, Math.min(0.75, mousePitch - mouseDY * 0.0022));
+  mouseDX = 0; mouseDY = 0; gyro.turn = 0;
+  return t;
+}
+let pendingTurn = 0;
+
 const ANG = (units) => units * 65536 / 4294967296 * 2 * Math.PI; // DOOM angleturn units -> radians
 function readInput() {
   const k = (...c) => c.some((x) => keys.has(x));
@@ -388,9 +398,7 @@ function readInput() {
   if (touch.stickId !== null) {
     forward += -touch.dy * 50; side += touch.dx * 40;
   }
-  const mouseturn = -mouseDX * 0.0028 + gyro.turn;
-  mousePitch = Math.max(-0.75, Math.min(0.75, mousePitch - mouseDY * 0.0022));
-  mouseDX = 0; mouseDY = 0; gyro.turn = 0;
+  const mouseturn = 0; // turning from mouse, gyro and drag arrives through takeTurn() every frame
   const use = k("Space", "KeyE", "Enter") || touch.use;
   const fire = k("ControlLeft", "ControlRight", "KeyF") || mouseFire || touch.fire;
   const w = weaponKey; weaponKey = 0;
@@ -437,9 +445,19 @@ function frame(now) {
   lastTime = now;
   let tics = Math.floor(ticAccum);
   ticAccum -= tics;
-  if (tics === 0) return; // nothing changed; the canvas keeps the last frame and input keeps accumulating
-  if (tics > 4) tics = 4;
-  const input = readInput();
+  if (tics > 4) { tics = 4; ticAccum = 0; } // a long stall: catch up a little, then drop the backlog
+  // Every display frame is drawn; the game advances only on whole tics. Between tics the view and
+  // things are blended by ticAccum, and turning shows at once through lookturn.
+  pendingTurn += takeTurn();
+  let input;
+  if (tics > 0) {
+    input = readInput();
+    input.mouseturn = pendingTurn; input.lookturn = 0;
+    pendingTurn = 0;
+  } else {
+    input = { pitch: lookPitch(), automap, amzoom, lookturn: pendingTurn };
+  }
+  input.frac = ticAccum;
   const enc = device.createCommandEncoder();
   engine.encodeFrame(enc, tics, input);
   engine.present(enc, context.getCurrentTexture().createView());

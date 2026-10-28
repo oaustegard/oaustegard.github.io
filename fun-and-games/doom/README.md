@@ -66,6 +66,13 @@ level.
   `amLines` runs one thread per line, plus seven for the player's arrow, each drawing its line
   in DOOM's colours. The status bar face is DOOM's `ST_updateFaceWidget`, run once a tic in
   `ticWorld`.
+- **Smooth motion.** The game advances at DOOM's 35 tics a second, and the screen is drawn on
+  every display frame. `ticSave` records each thing's position and each sector's floor and
+  ceiling at the start of a tic, and `viewSetup` blends the view between the last two tics by how
+  far the clock has moved toward the next one; `project` and `render` blend things and sectors
+  the same way. Mouse, gyro and drag turns reach the view on the next frame and the following tic
+  takes their sum, so turning is not delayed to tic rate. A frame without a tic costs about 1 ms
+  on an iPhone.
 - **What JavaScript does each frame.** It writes the input, encodes N tics plus the render and
   status bar passes, and copies 1 KB of the world buffer back to the CPU. That readback carries the
   sound queue and the level-exit flag.
@@ -79,7 +86,7 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Not done yet
 
-Menus, skill selection, the intermission screens, music, and smooth motion between tics. Monster behaviour is a
+Menus, skill selection, the intermission screens and music. Monster behaviour is a
 port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had little play-testing.
 
 ## Licences

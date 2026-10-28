@@ -2,9 +2,9 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs } from "./wad.js?v=20261028020204";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028020204";
-import { STATES, SFX } from "./info.js?v=20261028020204";
+import { readWad, buildGfx, buildMap, spawnMobjs } from "./wad.js?v=20261028021823";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028021823";
+import { STATES, SFX } from "./info.js?v=20261028021823";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -15,6 +15,7 @@ export const W = { // World word offsets (see struct World)
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
+  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277,
 };
 
 export function freshPlayer() {
@@ -43,7 +44,7 @@ export class Engine {
     const fbW = Math.max(maxWidth, width), fbH = Math.max(maxHeight, height);
     e.fbBuf = device.createBuffer({ size: (2 * fbW * fbH + 8 * MAXVIS) * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     e.fbMax = fbW * fbH;
-    e.frameBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    e.frameBuf = device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     e.infoBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     e.resize(width, height);
     e.layout = device.createBindGroupLayout({ entries: [
@@ -99,7 +100,7 @@ export class Engine {
     const cached = this.pipeCache.get(code);
     if (cached) Object.assign(this, cached);
     else await this.compile(code);
-    this.pipeCache.set(code, { renderPipe: this.renderPipe, projectPipe: this.projectPipe, hudPipe: this.hudPipe, ticPipes: this.ticPipes, amClearPipe: this.amClearPipe, amLinesPipe: this.amLinesPipe });
+    this.pipeCache.set(code, { renderPipe: this.renderPipe, projectPipe: this.projectPipe, hudPipe: this.hudPipe, ticPipes: this.ticPipes, amClearPipe: this.amClearPipe, amLinesPipe: this.amLinesPipe, viewSetupPipe: this.viewSetupPipe });
     if (this.pipeCache.size > 3) this.pipeCache.delete(this.pipeCache.keys().next().value);
     this.initLevel(map, player);
     return map;
@@ -125,8 +126,9 @@ export class Engine {
     this.hudPipe = await mk("hud");
     this.amClearPipe = await mk("amClear");
     this.amLinesPipe = await mk("amLines");
+    this.viewSetupPipe = await mk("viewSetup");
     this.ticPipes = [];
-    for (const k of ["ticPlayer", "ticSight", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
+    for (const k of ["ticSave", "ticPlayer", "ticSight", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
   }
 
   initLevel(map, player) {
@@ -145,6 +147,7 @@ export class Engine {
     map.sectors.forEach((s, i) => {
       const o = i * SECTOR_WORDS;
       sf[o] = s.floor; sf[o + 1] = s.ceil; su[o + 2] = s.floorpic; su[o + 3] = s.ceilpic;
+      sf[o + 29] = s.floor; sf[o + 30] = s.ceil; // previous-tic heights
       si[o + 4] = s.light; si[o + 5] = s.special; si[o + 6] = s.tag; si[o + 27] = -1; // no sound target
       const light = (type, extra = {}) => { su[o + 20] = type; for (const [k, v] of Object.entries(extra)) si[o + Number(k)] = v; };
       switch (s.special) {
@@ -181,6 +184,7 @@ export class Engine {
     const wu = new Uint32Array(world), wi = new Int32Array(world), wf = new Float32Array(world);
     const pf = new Float32Array(mobjs.buf);
     wf[W.viewx] = pf[0]; wf[W.viewy] = pf[1]; wf[W.viewangle] = pf[3]; wf[W.viewheight] = 41; wf[W.viewz] = pf[2] + 41;
+    for (const [a, b] of [["pvx", "viewx"], ["pvy", "viewy"], ["pvz", "viewz"], ["pva", "viewangle"], ["rx", "viewx"], ["ry", "viewy"], ["rz", "viewz"], ["ra", "viewangle"]]) wf[W[a]] = wf[W[b]];
     wu[W.rng] = (Math.random() * 0xffffffff) >>> 0 || 1;
     wu[W.lastframe] = 0xffffffff;
     wi[W.health] = player.health; wi[W.armor] = player.armor; wi[W.armortype] = player.armortype;
@@ -214,7 +218,7 @@ export class Engine {
 
   // input: {forward, side, turn (radians per tic), mouseturn (radians), use, fire, weapon}
   encodeFrame(encoder, tics, input = {}) {
-    const fu = new Uint32Array(16), ff = new Float32Array(fu.buffer);
+    const fu = new Uint32Array(20), ff = new Float32Array(fu.buffer);
     fu[0] = this.width; fu[1] = this.height; fu[2] = this.viewh; fu[3] = ++this.frameNo;
     // looking up and down shears the view: the horizon row moves, as in later source ports
     // projection follows height (Doom's 160 at 200 rows), so a wider screen sees more to the sides
@@ -225,13 +229,19 @@ export class Engine {
     fu[12] = (input.fire ? 1 : 0) | (input.use ? 2 : 0); fu[13] = input.weapon || 0;
     // automap: Doom's 0.2 pixels per unit at 320 columns, times the zoom
     ff[7] = 0.2 * (this.height * 1.6 / 320) * (input.amzoom || 1); fu[15] = input.automap ? 1 : 0;
+    // how far this frame is between the last tic and the next (1 draws the last tic as it is)
+    ff[16] = Math.max(0, Math.min(1, input.frac ?? 1)); ff[17] = input.lookturn || 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, fu);
     this.device.queue.writeBuffer(this.worldBuf, W.viscount * 4, new Uint32Array([0]));
     const pass = encoder.beginComputePass();
     pass.setBindGroup(0, this.bind);
     // ticSight is one thread per thing; the other tic kernels are single-threaded
     const sightGroups = Math.ceil(this.maxMobjs / 64);
-    for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 1 ? sightGroups : 1); });
+    // ticSave and ticSight run one thread per thing (or sector); the rest are single-threaded
+    const saveGroups = Math.ceil(Math.max(this.maxMobjs, this.map.sectors.length) / 64);
+    for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 0 ? saveGroups : k === 2 ? sightGroups : 1); });
+    pass.setPipeline(this.viewSetupPipe);
+    pass.dispatchWorkgroups(1);
     if (input.automap) {
       pass.setPipeline(this.amClearPipe);
       pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.viewh / 8));

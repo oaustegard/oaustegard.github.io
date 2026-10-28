@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028020204";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028020204";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028021823";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028021823";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -382,6 +382,7 @@ export function spawnMobjs(map, mobjWords, capacity) {
     i32[o + 21] = info[5]; // reactiontime
     u[o + 24] = 1; // in use
     u[o + 26] = 0xffffffff; // no state request
+    f[o + 28] = f[o]; f[o + 29] = f[o + 1]; f[o + 30] = f[o + 2]; // previous-tic position
     n++;
     return o;
   };

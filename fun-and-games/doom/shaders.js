@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028020204";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028020204";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028021823";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028021823";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -86,7 +86,7 @@ struct Sector {
   mtex: u32, mspecial: i32, molddir: i32, mstatus: i32,
   ltype: u32, lcount: i32, lmin: i32, lmax: i32,
   ldark: i32, lbright: i32, ldir: i32, soundtarget: i32,
-  pad0: u32, pad1: u32, pad2: u32, pad3: u32,
+  pad0: u32, pf: f32, pc: f32, pad3: u32, // pf, pc: floor and ceiling at the previous tic, for drawing between tics
 }
 struct Mobj {
   x: f32, y: f32, z: f32, angle: f32,
@@ -96,7 +96,7 @@ struct Mobj {
   sector: u32, targ: i32, tracer: i32, movedir: i32,
   movecount: i32, reactiontime: i32, threshold: i32, lastlook: i32,
   inuse: u32, dropoffz: f32, req: u32, seeplayer: u32,
-  pad2: u32, pad3: u32, pad4: u32, pad5: u32,
+  px: f32, py: f32, pz: f32, pad5: u32, // position at the previous tic
 }
 struct World {
   viewx: f32, viewy: f32, viewz: f32, viewangle: f32,
@@ -120,13 +120,16 @@ struct World {
   pspsx: f32, pspsy: f32, refire: i32, attacker: i32,
   face: i32, facecount: i32, facepri: i32, oldhealth: i32,
   lastattackdown: i32, oldweapons: u32,
-  pad2: array<u32, 50>,
+  pvx: f32, pvy: f32, pvz: f32, pva: f32,   // the view at the previous tic
+  rx: f32, ry: f32, rz: f32, ra: f32,       // the view drawn this frame, between the two
+  pad2: array<u32, 42>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
   centerx: f32, centery: f32, proj: f32, amscale: f32,
   forward: f32, side: f32, turn: f32, mouseturn: f32,
   buttons: u32, weapon: u32, run: u32, automap: u32,
+  frac: f32, lookturn: f32, pad0: u32, pad1: u32,
 }
 
 @group(0) @binding(0) var<storage, read> G: array<u32>;
@@ -286,9 +289,9 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
   let x = gid.x;
   if (x >= U.width) { return; }
   let VH = i32(U.viewh);
-  let p = vec2f(P.viewx, P.viewy);
-  let vz = P.viewz;
-  let ang = P.viewangle;
+  let p = vec2f(P.rx, P.ry);
+  let vz = P.rz;
+  let ang = P.ra;
   let fw = vec2f(cos(ang), sin(ang));
   let rt = vec2f(sin(ang), -cos(ang));
   let xo = (f32(x) + 0.5 - U.centerx) / U.proj;
@@ -338,7 +341,8 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
       if ((LS[line] & 0x80000000u) == 0u) { LS[line] |= 0x80000000u; }
       let lflags = lineFlags(line);
       let fsec = sideSector(sdef);
-      let F = S[fsec];
+      var F = S[fsec];
+      F.floorh = mix(F.pf, F.floorh, U.frac); F.ceilh = mix(F.pc, F.ceilh, U.frac);
       let otherSide = lineSide(line, 1u - segside);
       let scale = U.proj / t;
       let u = mf(sg + 4u) + s * length(e) + mf(M_SIDE + 4u * sdef);
@@ -353,7 +357,7 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
       let two = otherSide >= 0 && (lflags & ML_TWOSIDED) != 0u;
       if (two) {
         bsec = sideSector(u32(otherSide));
-        if (fsky && S[bsec].ceilpic == SKYFLAT) { fceil = S[bsec].ceilh; }
+        if (fsky && S[bsec].ceilpic == SKYFLAT) { fceil = mix(S[bsec].pc, S[bsec].ceilh, U.frac); }
       }
       let ytop = cy - (fceil - vz) * scale;
       let ybot = cy - (ffloor - vz) * scale;
@@ -374,7 +378,8 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
         ctop = cbot + 1;
         break;
       }
-      let B = S[bsec];
+      var B = S[bsec];
+      B.floorh = mix(B.pf, B.floorh, U.frac); B.ceilh = mix(B.pc, B.ceilh, U.frac);
       let yh = cy - (B.ceilh - vz) * scale;
       let yl = cy - (B.floorh - vz) * scale;
       let rH = rowOf(yh); let rL = rowOf(yl);
@@ -464,13 +469,14 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
 fn project(@builtin(global_invocation_id) gid: vec3u) {
   let i = gid.x;
   if (i == 0u || i >= MAXMOBJS) { return; }
-  let m = O[i];
+  var m = O[i];
   if (m.inuse == 0u) { return; }
+  m.x = mix(m.px, m.x, U.frac); m.y = mix(m.py, m.y, U.frac); m.z = mix(m.pz, m.z, U.frac);
   let st = G_STATES + 8u * m.state;
   let sprite = G[st]; let frame = G[st + 1u];
-  let p = vec2f(P.viewx, P.viewy);
-  let fw = vec2f(cos(P.viewangle), sin(P.viewangle));
-  let rt = vec2f(sin(P.viewangle), -cos(P.viewangle));
+  let p = vec2f(P.rx, P.ry);
+  let fw = vec2f(cos(P.ra), sin(P.ra));
+  let rt = vec2f(sin(P.ra), -cos(P.ra));
   let rel = vec2f(m.x, m.y) - p;
   let tz = dot(rel, fw);
   if (tz < 4.0) { return; }
@@ -497,7 +503,7 @@ fn project(@builtin(global_invocation_id) gid: vec3u) {
   let slot = atomicAdd(&P.viscount, 1u);
   if (slot >= MAXVIS) { return; }
   let o = (2u * U.width * U.height) + 8u * slot;
-  FB[o] = bitcast<u32>(x1); FB[o + 1u] = bitcast<u32>(scale); FB[o + 2u] = bitcast<u32>(m.z + top - P.viewz);
+  FB[o] = bitcast<u32>(x1); FB[o + 1u] = bitcast<u32>(scale); FB[o + 2u] = bitcast<u32>(m.z + top - P.rz);
   FB[o + 3u] = lump | (flip << 16u) | (select(0u, 1u, (m.flags & MF_SHADOW) != 0u) << 17u);
   FB[o + 4u] = level; FB[o + 5u] = bitcast<u32>(tz);
   FB[o + 6u] = bitcast<u32>(xs); FB[o + 7u] = bitcast<u32>(xe);
@@ -1513,6 +1519,8 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
       startSound(SFX_telept, O[j].x, O[j].y);
       if (mi == 0u) { O[mi].reactiontime = 18; }
       O[mi].angle = a; O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
+      O[mi].px = O[mi].x; O[mi].py = O[mi].y; O[mi].pz = O[mi].z;
+      if (mi == 0u) { P.pvx = O[0].x; P.pvy = O[0].y; P.pvz = P.viewz; P.pva = a; }
       return true;
     }
   }
@@ -1854,6 +1862,7 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     if (z == ONFLOORZ) { m.z = m.floorz; }
     m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = gi(mi + 5u);
     m.req = NOREQ; m.inuse = 1u;
+    m.px = m.x; m.py = m.y; m.pz = m.z;
     O[j] = m;
     return i32(j);
   }
@@ -2702,6 +2711,7 @@ fn playerThink() {
     O[0].reactiontime -= 1;
   } else {
     O[0].angle = O[0].angle + U.turn + select(0.0, U.mouseturn, first);
+    if (first) { P.pva += U.mouseturn; }
     O[0].angle = O[0].angle - TAU * floor(O[0].angle / TAU);
     let a = O[0].angle;
     if (onground) {
@@ -2741,6 +2751,24 @@ fn ticPlayer() {
   if (O[0].momx != 0.0 || O[0].momy != 0.0) { playerXY(hasCmd); processCrossings(0u); }
   if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
   calcHeight(O[0].z <= O[0].floorz);
+}
+
+// Start of a tic: remember where everything was, so frames between tics can blend.
+@compute @workgroup_size(64)
+fn ticSave(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (P.exit != 0u) { return; }
+  if (i == 0u) { P.pvx = P.viewx; P.pvy = P.viewy; P.pvz = P.viewz; P.pva = P.viewangle; }
+  if (i < MAXMOBJS) { O[i].px = O[i].x; O[i].py = O[i].y; O[i].pz = O[i].z; }
+  if (i < NUMSECTORS) { S[i].pf = S[i].floorh; S[i].pc = S[i].ceilh; }
+}
+
+// Each frame: the view between the last two tics, plus turning not yet given to a tic.
+@compute @workgroup_size(1)
+fn viewSetup() {
+  let f = U.frac;
+  P.rx = mix(P.pvx, P.viewx, f); P.ry = mix(P.pvy, P.viewy, f); P.rz = mix(P.pvz, P.viewz, f);
+  P.ra = P.pva + wrapPi(P.viewangle - P.pva) * f + U.lookturn;
 }
 
 // One thread per thing: can it see the player? Monsters read this during their think.
@@ -2827,7 +2855,7 @@ fn amPlot(x: i32, y: i32, c: u32) {
 }
 // world to screen: follows the player, north up; vertical pixels are 1.2 times taller
 fn amScreen(p: vec2f) -> vec2f {
-  let d = p - vec2f(P.viewx, P.viewy);
+  let d = p - vec2f(P.rx, P.ry);
   return vec2f(f32(U.width) / 2.0 + d.x * U.amscale, f32(U.viewh) / 2.0 - d.y * U.amscale / 1.2);
 }
 fn amLine(a: vec2f, b: vec2f, c: u32) {
@@ -2874,9 +2902,9 @@ fn amLines(@builtin(global_invocation_id) gid: vec3u) {
     vec4f(-R + R / 8.0, 0.0, -R - R / 8.0, R / 4.0), vec4f(-R + R / 8.0, 0.0, -R - R / 8.0, -R / 4.0),
     vec4f(-R + 3.0 * R / 8.0, 0.0, -R + R / 8.0, R / 4.0), vec4f(-R + 3.0 * R / 8.0, 0.0, -R + R / 8.0, -R / 4.0));
   let seg = a[k];
-  let c = cos(P.viewangle); let s = sin(P.viewangle);
+  let c = cos(P.ra); let s = sin(P.ra);
   let rot = mat2x2f(c, s, -s, c);
-  let o = vec2f(P.viewx, P.viewy);
+  let o = vec2f(P.rx, P.ry);
   amLine(o + rot * seg.xy, o + rot * seg.zw, 209u);
 }
 
