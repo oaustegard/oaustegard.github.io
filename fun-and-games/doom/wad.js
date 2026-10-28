@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028044349";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028044349";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028045119";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028045119";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -401,7 +401,7 @@ export function spawnMobjs(map, mobjWords, capacity, opts = {}) {
     f[o + 3] = angleDeg * Math.PI / 180;
     f[o + 7] = s.floor; f[o + 8] = s.ceil; f[o + 9] = info[16]; f[o + 10] = info[17];
     u[o + 11] = mt; u[o + 12] = info[1]; i32[o + 13] = STATES[info[1]][2]; u[o + 14] = flags; i32[o + 15] = info[2];
-    u[o + 16] = sec; i32[o + 17] = -1; i32[o + 18] = -1; i32[o + 19] = 8; // movedir DI_NODIR
+    u[o + 16] = sec; i32[o + 17] = -1; i32[o + 18] = -1; i32[o + 19] = 0; // movedir DI_EAST: P_SpawnMobj zeroes the mobj
     i32[o + 21] = map.skill >= 5 ? 0 : info[5]; // reactiontime; Nightmare monsters react at once
     u[o + 24] = 1; // in use
     u[o + 26] = 0xffffffff; // no state request

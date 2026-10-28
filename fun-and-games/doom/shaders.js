@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028044349";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028044349";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028045119";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028045119";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -731,13 +731,23 @@ fn pointOnLineSide(p: vec2f, l: u32) -> u32 {
   let left = dl.y * (p.x - a.x); let right = (p.y - a.y) * dl.x;
   return select(1u, 0u, right < left);
 }
-// -1 if the box crosses the line, else the side
+// P_BoxOnLineSide: -1 if the box crosses the line, else the side. Axis-aligned lines compare
+// strictly, so a box edge lying on the line doesn't cross it; sloped lines test two corners.
 fn boxOnLineSide(lo: vec2f, hi: vec2f, l: u32) -> i32 {
-  let s0 = pointOnLineSide(vec2f(lo.x, lo.y), l);
-  let s1 = pointOnLineSide(vec2f(hi.x, lo.y), l);
-  let s2 = pointOnLineSide(vec2f(lo.x, hi.y), l);
-  let s3 = pointOnLineSide(vec2f(hi.x, hi.y), l);
-  if (s0 == s1 && s1 == s2 && s2 == s3) { return i32(s0); }
+  let a = lineA(l); let d = lineB(l) - a;
+  var p1 = 0u; var p2 = 0u;
+  if (d.y == 0.0) {
+    p1 = select(0u, 1u, hi.y > a.y); p2 = select(0u, 1u, lo.y > a.y);
+    if (d.x < 0.0) { p1 ^= 1u; p2 ^= 1u; }
+  } else if (d.x == 0.0) {
+    p1 = select(0u, 1u, hi.x < a.x); p2 = select(0u, 1u, lo.x < a.x);
+    if (d.y < 0.0) { p1 ^= 1u; p2 ^= 1u; }
+  } else if ((d.x > 0.0) == (d.y > 0.0)) {
+    p1 = pointOnLineSide(vec2f(lo.x, hi.y), l); p2 = pointOnLineSide(vec2f(hi.x, lo.y), l);
+  } else {
+    p1 = pointOnLineSide(vec2f(hi.x, hi.y), l); p2 = pointOnLineSide(vec2f(lo.x, lo.y), l);
+  }
+  if (p1 == p2) { return i32(p1); }
   return -1;
 }
 
@@ -768,7 +778,9 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
     if (j == mi) { continue; }
     let th = O[j];
     if (th.inuse == 0u || (th.flags & (MF_SOLID | MF_SPECIAL | MF_SHOOTABLE)) == 0u) { continue; }
-    let bd = th.radius + r;
+    // a whisker of tolerance: DOOM's positions are exact in fixed point, so two things exactly
+    // radius apart (common, monsters step in exact multiples) don't touch there; floats can miss it
+    let bd = th.radius + r - 1.0 / 4096.0;
     if (abs(th.x - pos.x) >= bd || abs(th.y - pos.y) >= bd) { continue; }
     if ((me.flags & MF_SKULLFLY) != 0u) {
       damageMobj(j, i32(mi), i32(mi), (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
@@ -2031,7 +2043,7 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     m.floorz = S[m.sector].floorh; m.ceilingz = S[m.sector].ceilh;
     m.z = z;
     if (z == ONFLOORZ) { m.z = m.floorz; }
-    m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
+    m.targ = -1; m.tracer = -1; m.movedir = 0; // DI_EAST, as P_SpawnMobj's zeroed mobj has it m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
     m.req = NOREQ; m.inuse = 1u; m.spawnidx = NOREQ;
     m.px = m.x; m.py = m.y; m.pz = m.z;
     O[j] = m;
@@ -2815,10 +2827,16 @@ fn playerShoot() {
     spawnMissile(0u, -1, shotMissile, an, slope);
     return;
   }
+  // P_GunShot draws the damage before the spread; the super shotgun spreads twice as wide and also
+  // up and down (A_FireShotgun2)
+  let ssg = shotCount == 20;
   for (var i = 0; i < shotCount; i++) {
+    let dmg = 5 * (P_Random() % 3 + 1);
     var a = O[0].angle;
-    if (!shotAccurate) { a += subRandom() * BAM18; }
-    _ = trace(0u, a, MISSILERANGE, 1u, slope, 5 * (P_Random() % 3 + 1));
+    var sl = slope;
+    if (ssg) { a += subRandom() * BAM18 * 2.0; sl += subRandom() * 32.0 / 65536.0; }
+    else if (!shotAccurate) { a += subRandom() * BAM18; }
+    _ = trace(0u, a, MISSILERANGE, 1u, sl, dmg);
   }
 }
 
