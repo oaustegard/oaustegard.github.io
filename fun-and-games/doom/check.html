@@ -25,9 +25,9 @@
   <pre id="out">Press "Run the check".</pre>
 </main>
 <script type="module">
-import { unpackWad } from "./engine.js?v=20261028143033";
-import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028143033";
-import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028143033";
+import { unpackWad } from "./engine.js?v=20261028143147";
+import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028143147";
+import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028143147";
 
 const out = document.getElementById("out");
 const KEY = "gpudoom-check";
@@ -50,15 +50,17 @@ const brief = (m) => {
 };
 const ms = (t) => Math.round(performance.now() - t) + " ms";
 
-// Variant: the hitscan's intercept list and the move's line lists live in a storage buffer instead of
-// per-thread arrays. Mobile compilers try to keep private arrays in registers; these are the large ones.
-const SCRATCH = ["icFrac", "icId", "icSeen", "spechit", "crossq"];
-function scratchVariant(code) {
-  const decl = {};
-  code = code.replace(new RegExp(`^var<private> (${SCRATCH.join("|")}): ([^;]+);[^\n]*$`, "gm"), (_, n, ty) => { decl[n] = ty; return ""; });
-  if (Object.keys(decl).length !== SCRATCH.length) return null;
-  code = code.replace(new RegExp(`(?<![.\\w])(${SCRATCH.join("|")})\\b`, "g"), "SCR.$1");
-  return code + `\nstruct Scratch { ${SCRATCH.map((n) => `${n}: ${decl[n]}`).join(", ")} }\n@group(1) @binding(0) var<storage, read_write> SCR: Scratch;\n`;
+// Variant: every loop with a constant bound (a level's sector or line count, a literal) gets a bound
+// the compiler cannot know, OPQ being 0 at run time but read from a buffer. A compiler that unrolls
+// constant loops copies their inlined bodies once per iteration; this one cannot.
+function opaqueVariant(code) {
+  let n = 0;
+  const out = code.replace(/(for \(var \w+ = [^;]+; \w+ <=? )([^;]+);/g, (m, a, b) => {
+    if (!/^[\s(]*(NUM\w+|\d+u?|[A-Z][A-Z0-9_]+)([\s)+\-*/]*(NUM\w+|\d+u?|[A-Z][A-Z0-9_]+))*[\s)]*$/.test(b)) return m;
+    n++;
+    return `${a}select((${b}), (${b}) - 1, OPQ != 0u);`;
+  });
+  return [out + "\n@group(1) @binding(0) var<storage, read> OPQ: u32;\n", n];
 }
 
 async function module(device, code, label) {
@@ -123,13 +125,15 @@ async function check() {
   const eps = [...code.matchAll(/@compute[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*fn (\w+)/g)].map((m) => m[1]);
   const mod = await module(device, code, "game   ");
   if (!mod) return;
-  // the game as shipped, minus ticMobjs; then the scratch-buffer variant; then the shipped ticMobjs,
-  // which may never finish, last
-  for (const ep of eps.filter((e) => e !== "ticMobjs")) await pipeline(device, mod, ep, "game");
-  const vcode = scratchVariant(code);
-  const vmod = vcode ? await module(device, vcode, "scratch") : (log("scratch variant: declarations not found", "bad"), null);
-  if (vmod) for (const ep of ["ticPlayer", "ticMobjs"]) await pipeline(device, vmod, ep, "scratch");
-  await pipeline(device, mod, "ticMobjs", "game");
+  // the quick kernels as shipped; then the four slow ones with opaque loop bounds; then, last, the
+  // slow ones as shipped, which take minutes on some GPUs (stop there if you already measured them)
+  const SLOW = ["ticWorld", "ticActivate", "ticPlayer", "ticMobjs"];
+  for (const ep of eps.filter((e) => !SLOW.includes(e))) await pipeline(device, mod, ep, "game");
+  const [vcode, nloops] = opaqueVariant(code);
+  log(`opaque  ${nloops} loops given bounds the compiler cannot know`);
+  const vmod = await module(device, vcode, "opaque ");
+  if (vmod) for (const ep of SLOW) await pipeline(device, vmod, ep, "opaque");
+  for (const ep of SLOW) await pipeline(device, mod, ep, "game");
   log("done");
 }
 
