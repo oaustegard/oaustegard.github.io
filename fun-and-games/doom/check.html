@@ -20,23 +20,28 @@
 <body>
 <main>
   <h1>gPu(doom) GPU check</h1>
-  <p>This page compiles every GPU kernel of <a href="./" style="color:#f08a3c">gPu(doom)</a> on this device, one at a time, and reports which ones fail and why. It takes up to a minute and plays nothing. When it finishes, copy the report and send it back.</p>
+  <p>This page compiles every GPU kernel of <a href="./" style="color:#f08a3c">gPu(doom)</a> on this device, one at a time, and reports which ones fail and why. It takes up to a minute and plays nothing. Copy the report at any point, even while it runs, and send it back. It is saved as it goes, so it survives a reload.</p>
   <button id="run" type="button">Run the check</button><button id="copy" type="button" disabled>Copy the report</button>
   <pre id="out">Press "Run the check".</pre>
 </main>
 <script type="module">
-import { unpackWad } from "./engine.js?v=20261028132419";
-import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028132419";
-import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028132419";
+import { unpackWad } from "./engine.js?v=20261028134349";
+import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028134349";
+import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028134349";
 
 const out = document.getElementById("out");
-const lines = [];
+const KEY = "gpudoom-check";
+let lines = [], waiting = "", started = "", finished = false;
+// The report is saved after every line, so a frozen tab or a reload keeps what was learned so far.
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify({ lines, waiting, started, finished })); } catch {} };
+const report = () => lines.concat(waiting ? [waiting.trimEnd() + " (still running when copied)"] : []).join("\n");
 const log = (t, cls) => {
   lines.push(t);
   const s = document.createElement("span");
   if (cls) s.className = cls;
   s.textContent = t + "\n";
   out.append(s);
+  save();
 };
 // A WebGPU compiler message can carry the whole generated source; keep the lines that say what failed.
 const brief = (m) => {
@@ -45,8 +50,51 @@ const brief = (m) => {
 };
 const ms = (t) => Math.round(performance.now() - t) + " ms";
 
+// Variant: the hitscan's intercept list and the move's line lists live in a storage buffer instead of
+// per-thread arrays. Mobile compilers try to keep private arrays in registers; these are the large ones.
+const SCRATCH = ["icFrac", "icId", "icSeen", "spechit", "crossq"];
+function scratchVariant(code) {
+  const decl = {};
+  code = code.replace(new RegExp(`^var<private> (${SCRATCH.join("|")}): ([^;]+);[^\n]*$`, "gm"), (_, n, ty) => { decl[n] = ty; return ""; });
+  if (Object.keys(decl).length !== SCRATCH.length) return null;
+  code = code.replace(new RegExp(`(?<![.\\w])(${SCRATCH.join("|")})\\b`, "g"), "SCR.$1");
+  return code + `\nstruct Scratch { ${SCRATCH.map((n) => `${n}: ${decl[n]}`).join(", ")} }\n@group(1) @binding(0) var<storage, read_write> SCR: Scratch;\n`;
+}
+
+async function module(device, code, label) {
+  const t = performance.now();
+  const mod = device.createShaderModule({ code });
+  const errs = (await mod.getCompilationInfo()).messages.filter((m) => m.type === "error");
+  if (errs.length) {
+    const src = code.split("\n");
+    for (const m of errs.slice(0, 6)) log(`${label} WGSL ${m.lineNum}:${m.linePos} ${m.message}\n    ${src[m.lineNum - 1]?.trim()}`, "bad");
+    return null;
+  }
+  log(`${label} module ok (${code.split("\n").length} lines), ${ms(t)}`, "ok");
+  return mod;
+}
+
+async function pipeline(device, mod, ep, label) {
+  const t = performance.now(), name = `  ${label} ${ep}`.padEnd(30);
+  // a live timer, so a slow driver compile reads differently from a hang
+  const wait = document.createElement("span");
+  out.append(wait);
+  const tick = setInterval(() => {
+    waiting = `${name} compiling… ${Math.round((performance.now() - t) / 1000)} s\n`;
+    wait.textContent = waiting;
+    save();
+  }, 1000);
+  try {
+    await device.createComputePipelineAsync({ layout: "auto", compute: { module: mod, entryPoint: ep } });
+    log(`${name} ok   ${ms(t)}`, "ok");
+    return true;
+  } catch (e) {
+    log(`${name} FAIL ${ms(t)}\n    ${brief(e.message)}`, "bad");
+    return false;
+  } finally { clearInterval(tick); wait.remove(); waiting = ""; save(); }
+}
+
 async function check() {
-  out.textContent = "";
   log("page    " + location.href);
   log("agent   " + navigator.userAgent);
   if (!navigator.gpu) { log("navigator.gpu is missing: this browser has no WebGPU", "bad"); return; }
@@ -68,57 +116,46 @@ async function check() {
   const wad = readWad(await unpackWad(new Uint8Array(await r.arrayBuffer())));
   const gfx = buildGfx(wad);
   log("wad     loaded in " + ms(t));
+  await module(device, PRESENT_WGSL, "present");
 
-  t = performance.now();
-  const pm = device.createShaderModule({ code: PRESENT_WGSL });
-  const pi = (await pm.getCompilationInfo()).messages.filter((m) => m.type === "error");
-  log("present " + (pi.length ? "WGSL errors: " + pi.map((m) => m.lineNum + ": " + m.message).join("; ") : "module ok, " + ms(t)), pi.length ? "bad" : "ok");
-
-  for (const name of ["E1M1"]) {
-    const map = buildMap(wad, gfx, name, 3);
-    const code = makeWGSL({ gfx, map, maxMobjs: map.things.length + 1 + 768 });
-    t = performance.now();
-    const mod = device.createShaderModule({ code });
-    const errs = (await mod.getCompilationInfo()).messages.filter((m) => m.type === "error");
-    if (errs.length) {
-      const src = code.split("\n");
-      for (const m of errs.slice(0, 6)) log(`WGSL ${m.lineNum}:${m.linePos} ${m.message}\n    ${src[m.lineNum - 1]?.trim()}`, "bad");
-      return;
-    }
-    log(`${name}    module ok (${src_lines(code)} lines), ${ms(t)}`, "ok");
-    const eps = [...code.matchAll(/@compute[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*fn (\w+)/g)].map((m) => m[1]);
-    let bad = 0;
-    for (const ep of eps) {
-      t = performance.now();
-      // a live timer, so a slow driver compile reads differently from a hang
-      const wait = document.createElement("span");
-      out.append(wait);
-      const tick = setInterval(() => { wait.textContent = `  ${ep.padEnd(12)} compiling… ${Math.round((performance.now() - t) / 1000)} s\n`; }, 500);
-      try {
-        await device.createComputePipelineAsync({ layout: "auto", compute: { module: mod, entryPoint: ep } });
-        log(`  ${ep.padEnd(12)} ok   ${ms(t)}`, "ok");
-      } catch (e) {
-        bad++;
-        log(`  ${ep.padEnd(12)} FAIL ${ms(t)}\n    ${brief(e.message)}`, "bad");
-      } finally { clearInterval(tick); wait.remove(); }
-    }
-    log(bad ? `${bad} of ${eps.length} kernels failed` : `all ${eps.length} kernels compiled`, bad ? "bad" : "ok");
-  }
+  const map = buildMap(wad, gfx, "E1M1", 3);
+  const code = makeWGSL({ gfx, map, maxMobjs: map.things.length + 1 + 768 });
+  const eps = [...code.matchAll(/@compute[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*fn (\w+)/g)].map((m) => m[1]);
+  const mod = await module(device, code, "game   ");
+  if (!mod) return;
+  // the game as shipped, minus ticMobjs; then the scratch-buffer variant; then the shipped ticMobjs,
+  // which may never finish, last
+  for (const ep of eps.filter((e) => e !== "ticMobjs")) await pipeline(device, mod, ep, "game");
+  const vcode = scratchVariant(code);
+  const vmod = vcode ? await module(device, vcode, "scratch") : (log("scratch variant: declarations not found", "bad"), null);
+  if (vmod) for (const ep of ["ticPlayer", "ticMobjs"]) await pipeline(device, vmod, ep, "scratch");
+  await pipeline(device, mod, "ticMobjs", "game");
+  log("done");
 }
-const src_lines = (c) => c.split("\n").length;
 
 const run = document.getElementById("run"), copy = document.getElementById("copy");
 run.addEventListener("click", async () => {
-  run.disabled = true; copy.disabled = true; lines.length = 0;
+  run.disabled = true;
+  out.textContent = ""; lines = []; waiting = ""; finished = false; started = new Date().toISOString();
+  log("started " + started);
   try { await check(); } catch (e) { log("check stopped: " + (e.stack || e.message), "bad"); }
-  run.disabled = false; copy.disabled = false;
+  finished = true; save();
+  run.disabled = false;
 });
 copy.addEventListener("click", async () => {
-  const text = lines.join("\n");
-  try { await navigator.clipboard.writeText(text); copy.textContent = "Copied"; }
+  try { await navigator.clipboard.writeText(report()); copy.textContent = "Copied"; }
   catch { const s = getSelection(), rg = document.createRange(); rg.selectNodeContents(out); s.removeAllRanges(); s.addRange(rg); copy.textContent = "Selected: copy it"; }
   setTimeout(() => (copy.textContent = "Copy the report"), 2500);
 });
+// show the last run's report, finished or not
+try {
+  const last = JSON.parse(localStorage.getItem(KEY) || "null");
+  if (last?.lines?.length) {
+    lines = last.lines; waiting = last.waiting || "";
+    out.textContent = (last.finished ? "Last run:\n" : "Last run, which did not finish (the tab was closed or reloaded):\n") + report() + "\n";
+  }
+} catch {}
+copy.disabled = false;
 </script>
 </body>
 </html>
