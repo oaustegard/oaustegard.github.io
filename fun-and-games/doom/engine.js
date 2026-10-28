@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, decodePatch } from "./wad.js?v=20261028042623";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028042623";
-import { STATES, SFX } from "./info.js?v=20261028042623";
-import { MSG } from "./specials.js?v=20261028042623";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028043335";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028043335";
+import { STATES, SFX } from "./info.js?v=20261028043335";
+import { MSG } from "./specials.js?v=20261028043335";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -16,7 +16,7 @@ export const W = { // World word offsets (see struct World)
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
-  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310,
+  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311,
 };
 
 export function freshPlayer() {
@@ -141,11 +141,14 @@ export class Engine {
     const ns = map.sectors.length;
     const sec = new ArrayBuffer(ns * SECTOR_WORDS * 4);
     const su = new Uint32Array(sec), si = new Int32Array(sec), sf = new Float32Array(sec);
+    // P_LoadThings, then P_SpawnSpecials, draw from DOOM's random table in that order
+    const mobjs = spawnMobjs(map, MOBJ_WORDS, this.maxMobjs, { nomonsters: this.nomonsters, rng: player.rng ?? 0 });
+    let rng = mobjs.rng;
+    const rnd = () => { const [v, r] = tableRandom(rng); rng = r; return v; };
     const neighbours = map.sectors.map(() => new Set());
     for (const l of map.lines) if (l.fsec >= 0 && l.bsec >= 0 && (l.flags & 4)) { neighbours[l.fsec].add(l.bsec); neighbours[l.bsec].add(l.fsec); }
     const minLight = (i, max) => { let m = max; for (const n of neighbours[i]) m = Math.min(m, map.sectors[n].light); return m; };
     const lowestCeil = (i) => { let m = 32767; for (const n of neighbours[i]) m = Math.min(m, map.sectors[n].ceil); return m; };
-    const rnd = () => (Math.random() * 256) | 0;
     let totalSecrets = 0;
     map.sectors.forEach((s, i) => {
       const o = i * SECTOR_WORDS;
@@ -154,7 +157,7 @@ export class Engine {
       si[o + 4] = s.light; si[o + 5] = s.special; si[o + 6] = s.tag; si[o + 27] = -1; // no sound target
       const light = (type, extra = {}) => { su[o + 20] = type; for (const [k, v] of Object.entries(extra)) si[o + Number(k)] = v; };
       switch (s.special) {
-        case 1: light(1, { 23: s.light, 22: minLight(i, s.light), 21: (rnd() & 63) + 1 }); si[o + 5] = 0; break;
+        case 1: light(1, { 23: s.light, 22: minLight(i, s.light), 21: (rnd() & 64) + 1 }); si[o + 5] = 0; break; // & maxtime, as vanilla
         case 2: case 4: case 3: case 12: case 13: {
           const dark = s.special === 3 || s.special === 12 ? 35 : 15;
           let mn = minLight(i, s.light); if (mn === s.light) mn = 0;
@@ -175,10 +178,7 @@ export class Engine {
     map.lines.forEach((l, i) => { ls[i] = l.special; });
     map.sides.forEach((s, i) => { const o = map.lines.length + 3 * i; ls[o] = s.top; ls[o + 1] = s.bottom; ls[o + 2] = s.mid; });
 
-    const mobjs = spawnMobjs(map, MOBJ_WORDS, this.maxMobjs);
-    // randomise spawn-state tics like P_SpawnMapThing
     const mi = new Int32Array(mobjs.buf);
-    for (let k = 1; k < mobjs.count; k++) { const t = mi[k * MOBJ_WORDS + 13]; if (t > 0) mi[k * MOBJ_WORDS + 13] = 1 + (rnd() % t); }
     let kills = 0, items = 0;
     const mu = new Uint32Array(mobjs.buf);
     for (let k = 1; k < mobjs.count; k++) { const f = mu[k * MOBJ_WORDS + 14]; if (f & 0x400000) kills++; if (f & 0x800000) items++; }
@@ -188,7 +188,7 @@ export class Engine {
     const pf = new Float32Array(mobjs.buf);
     wf[W.viewx] = pf[0]; wf[W.viewy] = pf[1]; wf[W.viewangle] = pf[3]; wf[W.viewheight] = 41; wf[W.viewz] = pf[2] + 41;
     for (const [a, b] of [["pvx", "viewx"], ["pvy", "viewy"], ["pvz", "viewz"], ["pva", "viewangle"], ["rx", "viewx"], ["ry", "viewy"], ["rz", "viewz"], ["ra", "viewangle"]]) wf[W[a]] = wf[W[b]];
-    wu[W.rng] = (Math.random() * 0xffffffff) >>> 0 || 1;
+    wu[W.rng] = rng;
     wu[W.lastframe] = 0xffffffff;
     wi[W.health] = player.health; wi[W.armor] = player.armor; wi[W.armortype] = player.armortype;
     wu[W.weapons] = player.weapons; wi[W.readyweapon] = player.readyweapon; wi[W.pendingweapon] = -1; wu[W.backpack] = player.backpack;
@@ -359,7 +359,7 @@ export class Engine {
     const wi = new Int32Array(worldBuf), wu = new Uint32Array(worldBuf);
     return {
       health: Math.max(wi[W.health], 1), armor: wi[W.armor], armortype: wi[W.armortype], weapons: wu[W.weapons],
-      readyweapon: wi[W.readyweapon], backpack: wu[W.backpack],
+      readyweapon: wi[W.readyweapon], backpack: wu[W.backpack], rng: wu[W.rng],
       ammo: [0, 1, 2, 3].map((k) => wi[W.ammo + k]), maxammo: [0, 1, 2, 3].map((k) => wi[W.maxammo + k]),
     };
   }

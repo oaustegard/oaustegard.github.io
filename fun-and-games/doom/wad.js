@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028042623";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028042623";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028043335";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028043335";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -86,6 +86,9 @@ export function decodePatch(wad, name) {
   drawPatch(p, pix, info.w, info.h, 0, 0);
   return { w: info.w, h: info.h, left: info.left, top: info.top, pix };
 }
+
+// DOOM's random number table (m_random.c): every P_Random call steps an index through it
+const RNDTABLE = [0, 8, 109, 220, 222, 241, 149, 107, 75, 248, 254, 140, 16, 66, 74, 21, 211, 47, 80, 242, 154, 27, 205, 128, 161, 89, 77, 36, 95, 110, 85, 48, 212, 140, 211, 249, 22, 79, 200, 50, 28, 188, 52, 140, 202, 120, 68, 145, 62, 70, 184, 190, 91, 197, 152, 224, 149, 104, 25, 178, 252, 182, 202, 182, 141, 197, 4, 81, 181, 242, 145, 42, 39, 227, 156, 198, 225, 193, 219, 93, 122, 175, 249, 0, 175, 143, 70, 239, 46, 246, 163, 53, 163, 109, 168, 135, 2, 235, 25, 92, 20, 145, 138, 77, 69, 166, 78, 176, 173, 212, 166, 113, 94, 161, 41, 50, 239, 49, 111, 164, 70, 60, 2, 37, 171, 75, 136, 156, 11, 56, 42, 146, 138, 229, 73, 146, 77, 61, 98, 196, 135, 106, 63, 197, 195, 86, 96, 203, 113, 101, 170, 247, 181, 113, 80, 250, 108, 7, 255, 237, 129, 226, 79, 107, 112, 166, 103, 241, 24, 223, 239, 120, 198, 58, 60, 82, 128, 3, 184, 66, 143, 224, 145, 224, 81, 206, 163, 45, 63, 90, 168, 114, 59, 33, 159, 95, 28, 139, 123, 98, 125, 196, 15, 70, 194, 253, 54, 14, 109, 226, 71, 17, 161, 93, 186, 87, 244, 138, 20, 52, 123, 251, 26, 36, 17, 46, 52, 231, 232, 76, 31, 221, 84, 37, 216, 165, 212, 106, 197, 242, 98, 43, 39, 175, 254, 145, 190, 84, 118, 222, 187, 136, 120, 163, 236, 249];
 
 export function buildGfx(wad) {
   const texels = []; // Uint16Array chunks
@@ -212,6 +215,7 @@ export function buildGfx(wad) {
   L.SWITCH = W.n; W.u(switches.length); for (const [a, b] of switches) { W.u(a); W.u(b); }
   L.MSGDIR = W.n;
   { let o = 0; for (const m of MESSAGES) { W.u(o); W.u(m.length); o += m.length; } }
+  L.RNDTABLE = W.n; for (const v of RNDTABLE) W.u(v);
   L.MSGCHARS = W.n;
   for (const m of MESSAGES) for (const ch of m) W.u(ch.charCodeAt(0));
   // texels last, two per word
@@ -351,7 +355,7 @@ export function buildMap(wad, gfx, mapName, skill = 3) {
   for (let i = 0; i < nt; i++) {
     const o = 10 * i;
     const t = { x: TH.getInt16(o, true), y: TH.getInt16(o + 2, true), angle: TH.getInt16(o + 4, true), type: TH.getInt16(o + 6, true), flags: TH.getInt16(o + 8, true) };
-    if (t.type === 1) { player = t; continue; }
+    if (t.type === 1) { player = { ...t, order: things.length }; continue; }
     if (t.type >= 2 && t.type <= 4 || t.type === 11) continue; // other starts
     if (t.flags & 16) continue; // multiplayer only
     if (!(t.flags & skillBit)) continue;
@@ -377,7 +381,12 @@ export function buildMap(wad, gfx, mapName, skill = 3) {
 }
 
 // Initial mobj records for the GPU (see MOBJ_WORDS in shaders.js).
-export function spawnMobjs(map, mobjWords, capacity) {
+// P_Random over DOOM's table from index r; returns [value, new index]
+export function tableRandom(r) { r = (r + 1) & 255; return [RNDTABLE[r], r]; }
+
+// opts: {nomonsters, rng}. Draws the random numbers P_LoadThings draws, in its order: one per
+// P_SpawnMobj (lastlook), then the starting tics; returns the index the level continues from.
+export function spawnMobjs(map, mobjWords, capacity, opts = {}) {
   const buf = new ArrayBuffer(capacity * mobjWords * 4);
   const u = new Uint32Array(buf), i32 = new Int32Array(buf), f = new Float32Array(buf);
   let n = 0;
@@ -401,8 +410,17 @@ export function spawnMobjs(map, mobjWords, capacity) {
     n++;
     return o;
   };
-  const p = map.player || { x: 0, y: 0, angle: 0 };
+  let rng = opts.rng ?? 0;
+  const draw = () => { const [v, r] = tableRandom(rng); rng = r; return v; };
+  const p = map.player || { x: 0, y: 0, angle: 0, order: 0 };
   spawn(MT.PLAYER, p.x, p.y, p.angle);
-  map.things.forEach((t, k) => spawn(t.mt, t.x, t.y, t.angle, t.flags & 8 ? MF.AMBUSH : 0, k));
-  return { buf, count: n };
+  const tics = (o) => { if (i32[o + 13] > 0) i32[o + 13] = 1 + (draw() % i32[o + 13]); };
+  map.things.forEach((t, k) => {
+    if (k === p.order) draw();
+    if (opts.nomonsters && (t.mt === MT.SKULL || (MOBJINFO[t.mt][21] & MF.COUNTKILL))) return;
+    draw();
+    tics(spawn(t.mt, t.x, t.y, t.angle, t.flags & 8 ? MF.AMBUSH : 0, k));
+  });
+  if (p.order >= map.things.length) draw();
+  return { buf, count: n, rng };
 }

@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028042623";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028042623";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028043335";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028043335";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -35,7 +35,7 @@ export function makeWGSL({ gfx, map, maxMobjs }) {
 // ---- layout
 const G_PAL = ${G.PAL}u; const G_CMAP = ${G.CMAP}u; const G_TEXDIR = ${G.TEXDIR}u; const G_FLATDIR = ${G.FLATDIR}u;
 const G_SPRDIR = ${G.SPRDIR}u; const G_HUDDIR = ${G.HUDDIR}u; const G_SPRFRAMES = ${G.SPRFRAMES}u; const G_FRAMEROT = ${G.FRAMEROT}u;
-const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS = ${G.TEXELS}u; const G_LSPEC = ${G.LSPEC}u;
+const G_RNDTABLE = ${G.RNDTABLE}u; const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS = ${G.TEXELS}u; const G_LSPEC = ${G.LSPEC}u;
 const G_ANIMTEX = ${G.ANIMTEX}u; const G_ANIMFLAT = ${G.ANIMFLAT}u; const G_SWITCH = ${G.SWITCH}u;
 const G_MSGDIR = ${G.MSGDIR}u; const G_MSGCHARS = ${G.MSGCHARS}u;
 const M_VERT = ${M.VERT}u; const M_LINE = ${M.LINE}u; const M_SIDE = ${M.SIDE}u; const M_SEG = ${M.SEG}u; const M_SSEC = ${M.SSEC}u;
@@ -124,7 +124,8 @@ struct World {
   rx: f32, ry: f32, rz: f32, ra: f32,       // the view drawn this frame, between the two
   act: array<u32, 32>,                     // line activations waiting for the activate kernel
   cheats: u32,                              // 1 idclip, 2 iddqd, 4 iddt
-  pad2: array<u32, 9>,
+  mrng: u32,                                // M_Random's index: the status bar's own walk through the table
+  pad2: array<u32, 8>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -652,11 +653,10 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
 // TIC: one thread runs a whole game tic
 // =====================================================================
 
+// P_Random: DOOM's table, so the game's random numbers follow vanilla's sequence
 fn P_Random() -> i32 {
-  var s = P.rng;
-  s ^= s << 13u; s ^= s >> 17u; s ^= s << 5u;
-  P.rng = s;
-  return i32((s >> 8u) & 255u);
+  P.rng = (P.rng + 1u) & 255u;
+  return i32(G[G_RNDTABLE + P.rng]);
 }
 fn startSound(sfx: u32, x: f32, y: f32) {
   let i = P.sndcount % 32u;
@@ -1314,7 +1314,7 @@ fn lightThink(sec: u32) {
   if (S[sec].lcount > 0) { return; }
   if (ty == 1u) { // flash
     if (S[sec].light == S[sec].lmax) { S[sec].light = S[sec].lmin; S[sec].lcount = (P_Random() & 7) + 1; }
-    else { S[sec].light = S[sec].lmax; S[sec].lcount = (P_Random() & 63) + 1; }
+    else { S[sec].light = S[sec].lmax; S[sec].lcount = (P_Random() & 64) + 1; } // & maxtime, as vanilla
   } else if (ty == 2u) { // strobe
     if (S[sec].light == S[sec].lmin) { S[sec].light = S[sec].lmax; S[sec].lcount = S[sec].lbright; }
     else { S[sec].light = S[sec].lmin; S[sec].lcount = S[sec].ldark; }
@@ -1901,6 +1901,10 @@ fn info(ty: u32, field: u32) -> i32 { return gi(G_MOBJINFO + 24u * ty + field); 
 fn stateNext(st: u32) -> u32 { return G[G_STATES + 8u * st + 4u]; }
 fn approxDist(d: vec2f) -> f32 { let a = abs(d); return a.x + a.y - min(a.x, a.y) * 0.5; }
 fn angleTo(a: vec2f, b: vec2f) -> f32 { let d = b - a; return atan2(d.y, d.x); }
+// DOOM's finesine table: angle >> ANGLETOFINESHIFT, and finesine[i] = sin((i + 0.5) * 2 pi / 8192)
+fn fineAngle(a: f32) -> u32 { return u32(i32(floor(a / TAU * 8192.0 + 1e-3)) & 8191); }
+fn fineSin(i: u32) -> f32 { return sin((f32(i & 8191u) + 0.5) * TAU / 8192.0); }
+fn fineCos(i: u32) -> f32 { return fineSin(i + 2048u); }
 fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
 fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
 fn mpos(i: u32) -> vec2f { return vec2f(O[i].x, O[i].y); }
@@ -1967,6 +1971,7 @@ fn noiseAlert() {
 
 // ---- spawning
 fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
+  _ = P_Random(); // P_SpawnMobj's lastlook
   for (var j = 1u; j < MAXMOBJS; j++) {
     if (O[j].inuse != 0u) { continue; }
     let mi = G_MOBJINFO + 24u * ty;
@@ -2866,10 +2871,11 @@ fn playerThink() {
     O[0].angle = O[0].angle + U.turn + select(0.0, U.mouseturn, first);
     if (first) { P.pva += U.mouseturn; }
     O[0].angle = O[0].angle - TAU * floor(O[0].angle / TAU);
-    let a = O[0].angle;
+    // P_Thrust through DOOM's finesine table: 8192 steps, each sampled half a step in
+    let fa = fineAngle(O[0].angle);
     if (onground) {
-      if (U.forward != 0.0) { O[0].momx += cos(a) * U.forward / 32.0; O[0].momy += sin(a) * U.forward / 32.0; }
-      if (U.side != 0.0) { O[0].momx += sin(a) * U.side / 32.0; O[0].momy -= cos(a) * U.side / 32.0; }
+      if (U.forward != 0.0) { O[0].momx += fineCos(fa) * U.forward / 32.0; O[0].momy += fineSin(fa) * U.forward / 32.0; }
+      if (U.side != 0.0) { let fs = (fa + 6144u) & 8191u; O[0].momx += fineCos(fs) * U.side / 32.0; O[0].momy += fineSin(fs) * U.side / 32.0; }
     }
   }
   // P_PlayerThink: the view height follows the thrust, before the thinkers move the player
@@ -2962,6 +2968,9 @@ fn ticActivate() {
 // ---- the status bar face (ST_updateFaceWidget)
 fn painOffset() -> i32 { return 8 * (((100 - clamp(P.health, 0, 100)) * 5) / 101); }
 fn updateFace() {
+  // ST_Ticker draws st_randomnumber from M_Random every tic; the game's P_Random is left alone
+  P.mrng = (P.mrng + 1u) & 255u;
+  let strnd = i32(G[G_RNDTABLE + P.mrng]);
   var pri = P.facepri;
   if (pri < 10 && P.health <= 0) { pri = 9; P.face = 41; P.facecount = 1; }
   if (pri < 9 && P.bonuscount > 0 && P.weapons != P.oldweapons) {
@@ -2994,7 +3003,7 @@ fn updateFace() {
     } else { P.lastattackdown = -1; }
   }
   if (pri < 5 && P.powers[0] > 0) { pri = 4; P.face = 40; P.facecount = 1; }
-  if (P.facecount <= 0) { P.face = painOffset() + P_Random() % 3; P.facecount = 17; pri = 0; }
+  if (P.facecount <= 0) { P.face = painOffset() + strnd % 3; P.facecount = 17; pri = 0; }
   P.facecount -= 1;
   P.facepri = pri;
   P.oldhealth = P.health;
