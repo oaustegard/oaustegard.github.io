@@ -151,6 +151,13 @@ canvas { position: absolute; inset: 0; display: block; }
    home indicator. The HUD floats on top and the arrows and Boost float over the water at the bottom,
    or at the sides in short landscape; the script fits the play grid between them. */
 html, body { background: #07283a; }
+/* Installed on iOS with a translucent status bar, WebKit makes the viewport a status bar's height short
+   of the screen and stops drawing fixed content at that edge (WebKit bug 301108), so no element can be
+   made taller to cover it. A page at least as tall as the screen gets the full viewport back. min()
+   keeps an opaque-status-bar install, where the top inset is 0, from scrolling. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html { min-height: min(100lvh, calc(100% + env(safe-area-inset-top, 0px))); }
+}
 .stage { position: fixed; left: 0; right: 0; top: 0; height: 100vh; height: 100dvh; border: 0; border-radius: 0; }
 .hud {
   position: fixed; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none;
@@ -315,9 +322,11 @@ const area = () => [Math.max(1, W - inset.l - inset.r), Math.max(1, H - inset.t 
 function pickRows() {
   measureInsets();
   const [aw, ah] = area();
-  COLS = aw < 520 && ah > aw ? 16 : 20;
-  // as many rows as fit at the column width, so the grid fills the height without letterboxing
-  ROWS = clamp(Math.floor(ah / (aw / COLS)), 13, 40);
+  // 16 cells across the short side on a phone (20 on bigger screens), and as many as fit along the
+  // long side at that size, so the grid fills a portrait or a widescreen without letterboxing
+  const short = Math.min(aw, ah), c = short / (short < 520 ? 16 : 20);
+  COLS = clamp(Math.floor(aw / c), 13, 48);
+  ROWS = clamp(Math.floor(ah / c), 13, 48);
 }
 function layoutBoard() {
   measureInsets();
@@ -380,17 +389,30 @@ function freeCell(minDist = 0) {
   }
   return null;
 }
+// Re-fit the grid when the layout changes mid-dive (rotation, switching modes). The eel is unwrapped
+// into one continuous path, centred, and wrapped into the new grid, which keeps every segment next to
+// its neighbours; prey, pearls and jellyfish are dealt again.
 function regrid() {
   if (!S || state === 'title') return;
   const oc = COLS, orr = ROWS;
   resize(); pickRows();
-  const inside = p => p.x < COLS && p.y < ROWS;
-  if (!S.snake.every(inside)) { COLS = oc; ROWS = orr; layoutBoard(); return; }
-  S.prev = S.prev.map(p => (inside(p) ? p : { ...p }));
-  if (S.food && !inside(S.food)) spawnFood();
-  if (S.fish && !inside(S.fish)) S.fish = null;
-  if (S.pearl && !inside(S.pearl)) S.pearl = null;
-  S.jellies = S.jellies.filter(inside);
+  if (COLS === oc && ROWS === orr) { layoutBoard(); return; }
+  const path = [{ x: S.snake[0].x, y: S.snake[0].y }];
+  for (let i = 1; i < S.snake.length; i++) {
+    const a = S.snake[i - 1], b = S.snake[i], q = path[i - 1];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    if (dx > 1) dx -= oc; else if (dx < -1) dx += oc;
+    if (dy > 1) dy -= orr; else if (dy < -1) dy += orr;
+    path.push({ x: q.x + dx, y: q.y + dy });
+  }
+  const xs = path.map(q => q.x), ys = path.map(q => q.y);
+  const offX = Math.floor((COLS - (Math.max(...xs) - Math.min(...xs) + 1)) / 2) - Math.min(...xs);
+  const offY = Math.floor((ROWS - (Math.max(...ys) - Math.min(...ys) + 1)) / 2) - Math.min(...ys);
+  const md = (v, n) => ((v % n) + n) % n;
+  S.snake = path.map(q => ({ x: md(q.x + offX, COLS), y: md(q.y + offY, ROWS) }));
+  S.prev = S.snake.map(q => ({ ...q }));
+  S.food = null; S.fish = null; S.pearl = null; S.jellies = [];
+  spawnFood(); ensureJellies();
   layoutBoard();
 }
 function spawnFood() { S.food = freeCell(2); }
@@ -1124,21 +1146,8 @@ $('#levelBtn').addEventListener('click', () => { tilt.neutral = null; tilt.axis 
 const isPhone = matchMedia('(pointer: coarse)').matches && typeof DeviceOrientationEvent !== 'undefined';
 let ctl = load('lantern-eel-controls', isPhone ? 'tilt' : 'arrows');
 let side = load('lantern-eel-arrows-side', 'left');
-// iOS home-screen apps with a translucent status bar draw from the top of the screen but report a
-// viewport that is the screen minus the status bar, so 100dvh and inset:0 both stop a status bar's
-// height short of the bottom. Installed, the stage is sized from the screen itself; in a browser tab
-// 100dvh is right and keeps Safari's toolbar clear. iOS keeps screen.width/height in portrait terms.
-const installed = () => navigator.standalone === true || matchMedia('(display-mode: standalone), (display-mode: fullscreen)').matches;
-function fitStage() {
-  if (!installed()) { stage.style.height = ''; return; }
-  const landscape = (screen.orientation ? screen.orientation.type.startsWith('landscape') : Math.abs(window.orientation || 0) === 90);
-  const full = landscape ? Math.min(screen.width, screen.height) : Math.max(screen.width, screen.height);
-  stage.style.height = Math.max(innerHeight, full) + 'px';
-}
-addEventListener('resize', fitStage);
 function applyControls() {
   document.body.classList.toggle('mode-tilt', ctl === 'tilt');
-  fitStage();
   document.body.classList.toggle('pad-right', side === 'right');
   $('#levelBtn').hidden = ctl !== 'tilt';
   document.querySelectorAll('[data-ctl]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ctl === ctl)));
@@ -1156,11 +1165,18 @@ document.querySelectorAll('[data-side]').forEach(b => b.addEventListener('click'
   side = b.dataset.side; save('lantern-eel-arrows-side', side); applyControls();
 }));
 
-addEventListener('orientationchange', () => { tilt.neutral = null; setTimeout(() => { fitStage(); regrid(); }, 300); });
+addEventListener('orientationchange', () => { tilt.neutral = null; });
 
 /* ---------- boot ---------- */
 // resizing clears the canvas, so redraw at once rather than show a blank frame until the next tick
-const ro = new ResizeObserver(() => { resize(); if (S) render(performance.now()); });
+let wasLandscape = null;
+const ro = new ResizeObserver(() => {
+  resize();
+  const landscape = W > H;
+  if (wasLandscape !== null && landscape !== wasLandscape) { if (state === 'title') newGame(); else regrid(); }
+  wasLandscape = landscape;
+  if (S) render(performance.now());
+});
 ro.observe(stage);
 resize();
 newGame();
@@ -1190,7 +1206,7 @@ if ('serviceWorker' in navigator && isSecureContext && location.hostname !== 'lo
 
 // test hook
 window.__grid = () => ({ x: ox, y: oy, w: cell * COLS, h: cell * ROWS });
-window.__eel = { get state() { return state; }, get S() { return S; }, get tilt() { return tilt; }, get ctl() { return ctl; }, get audio() { return ac ? ac.state : null; }, start, step: () => step(), turn };
+window.__eel = { get state() { return state; }, get S() { return S; }, get tilt() { return tilt; }, get ctl() { return ctl; }, get audio() { return ac ? ac.state : null; }, get dims() { return [COLS, ROWS]; }, start, step: () => step(), turn };
 })();
 </script>
 </body>
