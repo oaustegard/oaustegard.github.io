@@ -46,12 +46,18 @@ level.
   buffer. A floor or ceiling pixel stores the depth of the wall that ended its span, which
   reproduces Doom's sprite clipping by wall silhouettes.
 - **Game tic.** A tic is five kernels in a row, four of them single-threaded:
-  - `ticPlayer` does input, thrust, collision through the blockmap, sliding and stepping, and the
-    weapon's state machine and shots.
-  - `ticSight` runs one thread per monster to check whether it can see the player.
-  - `ticMobjs` runs every thing's state machine, with the monster AI, attacks and missiles.
+  - `ticSave` (one thread per thing and sector) keeps the last tic's positions for smooth motion.
+  - `ticPlayer` does `P_PlayerThink`: input, thrust, the view height, use, and the weapon's state
+    machine and shots.
+  - `ticMobjs` walks DOOM's thinker list in its order: the map's things as they were spawned,
+    with the player's movement (`P_SlideMove` and stepping) at its own place among them, then the
+    light effects, then everything spawned since. Monsters look, chase and attack here, checking
+    sight by DOOM's walk of the BSP.
   - `ticActivate` runs the line specials that were crossed or used during the tic.
-  - `ticWorld` moves doors, lifts, floors, crushers and light effects.
+  - `ticWorld` moves doors, lifts, floors and crushers, and runs switch timers and the face.
+
+  Things sit in per-cell lists of the blockmap, as in DOOM, so collision tests only the things
+  near a move. With every one of E1M6's 192 monsters awake, a tic takes about 2.4 ms on a Mac.
 
   WGSL forbids recursion, and DOOM's game code recurses in two places. Crossing a teleport line
   calls `tryMove` from inside `tryMove`, so line activations go through a queue in the world
