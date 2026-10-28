@@ -11,6 +11,9 @@ warns "no curated note for <path>".
 Discovery, per district directory (see "dirs" in the notes file):
   *.html except index.html, plus subdirectories that contain an index.html.
   /found/generator.html belongs to the etc district (dirs: etc, found).
+  A district may also list pages hosted elsewhere under "external" (href, title,
+  blurb, optional featured, kind, source); the Experiments district uses it for
+  the pages of the oaustegard/experiments repo. No network access at build time.
 
 Writes:
   data/tools.json       compact list for search: districts and tools
@@ -56,6 +59,8 @@ def esc_attr(s):
 
 
 def href(path):
+    if path.startswith(("https://", "http://")):
+        return path
     return quote(path, safe="/-_.~%")
 
 
@@ -211,6 +216,22 @@ def check_blurb(label, text, warn):
         warn("blurb for %s opens with a filler word" % label)
 
 
+def external_tools(district, warn):
+    """Entries of a district's "external" list: pages hosted outside this repo."""
+    out = []
+    base = district.get("sourceBase", "")
+    for x in district.get("external", []):
+        check_blurb(x["href"], x.get("blurb"), warn)
+        src = x.get("source")
+        out.append({
+            "slug": src or re.sub(r"[^a-z0-9]+", "-", x["title"].lower()).strip("-"),
+            "title": x["title"], "blurb": x.get("blurb", ""), "path": x["href"],
+            "kind": x.get("kind") or "tool", "featured": bool(x.get("featured")), "district": district["key"],
+            "readme": (base + src + "/") if (src and base) else None,
+        })
+    return out
+
+
 def build_model(notes, warn):
     districts = sorted(notes["districts"], key=lambda d: (d.get("order", 999), d["key"]))
     known = notes.get("tools", {})
@@ -242,6 +263,7 @@ def build_model(notes, warn):
                 "kind": kind, "featured": featured, "district": d["key"],
                 "readme": ("/%s/%s" % (e["dir"], readme.relative_to(e["root_dir"]).as_posix())) if readme else None,
             })
+        tools += external_tools(d, warn)
         tools.sort(key=lambda t: (0 if t["featured"] else 1, sort_key(t["title"]), t["path"]))
         check_blurb("district " + d["key"], d["blurb"], warn)
         model.append({
@@ -363,12 +385,20 @@ def district_readmes_region(d):
     items = [t for t in d["tools"] if t["readme"]]
     if not items:
         return "\n" + ind
-    lines = ['<h2 id="h-readmes">Readmes</h2>',
-             '<p class="measure">README files on GitHub, for the tools that have one.</p>',
-             '<ul class="t-list t-cols">']
+    if all(t["readme"].startswith("https://") for t in items):  # external entries: one source directory each
+        lines = ['<h2 id="h-readmes">Writeups</h2>',
+                 '<p class="measure">Each experiment&rsquo;s directory on GitHub, with its writeup, code and data.</p>']
+    else:
+        lines = ['<h2 id="h-readmes">Readmes</h2>',
+                 '<p class="measure">README files on GitHub, for the tools that have one.</p>']
+    lines.append('<ul class="t-list t-cols">')
+    seen = set()
     for t in items:
-        lines.append('  <li><a class="ext" rel="noopener" href="%s">%s</a></li>' % (
-            esc_attr(REPO_BLOB + href(t["readme"].lstrip("/"))), esc(t["title"])))
+        url = t["readme"] if t["readme"].startswith("https://") else REPO_BLOB + href(t["readme"].lstrip("/"))
+        if url in seen:
+            continue
+        seen.add(url)
+        lines.append('  <li><a class="ext" rel="noopener" href="%s">%s</a></li>' % (esc_attr(url), esc(t["title"])))
     lines.append("</ul>")
     return "\n" + "\n".join(ind + l for l in lines) + "\n" + ind
 
