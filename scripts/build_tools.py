@@ -4,13 +4,20 @@ build_tools.py: generate the tool lists from the pages on disk and data/tool-not
 
 Site rule: drop a file in and it appears. Every tool page found in a district
 directory is listed; data/tool-notes.json only adds the curated title, blurb,
-featured flag and kind. A page without a note falls back to its <title>, its
+featured flag, kind and the date the page was added ("added", YYYY-MM-DD). A page without a note falls back to its <title>, its
 meta description, then the first plain paragraph of its README, and the script
 warns "no curated note for <path>".
 
 Discovery, per district directory (see "dirs" in the notes file):
   *.html except index.html, plus subdirectories that contain an index.html.
   /found/generator.html belongs to the etc district (dirs: etc, found).
+
+Dates: "added" in the notes is the date of the page's first commit (renames
+followed, copies not; see git_added). A page without one gets its git date, with a warning; in a shallow
+checkout (CI) that is the oldest commit fetched, which for a page committed in
+the push being built is the right day. A page git does not know gets no date
+and sorts as the newest. --stamp-dates writes the git dates of every page that
+has none into data/tool-notes.json; run it in a full clone (git fetch --unshallow).
 
 Writes:
   data/tools.json       compact list for search: districts and tools
@@ -24,12 +31,14 @@ Usage (from the repo root):
   python3 scripts/build_tools.py            write everything
   python3 scripts/build_tools.py --check    exit 1 and list stale files, write nothing
   python3 scripts/build_tools.py --dry-run  list what would change, write nothing
+  python3 scripts/build_tools.py --stamp-dates  fill missing "added" dates in the notes from git
 
 Standard library only. Deterministic and idempotent.
 """
 
 import json
 import re
+import subprocess
 import sys
 from html import escape, unescape
 from html.parser import HTMLParser
@@ -194,6 +203,67 @@ def discover(district):
     return found
 
 
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+_shallow = None
+
+
+def is_shallow():
+    global _shallow
+    if _shallow is None:
+        _shallow = (_git("rev-parse", "--is-shallow-repository") or "").strip() == "true"
+    return _shallow
+
+
+def _git(*args):
+    try:
+        return subprocess.run(["git", *args], cwd=ROOT, capture_output=True, text=True, check=True).stdout
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def git_added(file):
+    """Author date (YYYY-MM-DD) of the commit that first added `file`, or None when git
+    is missing or does not know the file.
+
+    Renames are followed, copies are not: `git log --follow` also walks through a
+    copy (a new tool started from an old one, or a page moved out of an index.html),
+    which would date the new tool by its template. So the trace stops at the first
+    copy, and the earliest plain add of the path itself also counts (a page that was
+    deleted and added again keeps its first date)."""
+    rel = file.relative_to(ROOT).as_posix()
+    dates = []
+    out = _git("log", "--follow", "--name-status", "--format=%x00%as", "--", rel)
+    if out is None:
+        return None
+    for rec in out.split("\0")[1:]:
+        lines = [l for l in rec.splitlines() if l.strip()]
+        if not lines or not DATE_RE.match(lines[0]):
+            continue
+        dates.append(lines[0])
+        if any(l.startswith("C") for l in lines[1:]):
+            break
+    trace = dates[-1] if dates else None
+    plain = (_git("log", "--diff-filter=A", "--format=%as", "--", rel) or "").split()
+    cands = [d for d in (trace, plain[-1] if plain else None) if d and DATE_RE.match(d)]
+    return min(cands) if cands else None
+
+
+def tool_added(path, file, note, warn):
+    """The page's "added" date: the notes, else git (with a warning), else None (with a warning)."""
+    added = (note or {}).get("added")
+    if added is not None:
+        if isinstance(added, str) and DATE_RE.match(added):
+            return added
+        warn("added date for %s is not YYYY-MM-DD: %r; ignored" % (path, added))
+    got = git_added(file)
+    if got:
+        warn("no added date for %s; using git date %s%s (add it to tool-notes.json, or run --stamp-dates)" % (
+            path, got, " from a shallow clone" if is_shallow() else ""))
+        return got
+    warn("no added date for %s and git has none; sorted as newest" % path)
+    return None
+
+
 BLURB_MAX = 92
 BLURB_FILLER = re.compile(r"^(various|assorted|miscellaneous|a collection|a set of|some)\b", re.I)
 
@@ -223,6 +293,9 @@ def build_model(notes, warn):
             note = known.get(e["path"])
             page_title, page_desc = read_page_meta(e["file"])
             readme = readme_for(e["root_dir"], e)
+            added = tool_added(e["path"], e["file"], note, warn)
+            if note is not None and "title" not in note and "blurb" not in note:
+                note = None  # a note that only carries a date is not a curated one
             if note is None:
                 warn("no curated note for %s" % e["path"])
                 title = page_title or humanize(e["stem"])
@@ -239,7 +312,7 @@ def build_model(notes, warn):
                 check_blurb(e["path"], blurb, warn)
             tools.append({
                 "slug": e["stem"], "title": title, "blurb": blurb, "path": e["path"],
-                "kind": kind, "featured": featured, "district": d["key"],
+                "kind": kind, "featured": featured, "district": d["key"], "added": added,
                 "readme": ("/%s/%s" % (e["dir"], readme.relative_to(e["root_dir"]).as_posix())) if readme else None,
             })
         tools.sort(key=lambda t: (0 if t["featured"] else 1, sort_key(t["title"]), t["path"]))
@@ -258,6 +331,8 @@ def build_model(notes, warn):
 
 def place_li(t, indent="", extra=""):
     sub = '<span class="sub">%s</span>' % esc(t["blurb"]) if t["blurb"] else ""
+    if t.get("added"):
+        extra += ' data-added="%s"' % esc_attr(t["added"])
     return '%s<li%s><a href="%s"><span class="nm">%s</span>%s</a></li>' % (
         indent, extra, esc_attr(href(t["path"])), esc(t["title"]), sub)
 
@@ -324,12 +399,29 @@ def extra_sections(notes):
     return lines
 
 
+SORT_SCRIPT = '<script src="/scripts/sort-list.js" defer></script>'
+
+
+def sort_control(list_ids, label):
+    """Order buttons for one or more place-lists. Hidden until /scripts/sort-list.js runs:
+    without JS the generated order (featured first, then A-Z) stands."""
+    ids = esc_attr(" ".join(list_ids))
+    btn = '<button type="button" data-sort="%s" aria-controls="%s" aria-pressed="%s">%s</button>'
+    return ('<div class="sort-ctl" role="group" aria-label="%s" hidden><span class="kicker">Order</span>'
+            % esc_attr(label)
+            + btn % ("featured", ids, "true", "Featured")
+            + btn % ("az", ids, "false", "A&ndash;Z")
+            + btn % ("new", ids, "false", "Newest")
+            + "</div>")
+
+
 def hub_region(model, notes=None):
     ind = "    "
     lines = ['<nav class="jump" aria-label="Districts"><span class="kicker"><b lang="nb">Distrikter</b> &middot; Districts</span><ul>']
     for d in model:
         lines.append('  <li><a href="#%s">%s <i>%d</i></a></li>' % (esc_attr(d["slug"]), esc(d["title"]), len(d["tools"])))
     lines.append("</ul></nav>")
+    lines.append(sort_control(["list-" + d["slug"] for d in model], "Order of the tools in each district"))
     lines.append('<div id="hub">')
     inner = []
     for d in model:
@@ -339,7 +431,7 @@ def hub_region(model, notes=None):
         inner.append('  <div class="hub-d__head"><h2 id="h-%s"><a href="%s">%s</a></h2><p class="spot"><b>%d</b> <span>tools</span></p></div>' % (
             esc_attr(d["slug"]), esc_attr(href(d["path"])), esc(d["title"]), n))
         inner.append('  <p class="blurb">%s</p>' % esc(d["blurb"]))
-        inner.append('  <ul class="place-list">')
+        inner.append('  <ul class="place-list" id="list-%s">' % esc_attr(d["slug"]))
         for t in d["tools"]:
             inner.append(place_li(t, "    ", ' data-kind="%s"' % esc_attr(t["kind"])))
         inner.append("  </ul>")
@@ -347,14 +439,16 @@ def hub_region(model, notes=None):
     inner += extra_sections(notes or {})
     lines += ["  " + l for l in inner]
     lines.append("</div>")
+    lines.append(SORT_SCRIPT)
     return "\n" + "\n".join(ind + l for l in lines) + "\n"
 
 
 def district_tools_region(d):
     ind = "    "
-    lines = ['<ul class="place-list">']
+    lines = [sort_control(["tools-list"], "Order of the tools"), '<ul class="place-list" id="tools-list">']
     lines += [place_li(t, "  ") for t in d["tools"]]
     lines.append("</ul>")
+    lines.append(SORT_SCRIPT)
     return "\n" + "\n".join(ind + l for l in lines) + "\n" + ind
 
 
@@ -379,7 +473,7 @@ def tools_json(model):
     ds = [{"slug": d["slug"], "title": d["title"], "blurb": d["blurb"], "path": d["path"], "count": len(d["tools"])}
           for d in model]
     ts = [{"slug": t["slug"], "title": t["title"], "blurb": t["blurb"], "path": t["path"],
-           "kind": t["kind"], "district": t["district"]}
+           "kind": t["kind"], "district": t["district"], "added": t["added"]}
           for d in model for t in d["tools"]]
     out = ['{"total":%d,' % total, '"districts":[']
     out.append(",\n".join(dumps(x) for x in ds))
@@ -419,12 +513,42 @@ def replace_region(text, name, content, required, label):
     return pat.sub(sub, text)
 
 
+def stamp_dates():
+    """Write the git first-commit date of every discovered page that has no "added" date
+    into data/tool-notes.json. Needs full history; refuses in a shallow clone."""
+    if is_shallow():
+        sys.exit("build_tools: shallow clone; run git fetch --unshallow first")
+    notes = load_notes()
+    tools = notes.setdefault("tools", {})
+    n = 0
+    for d in notes["districts"]:
+        for e in discover(d):
+            note = tools.get(e["path"])
+            if note is not None and note.get("added"):
+                continue
+            got = git_added(e["file"])
+            if not got:
+                print("warning: git has no date for %s" % e["path"], file=sys.stderr)
+                continue
+            if note is None:
+                tools[e["path"]] = {"added": got}
+            else:
+                note["added"] = got
+            n += 1
+            print("%s  %s" % (got, e["path"]))
+    NOTES.write_text(json.dumps(notes, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print("stamped %d date(s) in %s" % (n, NOTES.relative_to(ROOT).as_posix()))
+    return 0
+
+
 def main(argv):
     check = "--check" in argv
     dry = "--dry-run" in argv
-    unknown = [a for a in argv if a not in ("--check", "--dry-run")]
+    unknown = [a for a in argv if a not in ("--check", "--dry-run", "--stamp-dates")]
     if unknown:
-        sys.exit("usage: build_tools.py [--check | --dry-run]  (unknown: %s)" % " ".join(unknown))
+        sys.exit("usage: build_tools.py [--check | --dry-run | --stamp-dates]  (unknown: %s)" % " ".join(unknown))
+    if "--stamp-dates" in argv:
+        return stamp_dates()
 
     warnings = []
 
