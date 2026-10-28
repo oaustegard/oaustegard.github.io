@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028051304";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028051304";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028052252";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028052252";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -35,7 +35,7 @@ export function makeWGSL({ gfx, map, maxMobjs }) {
 // ---- layout
 const G_PAL = ${G.PAL}u; const G_CMAP = ${G.CMAP}u; const G_TEXDIR = ${G.TEXDIR}u; const G_FLATDIR = ${G.FLATDIR}u;
 const G_SPRDIR = ${G.SPRDIR}u; const G_HUDDIR = ${G.HUDDIR}u; const G_SPRFRAMES = ${G.SPRFRAMES}u; const G_FRAMEROT = ${G.FRAMEROT}u;
-const G_RNDTABLE = ${G.RNDTABLE}u; const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS = ${G.TEXELS}u; const G_LSPEC = ${G.LSPEC}u;
+const G_RNDTABLE = ${G.RNDTABLE}u; const G_FINESINE = ${G.FINESINE}u; const G_TANTOANGLE = ${G.TANTOANGLE}u; const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS = ${G.TEXELS}u; const G_LSPEC = ${G.LSPEC}u;
 const G_ANIMTEX = ${G.ANIMTEX}u; const G_ANIMFLAT = ${G.ANIMFLAT}u; const G_SWITCH = ${G.SWITCH}u;
 const G_MSGDIR = ${G.MSGDIR}u; const G_MSGCHARS = ${G.MSGCHARS}u;
 const M_VERT = ${M.VERT}u; const M_LINE = ${M.LINE}u; const M_SIDE = ${M.SIDE}u; const M_SEG = ${M.SEG}u; const M_SSEC = ${M.SSEC}u;
@@ -1942,8 +1942,44 @@ fn approxDist(d: vec2f) -> f32 { let a = abs(d); return a.x + a.y - min(a.x, a.y
 fn angleTo(a: vec2f, b: vec2f) -> f32 { let d = b - a; return atan2(d.y, d.x); }
 // DOOM's finesine table: angle >> ANGLETOFINESHIFT, and finesine[i] = sin((i + 0.5) * 2 pi / 8192)
 fn fineAngle(a: f32) -> u32 { return u32(i32(floor(a / TAU * 8192.0 + 1e-3)) & 8191); }
-fn fineSin(i: u32) -> f32 { return sin((f32(i & 8191u) + 0.5) * TAU / 8192.0); }
+fn fineSinFx(i: u32) -> i32 { return gi(G_FINESINE + (i & 8191u)); }
+fn fineCosFx(i: u32) -> i32 { return gi(G_FINESINE + ((i + 2048u) & 8191u)); }
+fn fineSin(i: u32) -> f32 { return f32(fineSinFx(i)) / 65536.0; }
 fn fineCos(i: u32) -> f32 { return fineSin(i + 2048u); }
+// R_PointToAngle2 on 16.16 coordinates: SlopeDiv into tantoangle, by octant, as a 32-bit BAM
+fn fixedOf(v: f32) -> i32 { return i32(round(v * 65536.0)); }
+fn bamToRad(b: u32) -> f32 { return f32(b) * (TAU / 4294967296.0); }
+fn slopeDiv(num: u32, den: u32) -> u32 { if (den < 512u) { return 2048u; } return min((num << 3u) / (den >> 8u), 2048u); }
+fn tanToAngle(i: u32) -> u32 { return G[G_TANTOANGLE + i]; }
+fn pointToAngle(a: vec2f, b: vec2f) -> u32 {
+  var x = fixedOf(b.x) - fixedOf(a.x);
+  var y = fixedOf(b.y) - fixedOf(a.y);
+  if (x == 0 && y == 0) { return 0u; }
+  let A90 = 0x40000000u; let A180 = 0x80000000u; let A270 = 0xc0000000u;
+  if (x >= 0) {
+    if (y >= 0) {
+      if (x > y) { return tanToAngle(slopeDiv(u32(y), u32(x))); }
+      return A90 - 1u - tanToAngle(slopeDiv(u32(x), u32(y)));
+    }
+    y = -y;
+    if (x > y) { return 0u - tanToAngle(slopeDiv(u32(y), u32(x))); }
+    return A270 + tanToAngle(slopeDiv(u32(x), u32(y)));
+  }
+  x = -x;
+  if (y >= 0) {
+    if (x > y) { return A180 - 1u - tanToAngle(slopeDiv(u32(y), u32(x))); }
+    return A90 + tanToAngle(slopeDiv(u32(x), u32(y)));
+  }
+  y = -y;
+  if (x > y) { return A180 + tanToAngle(slopeDiv(u32(y), u32(x))); }
+  return A270 - 1u - tanToAngle(slopeDiv(u32(x), u32(y)));
+}
+// P_AproxDistance in 16.16
+fn approxDistFx(a: vec2f, b: vec2f) -> i32 {
+  let dx = abs(fixedOf(b.x) - fixedOf(a.x)); let dy = abs(fixedOf(b.y) - fixedOf(a.y));
+  return dx + dy - (min(dx, dy) >> 1u);
+}
+fn subRandomI() -> i32 { let r = P_Random(); return r - P_Random(); }
 fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
 fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
 // loops over things stop at the highest slot in use (a save from before this was kept has 0)
@@ -2140,20 +2176,24 @@ fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
   var speed = f32(info(ty, MI_SPEED));
   // Nightmare: imp, cacodemon and baron fireballs fly at 20
   if (P.skill == 4 && (ty == MT_BRUISERSHOT || ty == MT_HEADSHOT || ty == MT_TROOPSHOT)) { speed = 20.0; }
-  var an = an0;
+  var fa = fineAngle(an0);
   if (dst >= 0) {
-    an = angleTo(mpos(src), mpos(u32(dst)));
-    if ((O[dst].flags & MF_SHADOW) != 0u) { an += subRandom() * BAM20; }
-    let dist = max(approxDist(mpos(u32(dst)) - mpos(src)) / speed, 1.0);
-    O[t].momz = (O[dst].z - O[src].z) / dist;
+    // DOOM's own arithmetic: a BAM angle from tantoangle, speeds from finesine, an integer tic count for momz
+    var an = pointToAngle(mpos(src), mpos(u32(dst)));
+    if ((O[dst].flags & MF_SHADOW) != 0u) { an += bitcast<u32>(subRandomI() << 20u); }
+    fa = an >> 19u;
+    O[t].angle = bamToRad(an);
+    let dist = max(approxDistFx(mpos(src), mpos(u32(dst))) / (i32(speed) << 16u), 1);
+    O[t].momz = f32((fixedOf(O[dst].z) - fixedOf(O[src].z)) / dist) / 65536.0;
   } else {
+    O[t].angle = an0;
     O[t].momz = speed * slope;
   }
-  O[t].angle = an;
-  O[t].momx = speed * cos(an); O[t].momy = speed * sin(an);
-  // P_CheckMissileSpawn: step half a tic forward so a point-blank shot still hits
+  O[t].momx = f32(i32(speed) * fineCosFx(fa)) / 65536.0; O[t].momy = f32(i32(speed) * fineSinFx(fa)) / 65536.0;
+  // P_CheckMissileSpawn: step half a tic forward (momx >> 1 in 16.16) so a point-blank shot still hits
   O[t].tics = max(O[t].tics - (P_Random() & 3), 1);
-  O[t].x += O[t].momx * 0.5; O[t].y += O[t].momy * 0.5; O[t].z += O[t].momz * 0.5;
+  O[t].x += f32(fixedOf(O[t].momx) >> 1u) / 65536.0; O[t].y += f32(fixedOf(O[t].momy) >> 1u) / 65536.0;
+  O[t].z += f32(fixedOf(O[t].momz) >> 1u) / 65536.0;
   if (!tryMove(t, mpos(t))) { explodeMissile(t); }
 }
 
@@ -2192,10 +2232,13 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
   if ((O[tgt].flags & MF_SKULLFLY) != 0u) { O[tgt].momx = 0.0; O[tgt].momy = 0.0; O[tgt].momz = 0.0; }
   if (tgt == 0u && P.skill == 0) { damage = damage >> 1u; }
   if (inflictor >= 0 && (O[tgt].flags & MF_NOCLIP) == 0u && !(source == 0 && P.readyweapon == 7)) {
-    var ang = angleTo(mpos(u32(inflictor)), mpos(tgt));
-    var thrust = f32(damage) * 12.5 / f32(max(info(O[tgt].mtype, MI_MASS), 1));
-    if (damage < 40 && damage > O[tgt].health && O[tgt].z - O[inflictor].z > 64.0 && (P_Random() & 1) != 0) { ang += PI; thrust *= 4.0; }
-    O[tgt].momx += thrust * cos(ang); O[tgt].momy += thrust * sin(ang);
+    var ang = pointToAngle(mpos(u32(inflictor)), mpos(tgt));
+    var thrust = damage * (8192 * 100) / max(info(O[tgt].mtype, MI_MASS), 1); // 16.16
+    if (damage < 40 && damage > O[tgt].health && O[tgt].z - O[inflictor].z > 64.0 && (P_Random() & 1) != 0) { ang += 0x80000000u; thrust *= 4; }
+    let fa = ang >> 19u;
+    // FixedMul(thrust, finecosine): the product needs 48 bits, so split thrust into 16.16 halves
+    O[tgt].momx += f32(thrust >> 16u) * f32(fineCosFx(fa)) / 65536.0 + f32(thrust & 0xffff) * f32(fineCosFx(fa)) / 4294967296.0;
+    O[tgt].momy += f32(thrust >> 16u) * f32(fineSinFx(fa)) / 65536.0 + f32(thrust & 0xffff) * f32(fineSinFx(fa)) / 4294967296.0;
   }
   if (tgt == 0u) {
     if (S[O[0].sector].special == 11 && damage >= O[0].health) { damage = O[0].health - 1; }
@@ -2340,8 +2383,9 @@ fn faceTarget(mi: u32) {
   let t = O[mi].targ;
   if (t < 0) { return; }
   O[mi].flags &= ~MF_AMBUSH;
-  O[mi].angle = angleTo(mpos(mi), mpos(u32(t)));
-  if ((O[t].flags & MF_SHADOW) != 0u) { O[mi].angle += subRandom() * BAM21; }
+  var an = pointToAngle(mpos(mi), mpos(u32(t)));
+  if ((O[t].flags & MF_SHADOW) != 0u) { an += bitcast<u32>(subRandomI() << 21u); }
+  O[mi].angle = bamToRad(an);
 }
 // sight to the current target: the per-mobj sight kernel covers the player, else one check per think
 var<private> sightTarget: bool;
@@ -3119,8 +3163,8 @@ fn viewSetup() {
 // movement among them), then the light thinkers P_SpawnSpecials made, then everything spawned since.
 fn ticMobjs() {
   if (P.exit != 0u) { return; }
-  let iend = max(mobjEnd(), P.initmobjs + 1u);
-  for (var i = 1u; i < iend; i++) {
+  // the bound is read each pass: a thing spawned this tic was appended to DOOM's list and thinks this tic too
+  for (var i = 1u; i < max(mobjEnd(), P.initmobjs + 1u); i++) {
     if (i == P.playerslot) { playerMobjThink(); }
     if (i == P.initmobjs) { for (var s = 0u; s < NUMSECTORS; s++) { lightThink(s); } }
     if (O[i].inuse != 0u) { mobjThink(i); }
