@@ -97,17 +97,25 @@ stamps every `import` with one version. GitHub Pages lets a browser cache each f
 minutes on its own clock, so without the stamp a phone can run a new `index.html` against an old
 `engine.js`.
 
+## Accuracy
+
+The engine is checked against Chocolate Doom tic for tic. Scripted inputs go into a demo lump for
+a Chocolate Doom build patched to print the player, every thing and every sector each tic, and
+into the GPU engine, and the two traces are compared. On E1M1–E1M6 the random number index,
+every monster's state, position and health, and door timing agree tic for tic until a fixed-point
+tie: the GPU keeps positions in 32-bit floats, which can't hold DOOM's 1/65536 steps above 256
+units, so now and then a move that touches a wall or another thing exactly is decided the other
+way. With 36 monsters awake on E1M6 that happens after about 80 tics; on E1M4 the engines agree
+for 480. Getting this far took DOOM's random table and its call order, the thinker order, sight
+through the BSP (`P_CheckSight`), `P_SlideMove`, `P_BoxOnLineSide` and the fine sine table.
+
 ## Not done yet
 
-Player movement has been compared tic for tic with Chocolate Doom: the same scripted inputs go into
-a demo lump for Chocolate Doom, patched to print the player every tic, and into the GPU engine.
-Thrust, friction, wall sliding (`P_SlideMove`, ported with its blockmap quirks) and the view bob
-agree to within a few units over a 365-tic walk; the rest of the difference is floats against
-DOOM's fixed point. Monsters can't be compared that way yet, because the GPU engine's random
-numbers don't follow DOOM's table in DOOM's call order. Their behaviour has been checked by
-scripted runs on E1M1 and E1M2 instead: waking on sight and sound, chasing, attacks, teleport
-closets, and sight against a CPU copy of `P_CheckSight`. The music synth has been checked by its
-spectrum, not by ear.
+- Positions in fixed point, which would carry the agreement with Chocolate Doom past those ties.
+  WGSL has no 64-bit integers, so `FixedMul` would need emulating.
+- The music synth has been checked by its spectrum, not by ear.
+- The monsters of episodes 2–4 and Doom II run code that has not been exercised, since the
+  bundled WAD is episode one.
 
 ## Licences
 
