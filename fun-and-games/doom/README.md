@@ -82,6 +82,9 @@ level.
   on an iPhone.
 - **Menus and intermission.** DOOM's menus (`m_menu.c`) and level-end screens (`wi_stuff.c`) are
   drawn on a 2D canvas from the WAD's own `M_` and `WI` graphics, at DOOM's 320×200 coordinates.
+  Each graphic is upscaled 4× once with Scale2x (twice), which keeps the pixel art's edges sharp,
+  and the menu's items are measured and zoomed to fill the window (up to 1.6× DOOM's layout, below
+  the logo on the title screen), with a drop shadow against the title art.
   Skill sets which things spawn (the map's per-skill flags), halves damage and doubles ammo on the
   easiest skill, and on Nightmare doubles ammo, halves the demons' run and bite tics, speeds up
   imp, cacodemon and baron fireballs, zeroes monster reaction time, and lets a corpse that has lain

@@ -116,8 +116,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261028073025";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028073025";
+import { Music, musicLumpFor } from "./music.js?v=20261028120259";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028120259";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -609,7 +609,8 @@ function drawIntermission() {
   const dpr = Math.min(devicePixelRatio || 1, 2);
   const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
   if (dmenu.width !== W || dmenu.height !== H) { dmenu.width = W; dmenu.height = H; }
-  dctx.imageSmoothingEnabled = false;
+  dctx.imageSmoothingEnabled = true; dctx.imageSmoothingQuality = "high";
+  menuView = null;
   dctx.fillStyle = "#000"; dctx.fillRect(0, 0, W, H);
   const ep = w.L?.ep ?? -1;
   drawPatchAt(ep >= 0 && ep < 3 && getPatch(`WIMAP${ep}`) ? `WIMAP${ep}` : "INTERPIC", 0, 0);
@@ -653,6 +654,21 @@ function drawIntermission() {
 const dmenu = $("dmenu"), dctx = dmenu.getContext("2d");
 let menu = null; // { screen, item, epi }
 const patchCache = new Map();
+// Scale2x (AdvMAME2x): doubles a pixel-art image, filling a corner from its neighbours where two
+// edges meet, so diagonals stay sharp instead of turning into blocks or blur
+function scale2x(src, w, h) {
+  const dst = new Uint32Array(4 * w * h), w2 = 2 * w;
+  const at = (x, y) => src[Math.min(h - 1, Math.max(0, y)) * w + Math.min(w - 1, Math.max(0, x))];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const P = at(x, y), A = at(x, y - 1), B = at(x + 1, y), C = at(x - 1, y), D = at(x, y + 1);
+    const o = 2 * y * w2 + 2 * x;
+    dst[o] = C === A && C !== D && A !== B ? A : P;
+    dst[o + 1] = A === B && A !== C && B !== D ? B : P;
+    dst[o + w2] = D === C && D !== B && C !== A ? C : P;
+    dst[o + w2 + 1] = B === D && B !== A && D !== C ? D : P;
+  }
+  return dst;
+}
 function getPatch(name) {
   if (patchCache.has(name)) return patchCache.get(name);
   const p = engine && decodePatch(engine.wad, name);
@@ -666,10 +682,19 @@ function getPatch(name) {
       const c = pal[po + (t & 255)], i = 4 * (y * p.w + x);
       img.data[i] = c & 255; img.data[i + 1] = (c >> 8) & 255; img.data[i + 2] = (c >> 16) & 255; img.data[i + 3] = 255;
     }
+    // Scale2x twice: 4x the pixels with staircase edges rounded, so a fractional on-screen scale
+    // can be drawn smoothed without blurring the pixel art; plus a black silhouette for the shadow
+    let px32 = new Uint32Array(img.data.buffer), w = p.w, h = p.h;
+    for (let k = 0; k < 2; k++) { px32 = scale2x(px32, w, h); w *= 2; h *= 2; }
+    const big = new ImageData(new Uint8ClampedArray(px32.buffer), w, h);
     const cv = document.createElement("canvas");
-    cv.width = p.w; cv.height = p.h;
-    cv.getContext("2d").putImageData(img, 0, 0);
-    out = { cv, w: p.w, h: p.h, left: p.left, top: p.top };
+    cv.width = w; cv.height = h;
+    cv.getContext("2d").putImageData(big, 0, 0);
+    const sh = document.createElement("canvas");
+    sh.width = w; sh.height = h;
+    const sc = sh.getContext("2d");
+    sc.drawImage(cv, 0, 0); sc.globalCompositeOperation = "source-in"; sc.fillStyle = "#000"; sc.fillRect(0, 0, w, h);
+    out = { cv, sh, w: p.w, h: p.h, left: p.left, top: p.top };
   }
   patchCache.set(name, out);
   return out;
@@ -790,17 +815,32 @@ async function newGame(skillIndex) {
   if (!isTouch) canvas.requestPointerLock?.();
 }
 
-// 320x200 virtual coordinates in a 4:3 box centred in the window
-function menuBox() {
+// 320x200 virtual coordinates in a 4:3 box centred in the window: the title and intermission art
+function screenBox() {
   const W = dmenu.width, H = dmenu.height;
   const bw = Math.min(W, H * 4 / 3), bh = bw * 3 / 4;
   return { x0: (W - bw) / 2, y0: (H - bh) / 2, sx: bw / 320, sy: bh / 200 };
 }
+// The menu's own transform: its items, zoomed to fill the window (see drawMenu); null means screenBox
+let menuView = null;
+function menuBox() { return menuView || screenBox(); }
+// measuring pass: drawPatchAt and drawText only grow these bounds
+let measuring = null;
+let shadowed = false;
+function blit(p, x, y) {
+  const b = menuBox(), X = b.x0 + x * b.sx, Y = b.y0 + y * b.sy, w = p.w * b.sx, h = p.h * b.sy;
+  if (shadowed) { dctx.globalAlpha = 0.85; dctx.drawImage(p.sh, X + b.sx, Y + b.sy, w, h); dctx.globalAlpha = 1; }
+  dctx.drawImage(p.cv, X, Y, w, h);
+}
+function grow(x, y, w, h) {
+  const m = measuring;
+  m.x0 = Math.min(m.x0, x); m.y0 = Math.min(m.y0, y); m.x1 = Math.max(m.x1, x + w); m.y1 = Math.max(m.y1, y + h);
+}
 function drawPatchAt(name, x, y) {
-  const p = getPatch(name), b = menuBox();
+  const p = getPatch(name);
   if (!p) return null;
   const px = x - p.left, py = y - p.top;
-  dctx.drawImage(p.cv, b.x0 + px * b.sx, b.y0 + py * b.sy, p.w * b.sx, p.h * b.sy);
+  if (measuring) grow(px, py, p.w, p.h); else blit(p, px, py);
   return { x: px, y: py, w: p.w, h: p.h };
 }
 // STCFN font, upper case like DOOM's M_WriteText; returns the width in virtual pixels
@@ -812,7 +852,7 @@ function drawText(str, x, y, measureOnly = false) {
     const name = "STCFN" + String(c).padStart(3, "0");
     const p = c > 32 && c < 96 ? getPatch(name) : null;
     if (!p) { cx += 4; continue; }
-    if (!measureOnly) { const b = menuBox(); dctx.drawImage(p.cv, b.x0 + cx * b.sx, b.y0 + cy * b.sy, p.w * b.sx, p.h * b.sy); }
+    if (!measureOnly) { if (measuring) grow(cx, cy, p.w, p.h); else blit(p, cx, cy); }
     cx += p.w;
   }
   return cx - x;
@@ -825,18 +865,49 @@ function drawMenu() {
   const dpr = Math.min(devicePixelRatio || 1, 2);
   const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
   if (dmenu.width !== W || dmenu.height !== H) { dmenu.width = W; dmenu.height = H; }
-  dctx.imageSmoothingEnabled = false;
+  dctx.imageSmoothingEnabled = true; dctx.imageSmoothingQuality = "high";
   dctx.clearRect(0, 0, W, H);
-  if (engine?.map) { dctx.fillStyle = "rgba(0,0,0,0.55)"; dctx.fillRect(0, 0, W, H); }
+  menuView = null;
+  if (engine?.map) { dctx.fillStyle = "rgba(0,0,0,0.65)"; dctx.fillRect(0, 0, W, H); }
   else {
     dctx.fillStyle = "#000"; dctx.fillRect(0, 0, W, H);
     drawPatchAt("TITLEPIC", 0, 0);
-    // the title art is busy behind the menu text; dim it except on the bare main screen's logo area
-    dctx.fillStyle = menu.screen === "main" ? "rgba(0,0,0,0.45)" : "rgba(0,0,0,0.7)";
+    // the title art is busy behind the menu text; dim it, the bare main screen's logo area least
+    dctx.fillStyle = menu.screen === "main" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.78)";
     dctx.fillRect(0, 0, W, H);
   }
+  // the menu at DOOM's size fills only part of the 320x200 screen: measure it, then zoom it to fill
+  // the window (never smaller than DOOM's own layout), keeping DOOM's tall pixels
+  measuring = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  layoutMenu();
+  const bx = measuring, base = screenBox();
+  measuring = null;
+  // on the title screen the items go below the title picture's logo
+  let top = 0;
+  const logo = MENUS[menu.screen].pics?.some(([n]) => n === "M_DOOM") && !engine?.map ? getPatch("M_DOOM") : null;
+  if (logo) top = base.y0 + (2 - logo.top + logo.h + 4) * base.sy;
+  const pad = 12, cw = bx.x1 - bx.x0 + 2 * pad, ch = (bx.y1 - bx.y0 + 2 * pad) * base.sy / base.sx;
+  const z = Math.max(base.sx, Math.min(0.96 * W / cw, 0.92 * (H - top) / ch, base.sx * 1.6));
+  menuView = { sx: z, sy: z * base.sy / base.sx, x0: 0, y0: 0 };
+  menuView.x0 = W / 2 - ((bx.x0 + bx.x1) / 2) * menuView.sx;
+  menuView.y0 = logo ? Math.max(top, (top + H) / 2 - ((bx.y1 - bx.y0) / 2) * menuView.sy) - bx.y0 * menuView.sy
+                     : H / 2 - ((bx.y0 + bx.y1) / 2) * menuView.sy;
+  shadowed = true;
+  layoutMenu();
+  shadowed = false;
+}
+function layoutMenu() {
   const m = MENUS[menu.screen];
-  for (const [n, x, y] of m.pics || []) drawPatchAt(n, x, y);
+  for (const [n, x, y] of m.pics || []) {
+    // over the title picture the logo must sit on the picture's own logo, so it keeps the picture's frame
+    if (n === "M_DOOM" && !engine?.map) {
+      if (measuring) continue;
+      const v = menuView, sh = shadowed;
+      menuView = null; shadowed = false;
+      drawPatchAt(n, x, y);
+      menuView = v; shadowed = sh;
+    } else drawPatchAt(n, x, y);
+  }
   if (m.message) drawText(m.message, 160 - drawText(m.message.split("\n")[0], 0, 0, true) / 2, 80);
   itemRects.length = 0;
   m.items().forEach((it, i) => {
@@ -854,10 +925,12 @@ function drawMenu() {
     if (!r) { const w = drawText(it.text || it.patch.replace(/^M_/, ""), x, y + 4); r = { x, y, w, h: 16 }; }
     itemRects.push({ x: x - 8, y: y - 2, w: Math.max(r.w, 40) + 16, h: 16 });
   });
-  const it = itemRects[menu.item];
+  // measured at the first item, so moving the selection never changes the zoom
+  const sel = measuring ? 0 : menu.item;
+  const it = itemRects[sel];
   if (it) {
     const sx = m.message ? it.x - 16 : m.x - 32;
-    drawPatchAt(skullFrame ? "M_SKULL2" : "M_SKULL1", sx, (m.message ? m.y : m.y + 16 * menu.item) - 5);
+    drawPatchAt(skullFrame ? "M_SKULL2" : "M_SKULL1", sx, (m.message ? m.y : m.y + 16 * sel) - 5);
   }
 }
 addEventListener("resize", () => (inter ? drawIntermission() : drawMenu()));
