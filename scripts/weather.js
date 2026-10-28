@@ -453,41 +453,50 @@ fn fjaera(m: vec2f, sea: f32, t: f32) -> vec4f {
   let k1 = max(1.0, u.scale * u.px);           // map units per CSS px, at least one
   var wa = 0.0;
 
+  // Everything below is drawn bolder and faster than life, so it reads behind the map lines.
   // 1. wave lines that follow the coast, spaced like a chart's, rolling in on the shores the wind faces
-  let S = 6.0 * k1;
+  let S = 9.0 * k1;
   let face = clamp(dot(u.dir, -out), 0.0, 1.0);
   let wob = (noise(m * 0.03 / k1 + vec2f(t * 0.05, 0.0)) - 0.5) * S * (0.4 + 0.9 * u.ws);
-  let ph = (dist + wob) / S + t * (0.08 + 0.3 * u.ws) * (0.3 + 0.7 * face);
+  let ph = (dist + wob) / S + t * (0.25 + 0.7 * u.ws) * (0.3 + 0.7 * face);
   let k = floor(ph + 0.5);
-  let n = 1.6 + (1.2 + 2.6 * u.ws) * (0.35 + 0.65 * face);
-  let brk = smoothstep(0.25, 0.4, noise(m * 0.06 / k1 + vec2f(k * 7.31, k * 3.17)));
-  let coast = stroke((ph - k) * S, 0.9) * smoothstep(S * 0.45, S * 1.05, dist) * (1.0 - smoothstep(S * (n - 1.0), S * n, dist)) * brk;
-  wa = max(wa, coast * (0.5 + 0.35 * face));
+  let n = 2.5 + (1.5 + 3.5 * u.ws) * (0.35 + 0.65 * face);
+  let brk = smoothstep(0.18, 0.32, noise(m * 0.06 / k1 + vec2f(k * 7.31, k * 3.17)));
+  let coast = stroke((ph - k) * S, 1.5) * smoothstep(S * 0.45, S * 1.05, dist) * (1.0 - smoothstep(S * (n - 1.0), S * n, dist)) * brk;
+  wa = max(wa, coast * (0.75 + 0.25 * face));
 
   // 2. crest dashes on open water, across the wind, riding downwind; more of them as it blows
   let nr = vec2f(-u.dir.y, u.dir.x);
-  let cell = vec2f(11.0, 26.0) * k1;
-  let q = vec2f(dot(m, u.dir), dot(m, nr)) - vec2f(t * (1.0 + 5.0 * u.ws) * k1, 0.0);
+  let cell = vec2f(16.0, 40.0) * k1;
+  let q = vec2f(dot(m, u.dir), dot(m, nr)) - vec2f(t * (2.0 + 10.0 * u.ws) * k1, 0.0);
   let id = floor(q / cell);
   let h1 = hash(id); let h2 = hash(id + vec2f(17.0, 5.0)); let h3 = hash(id + vec2f(3.0, 29.0));
   let rel = q - (id + 0.5 + (vec2f(h1, h3) - 0.5) * vec2f(0.4, 0.5)) * cell;
-  let life = fract(t * 0.06 + h1 * 7.0);
-  let L = cell.y * (0.14 + 0.3 * u.ws) * sin(3.14159 * life);
-  let dash = stroke(rel.x + rel.y * rel.y / (cell.y * 1.6), 0.85) * (1.0 - smoothstep(L * 0.55, L, abs(rel.y)));
-  wa = max(wa, dash * step(h2, 0.03 + 0.4 * u.ws * sqrt(u.ws)) * smoothstep(S * 1.4, S * 3.5, dist) * 0.55);
+  let life = fract(t * 0.1 + h1 * 7.0);
+  let L = cell.y * (0.2 + 0.4 * u.ws) * sin(3.14159 * life);
+  let dash = stroke(rel.x + rel.y * rel.y / (cell.y * 1.6), 1.3) * (1.0 - smoothstep(L * 0.55, L, abs(rel.y)));
+  wa = max(wa, dash * step(h2, 0.06 + 0.55 * u.ws) * smoothstep(S * 1.4, S * 3.5, dist) * 0.8);
 
   // 3. rain rings
   if (u.rain > 0.0) {
-    let rc = 15.0 * k1;
+    let rc = 26.0 * k1;
     let rp = m / rc + vec2f(0.37, 0.71);
     let ri = floor(rp);
     let rh = hash(ri + vec2f(41.0, 7.0));
-    let rt = t * 0.7 + rh * 13.0;
+    let rt = t * 1.1 + rh * 13.0;
     let rl = fract(rt); let cyc = floor(rt);
     let ro = vec2f(hash(ri + vec2f(cyc, 3.0)), hash(ri + vec2f(5.0, cyc))) * 0.6 + 0.2;
     let rr = length(rp - ri - ro) * rc;
-    let ring = stroke(rr - rl * rc * 0.3, 0.8) * (1.0 - rl) * step(hash(ri + vec2f(cyc, cyc)), u.rain);
-    wa = max(wa, ring * 0.45);
+    let ring = stroke(rr - rl * rc * 0.35, 1.3) * (1.0 - rl) * step(hash(ri + vec2f(cyc, cyc)), min(u.rain * 2.0, 0.9));
+    wa = max(wa, ring * 0.8);
+  }
+  // sunshine: gold glitter on the water
+  var ga = 0.0;
+  if (u.tide.y > 0.0) {
+    let gc = m / (8.0 * k1); let gi = floor(gc);
+    let gp = vec2f(hash(gi + vec2f(4.0, 8.0)), hash(gi + vec2f(9.0, 1.0))) * 0.7 + 0.15;
+    let tw = floor(t * 6.0 + hash(gi) * 40.0);
+    ga = (1.0 - smoothstep(0.5, 1.5, length(gc - gi - gp) * 8.0 * k1 / u.scale / u.px)) * step(hash(gi + vec2f(tw, 3.0)), u.tide.y * (0.05 + 0.15 * u.ws)) * wet;
   }
   wa *= wet;
 
@@ -498,25 +507,25 @@ fn fjaera(m: vec2f, sea: f32, t: f32) -> vec4f {
   let cn = fbm((wm - drift) * 0.00096 + vec2f(0.0, t * 0.003));
   let th = mix(0.8, 0.34, u.cl);
   let cd = smoothstep(th, th + 0.2, cn);
-  let hs = 4.5 * k1;
+  let hs = 6.0 * k1;
   let hp = (m.x + m.y) / hs;
-  let hatch = stroke((fract(hp + 0.5) - 0.5) * hs * 0.7071, 0.7);
-  var ia = cd * (0.05 + 0.16 * hatch) + u.cl * 0.025 + u.night * 0.06;
+  let hatch = stroke((fract(hp + 0.5) - 0.5) * hs * 0.7071, 0.9);
+  var ia = cd * (0.08 + 0.26 * hatch) + u.cl * 0.04 + u.night * 0.1;
 
   // 5. snow: ink flecks blowing across
   if (u.snow > 0.0) {
-    let sc = 9.0 * k1;
-    let sp = (m - u.dir * t * (3.0 + 8.0 * u.ws) * k1 - vec2f(t * 0.7, t * 1.3) * k1) / sc;
+    let sc = 14.0 * k1;
+    let sp = (m - u.dir * t * (6.0 + 16.0 * u.ws) * k1 - vec2f(t * 1.4, t * 2.6) * k1) / sc;
     let si = floor(sp);
     let so = vec2f(hash(si), hash(si + vec2f(1.0, 9.0))) * 0.7 + 0.15;
-    let fl = 1.0 - smoothstep(0.6, 1.4, length(sp - si - so) * sc / u.scale / u.px);
-    ia = max(ia, fl * step(hash(si + vec2f(4.0, 4.0)), u.snow) * 0.5);
+    let fl = 1.0 - smoothstep(1.0, 2.0, length(sp - si - so) * sc / u.scale / u.px);
+    ia = max(ia, fl * step(hash(si + vec2f(4.0, 4.0)), min(u.snow * 1.5, 0.9)) * 0.7);
   }
   ia *= inside;
 
   let a = wa * u.water.a + ia * u.ink.a * (1.0 - wa * u.water.a);
   let c = u.water.rgb * wa * u.water.a + u.ink.rgb * ia * u.ink.a * (1.0 - wa * u.water.a);
-  return vec4f(c, a);
+  return over(vec4f(c, a), vec3f(0.95, 0.72, 0.22), ga * inside);
 }`;
 
   function colour(v) {
