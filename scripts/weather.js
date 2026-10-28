@@ -299,13 +299,20 @@ fn stroke(dm: f32, w: f32) -> f32 {
       dev = dv;
       return waterMask(url, TW, TH);
     }).then(function (mc) {
-      var U = GPUTextureUsage, B = GPUBufferUsage;
+      /* compile off the main thread: the first synchronous compile took 0.9 s on an iPhone */
+      var fmt = navigator.gpu.getPreferredCanvasFormat(), mod = dev.createShaderModule({ code: DRAW });
+      return Promise.all([mc,
+        dev.createComputePipelineAsync({ layout: 'auto', compute: { module: dev.createShaderModule({ code: JFA }), entryPoint: 'main' } }),
+        dev.createRenderPipelineAsync({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' },
+          fragment: { module: mod, entryPoint: 'fs', targets: [{ format: fmt }] }, primitive: { topology: 'triangle-list' } }), fmt]);
+    }).then(function (r) {
+      var mc = r[0], jfa = r[1], fmt = r[3], U = GPUTextureUsage, B = GPUBufferUsage;
+      pipe = r[2];
       var mask = dev.createTexture({ size: [TW, TH], format: 'rgba8unorm', usage: U.TEXTURE_BINDING | U.COPY_DST | U.RENDER_ATTACHMENT });
       dev.queue.copyExternalImageToTexture({ source: mc }, { texture: mask }, [TW, TH]);
       var field = dev.createTexture({ size: [TW, TH], format: 'rgba8unorm', usage: U.TEXTURE_BINDING | U.STORAGE_BINDING });
 
       /* jump flood: seed, halve the step down to 1, write mask and distance */
-      var jfa = dev.createComputePipeline({ layout: 'auto', compute: { module: dev.createShaderModule({ code: JFA }), entryPoint: 'main' } });
       var bufs = [0, 1].map(function () { return dev.createBuffer({ size: TW * TH * 8, usage: B.STORAGE }); });
       var steps = [[0, 0]];
       for (var st = 1 << Math.ceil(Math.log2(Math.max(TW, TH))) >> 1; st >= 1; st >>= 1) steps.push([st, 1]);
@@ -326,11 +333,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
       dev.queue.submit([enc.finish()]);
 
       ctx = cv.getContext('webgpu');
-      var fmt = navigator.gpu.getPreferredCanvasFormat();
       ctx.configure({ device: dev, format: fmt, alphaMode: 'premultiplied' });
-      var mod = dev.createShaderModule({ code: DRAW });
-      pipe = dev.createRenderPipeline({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' },
-        fragment: { module: mod, entryPoint: 'fs', targets: [{ format: fmt }] }, primitive: { topology: 'triangle-list' } });
       ubuf = dev.createBuffer({ size: data.byteLength, usage: B.UNIFORM | B.COPY_DST });
       bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
         { binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: fv },
