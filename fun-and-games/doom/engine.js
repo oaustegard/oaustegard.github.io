@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028134349";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028134349";
-import { STATES, SFX, MF } from "./info.js?v=20261028134349";
-import { MSG } from "./specials.js?v=20261028134349";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028143033";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028143033";
+import { STATES, SFX, MF } from "./info.js?v=20261028143033";
+import { MSG } from "./specials.js?v=20261028143033";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -106,7 +106,7 @@ export class Engine {
 
   maps() { return this.wad.maps(); }
 
-  async loadMap(name, player = freshPlayer()) {
+  async loadMap(name, player = freshPlayer(), onProgress = null) {
     const d = this.device;
     const map = buildMap(this.wad, this.gfx, name, this.skill);
     this.map = map;
@@ -118,14 +118,14 @@ export class Engine {
     this.pipeCache ||= new Map();
     const cached = this.pipeCache.get(code);
     if (cached) Object.assign(this, cached);
-    else await this.compile(code);
+    else await this.compile(code, onProgress);
     this.pipeCache.set(code, { renderPipe: this.renderPipe, projectPipe: this.projectPipe, hudPipe: this.hudPipe, ticPipes: this.ticPipes, amClearPipe: this.amClearPipe, amLinesPipe: this.amLinesPipe, viewSetupPipe: this.viewSetupPipe });
     if (this.pipeCache.size > 3) this.pipeCache.delete(this.pipeCache.keys().next().value);
     this.initLevel(map, player);
     return map;
   }
 
-  async compile(code) {
+  async compile(code, onProgress = null) {
     const d = this.device;
     const mod = d.createShaderModule({ code });
     const info = await mod.getCompilationInfo();
@@ -135,7 +135,7 @@ export class Engine {
       throw new Error("WGSL: " + errs.map((m) => `${m.lineNum}:${m.linePos} ${m.message}\n  ${lines[m.lineNum - 1]?.trim()}`).join("\n"));
     }
     const pl = d.createPipelineLayout({ bindGroupLayouts: [this.layout] });
-    // one at a time: a failed pipeline names its kernel
+    // all at once, so the wait is the slowest kernel rather than the sum; a failed pipeline names its kernel
     const mk = async (entryPoint) => {
       try { return await d.createComputePipelineAsync({ layout: pl, compute: { module: mod, entryPoint } }); }
       catch (err) {
@@ -144,14 +144,18 @@ export class Engine {
         throw new Error(`pipeline ${entryPoint}: ${errLines.length ? errLines.slice(0, 4).join("\n") : m.length > 600 ? "…" + m.slice(-600) : m}`);
       }
     };
-    this.renderPipe = await mk("render");
-    this.projectPipe = await mk("project");
-    this.hudPipe = await mk("hud");
-    this.amClearPipe = await mk("amClear");
-    this.amLinesPipe = await mk("amLines");
-    this.viewSetupPipe = await mk("viewSetup");
-    this.ticPipes = [];
-    for (const k of ["ticSave", "ticPlayer", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
+    const names = ["render", "project", "hud", "amClear", "amLines", "viewSetup", "ticSave", "ticPlayer", "ticMobjs", "ticActivate", "ticWorld"];
+    const pending = new Set(names);
+    onProgress?.({ done: 0, total: names.length, pending: [...pending] });
+    const pipes = await Promise.all(names.map((n) => mk(n).then((p) => {
+      pending.delete(n);
+      onProgress?.({ done: names.length - pending.size, total: names.length, pending: [...pending] });
+      return p;
+    })));
+    const P = Object.fromEntries(names.map((n, i) => [n, pipes[i]]));
+    this.renderPipe = P.render; this.projectPipe = P.project; this.hudPipe = P.hud;
+    this.amClearPipe = P.amClear; this.amLinesPipe = P.amLines; this.viewSetupPipe = P.viewSetup;
+    this.ticPipes = ["ticSave", "ticPlayer", "ticMobjs", "ticActivate", "ticWorld"].map((n) => P[n]);
   }
 
   initLevel(map, player) {

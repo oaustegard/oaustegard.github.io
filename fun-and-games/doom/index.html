@@ -127,15 +127,15 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261028134349";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028134349";
+import { Music, musicLumpFor } from "./music.js?v=20261028143033";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028143033";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
 // ?embed=E1M2: start that map straight away, for a page that frames the game (the blog's screenshots);
 // progress goes to the banner, since the menu card stays hidden
 const embedMap = new URLSearchParams(location.search).get("embed");
-const status = (t) => { $("status").textContent = t; if (embedMap) banner(t.replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`)); };
+const status = (t) => { $("status").textContent = t; if (embedMap) banner(String(t).replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`)); };
 
 if (!navigator.gpu) {
   status("This browser has no WebGPU. Try a recent Chrome, Edge or Safari.");
@@ -195,12 +195,36 @@ async function buildEngine() {
 }
 
 function banner(html) { const b = $("banner"); b.hidden = !html; b.innerHTML = html || ""; }
+const esc = (t) => String(t).replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`);
 async function start(mapName, carry = freshPlayer(), saved = null) {
   loading = true;
   status(`Compiling shaders for ${mapName}…`);
-  if ($("menu").hidden) banner(`Loading ${mapName}…<small>compiling the GPU code</small>`);
   $("play").disabled = true;
-  await engine.loadMap(mapName, carry);
+  // the first compile of a level takes seconds on most GPUs and minutes on some: show which kernels remain
+  const t0 = performance.now();
+  let prog = null;
+  const show = () => {
+    const s = Math.round((performance.now() - t0) / 1000);
+    const what = prog ? `${prog.done} of ${prog.total} GPU kernels compiled, ${s} s` : `compiling the GPU code, ${s} s`;
+    const slow = s >= 20 && prog?.pending.length ? `<br>still compiling ${prog.pending.join(", ")}: on some GPUs the first load of a level takes minutes` : "";
+    if ($("menu").hidden) banner(`Loading ${mapName}…<small>${what}${slow}</small>`);
+    else status(`Compiling shaders for ${mapName}: ${what}`);
+  };
+  show();
+  const tick = setInterval(show, 1000);
+  try {
+    await engine.loadMap(mapName, carry, (p) => { prog = p; show(); });
+  } catch (err) {
+    console.error(err);
+    loading = false;
+    $("play").disabled = false;
+    // the status line sits in the hidden options card, so the banner carries the error; DOOM's menu
+    // comes back underneath it to try again
+    $("status").textContent = `${mapName} failed to load: ${err.message}`;
+    banner(`${esc(mapName)} failed to load<small>${esc(err.message)}</small>`);
+    if (!embedMap) showMenu();
+    return false;
+  } finally { clearInterval(tick); }
   if (saved && !engine.restore(saved)) status("That save doesn't fit this WAD; the level starts fresh.");
   playSong(musicLumpFor(mapName));
   banner("");
@@ -825,8 +849,7 @@ async function newGame(skillIndex) {
   hideMenu();
   engine.skill = skillIndex + 1;
   applySize();
-  await start(map, freshPlayer());
-  if (!isTouch) canvas.requestPointerLock?.();
+  if ((await start(map, freshPlayer())) !== false && !isTouch) canvas.requestPointerLock?.();
 }
 
 // 320x200 virtual coordinates in a 4:3 box centred in the window: the title and intermission art
