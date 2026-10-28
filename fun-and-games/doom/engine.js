@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028043335";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028043335";
-import { STATES, SFX } from "./info.js?v=20261028043335";
-import { MSG } from "./specials.js?v=20261028043335";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028044349";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028044349";
+import { STATES, SFX } from "./info.js?v=20261028044349";
+import { MSG } from "./specials.js?v=20261028044349";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -16,7 +16,7 @@ export const W = { // World word offsets (see struct World)
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
-  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311,
+  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311, initmobjs: 312, playerslot: 313, spawncursor: 314,
 };
 
 export function freshPlayer() {
@@ -131,7 +131,7 @@ export class Engine {
     this.amLinesPipe = await mk("amLines");
     this.viewSetupPipe = await mk("viewSetup");
     this.ticPipes = [];
-    for (const k of ["ticSave", "ticPlayer", "ticSight", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
+    for (const k of ["ticSave", "ticPlayer", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
   }
 
   initLevel(map, player) {
@@ -189,6 +189,9 @@ export class Engine {
     wf[W.viewx] = pf[0]; wf[W.viewy] = pf[1]; wf[W.viewangle] = pf[3]; wf[W.viewheight] = 41; wf[W.viewz] = pf[2] + 41;
     for (const [a, b] of [["pvx", "viewx"], ["pvy", "viewy"], ["pvz", "viewz"], ["pva", "viewangle"], ["rx", "viewx"], ["ry", "viewy"], ["rz", "viewz"], ["ra", "viewangle"]]) wf[W[a]] = wf[W[b]];
     wu[W.rng] = rng;
+    // the thinker order: map things, the player's place among them, then later spawns
+    this.order = { initmobjs: mobjs.count, playerslot: mobjs.playerSlot };
+    wu[W.initmobjs] = mobjs.count; wu[W.playerslot] = mobjs.playerSlot; wu[W.spawncursor] = mobjs.count;
     wu[W.lastframe] = 0xffffffff;
     wi[W.health] = player.health; wi[W.armor] = player.armor; wi[W.armortype] = player.armortype;
     wu[W.weapons] = player.weapons; wi[W.readyweapon] = player.readyweapon; wi[W.pendingweapon] = -1; wu[W.backpack] = player.backpack;
@@ -238,11 +241,9 @@ export class Engine {
     this.device.queue.writeBuffer(this.worldBuf, W.viscount * 4, new Uint32Array([0]));
     const pass = encoder.beginComputePass();
     pass.setBindGroup(0, this.bind);
-    // ticSight is one thread per thing; the other tic kernels are single-threaded
-    const sightGroups = Math.ceil(this.maxMobjs / 64);
-    // ticSave and ticSight run one thread per thing (or sector); the rest are single-threaded
+    // ticSave runs one thread per thing (or sector); the rest are single-threaded
     const saveGroups = Math.ceil(Math.max(this.maxMobjs, this.map.sectors.length) / 64);
-    for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 0 ? saveGroups : k === 2 ? sightGroups : 1); });
+    for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 0 ? saveGroups : 1); });
     pass.setPipeline(this.viewSetupPipe);
     pass.dispatchWorkgroups(1);
     if (input.automap) {
@@ -305,6 +306,10 @@ export class Engine {
     const parts = { sec: this.secBuf, mobj: this.mobjBuf, ls: this.lsBuf, world: this.worldBuf };
     for (const [k, b] of Object.entries(parts)) if (!st[k] || st[k].byteLength !== b.size) return false;
     for (const [k, b] of Object.entries(parts)) this.device.queue.writeBuffer(b, 0, st[k]);
+    // a save from before the thinker order was kept has zeros there: use this level's
+    if (!new Uint32Array(st.world)[W.initmobjs] && this.order) {
+      this.device.queue.writeBuffer(this.worldBuf, W.initmobjs * 4, new Uint32Array([this.order.initmobjs, this.order.playerslot, this.order.initmobjs]));
+    }
     this.cheats = st.cheats || 0;
     this.sndSeen = new Uint32Array(st.world)[W.sndcount];
     this.lastWorld = st.world;

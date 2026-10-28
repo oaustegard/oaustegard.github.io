@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028043335";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028043335";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028044349";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028044349";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -125,7 +125,10 @@ struct World {
   act: array<u32, 32>,                     // line activations waiting for the activate kernel
   cheats: u32,                              // 1 idclip, 2 iddqd, 4 iddt
   mrng: u32,                                // M_Random's index: the status bar's own walk through the table
-  pad2: array<u32, 8>,
+  initmobjs: u32,                           // the map's own things are 1..initmobjs-1; later spawns follow
+  playerslot: u32,                          // the player's thinker runs before this thing (its THINGS place)
+  spawncursor: u32,                         // where spawnMobj looks first, so new things append
+  pad2: array<u32, 5>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -1909,36 +1912,77 @@ fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
 fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
 fn mpos(i: u32) -> vec2f { return vec2f(O[i].x, O[i].y); }
 
-// ---- sight (P_CheckSight): REJECT first, then every line the sight line crosses
+// ---- sight (P_CheckSight): REJECT, then DOOM's walk of the BSP from eye to target (p_sight.c).
+// P_DivlineSide with its integer-truncated products and its x == node->y slip, kept as vanilla has them.
+fn sightSide(p: vec2f, o: vec2f, d: vec2f) -> u32 {
+  if (d.x == 0.0) {
+    if (p.x == o.x) { return 2u; }
+    if (p.x <= o.x) { return select(0u, 1u, d.y > 0.0); }
+    return select(0u, 1u, d.y < 0.0);
+  }
+  if (d.y == 0.0) {
+    if (p.x == o.y) { return 2u; }
+    if (p.y <= o.y) { return select(0u, 1u, d.x < 0.0); }
+    return select(0u, 1u, d.x > 0.0);
+  }
+  let left = i32(floor(d.y)) * i32(floor(p.x - o.x));
+  let right = i32(floor(p.y - o.y)) * i32(floor(d.x));
+  if (right < left) { return 0u; }
+  if (left == right) { return 2u; }
+  return 1u;
+}
+var<private> sightTop: f32;
+var<private> sightBottom: f32;
+var<private> sightZ: f32;
+// P_CrossSubsector
+fn crossSubsector(num: u32, p0: vec2f, p1: vec2f) -> bool {
+  let d = p1 - p0;
+  let n = M[M_SSEC + 4u * num]; let first = M[M_SSEC + 4u * num + 1u];
+  for (var k = 0u; k < n; k++) {
+    let l = M[M_SEG + 6u * (first + k) + 2u];
+    let a = lineA(l); let b = lineB(l); let dl = b - a;
+    if (sightSide(a, p0, d) == sightSide(b, p0, d)) { continue; }
+    if (sightSide(p0, a, dl) == sightSide(p1, a, dl)) { continue; }
+    if (lineBack(l) < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { return false; }
+    let F = S[lineFront(l)]; let B = S[lineBack(l)];
+    if (F.floorh == B.floorh && F.ceilh == B.ceilh) { continue; }
+    let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
+    if (openbottom >= opentop) { return false; }
+    // P_InterceptVector2
+    let den = dl.y * d.x - dl.x * d.y;
+    var frac = 0.0;
+    if (den != 0.0) { frac = ((a.x - p0.x) * dl.y + (p0.y - a.y) * dl.x) / den; }
+    if (F.floorh != B.floorh) { sightBottom = max(sightBottom, (openbottom - sightZ) / frac); }
+    if (F.ceilh != B.ceilh) { sightTop = min(sightTop, (opentop - sightZ) / frac); }
+    if (sightTop <= sightBottom) { return false; }
+  }
+  return true;
+}
 fn checkSight(a: u32, b: u32) -> bool {
   let s1 = O[a].sector; let s2 = O[b].sector;
   let pnum = s1 * NUMSECTORS + s2;
   if (((M[M_REJECT + (pnum >> 5u)] >> (pnum & 31u)) & 1u) != 0u) { return false; }
+  sightZ = O[a].z + O[a].height - O[a].height / 4.0;
+  sightTop = O[b].z + O[b].height - sightZ;
+  sightBottom = O[b].z - sightZ;
   let p0 = mpos(a); let p1 = mpos(b);
-  let sz = O[a].z + O[a].height - O[a].height / 4.0;
-  var top = O[b].z + O[b].height - sz;
-  var bot = O[b].z - sz;
-  let lo = min(p0, p1); let hi = max(p0, p1);
-  let dd = p1 - p0;
-  for (var l = 0u; l < NUMLINES; l++) {
-    let la = lineA(l); let lb = lineB(l);
-    if (max(la.x, lb.x) < lo.x || min(la.x, lb.x) > hi.x || max(la.y, lb.y) < lo.y || min(la.y, lb.y) > hi.y) { continue; }
-    let e = lb - la;
-    let den = dd.x * e.y - dd.y * e.x;
-    if (abs(den) < 1e-9) { continue; }
-    let ap = la - p0;
-    let t = (ap.x * e.y - ap.y * e.x) / den;
-    let s = (ap.x * dd.y - ap.y * dd.x) / den;
-    if (t <= 0.0 || t >= 1.0 || s < 0.0 || s > 1.0) { continue; }
-    let back = lineBack(l);
-    if (back < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { return false; }
-    let F = S[lineFront(l)]; let B = S[back];
-    if (F.floorh == B.floorh && F.ceilh == B.ceilh) { continue; }
-    let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
-    if (openbottom >= opentop) { return false; }
-    if (F.floorh != B.floorh) { bot = max(bot, (openbottom - sz) / t); }
-    if (F.ceilh != B.ceilh) { top = min(top, (opentop - sz) / t); }
-    if (top <= bot) { return false; }
+  // P_CrossBSPNode, with an explicit stack in its visiting order
+  var stack: array<u32, 64>;
+  stack[0] = select(0x8000u, NUMNODES - 1u, NUMNODES > 0u);
+  var sp = 1u;
+  for (var guard = 0; guard < 4096 && sp > 0u; guard++) {
+    sp -= 1u;
+    let n = stack[sp];
+    if ((n & 0x8000u) != 0u) {
+      if (!crossSubsector(select(n & 0x7fffu, 0u, n == 0xffffu), p0, p1)) { return false; }
+      continue;
+    }
+    let o = M_NODE + 14u * n;
+    let no = vec2f(mf(o), mf(o + 1u)); let nd = vec2f(mf(o + 2u), mf(o + 3u));
+    var side = sightSide(p0, no, nd);
+    if (side == 2u) { side = 0u; }
+    if (sightSide(p1, no, nd) != side && sp < 64u) { stack[sp] = M[o + 12u + (side ^ 1u)]; sp += 1u; }
+    if (sp < 64u) { stack[sp] = M[o + 12u + side]; sp += 1u; }
   }
   return true;
 }
@@ -1972,8 +2016,11 @@ fn noiseAlert() {
 // ---- spawning
 fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
   _ = P_Random(); // P_SpawnMobj's lastlook
-  for (var j = 1u; j < MAXMOBJS; j++) {
+  // new thinkers go at the end of DOOM's list: take the next free slot after the last one used
+  for (var probe = 1u; probe < MAXMOBJS; probe++) {
+    let j = 1u + (max(P.spawncursor, 1u) - 1u + probe - 1u) % (MAXMOBJS - 1u);
     if (O[j].inuse != 0u) { continue; }
+    P.spawncursor = j + 1u;
     let mi = G_MOBJINFO + 24u * ty;
     var m: Mobj;
     m.x = x; m.y = y; m.angle = 0.0;
@@ -2223,12 +2270,13 @@ fn faceTarget(mi: u32) {
 }
 // sight to the current target: the per-mobj sight kernel covers the player, else one check per think
 var<private> sightTarget: bool;
+var<private> sightPlayer: bool;
 fn canSeeTarget(mi: u32) -> bool {
-  if (O[mi].targ == 0) { return O[mi].seeplayer != 0u; }
+  if (O[mi].targ == 0) { return sightPlayer; }
   return sightTarget;
 }
 fn lookForPlayer(mi: u32, allaround: bool) -> bool {
-  if (P.health <= 0 || O[mi].seeplayer == 0u) { return false; }
+  if (P.health <= 0 || !sightPlayer) { return false; }
   if (!allaround) {
     let an = wrapPi(angleTo(mpos(mi), mpos(0u)) - O[mi].angle);
     if (abs(an) > PI / 2.0 && approxDist(mpos(0u) - mpos(mi)) > MELEERANGE) { return false; }
@@ -2288,7 +2336,9 @@ fn pMove(mi: u32) -> bool {
   return true;
 }
 
-// P_NewChaseDir: the candidate directions in DOOM's order, walked with one P_TryWalk call site
+// P_NewChaseDir: the candidate directions in DOOM's order, walked with one P_TryWalk call site.
+// The random numbers are drawn where vanilla draws them: the first only once the direct diagonal
+// has failed, the second only when it falls back to searching every direction.
 fn newChaseDir(mi: u32) {
   let t = O[mi].targ;
   if (t < 0) { return; }
@@ -2298,26 +2348,37 @@ fn newChaseDir(mi: u32) {
   var d1 = 8; var d2 = 8;
   if (delta.x > 10.0) { d1 = 0; } else if (delta.x < -10.0) { d1 = 4; }
   if (delta.y < -10.0) { d2 = 6; } else if (delta.y > 10.0) { d2 = 2; }
-  var cands: array<i32, 16>; var nc = 0;
+  var cands: array<i32, 16>; var nc = 0; var pos = 0; var phase = 0u;
   if (d1 != 8 && d2 != 8) {
     var diags = array<i32, 4>(3, 1, 5, 7);
     let dg = diags[select(0, 2, delta.y < 0.0) + select(0, 1, delta.x > 0.0)];
-    if (dg != turnaround) { cands[nc] = dg; nc += 1; }
+    if (dg != turnaround) { cands[0] = dg; nc = 1; }
   }
-  if (P_Random() > 200 || abs(delta.y) > abs(delta.x)) { let tmp = d1; d1 = d2; d2 = tmp; }
-  if (d1 == turnaround) { d1 = 8; }
-  if (d2 == turnaround) { d2 = 8; }
-  if (d1 != 8) { cands[nc] = d1; nc += 1; }
-  if (d2 != 8) { cands[nc] = d2; nc += 1; }
-  if (olddir != 8) { cands[nc] = olddir; nc += 1; }
-  let fwd = (P_Random() & 1) != 0;
-  for (var i = 0; i < 8; i++) {
-    let td = select(7 - i, i, fwd);
-    if (td != turnaround) { cands[nc] = td; nc += 1; }
-  }
-  if (turnaround != 8) { cands[nc] = turnaround; nc += 1; }
-  for (var c = 0; c < nc; c++) {
-    O[mi].movedir = cands[c];
+  for (var guard = 0; guard < 24; guard++) {
+    if (pos >= nc) {
+      if (phase == 0u) {
+        phase = 1u;
+        if (P_Random() > 200 || abs(delta.y) > abs(delta.x)) { let tmp = d1; d1 = d2; d2 = tmp; }
+        if (d1 == turnaround) { d1 = 8; }
+        if (d2 == turnaround) { d2 = 8; }
+        if (d1 != 8) { cands[nc] = d1; nc += 1; }
+        if (d2 != 8) { cands[nc] = d2; nc += 1; }
+        if (olddir != 8) { cands[nc] = olddir; nc += 1; }
+        continue;
+      }
+      if (phase == 1u) {
+        phase = 2u;
+        let fwd = (P_Random() & 1) != 0;
+        for (var i = 0; i < 8; i++) {
+          let td = select(7 - i, i, fwd);
+          if (td != turnaround) { cands[nc] = td; nc += 1; }
+        }
+        if (turnaround != 8) { cands[nc] = turnaround; nc += 1; }
+        continue;
+      }
+      break;
+    }
+    O[mi].movedir = cands[pos]; pos += 1;
     if (pMove(mi)) { O[mi].movecount = P_Random() & 15; return; }
   }
   O[mi].movedir = 8;
@@ -2366,7 +2427,7 @@ fn chase(mi: u32) {
     O[mi].req = u32(info(ty, MI_SPAWNSTATE));
     return;
   }
-  var needDir = false;
+  var needDir = false; var chased = false;
   if ((O[mi].flags & MF_JUSTATTACKED) != 0u) {
     O[mi].flags &= ~MF_JUSTATTACKED;
     if (P.skill != 4) { needDir = true; }
@@ -2386,10 +2447,12 @@ fn chase(mi: u32) {
     }
     O[mi].movecount -= 1;
     if (O[mi].movecount < 0 || !pMove(mi)) { needDir = true; }
-    let act = info(ty, MI_ACTIVESOUND);
-    if (act != 0 && P_Random() < 3) { mobjSound(mi, u32(act)); }
+    chased = true;
   }
   if (needDir) { newChaseDir(mi); }
+  // the active sound's draw comes after the new direction's, and not after an attack
+  let act = info(ty, MI_ACTIVESOUND);
+  if (chased && act != 0 && P_Random() < 3) { mobjSound(mi, u32(act)); }
 }
 
 fn bossDeath(mi: u32) {
@@ -2562,10 +2625,6 @@ fn nightmareRespawn(mi: u32) {
 }
 
 fn mobjThink(mi: u32) {
-  // sight to a non-player target, once per think
-  sightTarget = false;
-  let t = O[mi].targ;
-  if (t > 0 && O[t].inuse != 0u && (O[mi].flags & MF_SHOOTABLE) != 0u) { sightTarget = checkSight(mi, u32(t)); }
   numcross = 0u;
   if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (O[mi].flags & MF_SKULLFLY) != 0u) { thingXY(mi); processCrossings(mi); }
   if (O[mi].inuse == 0u) { return; }
@@ -2581,7 +2640,20 @@ fn mobjThink(mi: u32) {
     O[mi].movecount += 1;
     if (O[mi].movecount >= 12 * 35 && (P.leveltime & 31u) == 0u && P_Random() <= 4) { nightmareRespawn(mi); return; }
   }
-  if (next != NOREQ) { _ = setMobjState(mi, next); }
+  if (next != NOREQ) {
+    // the actions about to run ask P_CheckSight; nothing moves before they do, so look once here
+    sightPlayer = false; sightTarget = false;
+    if ((O[mi].flags & MF_SHOOTABLE) != 0u && info(O[mi].mtype, MI_SEESTATE) != 0) {
+      let t = O[mi].targ;
+      for (var k = 0; k < 2; k++) {
+        var who = 0u;
+        if (k == 1) { if (t <= 0 || O[t].inuse == 0u) { break; } who = u32(t); }
+        let seen = checkSight(mi, who);
+        if (k == 0) { sightPlayer = seen; } else { sightTarget = seen; }
+      }
+    }
+    _ = setMobjState(mi, next);
+  }
   // lines a monster walked over in its chase (P_Move): teleporters, monster doors and lifts
   processCrossings(mi);
 }
@@ -2752,13 +2824,20 @@ fn playerShoot() {
 
 // P_MovePsprites plus the state queue. Every psprite change goes through here.
 fn runPsprites() {
+  shotKind = 0u;
+  // a level's first tic first does P_SetupPsprites (the weapon's raise state and its first action),
+  // which DOOM ran at spawn, before any tic; then the tic's P_MovePsprites
+  let setup = P.pspstate[0] == 0u && P.dead == 0u && P.health > 0;
+  for (var ph = select(1u, 0u, setup); ph < 2u; ph++) {
   pqn = 0u;
-  wantFire = false; wantCheckAmmo = false; shotKind = 0u;
-  if (P.pspstate[0] == 0u && P.dead == 0u && P.health > 0) { pspCur = 9u; bringUpWeapon(); }
-  for (var pos = 0u; pos < 2u; pos++) {
-    if (P.pspstate[pos] == 0u || P.psptics[pos] == -1) { continue; }
-    P.psptics[pos] -= 1;
-    if (P.psptics[pos] <= 0 && pqn < 8u) { pq[pqn] = vec2u(pos, stateNext(P.pspstate[pos])); pqn += 1u; }
+  wantFire = false; wantCheckAmmo = false;
+  if (ph == 0u) { pspCur = 9u; bringUpWeapon(); }
+  else {
+    for (var pos = 0u; pos < 2u; pos++) {
+      if (P.pspstate[pos] == 0u || P.psptics[pos] == -1) { continue; }
+      P.psptics[pos] -= 1;
+      if (P.psptics[pos] <= 0 && pqn < 8u) { pq[pqn] = vec2u(pos, stateNext(P.pspstate[pos])); pqn += 1u; }
+    }
   }
   for (var qi = 0u; qi < 24u; qi++) {
     if (pqn == 0u) {
@@ -2795,6 +2874,7 @@ fn runPsprites() {
     }
     pspCur = 9u;
   }
+  }
   playerShoot();
 }
 
@@ -2808,7 +2888,7 @@ fn calcHeight(onground: bool) {
     return;
   }
   // FINEANGLES/20 truncates to 409, so the bob's period is not quite 20 tics
-  let b = bob / 2.0 * sin(TAU * f32((409u * P.leveltime) & 8191u) / 8192.0);
+  let b = bob / 2.0 * fineSin((409u * P.leveltime) & 8191u);
   if (P.dead == 0u) {
     P.viewheight += P.deltaviewheight;
     if (P.viewheight > VIEWHEIGHT) { P.viewheight = VIEWHEIGHT; P.deltaviewheight = 0.0; }
@@ -2908,6 +2988,9 @@ fn ticPlayer() {
   if (P.exit != 0u) { return; }
   playerThink();
   if ((P.cheats & 1u) != 0u) { O[0].flags |= MF_NOCLIP; } else { O[0].flags &= ~MF_NOCLIP; }
+}
+// The player's P_MobjThinker: its movement, which DOOM runs at the player's place in the thinker list
+fn playerMobjThink() {
   let hasCmd = U.forward != 0.0 || U.side != 0.0;
   numcross = 0u;
   if (O[0].momx != 0.0 || O[0].momy != 0.0) { playerXY(hasCmd); processCrossings(0u); }
@@ -2932,19 +3015,14 @@ fn viewSetup() {
   P.ra = P.pva + wrapPi(P.viewangle - P.pva) * f + U.lookturn;
 }
 
-// One thread per thing: can it see the player? Monsters read this during their think.
-@compute @workgroup_size(64)
-fn ticSight(@builtin(global_invocation_id) gid: vec3u) {
-  let i = gid.x;
-  if (i == 0u || i >= MAXMOBJS || P.exit != 0u) { return; }
-  if (O[i].inuse == 0u || (O[i].flags & MF_SHOOTABLE) == 0u || info(O[i].mtype, MI_SEESTATE) == 0) { O[i].seeplayer = 0u; return; }
-  O[i].seeplayer = select(0u, 1u, checkSight(i, 0u));
-}
-
 @compute @workgroup_size(1)
+// DOOM's thinker list in its order: the map's things as P_LoadThings spawned them (the player's
+// movement among them), then the light thinkers P_SpawnSpecials made, then everything spawned since.
 fn ticMobjs() {
   if (P.exit != 0u) { return; }
   for (var i = 1u; i < MAXMOBJS; i++) {
+    if (i == P.playerslot) { playerMobjThink(); }
+    if (i == P.initmobjs) { for (var s = 0u; s < NUMSECTORS; s++) { lightThink(s); } }
     if (O[i].inuse != 0u) { mobjThink(i); }
   }
 }
@@ -3084,7 +3162,6 @@ fn ticWorld() {
       case 4u: { ceilingThink(s); }
       default: {}
     }
-    lightThink(s);
   }
   for (var k = 0u; k < 16u; k++) {
     if (P.buttons[k].w > 0) {

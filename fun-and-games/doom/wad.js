@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028043335";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028043335";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028044349";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028044349";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();
@@ -415,12 +415,13 @@ export function spawnMobjs(map, mobjWords, capacity, opts = {}) {
   const p = map.player || { x: 0, y: 0, angle: 0, order: 0 };
   spawn(MT.PLAYER, p.x, p.y, p.angle);
   const tics = (o) => { if (i32[o + 13] > 0) i32[o + 13] = 1 + (draw() % i32[o + 13]); };
+  let playerSlot = -1;
   map.things.forEach((t, k) => {
-    if (k === p.order) draw();
+    if (k === p.order) { draw(); playerSlot = n; }
     if (opts.nomonsters && (t.mt === MT.SKULL || (MOBJINFO[t.mt][21] & MF.COUNTKILL))) return;
     draw();
     tics(spawn(t.mt, t.x, t.y, t.angle, t.flags & 8 ? MF.AMBUSH : 0, k));
   });
-  if (p.order >= map.things.length) draw();
-  return { buf, count: n, rng };
+  if (p.order >= map.things.length) { draw(); playerSlot = n; }
+  return { buf, count: n, rng, playerSlot: Math.max(playerSlot, 1) };
 }
