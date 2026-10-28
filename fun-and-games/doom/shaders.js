@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028123748";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028123748";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028123953";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028123953";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -2007,7 +2007,8 @@ fn fx(v: f32) -> f32 { return f32(fixedOf(v)) / 65536.0; }
 fn fxDiv(a: i32, b: i32) -> i32 {
   let ua = u32(abs(a)); let ub = u32(abs(b));
   let neg = (a ^ b) < 0;
-  if ((ua >> 14u) >= ub) { return select(0x7fffffff, i32(-2147483647 - 1), neg); }
+  // INT_MIN as a bitcast: Safari writes a folded -2147483648 into Metal, where it is a long and select() is ambiguous
+  if ((ua >> 14u) >= ub) { return select(i32(0x7fffffff), bitcast<i32>(0x80000000u), neg); }
   var q = ua / ub; var r = ua % ub;
   for (var k = 0; k < 16; k++) { r <<= 1u; q <<= 1u; if (r >= ub) { r -= ub; q |= 1u; } }
   return select(i32(q), -i32(q), neg);
