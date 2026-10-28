@@ -96,8 +96,10 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Not done yet
 
-Monster behaviour is a port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had
-little play-testing, and the music synth has been checked by its spectrum, not by ear.
+Monster behaviour is a port of DOOM's `A_Look`, `A_Chase` and attack functions. It has been
+checked by scripted runs on E1M1 and E1M2: waking on sight and sound, chasing, attacks, teleport
+closets, and sight against a CPU copy of `P_CheckSight`. It has not been compared tic for tic
+with Chocolate Doom. The music synth has been checked by its spectrum, not by ear.
 
 ## Licences
 

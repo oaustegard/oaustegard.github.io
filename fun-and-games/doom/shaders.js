@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028040004";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028040004";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028040708";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028040708";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -2458,6 +2458,8 @@ fn mobjThink(mi: u32) {
     if (O[mi].movecount >= 12 * 35 && (P.leveltime & 31u) == 0u && P_Random() <= 4) { nightmareRespawn(mi); return; }
   }
   if (next != NOREQ) { _ = setMobjState(mi, next); }
+  // lines a monster walked over in its chase (P_Move): teleporters, monster doors and lifts
+  processCrossings(mi);
 }
 
 // ---- the player's weapons (P_SetPsprite and friends)
