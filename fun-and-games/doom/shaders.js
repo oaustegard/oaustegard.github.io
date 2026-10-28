@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028062655";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028062655";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028064133";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028064133";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -2243,6 +2243,9 @@ fn killMobj(source: i32, tgt: u32) {
   if (tgt == 0u) {
     O[0].flags &= ~MF_SOLID;
     P.dead = 1u;
+    // P_KillMobj takes 0-3 tics off the death state, the player's included; the player's thing doesn't
+    // animate here, but the draw keeps the random sequence in step
+    _ = P_Random();
     mobjSound(0u, select(SFX_pldeth, SFX_pdiehi, O[0].health < -50));
     return;
   }
