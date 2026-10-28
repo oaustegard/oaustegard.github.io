@@ -11,7 +11,7 @@
 (function () {
   var d = document, b = d.body, mode = b.getAttribute('data-sheet');
   if (mode !== 'full' && mode !== 'band') return;
-  var home = mode === 'full', KEY = 'wx1', LAT = 60.5377, LON = 5.2608,
+  var home = mode === 'full', KEY = 'wx2', LAT = 60.5377, LON = 5.2608,
       API = 'https://api.met.no/weatherapi/locationforecast/2.0/complete?lat=' + LAT + '&lon=' + LON,
       still = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
@@ -23,7 +23,20 @@
     var x = e.data.instant.details, n = e.data.next_1_hours || e.data.next_6_hours;
     return { t: x.air_temperature, ws: x.wind_speed, wd: x.wind_from_direction, cl: x.cloud_area_fraction,
              fog: x.fog_area_fraction || 0, pr: n && n.details ? n.details.precipitation_amount || 0 : 0,
-             sym: n && n.summary ? n.summary.symbol_code : '' };
+             sym: n && n.summary ? n.summary.symbol_code : '', fc: ahead(ts, i - 1) };
+  }
+
+  /* the forecast every three hours for the next twelve, from the hourly part of the series */
+  function ahead(ts, i) {
+    var out = [];
+    for (var k = 3; k <= 12; k += 3) {
+      var e = ts[i + k];
+      if (!e || !e.data.next_1_hours) break;
+      var x = e.data.instant.details, n = e.data.next_1_hours;
+      out.push({ at: e.time, t: x.air_temperature, ws: x.wind_speed, wd: x.wind_from_direction,
+                 pr: n.details.precipitation_amount || 0, sym: n.summary.symbol_code });
+    }
+    return out;
   }
 
   function preview() {
@@ -63,6 +76,25 @@
                     .replace('andthunder', ' and thunder').replace('showers', ' showers');
   }
 
+  /* the weather report card in #place: the hour now and the next twelve hours */
+  function report(w, src) {
+    var card = d.getElementById('wx-card');
+    if (!card) return;
+    var hh = function (iso) {
+      try { return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo' }).format(new Date(iso)); }
+      catch (e) { return iso.slice(11, 16); }
+    }, arrow = function (deg) {   /* the arrow points where the wind blows to */
+      return '<i class="wx-arrow" style="transform:rotate(' + Math.round(deg + 180) + 'deg)" aria-hidden="true">&uarr;</i>';
+    }, row = function (x, when) {
+      return '<tr><th scope="row">' + when + '</th><td>' + sky(x.sym) + '</td><td>' + Math.round(x.t) + '&deg;</td><td>' +
+        arrow(x.wd) + DIRS[Math.round(x.wd / 22.5) % 16] + ' ' + Math.round(x.ws) + '</td><td>' +
+        (x.pr ? x.pr.toFixed(1) : '&ndash;') + '</td></tr>';
+    };
+    card.querySelector('tbody').innerHTML = row(w, 'Now') + (w.fc || []).map(function (x) { return row(x, hh(x.at)); }).join('');
+    card.querySelector('.src a').href = src;
+    card.hidden = false;
+  }
+
   function readout(w) {
     var deg = Math.round(w.t) + '°', wind = DIRS[Math.round(w.wd / 22.5) % 16] + ' ' + Math.round(w.ws) + ' m/s',
         what = w.sym ? sky(w.sym) : '', src = 'https://www.met.no/en/free-meteorological-data';
@@ -72,6 +104,7 @@
       el.querySelector('dd').innerHTML = deg + 'C' + (what ? ', ' + what : '') + '<br>wind ' + wind +
         ' &middot; <a href="' + src + '">MET Norway</a>';
       el.hidden = false;
+      report(w, src);
     } else {
       var co = d.querySelector('.sheet-bar .coords');
       if (!co) return;
@@ -152,7 +185,7 @@ struct U {
   dir: vec2f, ws: f32, cl: f32,        // wind (blows to), wind 0..1, cloud cover 0..1
   rain: f32, snow: f32, night: f32, px: f32,   // px: canvas px per CSS px
   water: vec4f, ink: vec4f,
-  geo: vec4f,                          // metres per map unit; map origin in metres east and south of the sheet's top left
+  geo: vec4f,                          // metres per map unit; map origin in metres east and south of the sheet's top left; surf (0 or 1)
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -226,6 +259,19 @@ fn stroke(dm: f32, w: f32) -> f32 {
   let dash = stroke(rel.x + rel.y * rel.y / (cell.y * 1.6), 0.85) * (1.0 - smoothstep(L * 0.55, L, abs(rel.y)));
   wa = max(wa, dash * step(h2, 0.03 + 0.4 * u.ws * sqrt(u.ws)) * smoothstep(S * 1.4, S * 3.5, dist) * 0.55);
 
+  // 2b. surf, in a close view: stippled foam on the shore, thrown up as each wave line arrives
+  if (u.geo.w > 0.0) {
+    let reach = fract(ph - dist / S);                       // phase of the next line to reach the shore
+    let burst = pow(1.0 - reach, 3.0) * (0.35 + 0.65 * face) * (0.4 + 0.9 * u.ws);
+    let edge = S * (0.35 + 1.3 * burst + 0.2 * noise(m * 0.05 / k1 + vec2f(t * 0.2, 0.0)));
+    let sc = 1.7 * k1;
+    let fi = floor(m / sc);
+    let fo = vec2f(hash(fi + vec2f(2.0, 11.0)), hash(fi + vec2f(13.0, 3.0))) * 0.6 + 0.2;
+    let dot = 1.0 - smoothstep(0.5, 1.1, length(m / sc - fi - fo) * sc / u.scale / u.px);
+    let dens = (1.0 - smoothstep(edge * 0.4, edge, dist)) * (0.35 + 0.5 * burst);
+    wa = max(wa, dot * step(hash(fi + vec2f(floor(t * 3.0), 7.0)), dens) * 0.85);
+  }
+
   // 3. rain rings
   if (u.rain > 0.0) {
     let rc = 15.0 * k1;
@@ -292,49 +338,62 @@ fn stroke(dm: f32, w: f32) -> f32 {
     });
   }
 
-  function gpu(cv, url, MW, MH, view, geo) {
-    var dev, ctx, pipe, bind, ubuf, data = new Float32Array(28), cur = null, aim = null, last = -1e9, raf = 0, on = true;
-    var TW = MW / TEXEL, TH = MH / TEXEL;
-    return navigator.gpu.requestAdapter({ powerPreference: 'low-power' }).then(function (ad) {
+  /* one device, one pair of pipelines and one distance field per map, shared by every canvas on the page:
+     three devices at once (the sheet and two lenses) stalled device creation in SwiftShader */
+  var core = null, fields = {};
+  function shared() {
+    return core || (core = navigator.gpu.requestAdapter({ powerPreference: 'low-power' }).then(function (ad) {
       if (!ad) throw 'no adapter';
       return ad.requestDevice();
-    }).then(function (dv) {
-      dev = dv;
-      return waterMask(url, TW, TH);
-    }).then(function (mc) {
+    }).then(function (dev) {
       /* compile off the main thread: the first synchronous compile took 0.9 s on an iPhone */
       var fmt = navigator.gpu.getPreferredCanvasFormat(), mod = dev.createShaderModule({ code: DRAW });
-      return Promise.all([mc,
+      return Promise.all([
         dev.createComputePipelineAsync({ layout: 'auto', compute: { module: dev.createShaderModule({ code: JFA }), entryPoint: 'main' } }),
         dev.createRenderPipelineAsync({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' },
-          fragment: { module: mod, entryPoint: 'fs', targets: [{ format: fmt }] }, primitive: { topology: 'triangle-list' } }), fmt]);
-    }).then(function (r) {
-      var mc = r[0], jfa = r[1], fmt = r[3], U = GPUTextureUsage, B = GPUBufferUsage;
-      pipe = r[2];
+          fragment: { module: mod, entryPoint: 'fs', targets: [{ format: fmt }] }, primitive: { topology: 'triangle-list' } })
+      ]).then(function (r) { return { dev: dev, jfa: r[0], pipe: r[1], fmt: fmt }; });
+    }));
+  }
+
+  /* the map's water mask and the distance from each water texel to land (jump flood), as one texture view */
+  function field(c, url, TW, TH) {
+    return fields[url] || (fields[url] = waterMask(url, TW, TH).then(function (mc) {
+      var dev = c.dev, jfa = c.jfa, U = GPUTextureUsage, B = GPUBufferUsage;
       var mask = dev.createTexture({ size: [TW, TH], format: 'rgba8unorm', usage: U.TEXTURE_BINDING | U.COPY_DST | U.RENDER_ATTACHMENT });
       dev.queue.copyExternalImageToTexture({ source: mc }, { texture: mask }, [TW, TH]);
-      var field = dev.createTexture({ size: [TW, TH], format: 'rgba8unorm', usage: U.TEXTURE_BINDING | U.STORAGE_BINDING });
+      var tex = dev.createTexture({ size: [TW, TH], format: 'rgba8unorm', usage: U.TEXTURE_BINDING | U.STORAGE_BINDING });
 
       /* jump flood: seed, halve the step down to 1, write mask and distance */
       var bufs = [0, 1].map(function () { return dev.createBuffer({ size: TW * TH * 8, usage: B.STORAGE }); });
       var steps = [[0, 0]];
       for (var st = 1 << Math.ceil(Math.log2(Math.max(TW, TH))) >> 1; st >= 1; st >>= 1) steps.push([st, 1]);
       steps.push([1, 1], [0, 2]);   /* one extra step of 1 (JFA+1) mends most of the flood's misses */
-      var enc = dev.createCommandEncoder(), fv = field.createView(), mv = mask.createView();
+      var enc = dev.createCommandEncoder(), fv = tex.createView(), mv = mask.createView();
       steps.forEach(function (s, k) {
         var ub = dev.createBuffer({ size: 16, usage: B.UNIFORM | B.COPY_DST });
         dev.queue.writeBuffer(ub, 0, new Int32Array([TW, TH, s[0], s[1]]));
-        var from = bufs[(k + 1) & 1], to = bufs[k & 1];
         var pass = enc.beginComputePass();
         pass.setPipeline(jfa);
         pass.setBindGroup(0, dev.createBindGroup({ layout: jfa.getBindGroupLayout(0), entries: [
-          { binding: 0, resource: mv }, { binding: 1, resource: { buffer: from } }, { binding: 2, resource: { buffer: to } },
+          { binding: 0, resource: mv }, { binding: 1, resource: { buffer: bufs[(k + 1) & 1] } }, { binding: 2, resource: { buffer: bufs[k & 1] } },
           { binding: 3, resource: { buffer: ub } }, { binding: 4, resource: fv }] }));
         pass.dispatchWorkgroups(Math.ceil(TW / 8), Math.ceil(TH / 8));
         pass.end();
       });
       dev.queue.submit([enc.finish()]);
+      return fv;
+    }));
+  }
 
+  function gpu(cv, url, MW, MH, view, geo) {
+    var dev, ctx, pipe, bind, ubuf, data = new Float32Array(28), cur = null, aim = null, last = -1e9, raf = 0, on = true, c;
+    var TW = MW / TEXEL, TH = MH / TEXEL;
+    return shared().then(function (cc) {
+      c = cc; dev = c.dev; pipe = c.pipe;
+      return field(c, url, TW, TH);
+    }).then(function (fv) {
+      var fmt = c.fmt, B = GPUBufferUsage;
       ctx = cv.getContext('webgpu');
       ctx.configure({ device: dev, format: fmt, alphaMode: 'premultiplied' });
       ubuf = dev.createBuffer({ size: data.byteLength, usage: B.UNIFORM | B.COPY_DST });
@@ -411,7 +470,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
     var cv = d.createElement('canvas');
     cv.className = 'wx-sky'; cv.setAttribute('aria-hidden', 'true');
     before.parentNode.insertBefore(cv, before);
-    gpu(cv, url, MW, MH, view, geo.concat(0)).then(function (g) {
+    gpu(cv, url, MW, MH, view, geo.length > 3 ? geo : geo.concat(0)).then(function (g) {
       g.set(p);
       if (hook) hook(g);
       else if (window.IntersectionObserver) new IntersectionObserver(function (es) { g.pause(!es[0].isIntersecting); }).observe(cv);
@@ -431,7 +490,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
       }, [2.5, 852.9, 1796.3]);
       return;
     }
-    var plane = d.getElementById('plane'), lens = d.querySelector('.loupe .lens');
+    var plane = d.getElementById('plane');
     if (plane) {
       /* sheet.js sets plane.x / plane.y (its translate) and calls plane.onmove as it pans */
       paint(p, plane, plane.getAttribute('data-map'), 2800, 2000, function () {
@@ -440,19 +499,19 @@ fn stroke(dm: f32, w: f32) -> f32 {
         return { x: -x, y: -y, scale: 1 };
       }, [2.5, 0, 0], function (g) { plane.onmove = function () { g.render(); }; });
     }
-    if (lens) {
-      /* the loupe: data-view is the map units at its top left and the units across it */
+    /* the lenses on the inset map (the loupe, the beach in the weather report): data-view is the map units at the
+       top left and the units across; data-detail draws the surf. Each starts when it comes near the window */
+    [].forEach.call(d.querySelectorAll('.lens[data-view]'), function (lens) {
       var v = lens.getAttribute('data-view').split(' ').map(Number), go = function () {
         paint(p, lens.firstElementChild, lens.getAttribute('data-map'), 2400, 2400, function (W) {
           return { x: v[0], y: v[1], scale: v[2] / W };
-        }, [0.5, 3252.9, 1946.3]);
+        }, [0.5, 3252.9, 1946.3, lens.hasAttribute('data-detail') ? 1 : 0]);
       };
-      /* it is a screen or more down the page: start it when it comes near */
       if (window.IntersectionObserver) {
         var io = new IntersectionObserver(function (es) { if (es[0].isIntersecting) { io.disconnect(); go(); } }, { rootMargin: '400px' });
         io.observe(lens);
       } else go();
-    }
+    });
   }
 
   var wx = load();
