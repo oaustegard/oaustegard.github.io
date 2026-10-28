@@ -1,4 +1,4 @@
-/* weather.js: the weather now at Austegarden, drawn on the map of sheet pages (home and band).
+/* weather.js: the weather now at Austegarden, drawn on the map of sheet pages (home, its loupe, and band).
    Reads MET Norway's locationforecast once per forecast update (the Expires header, kept in localStorage),
    writes a one-line readout (#wx on the home page, after the coordinates in the sheet bar elsewhere),
    and, where WebGPU is available, draws the sea and the sky under the map lines in a chart engraver's hand:
@@ -152,6 +152,7 @@ struct U {
   dir: vec2f, ws: f32, cl: f32,        // wind (blows to), wind 0..1, cloud cover 0..1
   rain: f32, snow: f32, night: f32, px: f32,   // px: canvas px per CSS px
   water: vec4f, ink: vec4f,
+  geo: vec4f,                          // metres per map unit; map origin in metres east and south of the sheet's top left
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<f32>;
@@ -241,8 +242,10 @@ fn stroke(dm: f32, w: f32) -> f32 {
   wa *= wet;
 
   // 4. cloud shadows: hatched, drifting with the wind, the cover set by the forecast
-  let drift = u.dir * t * (0.8 + 5.6 * u.ws);
-  let cn = fbm((m - drift) * 0.0024 + vec2f(0.0, t * 0.003));
+  // in sheet metres, so the home map, the band and the loupe share one sky
+  let wm = u.geo.yz + m * u.geo.x;
+  let drift = u.dir * t * (2.0 + 14.0 * u.ws);
+  let cn = fbm((wm - drift) * 0.00096 + vec2f(0.0, t * 0.003));
   let th = mix(0.8, 0.34, u.cl);
   let cd = smoothstep(th, th + 0.2, cn);
   let hs = 4.5 * k1;
@@ -289,8 +292,8 @@ fn stroke(dm: f32, w: f32) -> f32 {
     });
   }
 
-  function gpu(cv, url, MW, MH, view) {
-    var dev, ctx, pipe, bind, ubuf, data = new Float32Array(24), cur = null, aim = null, last = -1e9, raf = 0, on = true;
+  function gpu(cv, url, MW, MH, view, geo) {
+    var dev, ctx, pipe, bind, ubuf, data = new Float32Array(28), cur = null, aim = null, last = -1e9, raf = 0, on = true;
     var TW = MW / TEXEL, TH = MH / TEXEL;
     return navigator.gpu.requestAdapter({ powerPreference: 'low-power' }).then(function (ad) {
       if (!ad) throw 'no adapter';
@@ -347,6 +350,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
         data.set(colour(cs.getPropertyValue('--ink')).concat(dk ? .55 : .7), 20);
       }
       inks();
+      data.set(geo, 24);
       dark.addEventListener('change', function () { inks(); render(); });
 
       function size() {
@@ -399,38 +403,56 @@ fn stroke(dm: f32, w: f32) -> f32 {
 
   /* ── wiring ───────────────────────────────────────────────────── */
 
-  function fog(p) { (home ? d.querySelector('.plane-wrap') : b).style.setProperty('--wx-fog', p.fog.toFixed(2)); }
+  function fog(p) { d.documentElement.style.setProperty('--wx-fog', p.fog.toFixed(2)); }
+
+  /* one canvas of sea and sky over a map: url and size in map units, view(W, H) gives the map units at the
+     canvas's top left and per CSS px, geo = [metres per unit, origin metres east, origin metres south] of the sheet */
+  function paint(p, before, url, MW, MH, view, geo, hook) {
+    var cv = d.createElement('canvas');
+    cv.className = 'wx-sky'; cv.setAttribute('aria-hidden', 'true');
+    before.parentNode.insertBefore(cv, before);
+    gpu(cv, url, MW, MH, view, geo.concat(0)).then(function (g) {
+      g.set(p);
+      if (hook) hook(g);
+      else if (window.IntersectionObserver) new IntersectionObserver(function (es) { g.pause(!es[0].isIntersecting); }).observe(cv);
+    }).catch(function (e) { cv.remove(); console.warn('weather.js: no sea and sky', e); });
+  }
 
   function start(w) {
     if (w) readout(w);
     var p = params(w);
     fog(p);
     if (!navigator.gpu || (navigator.connection && navigator.connection.saveData)) return;
-    var cv = d.createElement('canvas'), plane, setup;
-    cv.className = 'wx-sky'; cv.setAttribute('aria-hidden', 'true');
-    if (home) {
-      plane = d.getElementById('plane');
-      if (!plane) return;
-      plane.parentNode.insertBefore(cv, plane);
+    if (!home) {
+      /* the band is the 2400 x 600 SVG drawn with background-size: cover, centred */
+      paint(p, b.firstChild, '/images/map/austegarden-band.svg', 2400, 600, function (W, H) {
+        var s = Math.max(W / 2400, H / 600);
+        return { x: -(W - 2400 * s) / 2 / s, y: -(H - 600 * s) / 2 / s, scale: 1 / s };
+      }, [2.5, 852.9, 1796.3]);
+      return;
+    }
+    var plane = d.getElementById('plane'), lens = d.querySelector('.loupe .lens');
+    if (plane) {
       /* sheet.js sets plane.x / plane.y (its translate) and calls plane.onmove as it pans */
-      setup = gpu(cv, plane.getAttribute('data-map'), 2800, 2000, function () {
+      paint(p, plane, plane.getAttribute('data-map'), 2800, 2000, function () {
         var x = plane.x, y = plane.y;
         if (x === undefined) { var t = new DOMMatrix(getComputedStyle(plane).transform); x = t.m41; y = t.m42; }
         return { x: -x, y: -y, scale: 1 };
-      });
-    } else {
-      b.insertBefore(cv, b.firstChild);
-      /* the band is the 2400 x 600 SVG drawn with background-size: cover, centred */
-      setup = gpu(cv, '/images/map/austegarden-band.svg', 2400, 600, function (W, H) {
-        var s = Math.max(W / 2400, H / 600);
-        return { x: -(W - 2400 * s) / 2 / s, y: -(H - 600 * s) / 2 / s, scale: 1 / s };
-      });
+      }, [2.5, 0, 0], function (g) { plane.onmove = function () { g.render(); }; });
     }
-    setup.then(function (g) {
-      g.set(p);
-      if (home) plane.onmove = function () { g.render(); };
-      else if (window.IntersectionObserver) new IntersectionObserver(function (es) { g.pause(!es[0].isIntersecting); }).observe(cv);
-    }).catch(function (e) { cv.remove(); console.warn('weather.js: no sea and sky', e); });
+    if (lens) {
+      /* the loupe: data-view is the map units at its top left and the units across it */
+      var v = lens.getAttribute('data-view').split(' ').map(Number), go = function () {
+        paint(p, lens.firstElementChild, lens.getAttribute('data-map'), 2400, 2400, function (W) {
+          return { x: v[0], y: v[1], scale: v[2] / W };
+        }, [0.5, 3252.9, 1946.3]);
+      };
+      /* it is a screen or more down the page: start it when it comes near */
+      if (window.IntersectionObserver) {
+        var io = new IntersectionObserver(function (es) { if (es[0].isIntersecting) { io.disconnect(); go(); } }, { rootMargin: '400px' });
+        io.observe(lens);
+      } else go();
+    }
   }
 
   var wx = load();

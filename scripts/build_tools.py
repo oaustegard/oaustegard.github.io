@@ -53,7 +53,7 @@ NOTES = ROOT / "data" / "tool-notes.json"
 OUT_JSON = ROOT / "data" / "tools.json"
 REPO_BLOB = "https://github.com/oaustegard/oaustegard.github.io/blob/main/"
 SITE_SUFFIX = " | Oskar Austegard"
-DEFAULT_PLACES = 3
+DEFAULT_PLACES = 5
 
 
 # ── helpers ────────────────────────────────────────────────────────
@@ -340,7 +340,9 @@ def build_model(notes, warn):
                 "readme": ("/%s/%s" % (e["dir"], readme.relative_to(e["root_dir"]).as_posix())) if readme else None,
             })
         tools += external_tools(d, warn)
-        tools.sort(key=lambda t: (0 if t["featured"] else 1, sort_key(t["title"]), t["path"]))
+        # newest first (an undated page is one git has not seen yet, so the newest), then A-Z
+        tools.sort(key=lambda t: (sort_key(t["title"]), t["path"]))
+        tools.sort(key=lambda t: t.get("added") or "9999-99-99", reverse=True)
         check_blurb("district " + d["key"], d["blurb"], warn)
         model.append({
             "slug": d["key"], "title": d["title"], "blurb": d["blurb"], "path": d["index"],
@@ -372,7 +374,7 @@ def home_cards(model):
         more = "All %d tools" % n
         out.append(
             '      <li class="district" data-slug="{slug}">\n'
-            '        <div class="district__head"><h3>{title}</h3><p class="spot"><b>{n}</b> tools</p></div>\n'
+            '        <div class="district__head"><h3><a href="{href}">{title}</a></h3><p class="spot"><b>{n}</b> tools</p></div>\n'
             '        <p class="blurb">{blurb}</p>\n'
             '        <ul class="places">\n'
             '          {places}\n'
@@ -429,14 +431,13 @@ SORT_SCRIPT = '<script src="/scripts/sort-list.js" defer></script>'
 
 def sort_control(list_ids, label):
     """Order buttons for one or more place-lists. Hidden until /scripts/sort-list.js runs:
-    without JS the generated order (featured first, then A-Z) stands."""
+    without JS the generated order (newest first) stands."""
     ids = esc_attr(" ".join(list_ids))
     btn = '<button type="button" data-sort="%s" aria-controls="%s" aria-pressed="%s">%s</button>'
     return ('<div class="sort-ctl" role="group" aria-label="%s" hidden><span class="kicker">Order</span>'
             % esc_attr(label)
-            + btn % ("featured", ids, "true", "Featured")
+            + btn % ("new", ids, "true", "Newest")
             + btn % ("az", ids, "false", "A&ndash;Z")
-            + btn % ("new", ids, "false", "Newest")
             + "</div>")
 
 
