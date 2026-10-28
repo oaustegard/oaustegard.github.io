@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028045947";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028045947";
-import { STATES, SFX } from "./info.js?v=20261028045947";
-import { MSG } from "./specials.js?v=20261028045947";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028050304";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028050304";
+import { STATES, SFX, MF } from "./info.js?v=20261028050304";
+import { MSG } from "./specials.js?v=20261028050304";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -18,6 +18,22 @@ export const W = { // World word offsets (see struct World)
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
   pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311, initmobjs: 312, playerslot: 313, spawncursor: 314, mobjtop: 315,
 };
+
+// P_SetThingPosition for every thing in spawn order: each blockmap cell lists its things newest
+// first, as index + 1 in the cell's head and in each thing's bnext word (0 ends a list).
+function linkBlocks(map, mu, ls) {
+  const heads = map.lines.length + 3 * map.sides.length, mf = new Float32Array(mu.buffer);
+  ls.fill(0, heads);
+  for (let k = 0; k < mu.length / MOBJ_WORDS; k++) {
+    const o = k * MOBJ_WORDS;
+    mu[o + 23] = 0;
+    if (!mu[o + 24] || (mu[o + 14] & MF.NOBLOCKMAP)) continue;
+    const bx = Math.floor((mf[o] - map.bmap.x) / 128), by = Math.floor((mf[o + 1] - map.bmap.y) / 128);
+    if (bx < 0 || by < 0 || bx >= map.bmap.w || by >= map.bmap.h) continue;
+    const c = heads + by * map.bmap.w + bx;
+    mu[o + 23] = ls[c]; ls[c] = k + 1;
+  }
+}
 
 export function freshPlayer() {
   return { health: 100, armor: 0, armortype: 0, weapons: 0b11, readyweapon: 1, ammo: [50, 0, 0, 0], maxammo: [200, 50, 300, 50], backpack: 0 };
@@ -174,9 +190,11 @@ export class Engine {
     });
 
     // line specials and side textures
-    const ls = new Uint32Array(map.lines.length + 3 * map.sides.length);
+    // line specials, side textures, then one head per blockmap cell for the things in it
+    const ls = new Uint32Array(map.lines.length + 3 * map.sides.length + map.bmap.w * map.bmap.h);
     map.lines.forEach((l, i) => { ls[i] = l.special; });
     map.sides.forEach((s, i) => { const o = map.lines.length + 3 * i; ls[o] = s.top; ls[o + 1] = s.bottom; ls[o + 2] = s.mid; });
+    linkBlocks(map, new Uint32Array(mobjs.buf), ls);
 
     const mi = new Int32Array(mobjs.buf);
     let kills = 0, items = 0;
@@ -304,6 +322,13 @@ export class Engine {
   // After loadMap(st.map): put a saved level's state back. False if the buffers don't fit (another WAD).
   restore(st) {
     const parts = { sec: this.secBuf, mobj: this.mobjBuf, ls: this.lsBuf, world: this.worldBuf };
+    // a save from before the blockmap lists has a shorter line buffer: pad it and link the things again
+    if (st.ls && st.ls.byteLength < parts.ls.size && st.mobj?.byteLength === parts.mobj.size) {
+      const ls = new Uint32Array(parts.ls.size / 4); ls.set(new Uint32Array(st.ls));
+      const mu = new Uint32Array(st.mobj.slice(0));
+      linkBlocks(this.map, mu, ls);
+      st = { ...st, ls: ls.buffer, mobj: mu.buffer };
+    }
     for (const [k, b] of Object.entries(parts)) if (!st[k] || st[k].byteLength !== b.size) return false;
     for (const [k, b] of Object.entries(parts)) this.device.queue.writeBuffer(b, 0, st[k]);
     // a save from before the thinker order was kept has zeros there: use this level's

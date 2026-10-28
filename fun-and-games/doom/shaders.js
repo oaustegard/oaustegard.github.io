@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028045947";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028045947";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028050304";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028050304";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -94,7 +94,7 @@ struct Mobj {
   ceilingz: f32, radius: f32, height: f32, mtype: u32,
   state: u32, tics: i32, flags: u32, health: i32,
   sector: u32, targ: i32, tracer: i32, movedir: i32,
-  movecount: i32, reactiontime: i32, threshold: i32, lastlook: i32,
+  movecount: i32, reactiontime: i32, threshold: i32, bnext: i32,   // next thing in its blockmap cell, +1 (0 ends)
   inuse: u32, dropoffz: f32, req: u32, seeplayer: u32,
   px: f32, py: f32, pz: f32, spawnidx: u32, // position at the previous tic; map thing it spawned from
 }
@@ -775,8 +775,20 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
   numspechit = 0u;
   if ((me.flags & MF_NOCLIP) != 0u) { return true; }
   // things (PIT_CheckThing)
-  let jend = mobjEnd();
-  for (var j = 0u; j < jend; j++) {
+  let tx0 = max(i32(floor((lo.x - BM_X - 32.0) / 128.0)), 0); let tx1 = min(i32(floor((hi.x - BM_X + 32.0) / 128.0)), BM_W - 1);
+  let ty0 = max(i32(floor((lo.y - BM_Y - 32.0) / 128.0)), 0); let ty1 = min(i32(floor((hi.y - BM_Y + 32.0) / 128.0)), BM_H - 1);
+  let ncell = max(tx1 - tx0 + 1, 0) * max(ty1 - ty0 + 1, 0);
+  var cellk = 0; var cur = 0u;
+  for (var guard = 0; guard < 8192; guard++) {
+    if (cur == 0u) {
+      if (cellk >= ncell) { break; }
+      let bx = tx0 + cellk / (ty1 - ty0 + 1); let by = ty0 + cellk % (ty1 - ty0 + 1);
+      cellk += 1;
+      cur = LS[BLOCKHEADS + u32(by * BM_W + bx)];
+      continue;
+    }
+    let j = cur - 1u;
+    cur = u32(O[j].bnext);
     if (j == mi || O[j].inuse == 0u || (O[j].flags & (MF_SOLID | MF_SPECIAL | MF_SHOOTABLE)) == 0u) { continue; }
     let pre = O[j].radius + r - 1.0 / 4096.0;
     if (abs(O[j].x - pos.x) >= pre || abs(O[j].y - pos.y) >= pre) { continue; }
@@ -863,7 +875,9 @@ fn tryMove(mi: u32, pos: vec2f) -> bool {
   }
   let old = vec2f(me.x, me.y);
   O[mi].floorz = tmfloorz; O[mi].ceilingz = tmceilingz; O[mi].dropoffz = tmdropoffz;
+  unlinkThing(mi);
   O[mi].x = pos.x; O[mi].y = pos.y;
+  linkThing(mi);
   O[mi].sector = sectorAt(pos);
   if ((me.flags & (MF_TELEPORT | MF_NOCLIP)) == 0u) {
     let n = numspechit;
@@ -1055,7 +1069,7 @@ fn thingXY(mi: u32) {
         // hitting a sky wall makes the missile vanish instead of exploding
         if (tmceilline >= 0) {
           let bk = lineBack(u32(tmceilline));
-          if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { O[mi].inuse = 0u; return; }
+          if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { removeMobj(mi); return; }
         }
         explodeMissile(mi);
       } else {
@@ -1157,7 +1171,7 @@ fn changeSector(sec: u32, crush: bool) -> bool {
     if (cz - fz >= O[j].height) { continue; }
     // doesn't fit: corpses turn to gibs, dropped items vanish
     if (O[j].health <= 0 && j != 0u) { O[j].req = S_GIBS; O[j].flags &= ~MF_SOLID; O[j].height = 0.0; O[j].radius = 0.0; continue; }
-    if ((O[j].flags & MF_DROPPED) != 0u) { O[j].inuse = 0u; continue; }
+    if ((O[j].flags & MF_DROPPED) != 0u) { removeMobj(j); continue; }
     if ((O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
     nofit = true;
     if (crush && (P.leveltime & 3u) == 0u) { damageMobj(j, -1, -1, 10); }
@@ -1645,7 +1659,9 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
         }
       }
       let dsec = sectorAt(dest);
+      unlinkThing(mi);
       O[mi].x = dest.x; O[mi].y = dest.y; O[mi].sector = dsec;
+      linkThing(mi);
       O[mi].floorz = S[dsec].floorh; O[mi].ceilingz = S[dsec].ceilh; O[mi].dropoffz = S[dsec].floorh;
       O[mi].z = O[mi].floorz;
       if (mi == 0u) { P.viewz = O[mi].z + P.viewheight; }
@@ -1909,7 +1925,7 @@ fn touchSpecialThing(sp: u32, toucher: u32) {
   }
   if (msg != 0) { setMessage(msg); }
   if ((O[sp].flags & MF_COUNTITEM) != 0u) { P.itemcount += 1; }
-  O[sp].inuse = 0u;
+  removeMobj(sp);
   P.bonuscount += 6;
   mobjSound(0u, sound);
 }
@@ -1928,6 +1944,38 @@ fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
 // loops over things stop at the highest slot in use (a save from before this was kept has 0)
 fn mobjEnd() -> u32 { return select(min(P.mobjtop, MAXMOBJS), MAXMOBJS, P.mobjtop == 0u); }
 fn mpos(i: u32) -> vec2f { return vec2f(O[i].x, O[i].y); }
+
+// ---- blocklinks (P_SetThingPosition / P_UnsetThingPosition): each blockmap cell keeps a list of
+// the things in it, newest first, so collision looks only at the cells around a move, in DOOM's order.
+// The heads live in LS after the side textures, as thing index + 1 (0 is empty).
+const BLOCKHEADS = NUMLINES + 3u * NUMSIDES;
+fn blockCell(p: vec2f) -> i32 {
+  let bx = i32(floor((p.x - BM_X) / 128.0)); let by = i32(floor((p.y - BM_Y) / 128.0));
+  if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { return -1; }
+  return by * BM_W + bx;
+}
+fn unlinkThing(mi: u32) {
+  if ((O[mi].flags & MF_NOBLOCKMAP) != 0u) { return; }
+  let c = blockCell(mpos(mi));
+  if (c < 0) { return; }
+  let h = BLOCKHEADS + u32(c);
+  if (LS[h] == mi + 1u) { LS[h] = u32(O[mi].bnext); return; }
+  var cur = LS[h];
+  for (var guard = 0; guard < 4096 && cur != 0u; guard++) {
+    let nx = u32(O[cur - 1u].bnext);
+    if (nx == mi + 1u) { O[cur - 1u].bnext = O[mi].bnext; return; }
+    cur = nx;
+  }
+}
+fn linkThing(mi: u32) {
+  O[mi].bnext = 0;
+  if ((O[mi].flags & MF_NOBLOCKMAP) != 0u) { return; }
+  let c = blockCell(mpos(mi));
+  if (c < 0) { return; }
+  let h = BLOCKHEADS + u32(c);
+  O[mi].bnext = i32(LS[h]); LS[h] = mi + 1u;
+}
+fn removeMobj(mi: u32) { unlinkThing(mi); O[mi].inuse = 0u; }
 
 // ---- sight (P_CheckSight): REJECT, then DOOM's walk of the BSP from eye to target (p_sight.c).
 // P_DivlineSide with its integer-truncated products and its x == node->y slip, kept as vanilla has them.
@@ -2049,10 +2097,12 @@ fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
     m.floorz = S[m.sector].floorh; m.ceilingz = S[m.sector].ceilh;
     m.z = z;
     if (z == ONFLOORZ) { m.z = m.floorz; }
-    m.targ = -1; m.tracer = -1; m.movedir = 0; // DI_EAST, as P_SpawnMobj's zeroed mobj has it m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
+    m.targ = -1; m.tracer = -1; m.reactiontime = select(gi(mi + 5u), 0, P.skill == 4);
+    m.movedir = 0; // DI_EAST, as P_SpawnMobj's zeroed mobj has it
     m.req = NOREQ; m.inuse = 1u; m.spawnidx = NOREQ;
     m.px = m.x; m.py = m.y; m.pz = m.z;
     O[j] = m;
+    linkThing(j);
     return i32(j);
   }
   return -1;
@@ -2605,7 +2655,7 @@ fn callAction(mi: u32, act: u32) {
 fn setMobjState(mi: u32, st0: u32) -> bool {
   var st = st0;
   for (var guard = 0; guard < 32; guard++) {
-    if (st == S_NULL) { O[mi].inuse = 0u; return false; }
+    if (st == S_NULL) { removeMobj(mi); return false; }
     O[mi].state = st;
     O[mi].tics = gi(G_STATES + 8u * st + 2u);
     // Nightmare: demons run and bite at double speed (DOOM halves these states' tics)
@@ -2639,7 +2689,7 @@ fn nightmareRespawn(mi: u32) {
     if ((M[t + 3u] & 8u) != 0u) { O[n].flags |= MF_AMBUSH; }
     O[n].reactiontime = 18;
   }
-  O[mi].inuse = 0u;
+  removeMobj(mi);
 }
 
 fn mobjThink(mi: u32) {
