@@ -116,9 +116,18 @@
       <input id="pollUrl" type="text" placeholder="https://bsky.app/profile/…/post/…" autocapitalize="none" spellcheck="false">
       <button type="submit">Count</button>
     </form>
-    <p class="hint">Paste the link to the question post. Counting reads public data, so no sign-in is needed.</p>
+    <p class="hint">Paste the link to the question post. Counting reads public data, so no sign-in is needed.
+      To open a count directly, add <code>?poll=</code> and the post link to this page’s address.</p>
     <div class="msg" id="resultsMsg"></div>
     <div id="resultsOut"></div>
+    <div id="resultsActions" class="hidden">
+      <div class="actions">
+        <button class="ghost" id="copyResultsBtn" type="button">Copy results link</button>
+        <button id="postResultsBtn" type="button">Post results to the thread</button>
+      </div>
+      <p class="hint" id="resultsHint"></p>
+      <div class="msg" id="resultsPostMsg"></div>
+    </div>
   </section>
 </main>
 
@@ -135,10 +144,37 @@ const VIA = 'via Like Poll';
 const rootText = (q, n, via) =>
   `${q.trim()}\n\n🗳️ Poll: open the thread and ♥ like ONE reply to vote.\n🧵 ${n} options below 👇` + (via ? `\n\n${VIA}` : '');
 const optionText = (i, label) => `${KEYCAPS[i]} ${label.trim()}\n\n♥ like to vote`;
+const RESULTS_HEAD = '📊 Results';
+const LIVE = 'Live count';
 
-// Link facets: bare URLs anywhere, plus "Like Poll" in the trailing credit line.
+function clip(s, max) {
+  const g = [...segmenter.segment(s)].map(x => x.segment);
+  return g.length <= max ? s : g.slice(0, max - 1).join('') + '…';
+}
+
+// The results reply: one line per option. To fit 300 graphemes it shortens labels
+// to 12, then drops the double-liker note, then the percentages, then shortens further.
+function resultsText({ rows, total, multi }) {
+  const build = (max, note, pct) => {
+    const lines = rows.map((r, i) => `${KEYCAPS[i]} ${clip(r.label, max)}: ${r.votes}` +
+      (pct && total ? ` (${Math.round((100 * r.votes) / total)}%)` : ''));
+    const n = note && multi ? `\n\n${multi} account${multi === 1 ? '' : 's'} liked more than one option and ${multi === 1 ? 'is' : 'are'} not counted.` : '';
+    return `${RESULTS_HEAD} so far: ${total} vote${total === 1 ? '' : 's'}\n\n${lines.join('\n')}${n}\n\n${LIVE}`;
+  };
+  // Labels keep at least 12 graphemes until the note and percentages are gone.
+  for (const [note, pct, floor] of [[true, true, 12], [false, true, 12], [false, false, 12], [false, false, 4]]) {
+    for (let max = 80; max >= floor; max = max > 20 ? max - 4 : max - 1) {
+      const t = build(max, note, pct);
+      if (graphemes(t) <= MAX_GRAPHEMES) return t;
+    }
+  }
+  return build(4, false, false);
+}
+
+// Link facets: bare URLs anywhere, plus `tail.text` at the very end linked to
+// `tail.uri` (the "Like Poll" credit, the "Live count" link on a results post).
 // Facet offsets are UTF-8 byte offsets, not string indexes.
-function facetsFor(text, via) {
+function facetsFor(text, tail) {
   const enc = new TextEncoder();
   const bytes = i => enc.encode(text.slice(0, i)).length;
   const link = (start, end, uri) => ({
@@ -150,12 +186,14 @@ function facetsFor(text, via) {
     const url = m[0].replace(/[.,;:!?)\]'"’]+$/, '');
     facets.push(link(m.index, m.index + url.length, url));
   }
-  if (via) facets.push(link(text.length - 'Like Poll'.length, text.length, BUILDER_URL));
+  if (tail) facets.push(link(text.length - tail.text.length, text.length, tail.uri));
   return facets;
 }
 
-function postRecord(text, via, extra = {}) {
-  const facets = facetsFor(text, via);
+const CREDIT = { text: 'Like Poll', uri: BUILDER_URL };
+
+function postRecord(text, tail, extra = {}) {
+  const facets = facetsFor(text, tail);
   return { $type: 'app.bsky.feed.post', text, createdAt: new Date().toISOString(),
     langs: [(navigator.language || 'en').split('-')[0]], ...(facets.length ? { facets } : {}), ...extra };
 }
@@ -293,14 +331,14 @@ async function postPoll() {
   const via = $('addLink').checked;
   const created = [];
   try {
-    const root = await createRecord('app.bsky.feed.post', postRecord(rootText(question, options.length, via), via));
+    const root = await createRecord('app.bsky.feed.post', postRecord(rootText(question, options.length, via), via ? CREDIT : null));
     created.push(root);
     // Every option replies to the question directly, so each sits one level under it.
     const ref = { uri: root.uri, cid: root.cid };
     for (let i = 0; i < options.length; i++) {
       msg.textContent = `Posting option ${i + 1} of ${options.length}…`;
       created.push(await createRecord('app.bsky.feed.post',
-        postRecord(optionText(i, options[i]), false, { reply: { root: ref, parent: ref } })));
+        postRecord(optionText(i, options[i]), null, { reply: { root: ref, parent: ref } })));
     }
     // Gate after the options exist, so the gate can never get in the author's own way.
     if ($('lockReplies').checked) {
@@ -378,24 +416,32 @@ async function pollFromRepo(uri) {
   const [, did, , rkey] = uri.slice('at://'.length).match(/^([^/]+)(\/app\.bsky\.feed\.post\/)([^/]+)$/) || [];
   if (!did) throw new Error('That does not look like a Bluesky post link');
   const pds = await resolvePds(did);
-  let question;
+  let root;
   try {
-    question = (await xrpc(pds, 'com.atproto.repo.getRecord', { params: { repo: did, collection: 'app.bsky.feed.post', rkey } })).value.text;
+    root = await xrpc(pds, 'com.atproto.repo.getRecord', { params: { repo: did, collection: 'app.bsky.feed.post', rkey } });
   } catch {
     throw new Error('Post not found');
   }
-  const { records } = await xrpc(pds, 'com.atproto.repo.listRecords',
-    { params: { repo: did, collection: 'app.bsky.feed.post', limit: 50, reverse: true, cursor: rkey } });
+  // Options sit in the first page; later pages only catch an earlier results post
+  // that is to be replaced.
   const found = [];
-  for (const r of records) {
-    if (r.value.reply?.root?.uri !== uri) continue;
-    const text = r.value.text || '';
-    const i = optionIndex(text);
-    if (i >= 0 && !found[i]) found[i] = { uri: r.uri, label: text.slice(KEYCAPS[i].length).split('\n')[0].trim() };
+  const results = [];
+  let cursor = rkey;
+  for (let page = 0; page < 4 && cursor; page++) {
+    const res = await xrpc(pds, 'com.atproto.repo.listRecords',
+      { params: { repo: did, collection: 'app.bsky.feed.post', limit: 100, reverse: true, cursor } });
+    for (const r of res.records) {
+      if (r.value.reply?.root?.uri !== uri) continue;
+      const text = r.value.text || '';
+      if (text.startsWith(RESULTS_HEAD)) { results.push(r.uri); continue; }
+      const i = optionIndex(text);
+      if (i >= 0 && !found[i]) found[i] = { uri: r.uri, label: text.slice(KEYCAPS[i].length).split('\n')[0].trim() };
+    }
+    cursor = res.records.length === 100 ? res.cursor : null;
   }
   const options = [];
   for (let i = 0; found[i]; i++) options.push(found[i]);
-  return { question: question.split('\n')[0], options };
+  return { did, cid: root.cid, question: root.value.text.split('\n')[0], options, results };
 }
 
 async function countResults(input) {
@@ -404,9 +450,12 @@ async function countResults(input) {
   msg.className = 'msg';
   msg.textContent = 'Counting…';
   out.innerHTML = '';
+  lastCount = null;
+  renderResultActions();
+  $('resultsPostMsg').textContent = '';
   try {
     const uri = await toAtUri(input);
-    const { question, options } = await pollFromRepo(uri);
+    const { did, cid, question, options, results } = await pollFromRepo(uri);
     if (options.length < 2) throw new Error('No numbered option replies found under that post. Paste the link to the question post.');
 
     msg.textContent = `Counting likes on ${options.length} options…`;
@@ -436,9 +485,68 @@ async function countResults(input) {
     msg.textContent = `${total} vote${total === 1 ? '' : 's'} from ${seen.size} account${seen.size === 1 ? '' : 's'}.` +
       (multi.size ? ` ${multi.size} account${multi.size === 1 ? '' : 's'} liked more than one option; Votes leaves them out, Likes keeps them.` : '') +
       (partial ? ' The like index was unreachable, so these counts come from Bluesky and may miss likers who hide their account from logged-out viewers.' : '');
+
+    const postLink = `https://bsky.app/profile/${did}/post/${rkeyOf(uri)}`;
+    const shareUrl = `${BUILDER_URL}?poll=${encodeURIComponent(postLink)}`;
+    try { history.replaceState(null, '', `?poll=${encodeURIComponent(postLink)}`); } catch {}
+    lastCount = { uri, cid, did, rows, total, multi: multi.size, results, shareUrl };
+    renderResultActions();
   } catch (e) {
     msg.className = 'msg bad';
     msg.textContent = e.message;
+  }
+}
+
+let lastCount = null;
+
+function renderResultActions() {
+  const c = lastCount;
+  $('resultsActions').classList.toggle('hidden', !c);
+  if (!c) return;
+  const isAuthor = session?.did === c.did;
+  $('postResultsBtn').classList.toggle('hidden', !isAuthor);
+  $('postResultsBtn').textContent = c.results.length ? 'Replace the results post in the thread' : 'Post results to the thread';
+  $('resultsHint').textContent = isAuthor
+    ? 'Posts the counts as a reply to the question, with a link back to the live count. Posting again deletes the earlier results post first.'
+    : 'Sign in above as the poll’s author to post these results to the thread.';
+}
+
+async function postResults() {
+  const c = lastCount;
+  const m = $('resultsPostMsg');
+  const btn = $('postResultsBtn');
+  btn.disabled = true;
+  m.className = 'msg';
+  m.textContent = 'Posting results…';
+  try {
+    const ref = { uri: c.uri, cid: c.cid };
+    const r = await createRecord('app.bsky.feed.post',
+      postRecord(resultsText(c), { text: LIVE, uri: c.shareUrl }, { reply: { root: ref, parent: ref } }));
+    // The new post goes up first, so a failed delete leaves two results posts, not none.
+    for (const old of c.results) {
+      await authed('com.atproto.repo.deleteRecord', { repo: session.did, collection: 'app.bsky.feed.post', rkey: rkeyOf(old) });
+    }
+    c.results = [r.uri];
+    m.className = 'msg ok';
+    m.innerHTML = `Results posted. <a href="${webUrl(r.uri, session.handle)}" target="_blank" rel="noopener">Open it on Bluesky</a>`;
+  } catch (e) {
+    m.className = 'msg bad';
+    m.textContent = `Posting results failed: ${e.message}`;
+  } finally {
+    btn.disabled = false;
+    renderResultActions();
+  }
+}
+
+async function copyResultsLink() {
+  const m = $('resultsPostMsg');
+  try {
+    await navigator.clipboard.writeText(lastCount.shareUrl);
+    m.className = 'msg ok';
+    m.textContent = 'Results link copied.';
+  } catch {
+    m.className = 'msg';
+    m.textContent = lastCount.shareUrl;
   }
 }
 
@@ -447,6 +555,7 @@ function showSignedIn() {
   $('login').classList.toggle('hidden', !!session);
   $('builder').classList.toggle('hidden', !session);
   if (session) $('whoami').textContent = `@${session.handle}`;
+  renderResultActions();
 }
 
 $('loginForm').addEventListener('submit', async e => {
@@ -478,6 +587,8 @@ $('question').addEventListener('input', render);
 $('addLink').addEventListener('change', render);
 $('addOpt').addEventListener('click', () => addOption());
 $('postBtn').addEventListener('click', postPoll);
+$('postResultsBtn').addEventListener('click', postResults);
+$('copyResultsBtn').addEventListener('click', copyResultsLink);
 $('resultsForm').addEventListener('submit', e => { e.preventDefault(); countResults($('pollUrl').value); });
 
 addOption();

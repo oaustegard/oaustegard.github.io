@@ -55,6 +55,36 @@ a post. If it is unreachable the page falls back to Bluesky's logged-out
 `getLikes`, says so, and warns that the count may miss likers who hide their
 account from logged-out viewers.
 
+## Sharing and posting results
+
+`?poll=<post link>` on this page's address opens a count directly, for example
+`like-poll.html?poll=https%3A%2F%2Fbsky.app%2Fprofile%2F…%2Fpost%2F…`. Every
+count also writes that link into the address bar and offers a **Copy results
+link** button.
+
+When the poll's author is signed in, the count gets a **Post results to the
+thread** button. It posts a reply to the question:
+
+```
+📊 Results so far: 4 votes
+
+1️⃣ Tacos: 3 (75%)
+2️⃣ Pho: 1 (25%)
+
+1 account liked more than one option and is not counted.
+
+Live count
+```
+
+"Live count" links to the `?poll=` page. The counter skips replies starting
+with `📊 Results`, so the post never counts as an option. Posting again
+replaces the earlier results post: the new one goes up first, then the old one
+is deleted, so a failure leaves two results posts rather than none. To stay
+within 300 characters the post shortens option labels to 12 characters, then
+drops the double-liker note, then the percentages, then shortens labels
+further. Because the results post replies to the question, Bluesky shows it
+among the options.
+
 ## Limits
 
 - Sign-in uses an app password through `com.atproto.server.createSession`
@@ -77,7 +107,13 @@ written (root, three replies whose `root` and `parent` are both the question,
 and the threadgate keyed to the root's rkey). It then counts a mocked repo listing in which one
 account liked two options, one option's likers span two pages, and one
 option's Constellation lookup fails so the `getLikes` fallback runs, and
-checks both columns, for both the current layout and the chained one. It
+checks both columns, for both the current layout and the chained one. As the
+poll's author it then posts the results and checks the reply's text, its
+reply refs, the "Live count" link and its byte offsets, that the earlier
+results post was deleted, and that the count reached the address bar as
+`?poll=`. It also checks that ten long options with four-digit counts fit in
+300 characters, and that someone signed in as another account gets no post
+button. It
 also checks the facet byte offsets for the credit link and for a URL with a
 non-ASCII character. It passes. The real PDS, Constellation and `getLikes`
 endpoints were checked by hand for response shape and CORS. Run against the first live poll, the

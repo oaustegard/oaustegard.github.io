@@ -8,12 +8,14 @@ const assert = require('assert');
 
 const DID = 'did:plc:testuser000000000000000';
 const PDS = 'https://pds.example.com';
+const graphemes0 = s => [...new Intl.Segmenter().segment(s)].length;
 const json = (route, body, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
 (async () => {
   const browser = await chromium.launch();
   const page = await browser.newPage();
   const writes = [];
+  const deletes = [];
   let n = 0;
   await page.route('**/*', async route => {
     const url = new URL(route.request().url());
@@ -26,6 +28,10 @@ const json = (route, body, status = 200) => route.fulfill({ status, contentType:
       assert.equal(b.identifier, DID); assert.equal(b.password, 'abcd-efgh-ijkl-mnop');
       return json(route, { did: DID, handle: 'tester.bsky.social', accessJwt: 'A', refreshJwt: 'R' });
     }
+    if (nsid === 'com.atproto.repo.deleteRecord') {
+      deletes.push(JSON.parse(route.request().postData()));
+      return json(route, {});
+    }
     if (nsid === 'com.atproto.repo.createRecord') {
       assert.equal(route.request().headers().authorization, 'Bearer A');
       const b = JSON.parse(route.request().postData());
@@ -35,7 +41,7 @@ const json = (route, body, status = 200) => route.fulfill({ status, contentType:
     }
     if (nsid === 'com.atproto.repo.getRecord') {
       assert.equal(url.origin, PDS);
-      return json(route, { uri: `at://${DID}/app.bsky.feed.post/${url.searchParams.get('rkey')}`, value: { text: 'Lunch?\n\n🗳️ Poll…' } });
+      return json(route, { uri: `at://${DID}/app.bsky.feed.post/${url.searchParams.get('rkey')}`, cid: `cid-${url.searchParams.get('rkey')}`, value: { text: 'Lunch?\n\n🗳️ Poll…' } });
     }
     if (nsid === 'com.atproto.repo.listRecords') {
       // Options in the repo after the question: rk0 has direct replies, chain0 the first
@@ -51,6 +57,7 @@ const json = (route, body, status = 200) => route.fulfill({ status, contentType:
         rec('rk3', labels[2] + '\n\n♥ like to vote', root === 'chain0' ? `at://${DID}/app.bsky.feed.post/rk2` : rootUri),
         rec('rk1', labels[0] + '\n\n♥ like to vote', rootUri),
         rec('rk2', labels[1] + '\n\n♥ like to vote', root === 'chain0' ? `at://${DID}/app.bsky.feed.post/rk1` : rootUri),
+        rec('rkR', '📊 Results so far: 1 vote\n\n…', rootUri),
       ];
       return json(route, { records });
     }
@@ -123,6 +130,31 @@ const json = (route, body, status = 200) => route.fulfill({ status, contentType:
   assert.match(await page.textContent('#resultsMsg'), /4 votes from 5 accounts\. 1 account liked more than one option.*may miss likers/);
   assert.equal(await page.textContent('#resultsOut .question'), 'Lunch?');
   await page.screenshot({ path: path.join(require('os').tmpdir(), 'like-poll-results.png'), fullPage: true });
+
+  // The count lands in the address bar as ?poll=, and the author can post it.
+  const pollLink = `https://bsky.app/profile/${DID}/post/rk0`;
+  assert.equal(new URL(page.url()).searchParams.get('poll'), pollLink);
+  assert.equal(await page.textContent('#postResultsBtn'), 'Replace the results post in the thread');
+  const before = writes.length;
+  await page.click('#postResultsBtn');
+  await page.waitForSelector('#resultsPostMsg.ok');
+  const res = writes[before];
+  assert.equal(res.collection, 'app.bsky.feed.post');
+  assert.equal(res.record.text, '📊 Results so far: 4 votes\n\n1️⃣ Tacos: 3 (75%)\n2️⃣ Pho: 1 (25%)\n3️⃣ Salad: 0 (0%)\n\n1 account liked more than one option and is not counted.\n\nLive count');
+  assert.deepEqual(res.record.reply, { root: { uri: `at://${DID}/app.bsky.feed.post/rk0`, cid: 'cid-rk0' }, parent: { uri: `at://${DID}/app.bsky.feed.post/rk0`, cid: 'cid-rk0' } });
+  const live = res.record.facets.find(f => f.features[0].uri.includes('?poll='));
+  assert.equal(live.features[0].uri, 'https://austegard.com/bsky/like-poll.html?poll=' + encodeURIComponent(pollLink));
+  assert.equal(Buffer.from(res.record.text, 'utf8').subarray(live.index.byteStart, live.index.byteEnd).toString(), 'Live count');
+  assert.deepEqual(deletes, [{ repo: DID, collection: 'app.bsky.feed.post', rkey: 'rkR' }], 'earlier results post deleted');
+
+  // Ten long options still fit in one post.
+  const long = await page.evaluate(() => resultsText({ rows: Array.from({ length: 10 }, (_, i) => ({ label: 'An option label that goes on and on and on '.repeat(3) + i, votes: 1234 })), total: 12340, multi: 12 }));
+  assert(graphemes0(long) <= 300, 'results post over 300 graphemes: ' + graphemes0(long));
+  assert(long.endsWith('Live count'));
+
+  // Someone else signed in sees no post button.
+  await page.evaluate(() => { session.did = 'did:plc:someoneelse'; renderResultActions(); });
+  assert(await page.isHidden('#postResultsBtn'));
 
   // The counter still reads a poll posted as a reply chain.
   await page.fill('#pollUrl', `at://${DID}/app.bsky.feed.post/chain0`);
