@@ -3,8 +3,8 @@
 // (geometry, BSP, blockmap) once per level. Texels are u16 pairs: palette
 // index | 0x100 when opaque, 0 when transparent.
 
-import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028050304";
-import { packSpecials, MESSAGES } from "./specials.js?v=20261028050304";
+import { SPRNAMES, STATES, MOBJINFO, MT, MF } from "./info.js?v=20261028051304";
+import { packSpecials, MESSAGES } from "./specials.js?v=20261028051304";
 
 const td = new TextDecoder("ascii");
 const lumpName = (u8, o) => td.decode(u8.subarray(o, o + 8)).replace(/\0.*$/, "").toUpperCase();

@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028050304";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028050304";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028051304";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028051304";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -95,7 +95,7 @@ struct Mobj {
   state: u32, tics: i32, flags: u32, health: i32,
   sector: u32, targ: i32, tracer: i32, movedir: i32,
   movecount: i32, reactiontime: i32, threshold: i32, bnext: i32,   // next thing in its blockmap cell, +1 (0 ends)
-  inuse: u32, dropoffz: f32, req: u32, seeplayer: u32,
+  inuse: u32, dropoffz: f32, req: u32, pend: u32, // pend: tics a death takes off (P_KillMobj, + 1), or 0x100 to draw that after the state (P_ExplodeMissile)
   px: f32, py: f32, pz: f32, spawnidx: u32, // position at the previous tic; map thing it spawned from
 }
 struct World {
@@ -829,17 +829,21 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
   // lines via the blockmap
   let x0 = max(i32(floor((lo.x - BM_X) / 128.0)), 0); let x1 = min(i32(floor((hi.x - BM_X) / 128.0)), BM_W - 1);
   let y0 = max(i32(floor((lo.y - BM_Y) / 128.0)), 0); let y1 = min(i32(floor((hi.y - BM_Y) / 128.0)), BM_H - 1);
-  for (var by = y0; by <= y1; by++) {
-    for (var bx = x0; bx <= x1; bx++) {
+  // P_CheckPosition's order: columns of blocks, each block's list from its first entry. Every vanilla
+  // list starts with line 0, so line 0 is tested first (validcount keeps it to once).
+  var line0 = x0 <= x1 && y0 <= y1;
+  for (var bx = x0; bx <= x1; bx++) {
+    for (var by = y0; by <= y1; by++) {
       let cell = M_BMCELL + 2u * u32(by * BM_W + bx);
       let start = M[cell]; let n = M[cell + 1u];
-      for (var k = 0u; k < n; k++) {
-        let l = M[M_BMLIST + start + k];
+      for (var k = 0u; k <= n; k++) {
+        var l = 0u;
+        if (k == 0u) { if (!line0) { continue; } line0 = false; } else { l = M[M_BMLIST + start + k - 1u]; }
         let a = lineA(l); let b = lineB(l);
         if (hi.x <= min(a.x, b.x) || lo.x >= max(a.x, b.x) || hi.y <= min(a.y, b.y) || lo.y >= max(a.y, b.y)) { continue; }
         if (boxOnLineSide(lo, hi, l) != -1) { continue; }
         let back = lineBack(l);
-        if (back < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { tmblockline = i32(l); tmceilline = i32(l); return false; }
+        if (back < 0) { tmblockline = i32(l); tmceilline = i32(l); return false; }
         if ((me.flags & MF_MISSILE) == 0u) {
           if ((lineFlags(l) & ML_BLOCKING) != 0u) { tmblockline = i32(l); return false; }
           if (mi != 0u && (lineFlags(l) & ML_BLOCKMONSTERS) != 0u) { tmblockline = i32(l); return false; }
@@ -1042,6 +1046,7 @@ fn playerXY(hasCmd: bool) {
 fn explodeMissile(mi: u32) {
   O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
   O[mi].req = u32(info(O[mi].mtype, MI_DEATHSTATE));
+  O[mi].pend = 0x100u;
   O[mi].flags &= ~MF_MISSILE;
   let s = info(O[mi].mtype, MI_DEATHSOUND);
   if (s != 0) { mobjSound(mi, u32(s)); }
@@ -2169,6 +2174,8 @@ fn killMobj(source: i32, tgt: u32) {
   let xd = info(ty, MI_XDEATHSTATE);
   if (O[tgt].health < -info(ty, MI_SPAWNHEALTH) && xd != 0) { O[tgt].req = u32(xd); }
   else { O[tgt].req = u32(info(ty, MI_DEATHSTATE)); }
+  // P_KillMobj takes 0-3 tics off the death state, drawn now; the state itself is set at the next think
+  O[tgt].pend = u32(P_Random() & 3) + 1u;
   var item = -1;
   if (ty == MT_WOLFSS || ty == MT_POSSESSED) { item = i32(MT_CLIP); }
   else if (ty == MT_SHOTGUY) { item = i32(MT_SHOTGUN); }
@@ -2375,8 +2382,10 @@ fn checkMissileRange(mi: u32) -> bool {
 }
 
 fn dirVec(d: i32) -> vec2f {
-  var v = array<vec2f, 8>(vec2f(1.0, 0.0), vec2f(0.71716, 0.71716), vec2f(0.0, 1.0), vec2f(-0.71716, 0.71716),
-                          vec2f(-1.0, 0.0), vec2f(-0.71716, -0.71716), vec2f(0.0, -1.0), vec2f(0.71716, -0.71716));
+  // DOOM's xspeed/yspeed: the diagonal is 47000/65536 exactly, which keeps diagonal steps on its grid
+  const D = 47000.0 / 65536.0;
+  var v = array<vec2f, 8>(vec2f(1.0, 0.0), vec2f(D, D), vec2f(0.0, 1.0), vec2f(-D, D),
+                          vec2f(-1.0, 0.0), vec2f(-D, -D), vec2f(0.0, -1.0), vec2f(D, -D));
   return v[clamp(d, 0, 7)];
 }
 
@@ -2696,10 +2705,13 @@ fn mobjThink(mi: u32) {
   numcross = 0u;
   if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (O[mi].flags & MF_SKULLFLY) != 0u) { thingXY(mi); processCrossings(mi); }
   if (O[mi].inuse == 0u) { return; }
-  if (O[mi].req == NOREQ && (O[mi].z != O[mi].floorz || O[mi].momz != 0.0)) { zMovement(mi, false); }
+  if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, false); }
   if (O[mi].inuse == 0u) { return; }
   var next = NOREQ;
-  if (O[mi].req != NOREQ) { next = O[mi].req; }
+  // a state asked for from outside (damage, death, an explosion): DOOM had already set it, so after
+  // setting it here this think also counts its first tic, as P_MobjThinker would have
+  let outside = O[mi].req != NOREQ;
+  if (outside) { next = O[mi].req; }
   else if (O[mi].tics != -1) {
     O[mi].tics -= 1;
     if (O[mi].tics <= 0) { next = stateNext(O[mi].state); }
@@ -2720,7 +2732,20 @@ fn mobjThink(mi: u32) {
         if (k == 0) { sightPlayer = seen; } else { sightTarget = seen; }
       }
     }
-    _ = setMobjState(mi, next);
+  }
+  for (var pass2 = 0; pass2 < 2 && next != NOREQ; pass2++) {
+    if (!setMobjState(mi, next)) { return; }
+    next = NOREQ;
+    if (pass2 == 0 && outside) {
+      let pd = O[mi].pend;
+      O[mi].pend = 0u;
+      if (pd == 0x100u) { O[mi].tics = max(O[mi].tics - (P_Random() & 3), 1); }
+      else if (pd != 0u) { O[mi].tics = max(O[mi].tics - i32(pd - 1u), 1); }
+      if (O[mi].tics != -1) {
+        O[mi].tics -= 1;
+        if (O[mi].tics <= 0) { next = stateNext(O[mi].state); }
+      }
+    }
   }
   // lines a monster walked over in its chase (P_Move): teleporters, monster doors and lifts
   processCrossings(mi);
