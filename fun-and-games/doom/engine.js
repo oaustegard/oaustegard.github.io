@@ -13,7 +13,7 @@ export const W = { // World word offsets (see struct World)
   damagecount: 28, bonuscount: 29, attackdown: 30, usedown: 31, powers: 32, dead: 38, exit: 39,
   killcount: 40, itemcount: 41, secretcount: 42, message: 43, messagetics: 44, viscount: 45, sndcount: 46,
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
-  snd: 64, buttons: 192,
+  snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
 };
 
 export function freshPlayer() {
@@ -100,7 +100,7 @@ export class Engine {
     this.projectPipe = await mk("project");
     this.hudPipe = await mk("hud");
     this.ticPipes = [];
-    for (const k of ["ticPlayer", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
+    for (const k of ["ticPlayer", "ticSight", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
 
     // sectors with P_SpawnSpecials applied
     const ns = map.sectors.length;
@@ -115,7 +115,7 @@ export class Engine {
     map.sectors.forEach((s, i) => {
       const o = i * SECTOR_WORDS;
       sf[o] = s.floor; sf[o + 1] = s.ceil; su[o + 2] = s.floorpic; su[o + 3] = s.ceilpic;
-      si[o + 4] = s.light; si[o + 5] = s.special; si[o + 6] = s.tag;
+      si[o + 4] = s.light; si[o + 5] = s.special; si[o + 6] = s.tag; si[o + 27] = -1; // no sound target
       const light = (type, extra = {}) => { su[o + 20] = type; for (const [k, v] of Object.entries(extra)) si[o + Number(k)] = v; };
       switch (s.special) {
         case 1: light(1, { 23: s.light, 22: minLight(i, s.light), 21: (rnd() & 63) + 1 }); si[o + 5] = 0; break;
@@ -157,7 +157,7 @@ export class Engine {
     wu[W.weapons] = player.weapons; wi[W.readyweapon] = player.readyweapon; wi[W.pendingweapon] = -1; wu[W.backpack] = player.backpack;
     for (let k = 0; k < 4; k++) { wi[W.ammo + k] = player.ammo[k]; wi[W.maxammo + k] = player.maxammo[k]; }
     wi[W.totalkills] = kills; wi[W.totalitems] = items; wi[W.totalsecrets] = totalSecrets;
-    wi[W.fixedcolormap] = -1; wi[W.skill] = this.skill - 1;
+    wi[W.fixedcolormap] = -1; wi[W.skill] = this.skill - 1; wi[W.attacker] = -1;
     mi[15] = player.health; // player mobj health
 
     for (const b of [this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf]) b?.destroy();
@@ -187,15 +187,19 @@ export class Engine {
     const fu = new Uint32Array(16), ff = new Float32Array(fu.buffer);
     fu[0] = this.width; fu[1] = this.height; fu[2] = this.viewh; fu[3] = ++this.frameNo;
     // looking up and down shears the view: the horizon row moves, as in later source ports
-    const shear = Math.max(-0.45, Math.min(0.45, Math.tan(input.pitch || 0) * this.width / 2 / this.viewh)) * this.viewh;
-    ff[4] = this.width / 2; ff[5] = this.viewh / 2 + shear; ff[6] = this.width / 2;
+    // projection follows height (Doom's 160 at 200 rows), so a wider screen sees more to the sides
+    const proj = this.height * 0.8;
+    const shear = Math.max(-0.45, Math.min(0.45, Math.tan(input.pitch || 0) * proj / this.viewh)) * this.viewh;
+    ff[4] = this.width / 2; ff[5] = this.viewh / 2 + shear; ff[6] = proj;
     ff[8] = input.forward || 0; ff[9] = input.side || 0; ff[10] = input.turn || 0; ff[11] = input.mouseturn || 0;
     fu[12] = (input.fire ? 1 : 0) | (input.use ? 2 : 0); fu[13] = input.weapon || 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, fu);
     this.device.queue.writeBuffer(this.worldBuf, W.viscount * 4, new Uint32Array([0]));
     const pass = encoder.beginComputePass();
     pass.setBindGroup(0, this.bind);
-    for (let i = 0; i < tics; i++) for (const p of this.ticPipes) { pass.setPipeline(p); pass.dispatchWorkgroups(1); }
+    // ticSight is one thread per thing; the other tic kernels are single-threaded
+    const sightGroups = Math.ceil(this.maxMobjs / 64);
+    for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 1 ? sightGroups : 1); });
     pass.setPipeline(this.projectPipe);
     pass.dispatchWorkgroups(Math.ceil(this.maxMobjs / 64));
     pass.setPipeline(this.renderPipe);

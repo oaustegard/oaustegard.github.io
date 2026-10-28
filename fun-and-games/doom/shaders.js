@@ -18,7 +18,7 @@ import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
-export const WORLD_WORDS = 256;
+export const WORLD_WORDS = 320;
 export const MAXVIS = 256;
 
 const constBlock = (prefix, obj, type = "u32") =>
@@ -39,13 +39,15 @@ const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS
 const G_ANIMTEX = ${G.ANIMTEX}u; const G_ANIMFLAT = ${G.ANIMFLAT}u; const G_SWITCH = ${G.SWITCH}u;
 const G_MSGDIR = ${G.MSGDIR}u; const G_MSGCHARS = ${G.MSGCHARS}u;
 const M_VERT = ${M.VERT}u; const M_LINE = ${M.LINE}u; const M_SIDE = ${M.SIDE}u; const M_SEG = ${M.SEG}u; const M_SSEC = ${M.SSEC}u;
-const M_NODE = ${M.NODE}u; const M_BMCELL = ${M.BMCELL}u; const M_BMLIST = ${M.BMLIST}u; const M_SECLINE = ${M.SECLINE}u; const M_SECLIST = ${M.SECLIST}u;
+const M_NODE = ${M.NODE}u; const M_REJECT = ${M.REJECT}u; const M_BMCELL = ${M.BMCELL}u; const M_BMLIST = ${M.BMLIST}u; const M_SECLINE = ${M.SECLINE}u; const M_SECLIST = ${M.SECLIST}u;
 const NUMLINES = ${c.lines}u; const NUMSIDES = ${c.sides}u; const NUMSECTORS = ${c.sectors}u; const NUMNODES = ${c.nodes}u;
 const BM_X = ${map.bmap.x}.0; const BM_Y = ${map.bmap.y}.0; const BM_W = ${map.bmap.w}; const BM_H = ${map.bmap.h};
 const MAXMOBJS = ${maxMobjs}u; const MAXVIS = ${MAXVIS}u;
 const SKYFLAT = ${gfx.skyFlat}u; const SKYTEX = ${gfx.texIndex.get("SKY1") ?? 0}u;
 const NOTEX = 0xffffu;
 const WIDTH = ${width}u; const HEIGHT = ${height}u; const VIEWH = ${viewh}u;
+// the width a 4:3 screen of this height would have; wider screens see more to the sides
+const BASEW = ${(height * 1.6).toFixed(3)}; const BORDERFLAT = ${gfx.flatIndex.get("FLOOR7_2") ?? gfx.flatIndex.get("GRNROCK") ?? 0xffff}u;
 const FB_DEPTH = ${width * height}u; const FB_VIS = ${2 * width * height}u;
 const PI = 3.14159265358979;
 const TAU = 6.28318530717959;
@@ -54,8 +56,16 @@ ${constBlock("SPR_", spr)}
 ${constBlock("SFX_", sfx)}
 ${constBlock("MT_", MT)}
 ${constBlock("MF_", MF)}
-const S_NULL = 0u;
-const S_PLAY = ${ST.PLAY}u; const S_TFOG = ${ST.TFOG}u;
+${constBlock("S_", ST)}
+${constBlock("A_", Object.fromEntries(ACTIONS.map((n, i) => [n, i])))}
+const NOREQ = 0xffffffffu; const ONFLOORZ = -32768.0;
+const MELEERANGE = 64.0; const MISSILERANGE = 2048.0;
+const BAM18 = TAU / 16384.0; const BAM20 = TAU / 4096.0; const BAM21 = TAU / 2048.0; const BAM26 = TAU / 64.0;
+const MI_SPAWNSTATE = 1u; const MI_SPAWNHEALTH = 2u; const MI_SEESTATE = 3u; const MI_SEESOUND = 4u; const MI_ATTACKSOUND = 6u;
+const MI_PAINSTATE = 7u; const MI_PAINCHANCE = 8u; const MI_PAINSOUND = 9u; const MI_MELEESTATE = 10u; const MI_MISSILESTATE = 11u;
+const MI_DEATHSTATE = 12u; const MI_XDEATHSTATE = 13u; const MI_DEATHSOUND = 14u; const MI_SPEED = 15u; const MI_RADIUS = 16u;
+const MI_HEIGHT = 17u; const MI_MASS = 18u; const MI_DAMAGE = 19u; const MI_ACTIVESOUND = 20u;
+const GAMEEPISODE = ${map.episode}; const GAMEMAP = ${map.mapnum}; const COMMERCIAL = ${map.commercial}; const SHAREWARE = ${map.shareware};
 ${constBlock("AC_", AC)}
 ${constBlock("TR_", TR)}
 ${constBlock("DOOR_", DOOR, "i32")}
@@ -86,7 +96,7 @@ struct Mobj {
   state: u32, tics: i32, flags: u32, health: i32,
   sector: u32, targ: i32, tracer: i32, movedir: i32,
   movecount: i32, reactiontime: i32, threshold: i32, lastlook: i32,
-  inuse: u32, dropoffz: f32, pad0: u32, pad1: u32,
+  inuse: u32, dropoffz: f32, req: u32, seeplayer: u32,
   pad2: u32, pad3: u32, pad4: u32, pad5: u32,
 }
 struct World {
@@ -106,6 +116,10 @@ struct World {
   fixedcolormap: i32, skill: i32, nact: u32, act: array<u32, 9>,
   snd: array<vec4<f32>, 32>,
   buttons: array<vec4<i32>, 16>,
+  pspstate: array<u32, 2>,
+  psptics: array<i32, 2>,
+  pspsx: f32, pspsy: f32, refire: i32, attacker: i32,
+  pad2: array<u32, 56>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -246,7 +260,7 @@ fn drawPlane(x: u32, y0: i32, y1: i32, h: f32, pic: u32, light: i32, depth: f32,
     let base = G[td + 2u] + u32(col * sh);
     let lvl = select(0u, u32(max(P.fixedcolormap, 0)), P.fixedcolormap > 0);
     for (var y = y0; y <= y1; y++) {
-      let v = 100.0 + (f32(y) + 0.5 - U.centery) * 320.0 / f32(WIDTH);
+      let v = 100.0 + (f32(y) + 0.5 - U.centery) * 320.0 / BASEW;
       putPixel(x, y, cmap(lvl, texel(base + u32(imod(i32(floor(v)), sh)))), 1e30);
     }
     return;
@@ -529,9 +543,20 @@ fn hudNum(n: i32, digits: i32, x: f32, y: f32, vx: f32, vy: f32, big: bool) -> u
 fn hud(@builtin(global_invocation_id) gid: vec3u) {
   let x = gid.x; let y = gid.y;
   if (x >= WIDTH || y >= HEIGHT) { return; }
-  let vx = (f32(x) + 0.5) * 320.0 / f32(WIDTH);
+  // status bar coordinates: the original 320 columns, centred
+  let vx = (f32(x) + 0.5 - (f32(WIDTH) - BASEW) / 2.0) * 320.0 / BASEW;
   let vy = (f32(y) + 0.5) * 200.0 / f32(HEIGHT);
   if (y >= VIEWH) {
+    if (vx < 0.0 || vx >= 320.0) {
+      // tile a flat beside the bar, like the border around a shrunken view
+      var c = 0u;
+      if (BORDERFLAT != 0xffffu) {
+        let tx = u32(i32(floor(vx)) & 63); let ty = u32(i32(floor(vy)) & 63);
+        c = texel(G[G_FLATDIR + BORDERFLAT] + ty * 64u + tx) & 255u;
+      }
+      FB[y * WIDTH + x] = c;
+      return;
+    }
     var t = hudPatch(HUD_STBAR, 0.0, 168.0, vx, vy);
     var o = 0u;
     var ammoTypes = array<i32, 9>(-1, 0, 1, 0, 3, 2, 2, -1, 1);
@@ -564,6 +589,7 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
     return;
   }
   // message line at the top of the view
+  let mx = (f32(x) + 0.5) * 320.0 / BASEW;
   if (P.messagetics > 0 && P.message > 0 && vy < 9.0) {
     let md = G_MSGDIR + 2u * u32(P.message);
     let start = G[md]; let len = G[md + 1u];
@@ -573,11 +599,39 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
       if (ch == 32u || ch < 33u || ch > 95u) { cx += 4.0; continue; }
       let idx = HUD_FONT[ch - 33u];
       if (idx == 0xffffu) { cx += 4.0; continue; }
-      let t = hudPatch(idx, cx, 1.0, vx, vy);
+      let t = hudPatch(idx, cx, 1.0, mx, vy);
       if (t != 0u) { FB[y * WIDTH + x] = t & 255u; return; }
       cx += hudWidth(idx);
-      if (cx > vx) { break; }
+      if (cx > mx) { break; }
     }
+  }
+  // the player's weapon and its muzzle flash (R_DrawPSprite), flash on top
+  for (var pp = 0u; pp < 2u; pp++) {
+    let pos = 1u - pp;
+    let st = P.pspstate[pos];
+    if (st == 0u) { continue; }
+    let spr = G[G_STATES + 8u * st]; let frame = G[G_STATES + 8u * st + 1u];
+    let sf = G_SPRFRAMES + 2u * spr; let fr = frame & 0x7fffu;
+    if (fr >= G[sf + 1u]) { continue; }
+    let w = G[G_FRAMEROT + (G[sf] + fr) * 8u];
+    if (w == 0xffffffffu) { continue; }
+    let lump = w & 0x7fffu; let flip = (w >> 15u) & 1u;
+    let sd = G_SPRDIR + 6u * lump;
+    let sw = i32(G[sd]); let sh = i32(G[sd + 1u]);
+    let s = BASEW / 320.0;
+    let x1 = f32(WIDTH) / 2.0 + (P.pspsx - 160.0 - f32(gi(sd + 2u))) * s;
+    let ytop = f32(VIEWH) / 2.0 - (100.5 - (P.pspsy - f32(gi(sd + 3u)))) * s;
+    var col = i32(floor((f32(x) + 0.5 - x1) / s));
+    let row = i32(floor((f32(y) + 0.5 - ytop) / s));
+    if (flip == 1u) { col = sw - 1 - col; }
+    if (col < 0 || col >= sw || row < 0 || row >= sh) { continue; }
+    let tx = texel(G[sd + 4u] + u32(col * sh + row));
+    if ((tx & 0x100u) == 0u) { continue; }
+    var level = 0u;
+    if (P.fixedcolormap >= 0) { level = u32(P.fixedcolormap); }
+    else if ((frame & 0x8000u) == 0u) { level = u32(max(startmap(S[O[0].sector].light) - 23, 0)); }
+    FB[y * WIDTH + x] = cmap(level, tx);
+    return;
   }
 }
 
@@ -680,6 +734,8 @@ var<private> tmfloorline: i32;
 var<private> numspechit: u32;
 var<private> spechit: array<u32, 16>;
 var<private> numcross: u32;
+var<private> floatok: bool;
+var<private> actTag: i32;
 var<private> crossq: array<vec2u, 16>;
 
 fn checkPosition(mi: u32, pos: vec2f) -> bool {
@@ -691,13 +747,36 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
   tmblockline = -1; tmceilline = -1; tmfloorline = -1;
   numspechit = 0u;
   if ((me.flags & MF_NOCLIP) != 0u) { return true; }
-  // things
+  // things (PIT_CheckThing)
   for (var j = 0u; j < MAXMOBJS; j++) {
     if (j == mi) { continue; }
     let th = O[j];
     if (th.inuse == 0u || (th.flags & (MF_SOLID | MF_SPECIAL | MF_SHOOTABLE)) == 0u) { continue; }
     let bd = th.radius + r;
     if (abs(th.x - pos.x) >= bd || abs(th.y - pos.y) >= bd) { continue; }
+    if ((me.flags & MF_SKULLFLY) != 0u) {
+      damageMobj(j, i32(mi), i32(mi), (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
+      O[mi].flags &= ~MF_SKULLFLY;
+      O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
+      O[mi].req = u32(info(me.mtype, MI_SPAWNSTATE));
+      return false;
+    }
+    if ((me.flags & MF_MISSILE) != 0u) {
+      if (me.z > th.z + th.height || me.z + me.height < th.z) { continue; }
+      if (me.targ >= 0) {
+        let st = O[me.targ].mtype;
+        if (st == th.mtype || (st == MT_KNIGHT && th.mtype == MT_BRUISER) || (st == MT_BRUISER && th.mtype == MT_KNIGHT)) {
+          if (i32(j) == me.targ) { continue; }
+          if (th.mtype != MT_PLAYER) { return false; }
+        }
+      }
+      if ((th.flags & MF_SHOOTABLE) == 0u) {
+        if ((th.flags & MF_SOLID) != 0u) { return false; }
+        continue;
+      }
+      damageMobj(j, i32(mi), me.targ, (P_Random() % 8 + 1) * info(me.mtype, MI_DAMAGE));
+      return false;
+    }
     if ((th.flags & MF_SPECIAL) != 0u) {
       if ((me.flags & MF_PICKUP) != 0u) { touchSpecialThing(j, mi); }
       if ((th.flags & MF_SOLID) == 0u) { continue; }
@@ -717,7 +796,7 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
         if (hi.x <= min(a.x, b.x) || lo.x >= max(a.x, b.x) || hi.y <= min(a.y, b.y) || lo.y >= max(a.y, b.y)) { continue; }
         if (boxOnLineSide(lo, hi, l) != -1) { continue; }
         let back = lineBack(l);
-        if (back < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { tmblockline = i32(l); return false; }
+        if (back < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { tmblockline = i32(l); tmceilline = i32(l); return false; }
         if ((me.flags & MF_MISSILE) == 0u) {
           if ((lineFlags(l) & ML_BLOCKING) != 0u) { tmblockline = i32(l); return false; }
           if (mi != 0u && (lineFlags(l) & ML_BLOCKMONSTERS) != 0u) { tmblockline = i32(l); return false; }
@@ -741,10 +820,12 @@ fn checkPosition(mi: u32, pos: vec2f) -> bool {
 }
 
 fn tryMove(mi: u32, pos: vec2f) -> bool {
+  floatok = false;
   if (!checkPosition(mi, pos)) { return false; }
   let me = O[mi];
   if ((me.flags & MF_NOCLIP) == 0u) {
     if (tmceilingz - tmfloorz < me.height) { tmblockline = tmceilline; return false; }
+    floatok = true;
     if ((me.flags & MF_TELEPORT) == 0u && tmceilingz - me.z < me.height) { tmblockline = tmceilline; return false; }
     if ((me.flags & MF_TELEPORT) == 0u && tmfloorz - me.z > 24.0) { tmblockline = tmfloorline; return false; }
     if ((me.flags & (MF_DROPOFF | MF_FLOAT)) == 0u && tmfloorz - tmdropoffz > 24.0) { tmblockline = tmfloorline; return false; }
@@ -775,36 +856,80 @@ fn processCrossings(mi: u32) {
   for (var k = 0u; k < n; k++) { queueActivation(crossq[k].x, crossq[k].y, 0u, mi); }
 }
 
-// Slide along the wall that blocked us, then fall back to DOOM's stairstep.
-fn slideMove(mi: u32) {
-  let me = O[mi];
-  let mom = vec2f(me.momx, me.momy);
-  if (tmblockline >= 0) {
-    let l = u32(tmblockline);
-    let dl = normalize(lineB(l) - lineA(l));
-    let along = dl * dot(mom, dl);
-    if (tryMove(mi, vec2f(me.x, me.y) + along)) { O[mi].momx = along.x; O[mi].momy = along.y; return; }
+// The player's move: one tryMove call site in a loop over candidates, so the
+// collision code is compiled once. Candidates: the full step, the step slid
+// along the blocking wall, then DOOM's stairstep (y alone, x alone).
+fn playerXY(hasCmd: bool) {
+  var mom = clamp(vec2f(O[0].momx, O[0].momy), vec2f(-MAXMOVE), vec2f(MAXMOVE));
+  if (mom.x == 0.0 && mom.y == 0.0) { return; }
+  O[0].momx = mom.x; O[0].momy = mom.y;
+  var mv = mom;
+  for (var guard = 0; guard < 8; guard++) {
+    var step = mv;
+    if (abs(mv.x) > MAXMOVE / 2.0 || abs(mv.y) > MAXMOVE / 2.0) { step = mv * 0.5; }
+    mv -= step;
+    var moved = false;
+    var slideDir = vec2f(0.0);
+    for (var c = 0; c < 4 && !moved; c++) {
+      var t = step;
+      if (c == 1) {
+        if (tmblockline < 0) { continue; }
+        slideDir = normalize(lineB(u32(tmblockline)) - lineA(u32(tmblockline)));
+        t = slideDir * dot(step, slideDir);
+      } else if (c == 2) { t = vec2f(0.0, step.y); }
+      else if (c == 3) { t = vec2f(step.x, 0.0); }
+      if (tryMove(0u, vec2f(O[0].x, O[0].y) + t)) {
+        moved = true;
+        if (c == 1) { let m = slideDir * dot(vec2f(O[0].momx, O[0].momy), slideDir); O[0].momx = m.x; O[0].momy = m.y; }
+        else if (c == 2) { O[0].momx = 0.0; }
+        else if (c == 3) { O[0].momy = 0.0; }
+      }
+    }
+    if (!moved) { O[0].momx = 0.0; O[0].momy = 0.0; break; }
+    if (mv.x == 0.0 && mv.y == 0.0) { break; }
   }
-  if (tryMove(mi, vec2f(me.x, me.y + mom.y))) { O[mi].momx = 0.0; return; }
-  if (tryMove(mi, vec2f(me.x + mom.x, me.y))) { O[mi].momy = 0.0; return; }
-  O[mi].momx = 0.0; O[mi].momy = 0.0;
+  if (O[0].z > O[0].floorz) { return; }
+  let m2 = vec2f(O[0].momx, O[0].momy);
+  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && !hasCmd) { O[0].momx = 0.0; O[0].momy = 0.0; }
+  else { O[0].momx = m2.x * FRICTION; O[0].momy = m2.y * FRICTION; }
 }
 
-fn xyMovement(mi: u32, isPlayer: bool, hasCmd: bool) {
+fn explodeMissile(mi: u32) {
+  O[mi].momx = 0.0; O[mi].momy = 0.0; O[mi].momz = 0.0;
+  O[mi].req = u32(info(O[mi].mtype, MI_DEATHSTATE));
+  O[mi].flags &= ~MF_MISSILE;
+  let s = info(O[mi].mtype, MI_DEATHSOUND);
+  if (s != 0) { mobjSound(mi, u32(s)); }
+}
+
+// P_XYMovement for everything but the player.
+fn thingXY(mi: u32) {
   var mom = vec2f(O[mi].momx, O[mi].momy);
-  if (mom.x == 0.0 && mom.y == 0.0) { return; }
+  if (mom.x == 0.0 && mom.y == 0.0) {
+    if ((O[mi].flags & MF_SKULLFLY) != 0u) {
+      O[mi].flags &= ~MF_SKULLFLY; O[mi].momz = 0.0;
+      O[mi].req = u32(info(O[mi].mtype, MI_SPAWNSTATE));
+    }
+    return;
+  }
   mom = clamp(mom, vec2f(-MAXMOVE), vec2f(MAXMOVE));
   O[mi].momx = mom.x; O[mi].momy = mom.y;
   var mv = mom;
   for (var guard = 0; guard < 8; guard++) {
-    var ptry: vec2f;
-    if (abs(mv.x) > MAXMOVE / 2.0 || abs(mv.y) > MAXMOVE / 2.0) {
-      ptry = vec2f(O[mi].x, O[mi].y) + mv * 0.5; mv *= 0.5;
-    } else {
-      ptry = vec2f(O[mi].x, O[mi].y) + mv; mv = vec2f(0.0);
-    }
-    if (!tryMove(mi, ptry)) {
-      if (isPlayer) { slideMove(mi); } else { O[mi].momx = 0.0; O[mi].momy = 0.0; }
+    var step = mv;
+    if (abs(mv.x) > MAXMOVE / 2.0 || abs(mv.y) > MAXMOVE / 2.0) { step = mv * 0.5; }
+    mv -= step;
+    if (!tryMove(mi, vec2f(O[mi].x, O[mi].y) + step)) {
+      if ((O[mi].flags & MF_MISSILE) != 0u) {
+        // hitting a sky wall makes the missile vanish instead of exploding
+        if (tmceilline >= 0) {
+          let bk = lineBack(u32(tmceilline));
+          if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { O[mi].inuse = 0u; return; }
+        }
+        explodeMissile(mi);
+      } else {
+        O[mi].momx = 0.0; O[mi].momy = 0.0;
+      }
       break;
     }
     if (mv.x == 0.0 && mv.y == 0.0) { break; }
@@ -812,11 +937,8 @@ fn xyMovement(mi: u32, isPlayer: bool, hasCmd: bool) {
   if ((O[mi].flags & (MF_MISSILE | MF_SKULLFLY)) != 0u) { return; }
   if (O[mi].z > O[mi].floorz) { return; }
   let m2 = vec2f(O[mi].momx, O[mi].momy);
-  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && (!isPlayer || !hasCmd)) {
-    O[mi].momx = 0.0; O[mi].momy = 0.0;
-  } else {
-    O[mi].momx = m2.x * FRICTION; O[mi].momy = m2.y * FRICTION;
-  }
+  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
+  else { O[mi].momx = m2.x * FRICTION; O[mi].momy = m2.y * FRICTION; }
 }
 
 fn zMovement(mi: u32, isPlayer: bool) {
@@ -825,7 +947,17 @@ fn zMovement(mi: u32, isPlayer: bool) {
     P.deltaviewheight = (VIEWHEIGHT - P.viewheight) / 8.0;
   }
   O[mi].z += O[mi].momz;
+  let flags = O[mi].flags;
+  // floating monsters drift toward their target's height
+  if ((flags & MF_FLOAT) != 0u && O[mi].targ >= 0 && (flags & (MF_SKULLFLY | MF_INFLOAT)) == 0u) {
+    let t = O[O[mi].targ];
+    let dist = approxDist(vec2f(t.x - O[mi].x, t.y - O[mi].y));
+    let delta = t.z + O[mi].height / 2.0 - O[mi].z;
+    if (delta < 0.0 && dist < -(delta * 3.0)) { O[mi].z -= 4.0; }
+    else if (delta > 0.0 && dist < delta * 3.0) { O[mi].z += 4.0; }
+  }
   if (O[mi].z <= O[mi].floorz) {
+    if ((flags & MF_SKULLFLY) != 0u) { O[mi].momz = -O[mi].momz; }
     if (O[mi].momz < 0.0) {
       if (isPlayer && O[mi].momz < -GRAVITY * 8.0) {
         P.deltaviewheight = O[mi].momz / 8.0;
@@ -834,12 +966,15 @@ fn zMovement(mi: u32, isPlayer: bool) {
       O[mi].momz = 0.0;
     }
     O[mi].z = O[mi].floorz;
-  } else if ((O[mi].flags & MF_NOGRAVITY) == 0u) {
+    if ((flags & MF_MISSILE) != 0u && (flags & MF_NOCLIP) == 0u) { explodeMissile(mi); return; }
+  } else if ((flags & MF_NOGRAVITY) == 0u) {
     if (O[mi].momz == 0.0) { O[mi].momz = -GRAVITY * 2.0; } else { O[mi].momz -= GRAVITY; }
   }
   if (O[mi].z + O[mi].height > O[mi].ceilingz) {
     if (O[mi].momz > 0.0) { O[mi].momz = 0.0; }
     O[mi].z = O[mi].ceilingz - O[mi].height;
+    if ((flags & MF_SKULLFLY) != 0u) { O[mi].momz = -O[mi].momz; }
+    if ((flags & MF_MISSILE) != 0u && (flags & MF_NOCLIP) == 0u) { explodeMissile(mi); return; }
   }
 }
 
@@ -889,11 +1024,12 @@ fn changeSector(sec: u32, crush: bool) -> bool {
     O[j].floorz = fz; O[j].ceilingz = cz;
     if (onfloor) { O[j].z = fz; } else if (O[j].z + O[j].height > cz) { O[j].z = cz - O[j].height; }
     if (cz - fz >= O[j].height) { continue; }
-    // doesn't fit
+    // doesn't fit: corpses turn to gibs, dropped items vanish
+    if (O[j].health <= 0 && j != 0u) { O[j].req = S_GIBS; O[j].flags &= ~MF_SOLID; O[j].height = 0.0; O[j].radius = 0.0; continue; }
     if ((O[j].flags & MF_DROPPED) != 0u) { O[j].inuse = 0u; continue; }
     if ((O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
     nofit = true;
-    if (crush && (P.leveltime & 3u) == 0u) { damageMobj(j, 10); }
+    if (crush && (P.leveltime & 3u) == 0u) { damageMobj(j, -1, -1, 10); }
   }
   return nofit;
 }
@@ -1077,7 +1213,7 @@ fn lightThink(sec: u32) {
 }
 
 // ---- activation (EV_*)
-fn tagged(l: u32, sec: u32) -> bool { return S[sec].tag == lineTag(l); }
+fn tagged(l: u32, sec: u32) -> bool { return S[sec].tag == actTag; }
 
 fn evDoDoor(l: u32, ty: i32) -> bool {
   var rtn = false;
@@ -1379,10 +1515,11 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
 }
 
 // Run the action of a special. Returns true when something happened.
-fn runAction(l: u32, mi: u32, side: u32, info: u32) -> bool {
-  let ac = (info >> 8u) & 0xffu;
-  let arg = i32((info >> 16u) & 0xfffu);
-  let key = info >> 28u;
+fn runAction(l: u32, mi: u32, side: u32, spec: u32) -> bool {
+  actTag = lineTag(l);
+  let ac = (spec >> 8u) & 0xffu;
+  let arg = i32((spec >> 16u) & 0xfffu);
+  let key = spec >> 28u;
   switch (ac) {
     case 1u: { return evDoDoor(l, arg); }
     case 2u: { return evDoFloor(l, arg); }
@@ -1436,18 +1573,18 @@ fn changeSwitchTexture(l: u32, useAgain: bool) {
 
 fn useSpecialLine(l: u32, side: u32, mi: u32) -> bool {
   let special = lineSpecial(l);
-  let info = G[G_LSPEC + min(special, 255u)];
-  let tr = info & 7u;
+  let spec = G[G_LSPEC + min(special, 255u)];
+  let tr = spec & 7u;
   if (side != 0u && special != 124u) { return false; }
   if (mi != 0u) {
     if ((lineFlags(l) & ML_SECRET) != 0u) { return false; }
-    if (((info >> 4u) & 1u) == 0u) { return false; }
+    if (((spec >> 4u) & 1u) == 0u) { return false; }
   }
-  if (tr == TR_D) { return runAction(l, mi, side, info); }
+  if (tr == TR_D) { return runAction(l, mi, side, spec); }
   if (tr != TR_S) { return false; }
-  let rep = ((info >> 3u) & 1u) != 0u;
-  let ac = (info >> 8u) & 0xffu;
-  let did = runAction(l, mi, side, info);
+  let rep = ((spec >> 3u) & 1u) != 0u;
+  let ac = (spec >> 8u) & 0xffu;
+  let did = runAction(l, mi, side, spec);
   if (did || ac == AC_EXIT || ac == AC_SECRETEXIT || ac == AC_LIGHT) {
     changeSwitchTexture(l, rep);
   }
@@ -1456,25 +1593,25 @@ fn useSpecialLine(l: u32, side: u32, mi: u32) -> bool {
 
 fn crossSpecialLine(l: u32, side: u32, mi: u32) {
   let special = lineSpecial(l);
-  let info = G[G_LSPEC + min(special, 255u)];
-  if ((info & 7u) != TR_W) { return; }
-  let mon = (info >> 4u) & 3u;
+  let spec = G[G_LSPEC + min(special, 255u)];
+  if ((spec & 7u) != TR_W) { return; }
+  let mon = (spec >> 4u) & 3u;
   if (mi != 0u) {
     if ((O[mi].flags & MF_MISSILE) != 0u) { return; }
     if (mon == 0u) { return; }
   } else if (mon == 2u) { return; }
-  let did = runAction(l, mi, side, info);
-  let rep = ((info >> 3u) & 1u) != 0u;
-  let ac = (info >> 8u) & 0xffu;
+  let did = runAction(l, mi, side, spec);
+  let rep = ((spec >> 3u) & 1u) != 0u;
+  let ac = (spec >> 8u) & 0xffu;
   if (!rep && (did || ac != AC_TELEPORT)) { LS[l] = 0u; }
 }
 
 fn shootSpecialLine(l: u32, mi: u32) {
   let special = lineSpecial(l);
-  let info = G[G_LSPEC + min(special, 255u)];
-  if ((info & 7u) != TR_G) { return; }
-  if (mi != 0u && ((info >> 4u) & 1u) == 0u) { return; }
-  if (runAction(l, mi, 0u, info)) { changeSwitchTexture(l, ((info >> 3u) & 1u) != 0u); }
+  let spec = G[G_LSPEC + min(special, 255u)];
+  if ((spec & 7u) != TR_G) { return; }
+  if (mi != 0u && ((spec >> 4u) & 1u) == 0u) { return; }
+  if (runAction(l, mi, 0u, spec)) { changeSwitchTexture(l, ((spec >> 3u) & 1u) != 0u); }
 }
 
 // P_UseLines: walk the lines crossed by the use trace, nearest first.
@@ -1627,74 +1764,874 @@ fn touchSpecialThing(sp: u32, toucher: u32) {
   mobjSound(0u, sound);
 }
 
-fn damageMobj(tgt: u32, damage0: i32) {
+// ---- small helpers
+fn info(ty: u32, field: u32) -> i32 { return gi(G_MOBJINFO + 24u * ty + field); }
+fn stateNext(st: u32) -> u32 { return G[G_STATES + 8u * st + 4u]; }
+fn approxDist(d: vec2f) -> f32 { let a = abs(d); return a.x + a.y - min(a.x, a.y) * 0.5; }
+fn angleTo(a: vec2f, b: vec2f) -> f32 { let d = b - a; return atan2(d.y, d.x); }
+fn wrapPi(a: f32) -> f32 { return a - TAU * floor((a + PI) / TAU); }
+fn subRandom() -> f32 { return f32(P_Random() - P_Random()); }
+fn mpos(i: u32) -> vec2f { return vec2f(O[i].x, O[i].y); }
+
+// ---- sight (P_CheckSight): REJECT first, then every line the sight line crosses
+fn checkSight(a: u32, b: u32) -> bool {
+  let s1 = O[a].sector; let s2 = O[b].sector;
+  let pnum = s1 * NUMSECTORS + s2;
+  if (((M[M_REJECT + (pnum >> 5u)] >> (pnum & 31u)) & 1u) != 0u) { return false; }
+  let p0 = mpos(a); let p1 = mpos(b);
+  let sz = O[a].z + O[a].height - O[a].height / 4.0;
+  var top = O[b].z + O[b].height - sz;
+  var bot = O[b].z - sz;
+  let lo = min(p0, p1); let hi = max(p0, p1);
+  let dd = p1 - p0;
+  for (var l = 0u; l < NUMLINES; l++) {
+    let la = lineA(l); let lb = lineB(l);
+    if (max(la.x, lb.x) < lo.x || min(la.x, lb.x) > hi.x || max(la.y, lb.y) < lo.y || min(la.y, lb.y) > hi.y) { continue; }
+    let e = lb - la;
+    let den = dd.x * e.y - dd.y * e.x;
+    if (abs(den) < 1e-9) { continue; }
+    let ap = la - p0;
+    let t = (ap.x * e.y - ap.y * e.x) / den;
+    let s = (ap.x * dd.y - ap.y * dd.x) / den;
+    if (t <= 0.0 || t >= 1.0 || s < 0.0 || s > 1.0) { continue; }
+    let back = lineBack(l);
+    if (back < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { return false; }
+    let F = S[lineFront(l)]; let B = S[back];
+    if (F.floorh == B.floorh && F.ceilh == B.ceilh) { continue; }
+    let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
+    if (openbottom >= opentop) { return false; }
+    if (F.floorh != B.floorh) { bot = max(bot, (openbottom - sz) / t); }
+    if (F.ceilh != B.ceilh) { top = min(top, (opentop - sz) / t); }
+    if (top <= bot) { return false; }
+  }
+  return true;
+}
+
+// ---- P_NoiseAlert: flood the player's noise through open lines, two sound-blocking lines deep
+fn noiseAlert() {
+  for (var s = 0u; s < NUMSECTORS; s++) { S[s].pad0 = 99u; }
+  S[O[0].sector].pad0 = 1u;
+  for (var iter = 0; iter < 96; iter++) {
+    var changed = false;
+    for (var l = 0u; l < NUMLINES; l++) {
+      let bk = lineBack(l);
+      if (bk < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { continue; }
+      let fr = u32(lineFront(l)); let bs = u32(bk);
+      if (min(S[fr].ceilh, S[bs].ceilh) - max(S[fr].floorh, S[bs].floorh) <= 0.0) { continue; }
+      let block = (lineFlags(l) & 64u) != 0u;
+      for (var dir = 0u; dir < 2u; dir++) {
+        let src = select(fr, bs, dir == 1u); let dst = select(bs, fr, dir == 1u);
+        let st = S[src].pad0;
+        if (st > 2u) { continue; }
+        var nst = st;
+        if (block) { if (st == 1u) { nst = 2u; } else { continue; } }
+        if (nst < S[dst].pad0) { S[dst].pad0 = nst; changed = true; }
+      }
+    }
+    if (!changed) { break; }
+  }
+  for (var s = 0u; s < NUMSECTORS; s++) { if (S[s].pad0 <= 2u) { S[s].soundtarget = 0; } }
+}
+
+// ---- spawning
+fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
+  for (var j = 1u; j < MAXMOBJS; j++) {
+    if (O[j].inuse != 0u) { continue; }
+    let mi = G_MOBJINFO + 24u * ty;
+    var m: Mobj;
+    m.x = x; m.y = y; m.angle = 0.0;
+    m.radius = f32(gi(mi + 16u)); m.height = f32(gi(mi + 17u));
+    m.mtype = ty; m.state = G[mi + 1u]; m.tics = gi(G_STATES + 8u * m.state + 2u);
+    m.flags = G[mi + 21u]; m.health = gi(mi + 2u);
+    m.sector = sectorAt(vec2f(x, y));
+    m.floorz = S[m.sector].floorh; m.ceilingz = S[m.sector].ceilh;
+    m.z = z;
+    if (z == ONFLOORZ) { m.z = m.floorz; }
+    m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = gi(mi + 5u);
+    m.req = NOREQ; m.inuse = 1u;
+    O[j] = m;
+    return i32(j);
+  }
+  return -1;
+}
+fn spawnPuff(p: vec2f, z0: f32, melee: bool) {
+  let th = spawnMobj(p.x, p.y, z0 + subRandom() / 64.0, MT_PUFF);
+  if (th < 0) { return; }
+  O[th].momz = 1.0;
+  O[th].tics = max(O[th].tics - (P_Random() & 3), 1);
+  if (melee) { O[th].state = S_PUFF3; O[th].tics = gi(G_STATES + 8u * S_PUFF3 + 2u); }
+}
+fn spawnBlood(p: vec2f, z0: f32, damage: i32) {
+  let th = spawnMobj(p.x, p.y, z0 + subRandom() / 64.0, MT_BLOOD);
+  if (th < 0) { return; }
+  O[th].momz = 2.0;
+  O[th].tics = max(O[th].tics - (P_Random() & 3), 1);
+  var st = 0u;
+  if (damage <= 12 && damage >= 9) { st = S_BLOOD2; } else if (damage < 9) { st = S_BLOOD3; }
+  if (st != 0u) { O[th].state = st; O[th].tics = gi(G_STATES + 8u * st + 2u); }
+}
+
+// P_SpawnMissile / P_SpawnPlayerMissile in one: aimed at dst, or along angle and slope when dst < 0.
+fn spawnMissile(src: u32, dst: i32, ty: u32, an0: f32, slope: f32) {
+  let th = spawnMobj(O[src].x, O[src].y, O[src].z + 32.0, ty);
+  if (th < 0) { return; }
+  let t = u32(th);
+  let ss = info(ty, MI_SEESOUND);
+  if (ss != 0) { mobjSound(t, u32(ss)); }
+  O[t].targ = i32(src);
+  let speed = f32(info(ty, MI_SPEED));
+  var an = an0;
+  if (dst >= 0) {
+    an = angleTo(mpos(src), mpos(u32(dst)));
+    if ((O[dst].flags & MF_SHADOW) != 0u) { an += subRandom() * BAM20; }
+    let dist = max(approxDist(mpos(u32(dst)) - mpos(src)) / speed, 1.0);
+    O[t].momz = (O[dst].z - O[src].z) / dist;
+  } else {
+    O[t].momz = speed * slope;
+  }
+  O[t].angle = an;
+  O[t].momx = speed * cos(an); O[t].momy = speed * sin(an);
+  // P_CheckMissileSpawn: step half a tic forward so a point-blank shot still hits
+  O[t].tics = max(O[t].tics - (P_Random() & 3), 1);
+  O[t].x += O[t].momx * 0.5; O[t].y += O[t].momy * 0.5; O[t].z += O[t].momz * 0.5;
+  if (!tryMove(t, mpos(t))) { explodeMissile(t); }
+}
+
+// ---- damage
+fn killMobj(source: i32, tgt: u32) {
+  let ty = O[tgt].mtype;
+  O[tgt].flags &= ~(MF_SHOOTABLE | MF_FLOAT | MF_SKULLFLY);
+  if (ty != MT_SKULL) { O[tgt].flags &= ~MF_NOGRAVITY; }
+  O[tgt].flags |= MF_CORPSE | MF_DROPOFF;
+  O[tgt].height /= 4.0;
+  if ((O[tgt].flags & MF_COUNTKILL) != 0u) { P.killcount += 1; }
+  if (tgt == 0u) {
+    O[0].flags &= ~MF_SOLID;
+    P.dead = 1u;
+    mobjSound(0u, select(SFX_pldeth, SFX_pdiehi, O[0].health < -50));
+    return;
+  }
+  let xd = info(ty, MI_XDEATHSTATE);
+  if (O[tgt].health < -info(ty, MI_SPAWNHEALTH) && xd != 0) { O[tgt].req = u32(xd); }
+  else { O[tgt].req = u32(info(ty, MI_DEATHSTATE)); }
+  var item = -1;
+  if (ty == MT_WOLFSS || ty == MT_POSSESSED) { item = i32(MT_CLIP); }
+  else if (ty == MT_SHOTGUY) { item = i32(MT_SHOTGUN); }
+  else if (ty == MT_CHAINGUY) { item = i32(MT_CHAINGUN); }
+  if (item >= 0) {
+    let d = spawnMobj(O[tgt].x, O[tgt].y, ONFLOORZ, u32(item));
+    if (d >= 0) { O[d].flags |= MF_DROPPED; }
+  }
+}
+
+fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
   if ((O[tgt].flags & MF_SHOOTABLE) == 0u || O[tgt].health <= 0) { return; }
   var damage = damage0;
+  if ((O[tgt].flags & MF_SKULLFLY) != 0u) { O[tgt].momx = 0.0; O[tgt].momy = 0.0; O[tgt].momz = 0.0; }
+  if (tgt == 0u && P.skill == 0) { damage = damage >> 1u; }
+  if (inflictor >= 0 && (O[tgt].flags & MF_NOCLIP) == 0u && !(source == 0 && P.readyweapon == 7)) {
+    var ang = angleTo(mpos(u32(inflictor)), mpos(tgt));
+    var thrust = f32(damage) * 12.5 / f32(max(info(O[tgt].mtype, MI_MASS), 1));
+    if (damage < 40 && damage > O[tgt].health && O[tgt].z - O[inflictor].z > 64.0 && (P_Random() & 1) != 0) { ang += PI; thrust *= 4.0; }
+    O[tgt].momx += thrust * cos(ang); O[tgt].momy += thrust * sin(ang);
+  }
   if (tgt == 0u) {
-    if (P.powers[0] > 0 && damage < 1000) { return; }
-    if (P.skill == 0) { damage = damage >> 1u; }
+    if (S[O[0].sector].special == 11 && damage >= O[0].health) { damage = O[0].health - 1; }
+    if (damage < 1000 && P.powers[0] > 0) { return; }
     if (P.armortype != 0) {
       var saved = select(damage / 2, damage / 3, P.armortype == 1);
       if (P.armor <= saved) { saved = P.armor; P.armortype = 0; }
       P.armor -= saved; damage -= saved;
     }
     P.health = max(P.health - damage, 0);
+    P.attacker = source;
     P.damagecount = min(P.damagecount + damage, 100);
   }
   O[tgt].health -= damage;
-  if (O[tgt].health <= 0) {
-    if (tgt == 0u) { P.dead = 1u; O[0].flags &= ~MF_SOLID; mobjSound(0u, SFX_pldeth); }
+  if (O[tgt].health <= 0) { killMobj(source, tgt); return; }
+  if (P_Random() < info(O[tgt].mtype, MI_PAINCHANCE) && (O[tgt].flags & MF_SKULLFLY) == 0u) {
+    O[tgt].flags |= MF_JUSTHIT;
+    O[tgt].req = u32(info(O[tgt].mtype, MI_PAINSTATE));
+  }
+  O[tgt].reactiontime = 0;
+  if ((O[tgt].threshold == 0 || O[tgt].mtype == MT_VILE) && source >= 0 && u32(source) != tgt && O[source].mtype != MT_VILE) {
+    O[tgt].targ = source;
+    O[tgt].threshold = 100;
+    let see = info(O[tgt].mtype, MI_SEESTATE);
+    if (O[tgt].state == u32(info(O[tgt].mtype, MI_SPAWNSTATE)) && see != 0) { O[tgt].req = u32(see); }
+  }
+}
+
+fn radiusAttack(spot: u32, source: i32, damage: i32) {
+  for (var j = 0u; j < MAXMOBJS; j++) {
+    if (O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
+    if (O[j].mtype == MT_CYBORG || O[j].mtype == MT_SPIDER) { continue; }
+    let d = abs(mpos(j) - mpos(spot));
+    let dist = max(i32(max(d.x, d.y) - O[j].radius), 0);
+    if (dist >= damage) { continue; }
+    if (checkSight(j, spot)) { damageMobj(j, i32(spot), source, damage - dist); }
+  }
+}
+
+// ---- hitscan: P_AimLineAttack (mode 0) and P_LineAttack (mode 1) over sorted intercepts
+var<private> linetarget: i32;
+fn trace(mi: u32, angle: f32, range: f32, mode: u32, slope0: f32, damage: i32) -> f32 {
+  let p0 = mpos(mi);
+  let p1 = p0 + vec2f(cos(angle), sin(angle)) * range;
+  let dd = p1 - p0;
+  let shootz = O[mi].z + O[mi].height * 0.5 + 8.0;
+  var top = 100.0 / 160.0; var bot = -100.0 / 160.0;
+  let aimslope = slope0;
+  linetarget = -1;
+  var fr: array<f32, 64>; var ids: array<u32, 64>; var n = 0u;
+  let lo = min(p0, p1); let hi = max(p0, p1);
+  for (var l = 0u; l < NUMLINES; l++) {
+    let la = lineA(l); let lb = lineB(l);
+    if (max(la.x, lb.x) < lo.x || min(la.x, lb.x) > hi.x || max(la.y, lb.y) < lo.y || min(la.y, lb.y) > hi.y) { continue; }
+    let e = lb - la;
+    let den = dd.x * e.y - dd.y * e.x;
+    if (abs(den) < 1e-9) { continue; }
+    let ap = la - p0;
+    let t = (ap.x * e.y - ap.y * e.x) / den;
+    let s = (ap.x * dd.y - ap.y * dd.x) / den;
+    if (t < 0.0 || t > 1.0 || s < 0.0 || s > 1.0) { continue; }
+    var k = min(n, 63u);
+    while (k > 0u && fr[k - 1u] > t) { fr[k] = fr[k - 1u]; ids[k] = ids[k - 1u]; k -= 1u; }
+    fr[k] = t; ids[k] = l; n = min(n + 1u, 64u);
+  }
+  for (var j = 0u; j < MAXMOBJS; j++) {
+    if (j == mi || O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
+    let r = O[j].radius;
+    let c = mpos(j);
+    // segment against the thing's box: entry fraction
+    var t0 = 0.0; var t1 = 1.0;
+    for (var ax = 0; ax < 2; ax++) {
+      let o = select(p0.y, p0.x, ax == 0); let dv = select(dd.y, dd.x, ax == 0); let cc = select(c.y, c.x, ax == 0);
+      if (abs(dv) < 1e-9) { if (o < cc - r || o > cc + r) { t0 = 2.0; } }
+      else { let a1 = (cc - r - o) / dv; let a2 = (cc + r - o) / dv; t0 = max(t0, min(a1, a2)); t1 = min(t1, max(a1, a2)); }
+    }
+    if (t0 > t1 || t0 > 1.0) { continue; }
+    var k = min(n, 63u);
+    while (k > 0u && fr[k - 1u] > t0) { fr[k] = fr[k - 1u]; ids[k] = ids[k - 1u]; k -= 1u; }
+    fr[k] = t0; ids[k] = j | 0x80000000u; n = min(n + 1u, 64u);
+  }
+  for (var k = 0u; k < n; k++) {
+    let f = fr[k];
+    let dist = max(range * f, 1.0);
+    if ((ids[k] & 0x80000000u) == 0u) {
+      let l = ids[k];
+      if (mode == 1u && lineSpecial(l) != 0u) { queueActivation(l, 0u, 2u, mi); }
+      let bk = lineBack(l);
+      var hit = false;
+      if (bk < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) {
+        if (mode == 0u) { return 0.0; }
+        hit = true;
+      } else {
+        let F = S[lineFront(l)]; let B = S[bk];
+        let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
+        if (mode == 0u) {
+          if (openbottom >= opentop) { return 0.0; }
+          if (F.floorh != B.floorh) { bot = max(bot, (openbottom - shootz) / dist); }
+          if (F.ceilh != B.ceilh) { top = min(top, (opentop - shootz) / dist); }
+          if (top <= bot) { return 0.0; }
+          continue;
+        }
+        if (F.floorh != B.floorh && (openbottom - shootz) / dist > aimslope) { hit = true; }
+        if (F.ceilh != B.ceilh && (opentop - shootz) / dist < aimslope) { hit = true; }
+      }
+      if (!hit) { continue; }
+      let f2 = f - 4.0 / range;
+      let hp = p0 + dd * f2;
+      let z = shootz + aimslope * f2 * range;
+      let F = S[lineFront(l)];
+      if (F.ceilpic == SKYFLAT) {
+        if (z > F.ceilh) { return 0.0; }
+        if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { return 0.0; }
+      }
+      spawnPuff(hp, z, range <= MELEERANGE + 1.0);
+      return 0.0;
+    }
+    let j = ids[k] & 0x7fffffffu;
+    let tts = (O[j].z + O[j].height - shootz) / dist;
+    let tbs = (O[j].z - shootz) / dist;
+    if (mode == 0u) {
+      if (tts < bot || tbs > top) { continue; }
+      linetarget = i32(j);
+      return (min(tts, top) + max(tbs, bot)) / 2.0;
+    }
+    if (tts < aimslope || tbs > aimslope) { continue; }
+    let f2 = f - 10.0 / range;
+    let hp = p0 + dd * f2;
+    let z = shootz + aimslope * f2 * range;
+    if ((O[j].flags & MF_NOBLOOD) != 0u) { spawnPuff(hp, z, range <= MELEERANGE + 1.0); }
+    else { spawnBlood(hp, z, damage); }
+    if (damage > 0) { damageMobj(j, i32(mi), i32(mi), damage); }
+    return 0.0;
+  }
+  return 0.0;
+}
+
+// ---- monster AI
+fn faceTarget(mi: u32) {
+  let t = O[mi].targ;
+  if (t < 0) { return; }
+  O[mi].flags &= ~MF_AMBUSH;
+  O[mi].angle = angleTo(mpos(mi), mpos(u32(t)));
+  if ((O[t].flags & MF_SHADOW) != 0u) { O[mi].angle += subRandom() * BAM21; }
+}
+// sight to the current target: the per-mobj sight kernel covers the player, else one check per think
+var<private> sightTarget: bool;
+fn canSeeTarget(mi: u32) -> bool {
+  if (O[mi].targ == 0) { return O[mi].seeplayer != 0u; }
+  return sightTarget;
+}
+fn lookForPlayer(mi: u32, allaround: bool) -> bool {
+  if (P.health <= 0 || O[mi].seeplayer == 0u) { return false; }
+  if (!allaround) {
+    let an = wrapPi(angleTo(mpos(mi), mpos(0u)) - O[mi].angle);
+    if (abs(an) > PI / 2.0 && approxDist(mpos(0u) - mpos(mi)) > MELEERANGE) { return false; }
+  }
+  O[mi].targ = 0;
+  return true;
+}
+fn checkMeleeRange(mi: u32) -> bool {
+  let t = O[mi].targ;
+  if (t < 0) { return false; }
+  let range = MELEERANGE - 20.0 + f32(info(O[t].mtype, MI_RADIUS));
+  if (approxDist(mpos(u32(t)) - mpos(mi)) >= range) { return false; }
+  return canSeeTarget(mi);
+}
+fn checkMissileRange(mi: u32) -> bool {
+  if (!canSeeTarget(mi)) { return false; }
+  if ((O[mi].flags & MF_JUSTHIT) != 0u) { O[mi].flags &= ~MF_JUSTHIT; return true; }
+  if (O[mi].reactiontime != 0) { return false; }
+  let ty = O[mi].mtype;
+  var dist = i32(approxDist(mpos(mi) - mpos(u32(O[mi].targ)))) - 64;
+  if (info(ty, MI_MELEESTATE) == 0) { dist -= 128; }
+  if (ty == MT_VILE && dist > 14 * 64) { return false; }
+  if (ty == MT_UNDEAD) { if (dist < 196) { return false; } dist >>= 1u; }
+  if (ty == MT_CYBORG || ty == MT_SPIDER || ty == MT_SKULL) { dist >>= 1u; }
+  dist = min(dist, 200);
+  if (ty == MT_CYBORG) { dist = min(dist, 160); }
+  return P_Random() >= dist;
+}
+
+fn dirVec(d: i32) -> vec2f {
+  var v = array<vec2f, 8>(vec2f(1.0, 0.0), vec2f(0.71716, 0.71716), vec2f(0.0, 1.0), vec2f(-0.71716, 0.71716),
+                          vec2f(-1.0, 0.0), vec2f(-0.71716, -0.71716), vec2f(0.0, -1.0), vec2f(0.71716, -0.71716));
+  return v[clamp(d, 0, 7)];
+}
+
+// P_Move: step in movedir; on a block, float over it or push the specials touched (doors)
+fn pMove(mi: u32) -> bool {
+  let md = O[mi].movedir;
+  if (md < 0 || md >= 8) { return false; }
+  let spd = f32(info(O[mi].mtype, MI_SPEED));
+  if (!tryMove(mi, mpos(mi) + dirVec(md) * spd)) {
+    if ((O[mi].flags & MF_FLOAT) != 0u && floatok) {
+      O[mi].z += select(-4.0, 4.0, O[mi].z < tmfloorz);
+      O[mi].flags |= MF_INFLOAT;
+      return true;
+    }
+    if (numspechit == 0u) { return false; }
+    O[mi].movedir = 8;
+    var good = false;
+    let n = numspechit;
+    var hits = spechit;
+    for (var k = n; k > 0u; k--) { if (useSpecialLine(hits[k - 1u], 0u, mi)) { good = true; } }
+    return good;
+  }
+  O[mi].flags &= ~MF_INFLOAT;
+  if ((O[mi].flags & MF_FLOAT) == 0u) { O[mi].z = O[mi].floorz; }
+  return true;
+}
+
+// P_NewChaseDir: the candidate directions in DOOM's order, walked with one P_TryWalk call site
+fn newChaseDir(mi: u32) {
+  let t = O[mi].targ;
+  if (t < 0) { return; }
+  let olddir = O[mi].movedir;
+  let turnaround = select(8, (olddir + 4) % 8, olddir < 8);
+  let delta = mpos(u32(t)) - mpos(mi);
+  var d1 = 8; var d2 = 8;
+  if (delta.x > 10.0) { d1 = 0; } else if (delta.x < -10.0) { d1 = 4; }
+  if (delta.y < -10.0) { d2 = 6; } else if (delta.y > 10.0) { d2 = 2; }
+  var cands: array<i32, 16>; var nc = 0;
+  if (d1 != 8 && d2 != 8) {
+    var diags = array<i32, 4>(3, 1, 5, 7);
+    let dg = diags[select(0, 2, delta.y < 0.0) + select(0, 1, delta.x > 0.0)];
+    if (dg != turnaround) { cands[nc] = dg; nc += 1; }
+  }
+  if (P_Random() > 200 || abs(delta.y) > abs(delta.x)) { let tmp = d1; d1 = d2; d2 = tmp; }
+  if (d1 == turnaround) { d1 = 8; }
+  if (d2 == turnaround) { d2 = 8; }
+  if (d1 != 8) { cands[nc] = d1; nc += 1; }
+  if (d2 != 8) { cands[nc] = d2; nc += 1; }
+  if (olddir != 8) { cands[nc] = olddir; nc += 1; }
+  let fwd = (P_Random() & 1) != 0;
+  for (var i = 0; i < 8; i++) {
+    let td = select(7 - i, i, fwd);
+    if (td != turnaround) { cands[nc] = td; nc += 1; }
+  }
+  if (turnaround != 8) { cands[nc] = turnaround; nc += 1; }
+  for (var c = 0; c < nc; c++) {
+    O[mi].movedir = cands[c];
+    if (pMove(mi)) { O[mi].movecount = P_Random() & 15; return; }
+  }
+  O[mi].movedir = 8;
+}
+
+fn seeSound(mi: u32) {
+  var s = info(O[mi].mtype, MI_SEESOUND);
+  if (s == 0) { return; }
+  if (u32(s) >= SFX_posit1 && u32(s) <= SFX_posit3) { s = i32(SFX_posit1) + P_Random() % 3; }
+  else if (u32(s) == SFX_bgsit1 || u32(s) == SFX_bgsit2) { s = i32(SFX_bgsit1) + P_Random() % 2; }
+  mobjSound(mi, u32(s));
+}
+
+fn look(mi: u32) {
+  O[mi].threshold = 0;
+  let st = S[O[mi].sector].soundtarget;
+  var seen = false;
+  if (st >= 0 && (O[st].flags & MF_SHOOTABLE) != 0u) {
+    O[mi].targ = st;
+    seen = (O[mi].flags & MF_AMBUSH) == 0u || canSeeTarget(mi);
+  }
+  if (!seen) { seen = lookForPlayer(mi, false); }
+  if (!seen) { return; }
+  seeSound(mi);
+  O[mi].req = u32(info(O[mi].mtype, MI_SEESTATE));
+}
+
+fn chase(mi: u32) {
+  let ty = O[mi].mtype;
+  if (O[mi].reactiontime > 0) { O[mi].reactiontime -= 1; }
+  if (O[mi].threshold > 0) {
+    let t = O[mi].targ;
+    if (t < 0 || O[t].health <= 0) { O[mi].threshold = 0; } else { O[mi].threshold -= 1; }
+  }
+  // turn toward movedir in 45 degree steps
+  if (O[mi].movedir < 8) {
+    let q = PI / 4.0;
+    O[mi].angle = floor(O[mi].angle / q + 1e-4) * q;
+    let delta = wrapPi(O[mi].angle - f32(O[mi].movedir) * q);
+    if (delta > 0.01) { O[mi].angle -= q; } else if (delta < -0.01) { O[mi].angle += q; }
+    O[mi].angle -= TAU * floor(O[mi].angle / TAU);
+  }
+  let t = O[mi].targ;
+  if (t < 0 || (O[t].flags & MF_SHOOTABLE) == 0u) {
+    if (lookForPlayer(mi, true)) { return; }
+    O[mi].req = u32(info(ty, MI_SPAWNSTATE));
     return;
   }
-  if (tgt == 0u) { mobjSound(0u, SFX_plpain); }
-}
-
-fn spawnMobj(x: f32, y: f32, z: f32, ty: u32) -> i32 {
-  for (var j = 1u; j < MAXMOBJS; j++) {
-    if (O[j].inuse != 0u) { continue; }
-    let mi = G_MOBJINFO + 24u * ty;
-    var m: Mobj;
-    m.x = x; m.y = y; m.z = z; m.angle = 0.0;
-    m.radius = f32(gi(mi + 16u)); m.height = f32(gi(mi + 17u));
-    m.mtype = ty; m.state = G[mi + 1u]; m.tics = gi(G_STATES + 8u * m.state + 2u);
-    m.flags = G[mi + 21u]; m.health = gi(mi + 2u);
-    m.sector = sectorAt(vec2f(x, y));
-    m.floorz = S[m.sector].floorh; m.ceilingz = S[m.sector].ceilh;
-    m.targ = -1; m.tracer = -1; m.movedir = 8; m.reactiontime = gi(mi + 5u);
-    m.inuse = 1u;
-    O[j] = m;
-    return i32(j);
+  var needDir = false;
+  if ((O[mi].flags & MF_JUSTATTACKED) != 0u) {
+    O[mi].flags &= ~MF_JUSTATTACKED;
+    if (P.skill != 4) { needDir = true; }
+  } else {
+    let melee = info(ty, MI_MELEESTATE);
+    if (melee != 0 && checkMeleeRange(mi)) {
+      let asnd = info(ty, MI_ATTACKSOUND);
+      if (asnd != 0) { mobjSound(mi, u32(asnd)); }
+      O[mi].req = u32(melee);
+      return;
+    }
+    let missile = info(ty, MI_MISSILESTATE);
+    if (missile != 0 && !(P.skill < 4 && O[mi].movecount != 0) && checkMissileRange(mi)) {
+      O[mi].req = u32(missile);
+      O[mi].flags |= MF_JUSTATTACKED;
+      return;
+    }
+    O[mi].movecount -= 1;
+    if (O[mi].movecount < 0 || !pMove(mi)) { needDir = true; }
+    let act = info(ty, MI_ACTIVESOUND);
+    if (act != 0 && P_Random() < 3) { mobjSound(mi, u32(act)); }
   }
-  return -1;
+  if (needDir) { newChaseDir(mi); }
 }
 
-// state machine without action functions (monsters come later)
+fn bossDeath(mi: u32) {
+  let ty = O[mi].mtype;
+  var ok = false;
+  if (COMMERCIAL) { ok = GAMEMAP == 7 && (ty == MT_FATSO || ty == MT_BABY); }
+  else {
+    switch (GAMEEPISODE) {
+      case 1: { ok = GAMEMAP == 8 && ty == MT_BRUISER; }
+      case 2: { ok = GAMEMAP == 8 && ty == MT_CYBORG; }
+      case 3: { ok = GAMEMAP == 8 && ty == MT_SPIDER; }
+      case 4: { ok = (GAMEMAP == 6 && ty == MT_CYBORG) || (GAMEMAP == 8 && ty == MT_SPIDER); }
+      default: { ok = GAMEMAP == 8; }
+    }
+  }
+  if (!ok || P.health <= 0) { return; }
+  for (var j = 1u; j < MAXMOBJS; j++) {
+    if (j != mi && O[j].inuse != 0u && O[j].mtype == ty && O[j].health > 0) { return; }
+  }
+  if (COMMERCIAL) {
+    if (ty == MT_FATSO) { actTag = 666; _ = evDoFloor(0u, FLOOR_lowerFloorToLowest); return; }
+    actTag = 667; _ = evDoFloor(0u, FLOOR_raiseToTexture); return;
+  }
+  if (GAMEEPISODE == 1) { actTag = 666; _ = evDoFloor(0u, FLOOR_lowerFloorToLowest); return; }
+  if (GAMEEPISODE == 4 && GAMEMAP == 6) { actTag = 666; _ = evDoDoor(0u, DOOR_blazeOpen); return; }
+  if (GAMEEPISODE == 4 && GAMEMAP == 8) { actTag = 666; _ = evDoFloor(0u, FLOOR_lowerFloorToLowest); return; }
+  P.exit = 1u;
+}
+
+// Monster state actions. Each shared primitive has one call site at the end,
+// so the compiler inlines the movement and attack code once.
+fn callAction(mi: u32, act: u32) {
+  let ty = O[mi].mtype;
+  var doLook = false; var doChase = false; var preSound = 0u;
+  var face = false; var shots = 0; var shotSound = 0u; var dmgMod = 5; var dmgMul = 3;
+  var meleeMod = 0; var meleeMul = 0; var meleeSound = 0u;
+  var missile = -1;
+  switch (act) {
+    case A_Look: { doLook = true; }
+    case A_Chase, A_VileChase: { doChase = true; }
+    case A_Hoof: { preSound = SFX_hoof; doChase = true; }
+    case A_Metal: { preSound = SFX_metal; doChase = true; }
+    case A_BabyMetal: { preSound = SFX_bspwlk; doChase = true; }
+    case A_FaceTarget, A_VileStart, A_VileTarget, A_VileAttack, A_FatRaise: { face = true; }
+    case A_PosAttack: { face = true; shots = 1; shotSound = SFX_pistol; }
+    case A_SPosAttack: { face = true; shots = 3; shotSound = SFX_shotgn; }
+    case A_CPosAttack: { face = true; shots = 1; shotSound = SFX_shotgn; }
+    case A_CPosRefire, A_SpidRefire: {
+      faceTarget(mi);
+      if (P_Random() < select(40, 10, act == A_SpidRefire)) { return; }
+      let t = O[mi].targ;
+      if (t < 0 || O[t].health <= 0 || !canSeeTarget(mi)) { O[mi].req = u32(info(ty, MI_SEESTATE)); }
+      return;
+    }
+    case A_TroopAttack: { face = true; meleeMod = 8; meleeMul = 3; meleeSound = SFX_claw; missile = i32(MT_TROOPSHOT); }
+    case A_SargAttack: { face = true; meleeMod = 10; meleeMul = 4; }
+    case A_HeadAttack: { face = true; meleeMod = 6; meleeMul = 10; missile = i32(MT_HEADSHOT); }
+    case A_BruisAttack: { meleeMod = 8; meleeMul = 10; meleeSound = SFX_claw; missile = i32(MT_BRUISERSHOT); }
+    case A_CyberAttack: { face = true; missile = i32(MT_ROCKET); }
+    case A_BspiAttack: { face = true; missile = i32(MT_ARACHPLAZ); }
+    case A_SkelMissile: { face = true; missile = i32(MT_TRACER); }
+    case A_FatAttack1, A_FatAttack2, A_FatAttack3: { face = true; missile = i32(MT_FATSHOT); }
+    case A_SkelWhoosh: { faceTarget(mi); mobjSound(mi, SFX_skeswg); return; }
+    case A_SkelFist: { face = true; meleeMod = 10; meleeMul = 6; meleeSound = SFX_skepch; }
+    case A_SkullAttack: {
+      let t = O[mi].targ;
+      if (t < 0) { return; }
+      O[mi].flags |= MF_SKULLFLY;
+      let asnd = info(ty, MI_ATTACKSOUND);
+      if (asnd != 0) { mobjSound(mi, u32(asnd)); }
+      faceTarget(mi);
+      O[mi].momx = 20.0 * cos(O[mi].angle); O[mi].momy = 20.0 * sin(O[mi].angle);
+      let dist = max(approxDist(mpos(u32(t)) - mpos(mi)) / 20.0, 1.0);
+      O[mi].momz = (O[t].z + O[t].height / 2.0 - O[mi].z) / dist;
+      return;
+    }
+    case A_Scream: {
+      var s = info(ty, MI_DEATHSOUND);
+      if (s == 0) { return; }
+      if (u32(s) >= SFX_podth1 && u32(s) <= SFX_podth3) { s = i32(SFX_podth1) + P_Random() % 3; }
+      else if (u32(s) == SFX_bgdth1 || u32(s) == SFX_bgdth2) { s = i32(SFX_bgdth1) + P_Random() % 2; }
+      mobjSound(mi, u32(s));
+      return;
+    }
+    case A_XScream: { mobjSound(mi, SFX_slop); return; }
+    case A_Pain: { let s = info(ty, MI_PAINSOUND); if (s != 0) { mobjSound(mi, u32(s)); } return; }
+    case A_PlayerScream: { mobjSound(mi, SFX_pldeth); return; }
+    case A_Fall: { O[mi].flags &= ~MF_SOLID; return; }
+    case A_Explode: { radiusAttack(mi, O[mi].targ, 128); return; }
+    case A_BossDeath: { bossDeath(mi); return; }
+    case A_KeenDie: { O[mi].flags &= ~MF_SOLID; return; }
+    case A_BFGSpray: {
+      let src = O[mi].targ;
+      if (src < 0) { return; }
+      for (var i = 0; i < 40; i++) {
+        let an = O[mi].angle - PI / 4.0 + PI / 2.0 / 40.0 * f32(i);
+        _ = trace(u32(src), an, 1024.0, 0u, 0.0, 0);
+        if (linetarget < 0) { continue; }
+        let lt = u32(linetarget);
+        _ = spawnMobj(O[lt].x, O[lt].y, O[lt].z + O[lt].height / 4.0, MT_EXTRABFG);
+        var dmg = 0;
+        for (var k = 0; k < 15; k++) { dmg += (P_Random() & 7) + 1; }
+        damageMobj(lt, src, src, dmg);
+      }
+      return;
+    }
+    default: { return; }
+  }
+  if (preSound != 0u) { mobjSound(mi, preSound); }
+  if (doLook) { look(mi); return; }
+  if (doChase) { chase(mi); return; }
+  let t = O[mi].targ;
+  if (t < 0) { return; }
+  if (face) { faceTarget(mi); }
+  if (meleeMul > 0 && checkMeleeRange(mi)) {
+    if (meleeSound != 0u) { mobjSound(mi, meleeSound); }
+    damageMobj(u32(t), i32(mi), i32(mi), (P_Random() % meleeMod + 1) * meleeMul);
+    return;
+  }
+  if (missile >= 0) { spawnMissile(mi, t, u32(missile), 0.0, 0.0); return; }
+  if (shots > 0) {
+    mobjSound(mi, shotSound);
+    let slope = trace(mi, O[mi].angle, MISSILERANGE, 0u, 0.0, 0);
+    for (var i = 0; i < shots; i++) {
+      _ = trace(mi, O[mi].angle + subRandom() * BAM20, MISSILERANGE, 1u, slope, (P_Random() % dmgMod + 1) * dmgMul);
+    }
+  }
+}
+
+// P_SetMobjState with actions. An action or a hit asks for a new state by
+// writing req; this loop is the only place states change, so nothing recurses.
 fn setMobjState(mi: u32, st0: u32) -> bool {
   var st = st0;
-  for (var guard = 0; guard < 16; guard++) {
+  for (var guard = 0; guard < 32; guard++) {
     if (st == S_NULL) { O[mi].inuse = 0u; return false; }
     O[mi].state = st;
     O[mi].tics = gi(G_STATES + 8u * st + 2u);
+    O[mi].req = NOREQ;
+    let act = G[G_STATES + 8u * st + 3u];
+    if (act != 0u) { callAction(mi, act); }
+    if (O[mi].inuse == 0u) { return false; }
+    if (O[mi].req != NOREQ) { st = O[mi].req; continue; }
     if (O[mi].tics != 0) { return true; }
-    st = G[G_STATES + 8u * st + 4u];
+    st = stateNext(st);
   }
   return true;
 }
 
 fn mobjThink(mi: u32) {
-  if (O[mi].momx != 0.0 || O[mi].momy != 0.0) { xyMovement(mi, false, false); processCrossings(mi); }
-  if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, false); }
+  // sight to a non-player target, once per think
+  sightTarget = false;
+  let t = O[mi].targ;
+  if (t > 0 && O[t].inuse != 0u && (O[mi].flags & MF_SHOOTABLE) != 0u) { sightTarget = checkSight(mi, u32(t)); }
+  numcross = 0u;
+  if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (O[mi].flags & MF_SKULLFLY) != 0u) { thingXY(mi); processCrossings(mi); }
   if (O[mi].inuse == 0u) { return; }
-  if (O[mi].tics != -1) {
+  if (O[mi].req == NOREQ && (O[mi].z != O[mi].floorz || O[mi].momz != 0.0)) { zMovement(mi, false); }
+  if (O[mi].inuse == 0u) { return; }
+  var next = NOREQ;
+  if (O[mi].req != NOREQ) { next = O[mi].req; }
+  else if (O[mi].tics != -1) {
     O[mi].tics -= 1;
-    if (O[mi].tics <= 0) { _ = setMobjState(mi, G[G_STATES + 8u * O[mi].state + 4u]); }
+    if (O[mi].tics <= 0) { next = stateNext(O[mi].state); }
   }
+  if (next != NOREQ) { _ = setMobjState(mi, next); }
+}
+
+// ---- the player's weapons (P_SetPsprite and friends)
+var<private> W_AMMO: array<i32, 9> = array<i32, 9>(-1, 0, 1, 0, 3, 2, 2, -1, 1);
+var<private> W_UP: array<u32, 9> = array<u32, 9>(S_PUNCHUP, S_PISTOLUP, S_SGUNUP, S_CHAINUP, S_MISSILEUP, S_PLASMAUP, S_BFGUP, S_SAWUP, S_DSGUNUP);
+var<private> W_DOWN: array<u32, 9> = array<u32, 9>(S_PUNCHDOWN, S_PISTOLDOWN, S_SGUNDOWN, S_CHAINDOWN, S_MISSILEDOWN, S_PLASMADOWN, S_BFGDOWN, S_SAWDOWN, S_DSGUNDOWN);
+var<private> W_READY: array<u32, 9> = array<u32, 9>(S_PUNCH, S_PISTOL, S_SGUN, S_CHAIN, S_MISSILE, S_PLASMA, S_BFG, S_SAW, S_DSGUN);
+var<private> W_ATK: array<u32, 9> = array<u32, 9>(S_PUNCH1, S_PISTOL1, S_SGUN1, S_CHAIN1, S_MISSILE1, S_PLASMA1, S_BFG1, S_SAW1, S_DSGUN1);
+var<private> W_FLASH: array<u32, 9> = array<u32, 9>(S_NULL, S_PISTOLFLASH, S_SGUNFLASH1, S_CHAINFLASH1, S_MISSILEFLASH1, S_PLASMAFLASH1, S_BFGFLASH1, S_NULL, S_DSGUNFLASH1);
+
+var<private> pq: array<vec2u, 8>;   // queued (psprite, state) changes
+var<private> pqn: u32;
+var<private> pspCur: u32;          // the psprite being processed
+var<private> pspReq: u32;          // a new state for it, asked by its own action
+fn setPsp(pos: u32, st: u32) {
+  if (pos == pspCur) { pspReq = st; return; }
+  if (pqn < 8u) { pq[pqn] = vec2u(pos, st); pqn += 1u; }
+}
+fn ammoPerShot(w: i32) -> i32 { if (w == 6) { return 40; } if (w == 8) { return 2; } return 1; }
+
+fn checkAmmo() -> bool {
+  let w = P.readyweapon;
+  let am = W_AMMO[clamp(w, 0, 8)];
+  if (am < 0 || P.ammo[am] >= ammoPerShot(w)) { return true; }
+  let own = P.weapons;
+  var nw = 0;
+  if ((own & 32u) != 0u && P.ammo[2] > 0 && !SHAREWARE) { nw = 5; }
+  else if ((own & 256u) != 0u && P.ammo[1] > 2 && COMMERCIAL) { nw = 8; }
+  else if ((own & 8u) != 0u && P.ammo[0] > 0) { nw = 3; }
+  else if ((own & 4u) != 0u && P.ammo[1] > 0) { nw = 2; }
+  else if (P.ammo[0] > 0) { nw = 1; }
+  else if ((own & 128u) != 0u) { nw = 7; }
+  else if ((own & 16u) != 0u && P.ammo[3] > 0) { nw = 4; }
+  else if ((own & 64u) != 0u && P.ammo[2] > 40 && !SHAREWARE) { nw = 6; }
+  P.pendingweapon = nw;
+  setPsp(0u, W_DOWN[clamp(w, 0, 8)]);
+  return false;
+}
+fn bringUpWeapon() {
+  if (P.pendingweapon < 0) { P.pendingweapon = P.readyweapon; }
+  if (P.pendingweapon == 7) { mobjSound(0u, SFX_sawup); }
+  let st = W_UP[clamp(P.pendingweapon, 0, 8)];
+  P.pendingweapon = -1;
+  P.pspsy = 128.0;
+  setPsp(0u, st);
+}
+
+var<private> wantFire: bool;
+var<private> wantCheckAmmo: bool;
+var<private> shotKind: u32;   // 0 none, 1 bullets, 2 missile, 3 punch, 4 saw
+var<private> shotCount: i32;
+var<private> shotAccurate: bool;
+var<private> shotMissile: u32;
+
+fn pspAction(pos: u32, act: u32) {
+  let w = clamp(P.readyweapon, 0, 8);
+  let am = W_AMMO[w];
+  switch (act) {
+    case A_Light0: { P.extralight = 0; }
+    case A_Light1: { P.extralight = 1; }
+    case A_Light2: { P.extralight = 2; }
+    case A_WeaponReady: {
+      if (w == 7 && P.pspstate[0] == S_SAW) { mobjSound(0u, SFX_sawidl); }
+      if (P.pendingweapon >= 0 || P.health <= 0) { setPsp(0u, W_DOWN[w]); return; }
+      if ((U.buttons & 1u) != 0u) {
+        if (P.attackdown == 0u || (w != 4 && w != 6)) { P.attackdown = 1u; wantFire = true; return; }
+      } else { P.attackdown = 0u; }
+      let a = TAU * f32(P.leveltime % 64u) / 64.0;
+      P.pspsx = 1.0 + P.bob * cos(a);
+      P.pspsy = 32.0 + P.bob * abs(sin(a));
+    }
+    case A_Lower: {
+      P.pspsy += 6.0;
+      if (P.pspsy < 128.0) { return; }
+      if (P.dead != 0u) { P.pspsy = 128.0; return; }
+      if (P.health <= 0) { setPsp(0u, S_NULL); return; }
+      P.readyweapon = P.pendingweapon;
+      bringUpWeapon();
+    }
+    case A_Raise: {
+      P.pspsy -= 6.0;
+      if (P.pspsy > 32.0) { return; }
+      P.pspsy = 32.0;
+      setPsp(0u, W_READY[w]);
+    }
+    case A_ReFire: {
+      if ((U.buttons & 1u) != 0u && P.pendingweapon < 0 && P.health > 0) { P.refire += 1; wantFire = true; }
+      else { P.refire = 0; wantCheckAmmo = true; }
+    }
+    case A_CheckReload: { wantCheckAmmo = true; }
+    case A_GunFlash: { setPsp(1u, W_FLASH[w]); }
+    case A_FirePistol: {
+      mobjSound(0u, SFX_pistol); P.ammo[am] -= 1; setPsp(1u, W_FLASH[w]);
+      shotKind = 1u; shotCount = 1; shotAccurate = P.refire == 0;
+    }
+    case A_FireShotgun: {
+      mobjSound(0u, SFX_shotgn); P.ammo[am] -= 1; setPsp(1u, W_FLASH[w]);
+      shotKind = 1u; shotCount = 7; shotAccurate = false;
+    }
+    case A_FireShotgun2: {
+      mobjSound(0u, SFX_dshtgn); P.ammo[am] -= 2; setPsp(1u, W_FLASH[w]);
+      shotKind = 1u; shotCount = 20; shotAccurate = false;
+    }
+    case A_FireCGun: {
+      mobjSound(0u, SFX_pistol);
+      if (P.ammo[am] <= 0) { return; }
+      P.ammo[am] -= 1;
+      setPsp(1u, W_FLASH[w] + (P.pspstate[0] - S_CHAIN1));
+      shotKind = 1u; shotCount = 1; shotAccurate = P.refire == 0;
+    }
+    case A_FireMissile: { P.ammo[am] -= 1; shotKind = 2u; shotMissile = MT_ROCKET; }
+    case A_FirePlasma: { P.ammo[am] -= 1; setPsp(1u, W_FLASH[w] + u32(P_Random() & 1)); shotKind = 2u; shotMissile = MT_PLASMA; }
+    case A_FireBFG: { P.ammo[am] -= 40; shotKind = 2u; shotMissile = MT_BFG; }
+    case A_BFGsound: { mobjSound(0u, SFX_bfg); }
+    case A_Punch: { shotKind = 3u; }
+    case A_Saw: { shotKind = 4u; }
+    case A_OpenShotgun2: { mobjSound(0u, SFX_dbopn); }
+    case A_LoadShotgun2: { mobjSound(0u, SFX_dbload); }
+    case A_CloseShotgun2: {
+      mobjSound(0u, SFX_dbcls);
+      if ((U.buttons & 1u) != 0u && P.pendingweapon < 0 && P.health > 0) { P.refire += 1; wantFire = true; }
+      else { P.refire = 0; wantCheckAmmo = true; }
+    }
+    default: {}
+  }
+}
+
+// Fire what the actions asked for: one trace call site for aiming, one for shooting.
+fn playerShoot() {
+  let kind = shotKind;
+  shotKind = 0u;
+  if (kind == 0u) { return; }
+  var an = O[0].angle;
+  if (kind >= 3u) {
+    var dmg = (P_Random() % 10 + 1) * 2;
+    if (kind == 3u && P.powers[1] != 0) { dmg *= 10; }
+    an += subRandom() * BAM18;
+    let range = select(MELEERANGE, MELEERANGE + 1.0, kind == 4u);
+    let slope = trace(0u, an, range, 0u, 0.0, 0);
+    let lt = linetarget;
+    _ = trace(0u, an, range, 1u, slope, dmg);
+    if (lt < 0) { if (kind == 4u) { mobjSound(0u, SFX_sawful); } return; }
+    mobjSound(0u, select(SFX_punch, SFX_sawhit, kind == 4u));
+    O[0].angle = angleTo(mpos(0u), mpos(u32(lt)));
+    return;
+  }
+  // P_BulletSlope / the aim of P_SpawnPlayerMissile: straight, then 5.6 degrees either side
+  var slope = 0.0;
+  var offs = array<f32, 3>(0.0, BAM26, -BAM26);
+  var found = false;
+  for (var i = 0; i < 3 && !found; i++) {
+    slope = trace(0u, O[0].angle + offs[i], 1024.0, 0u, 0.0, 0);
+    if (linetarget >= 0) { an = O[0].angle + offs[i]; found = true; }
+  }
+  if (kind == 2u) {
+    if (!found) { an = O[0].angle; slope = 0.0; }
+    spawnMissile(0u, -1, shotMissile, an, slope);
+    return;
+  }
+  for (var i = 0; i < shotCount; i++) {
+    var a = O[0].angle;
+    if (!shotAccurate) { a += subRandom() * BAM18; }
+    _ = trace(0u, a, MISSILERANGE, 1u, slope, 5 * (P_Random() % 3 + 1));
+  }
+}
+
+// P_MovePsprites plus the state queue. Every psprite change goes through here.
+fn runPsprites() {
+  pqn = 0u;
+  wantFire = false; wantCheckAmmo = false; shotKind = 0u;
+  if (P.pspstate[0] == 0u && P.dead == 0u && P.health > 0) { pspCur = 9u; bringUpWeapon(); }
+  for (var pos = 0u; pos < 2u; pos++) {
+    if (P.pspstate[pos] == 0u || P.psptics[pos] == -1) { continue; }
+    P.psptics[pos] -= 1;
+    if (P.psptics[pos] <= 0 && pqn < 8u) { pq[pqn] = vec2u(pos, stateNext(P.pspstate[pos])); pqn += 1u; }
+  }
+  for (var qi = 0u; qi < 24u; qi++) {
+    if (pqn == 0u) {
+      // fire and ammo checks run between state changes, like DOOM's nested calls
+      if (wantFire) {
+        wantFire = false;
+        pspCur = 9u;
+        if (checkAmmo()) { setPsp(0u, W_ATK[clamp(P.readyweapon, 0, 8)]); noiseAlert(); }
+      } else if (wantCheckAmmo) {
+        wantCheckAmmo = false;
+        pspCur = 9u;
+        _ = checkAmmo();
+      }
+      if (pqn == 0u) { break; }
+    }
+    let item = pq[0];
+    for (var k = 1u; k < pqn; k++) { pq[k - 1u] = pq[k]; }
+    pqn -= 1u;
+    let pos = item.x;
+    var st = item.y;
+    pspCur = pos;
+    for (var guard = 0; guard < 16; guard++) {
+      if (st == S_NULL) { P.pspstate[pos] = 0u; break; }
+      P.pspstate[pos] = st;
+      P.psptics[pos] = gi(G_STATES + 8u * st + 2u);
+      let m1 = gi(G_STATES + 8u * st + 5u);
+      if (m1 != 0) { P.pspsx = f32(m1); P.pspsy = f32(gi(G_STATES + 8u * st + 6u)); }
+      pspReq = NOREQ;
+      let act = G[G_STATES + 8u * st + 3u];
+      if (act != 0u) { pspAction(pos, act); }
+      if (pspReq != NOREQ) { st = pspReq; continue; }
+      if (P.psptics[pos] != 0) { break; }
+      st = stateNext(st);
+    }
+    pspCur = 9u;
+  }
+  playerShoot();
 }
 
 fn calcHeight(onground: bool) {
   let m = O[0];
   var bob = (m.momx * m.momx + m.momy * m.momy) / 4.0;
   bob = min(bob, MAXBOB);
+  P.bob = bob;
   if (!onground) {
     P.viewz = min(m.z + VIEWHEIGHT, m.ceilingz - 4.0);
     return;
@@ -1714,17 +2651,19 @@ fn playerInSpecialSector() {
   if (O[0].z != S[sec].floorh) { return; }
   let sp = S[sec].special;
   let tick = (P.leveltime & 31u) == 0u;
+  var dmg = 0;
   switch (sp) {
-    case 5: { if (P.powers[3] == 0 && tick) { damageMobj(0u, 10); } }
-    case 7: { if (P.powers[3] == 0 && tick) { damageMobj(0u, 5); } }
-    case 16, 4: { if ((P.powers[3] == 0 || P_Random() < 5) && tick) { damageMobj(0u, 20); } }
+    case 5: { if (P.powers[3] == 0 && tick) { dmg = 10; } }
+    case 7: { if (P.powers[3] == 0 && tick) { dmg = 5; } }
+    case 16, 4: { if ((P.powers[3] == 0 || P_Random() < 5) && tick) { dmg = 20; } }
     case 9: { P.secretcount += 1; S[sec].special = 0; }
     case 11: {
-      if (tick) { damageMobj(0u, 20); }
+      if (tick) { dmg = 20; }
       if (P.health <= 10) { P.exit = 1u; }
     }
     default: {}
   }
+  if (dmg > 0) { damageMobj(0u, -1, -1, dmg); }
 }
 
 fn playerThink() {
@@ -1732,13 +2671,24 @@ fn playerThink() {
   P.lastframe = U.frame;
   let onground = O[0].z <= O[0].floorz;
   P.onground = select(0u, 1u, onground);
+  // a state the player's mobj was asked for: only the pain sound matters in first person
+  if (O[0].req != NOREQ) {
+    if (O[0].req == u32(info(MT_PLAYER, MI_PAINSTATE)) && P.dead == 0u) { mobjSound(0u, SFX_plpain); }
+    O[0].req = NOREQ;
+  }
   if (P.dead != 0u) {
-    // fall to the floor and wait for use to restart
+    // fall to the floor, face the killer, wait for use to restart
     if (P.viewheight > 6.0) { P.viewheight -= 1.0; }
     P.deltaviewheight = 0.0;
     calcHeight(onground);
+    if (P.attacker > 0 && O[P.attacker].inuse != 0u) {
+      let want = angleTo(mpos(0u), mpos(u32(P.attacker)));
+      let d = wrapPi(want - O[0].angle);
+      if (abs(d) < BAM26 / 2.0) { O[0].angle = want; } else { O[0].angle += sign(d) * BAM26 / 2.0; }
+    }
     if ((U.buttons & 2u) != 0u && P.usedown == 0u) { P.exit = 3u; }
     P.usedown = select(0u, 1u, (U.buttons & 2u) != 0u);
+    runPsprites();
     return;
   }
   if (O[0].reactiontime > 0) {
@@ -1757,16 +2707,20 @@ fn playerThink() {
     if (P.usedown == 0u) { useLines(); P.usedown = 1u; }
   } else { P.usedown = 0u; }
   if (U.weapon != 0u && U.weapon <= 9u) {
-    let w = i32(U.weapon) - 1;
-    if ((P.weapons & (1u << u32(w))) != 0u) { P.pendingweapon = w; }
+    var w = i32(U.weapon) - 1;
+    // 1 toggles fist and chainsaw, 3 toggles the shotguns
+    if (w == 0 && (P.weapons & 128u) != 0u && !(P.readyweapon == 7 && P.powers[1] != 0)) { w = 7; }
+    if (w == 2 && COMMERCIAL && (P.weapons & 256u) != 0u && P.readyweapon != 8) { w = 8; }
+    if ((P.weapons & (1u << u32(w))) != 0u && w != P.readyweapon) { P.pendingweapon = w; }
   }
-  if (P.pendingweapon >= 0) { P.readyweapon = P.pendingweapon; P.pendingweapon = -1; }
+  runPsprites();
   for (var i = 0; i < 6; i++) {
     if (P.powers[i] > 0 && i != 1 && i != 4) {
       P.powers[i] -= 1;
       if (i == 2 && P.powers[i] == 0) { O[0].flags &= ~MF_SHADOW; }
     }
   }
+  if (P.powers[1] > 0) { P.powers[1] += 1; }
   if (P.damagecount > 0) { P.damagecount -= 1; }
   if (P.bonuscount > 0) { P.bonuscount -= 1; }
 }
@@ -1777,9 +2731,18 @@ fn ticPlayer() {
   playerThink();
   let hasCmd = U.forward != 0.0 || U.side != 0.0;
   numcross = 0u;
-  if (O[0].momx != 0.0 || O[0].momy != 0.0) { xyMovement(0u, true, hasCmd); processCrossings(0u); }
+  if (O[0].momx != 0.0 || O[0].momy != 0.0) { playerXY(hasCmd); processCrossings(0u); }
   if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
   calcHeight(O[0].z <= O[0].floorz);
+}
+
+// One thread per thing: can it see the player? Monsters read this during their think.
+@compute @workgroup_size(64)
+fn ticSight(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i == 0u || i >= MAXMOBJS || P.exit != 0u) { return; }
+  if (O[i].inuse == 0u || (O[i].flags & MF_SHOOTABLE) == 0u || info(O[i].mtype, MI_SEESTATE) == 0) { O[i].seeplayer = 0u; return; }
+  O[i].seeplayer = select(0u, 1u, checkSight(i, 0u));
 }
 
 @compute @workgroup_size(1)

@@ -322,6 +322,15 @@ export function buildMap(wad, gfx, mapName, skill = 3) {
   L.BMLIST = W.n; for (const v of blist) W.u(v);
   L.SECLINE = W.n; { let s = 0; for (const sl of secLines) { W.u(s); W.u(sl.length); s += sl.length; } }
   L.SECLIST = W.n; for (const sl of secLines) for (const v of sl) W.u(v);
+  // REJECT bits, 32 to a word; a short or missing lump rejects nothing
+  L.REJECT = W.n;
+  {
+    const bits = nsec * nsec, words = Math.ceil(bits / 32) + 1;
+    const start = W.zeros(words);
+    let rej = null;
+    try { const r = lump("REJECT"); rej = new Uint8Array(r.buffer, r.byteOffset, r.byteLength); } catch { rej = null; }
+    if (rej) for (let i = 0; i < Math.min(rej.length, Math.ceil(bits / 8)); i++) W.a[start + (i >> 2)] |= rej[i] << ((i & 3) * 8);
+  }
   W.u(0);
 
   // things
@@ -342,8 +351,11 @@ export function buildMap(wad, gfx, mapName, skill = 3) {
     things.push({ ...t, mt });
   }
   const spawnSector = (x, y) => ssecs[pointInSubsector(x, y)].sector;
+  const em = /^E(\d)M(\d)$/.exec(mapName), mm = /^MAP(\d\d)$/.exec(mapName);
   return {
     name: mapName, words: W.done(), layout: L,
+    episode: em ? +em[1] : 1, mapnum: em ? +em[2] : mm ? +mm[1] : 1, commercial: !!mm,
+    shareware: !wad.has("E2M1") && !wad.has("MAP01") && !wad.has("E4M1"),
     counts: { verts: nv, lines: nl, sides: nsd, segs: nseg, ssecs: nss, nodes: nn, sectors: nsec },
     bmap: { x: bmx, y: bmy, w: bmw, h: bmh },
     sectors, lines, sides, things, player, spawnSector, pointInSubsector,
@@ -369,6 +381,7 @@ export function spawnMobjs(map, mobjWords, capacity) {
     u[o + 16] = sec; i32[o + 17] = -1; i32[o + 18] = -1; i32[o + 19] = 8; // movedir DI_NODIR
     i32[o + 21] = info[5]; // reactiontime
     u[o + 24] = 1; // in use
+    u[o + 26] = 0xffffffff; // no state request
     n++;
     return o;
   };

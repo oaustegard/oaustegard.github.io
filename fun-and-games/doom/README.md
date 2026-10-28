@@ -9,6 +9,7 @@ Edge or Safari.
 
 ## Controls
 
+
 | input | does |
 |---|---|
 | W A S D, arrows | move and turn; A and D strafe |
@@ -16,6 +17,8 @@ Edge or Safari.
 | shift | run |
 | space, E | open doors and press switches |
 | alt + ← → | strafe with the arrow keys |
+| ctrl, F, click | fire |
+| 1 – 7 | weapons |
 | esc | menu |
 | phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn |
 
@@ -29,7 +32,8 @@ things, line specials, the player and world counters, and the framebuffer. `shad
 buffer offsets of each WAD and level into the WGSL as constants and compiles one shader module per
 level.
 
-- **Rendering.** `render` runs one thread per screen column. Each thread walks the BSP tree front
+- **Rendering.** `render` runs one thread per screen column. The projection follows the screen
+  height, as Doom's 160 does at 200 lines, so a widescreen window sees more to the sides. Each thread walks the BSP tree front
   to back with an explicit 64-entry stack, because WGSL has no recursion, and skips any node whose
   bounding box the column's ray misses. It draws each wall piece, floor and ceiling as it reaches
   it, then stops once a solid wall closes the column. Floors and ceilings are textured per pixel
@@ -39,14 +43,20 @@ level.
   an atomic counter. The column threads then draw masked mid-textures and sprites through a depth
   buffer. A floor or ceiling pixel stores the depth of the wall that ended its span, which
   reproduces Doom's sprite clipping by wall silhouettes.
-- **Game tic.** A tic is four single-thread kernels in a row:
-  - `ticPlayer` does input, thrust, collision through the blockmap, sliding and stepping.
-  - `ticMobjs` runs every thing's state machine.
+- **Game tic.** A tic is five kernels in a row, four of them single-threaded:
+  - `ticPlayer` does input, thrust, collision through the blockmap, sliding and stepping, and the
+    weapon's state machine and shots.
+  - `ticSight` runs one thread per monster to check whether it can see the player.
+  - `ticMobjs` runs every thing's state machine, with the monster AI, attacks and missiles.
   - `ticActivate` runs the line specials that were crossed or used during the tic.
   - `ticWorld` moves doors, lifts, floors, crushers and light effects.
 
-  Line activations go through a queue in the world buffer. Without it, crossing a teleport line
-  would call `tryMove` from inside `tryMove`, and WGSL forbids that cycle.
+  WGSL forbids recursion, and DOOM's game code recurses in two places. Crossing a teleport line
+  calls `tryMove` from inside `tryMove`, so line activations go through a queue in the world
+  buffer. A monster's state action can change its own state, or damage something whose state
+  then changes, so actions and damage write a requested state that only the state loop applies.
+  Heavy functions such as `tryMove` and the hitscan trace each have one call site, because the
+  shader compiler inlines every call.
 - **Specials as data.** `specials.js` encodes Doom's 140-odd line specials as one word each:
   trigger, repeatability, action, argument and key. The WGSL dispatches on the action code.
   `info.js` holds Doom's state and thing tables, generated from `info.c`.
@@ -56,8 +66,8 @@ level.
 
 ## Not done yet
 
-Weapons and monsters. Monsters animate but don't act, and the gun isn't drawn or fired. The
-automap, menus and intermission screens are also missing.
+The automap, menus, the intermission screens and the status bar face. Monster behaviour is a
+port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had little play-testing.
 
 ## Licences
 

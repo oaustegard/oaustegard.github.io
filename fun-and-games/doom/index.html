@@ -36,7 +36,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 #touch { position: fixed; inset: 0; pointer-events: none; }
 #touch[hidden] { display: none; }
 .tbtn { position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .5); background: rgba(40, 30, 16, .45); color: var(--ink); font: 12px ui-monospace, monospace; display: flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; }
-#bUse { right: max(16px, env(safe-area-inset-right)); bottom: 120px; }
+#bUse { right: max(16px, env(safe-area-inset-right)); bottom: 196px; }
+#bFire { right: max(16px, env(safe-area-inset-right)); bottom: 100px; width: 84px; height: 84px; border-color: rgba(220, 80, 60, .7); }
 #bCentre { right: max(72px, calc(env(safe-area-inset-right) + 72px)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 18px; }
 #bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
 #stick { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
@@ -50,6 +51,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
 <div id="touch" hidden>
   <div id="stick"><div id="nub"></div></div>
   <div class="tbtn" id="bUse">USE</div>
+  <div class="tbtn" id="bFire">FIRE</div>
   <div class="tbtn" id="bMenu">II</div>
   <div class="tbtn" id="bCentre">◎</div>
 </div>
@@ -58,14 +60,15 @@ button.go:disabled { opacity: .5; cursor: wait; }
   <div class="card">
     <h1>DOOM ON THE GPU</h1>
     <p>The Doom engine rewritten as WebGPU compute shaders. One GPU thread per screen column walks the BSP tree and draws walls, floors and sprites; the game tic (movement, collision, doors, lifts, pickups) runs in GPU kernels too. JavaScript reads the WAD, passes keys and plays sounds.</p>
-    <p class="mute">Playing Freedoom's first episode (BSD licence). Monsters and weapons don't fight back yet: this build is the renderer and the world.</p>
+    <p class="mute">Playing Freedoom's first episode (BSD licence).</p>
     <label>Level <select id="map"></select></label>
     <label>Resolution <select id="res">
-      <option value="320x200">320 × 200 (original)</option>
-      <option value="640x400" selected>640 × 400</option>
-      <option value="960x600">960 × 600</option>
-      <option value="1280x800">1280 × 800</option>
+      <option value="200">200 lines (original)</option>
+      <option value="400" selected>400 lines</option>
+      <option value="600">600 lines</option>
+      <option value="800">800 lines</option>
     </select></label>
+    <label>Widescreen (fit the screen's shape) <input type="checkbox" id="wide" checked></label>
     <div id="tiltOpts" hidden>
       <label>Swivel to turn <input type="checkbox" id="tilt" checked></label>
       <label>Tilt sideways to turn <input type="checkbox" id="tiltRoll" checked></label>
@@ -80,6 +83,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <b>W A S D / arrows</b><span>move and turn (A/D strafe)</span>
       <b>mouse</b><span>turn and look up or down (click the screen to capture it)</span>
       <b>shift</b><span>run</span>
+      <b>ctrl / F / click</b><span>fire</span>
+      <b>1 – 7</b><span>weapons</span>
       <b>space / E</b><span>open doors, press switches</span>
       <b>alt + ← →</b><span>strafe with the arrows</span>
       <b>esc</b><span>this menu</span>
@@ -141,10 +146,17 @@ async function fetchWad() {
   return unpackWad(await new Blob(parts).arrayBuffer());
 }
 
+// Doom's pixels are 1.2 times taller than wide; the width that fills the screen follows from that
+function renderSize() {
+  const h = +$("res").value;
+  const aspect = $("wide").checked ? Math.max(4 / 3, Math.min(2.4, innerWidth / innerHeight)) : 4 / 3;
+  return [Math.round(h * 1.2 * aspect / 8) * 8, h];
+}
 async function buildEngine() {
-  const [w, h] = $("res").value.split("x").map(Number);
+  const [w, h] = renderSize();
   res = [w, h];
   canvas.width = w; canvas.height = h;
+  fit();
   status("Packing textures…");
   engine = await Engine.create(device, wadBuf, { width: w, height: h, format });
   const sel = $("map"), prev = sel.value;
@@ -172,7 +184,7 @@ async function start(mapName, carry = freshPlayer()) {
 // ---------------------------------------------------------------- layout
 function fit() {
   const vw = innerWidth, vh = innerHeight;
-  const ar = 4 / 3;
+  const ar = res[0] / (res[1] * 1.2);
   let w = vw, h = vw / ar;
   if (h > vh) { h = vh; w = vh * ar; }
   canvas.style.width = Math.floor(w) + "px";
@@ -193,7 +205,9 @@ addEventListener("keydown", (e) => {
 addEventListener("keyup", (e) => keys.delete(e.code));
 addEventListener("blur", () => keys.clear());
 canvas.addEventListener("click", () => { if (running && !isTouch) canvas.requestPointerLock?.(); });
-let mouseDY = 0, mousePitch = 0;
+let mouseDY = 0, mousePitch = 0, mouseFire = false;
+addEventListener("mousedown", (e) => { if (document.pointerLockElement === canvas && e.button === 0) mouseFire = true; });
+addEventListener("mouseup", (e) => { if (e.button === 0) mouseFire = false; });
 addEventListener("mousemove", (e) => { if (document.pointerLockElement === canvas) { mouseDX += e.movementX; mouseDY += e.movementY; } });
 
 // Phone motion. Gravity gives the pose: the back camera's elevation is the look pitch and the
@@ -253,7 +267,7 @@ async function enableGyro() {
 
 // touch: the left half is a floating stick, the right half drags to turn
 const STICK = 70;
-const touch = { stickId: null, sx: 0, sy: 0, dx: 0, dy: 0, turnId: null, tx: 0, use: false };
+const touch = { stickId: null, sx: 0, sy: 0, dx: 0, dy: 0, turnId: null, tx: 0, use: false, fire: false };
 if (isTouch) {
   $("touch").hidden = false;
   $("tiltOpts").hidden = false;
@@ -294,6 +308,8 @@ if (isTouch) {
   addEventListener("touchend", end); addEventListener("touchcancel", end);
   $("bUse").addEventListener("touchstart", (e) => { touch.use = true; e.preventDefault(); e.stopPropagation(); });
   $("bUse").addEventListener("touchend", (e) => { touch.use = false; e.preventDefault(); });
+  $("bFire").addEventListener("touchstart", (e) => { touch.fire = true; e.preventDefault(); e.stopPropagation(); });
+  $("bFire").addEventListener("touchend", (e) => { touch.fire = false; e.preventDefault(); });
   $("bCentre").addEventListener("touchstart", (e) => { recentre(); e.preventDefault(); e.stopPropagation(); });
   $("bMenu").addEventListener("touchstart", (e) => { running = false; showMenu(); e.preventDefault(); e.stopPropagation(); });
 }
@@ -321,8 +337,9 @@ function readInput() {
   mousePitch = Math.max(-0.75, Math.min(0.75, mousePitch - mouseDY * 0.0022));
   mouseDX = 0; mouseDY = 0; gyro.turn = 0;
   const use = k("Space", "KeyE", "Enter") || touch.use;
+  const fire = k("ControlLeft", "ControlRight", "KeyF") || mouseFire || touch.fire;
   const w = weaponKey; weaponKey = 0;
-  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, weapon: w, pitch: lookPitch() };
+  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, fire, weapon: w, pitch: lookPitch() };
 }
 
 // ---------------------------------------------------------------- sound
@@ -416,8 +433,8 @@ $("play").addEventListener("click", async () => {
   if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
   audio?.resume?.();
   await enableGyro();
-  const [w, h] = $("res").value.split("x").map(Number);
-  if (w !== res[0] || h !== res[1]) { await buildEngine(); engine.map = null; }
+  const [w, h] = renderSize();
+  if (w !== res[0] || h !== res[1]) { await buildEngine(); engine.map = null; fit(); }
   const m = $("map").value;
   if (engine.map && engine.mapName === m) { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); return; }
   await start(m);
