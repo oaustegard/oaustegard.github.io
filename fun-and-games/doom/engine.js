@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028123143";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028123143";
-import { STATES, SFX, MF } from "./info.js?v=20261028123143";
-import { MSG } from "./specials.js?v=20261028123143";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028123748";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028123748";
+import { STATES, SFX, MF } from "./info.js?v=20261028123748";
+import { MSG } from "./specials.js?v=20261028123748";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -138,7 +138,11 @@ export class Engine {
     // one at a time: a failed pipeline names its kernel
     const mk = async (entryPoint) => {
       try { return await d.createComputePipelineAsync({ layout: pl, compute: { module: mod, entryPoint } }); }
-      catch (err) { throw new Error(`pipeline ${entryPoint}: ${err.message}`); }
+      catch (err) {
+        // Safari's message carries the whole generated Metal source; the compiler's verdict is in its error lines
+        const m = err.message, errLines = m.split("\n").filter((l) => /error:/.test(l));
+        throw new Error(`pipeline ${entryPoint}: ${errLines.length ? errLines.slice(0, 4).join("\n") : m.length > 600 ? "…" + m.slice(-600) : m}`);
+      }
     };
     this.renderPipe = await mk("render");
     this.projectPipe = await mk("project");
