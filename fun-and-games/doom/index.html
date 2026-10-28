@@ -127,12 +127,15 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261028120952";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028120952";
+import { Music, musicLumpFor } from "./music.js?v=20261028123143";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028123143";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
-const status = (t) => { $("status").textContent = t; };
+// ?embed=E1M2: start that map straight away, for a page that frames the game (the blog's screenshots);
+// progress goes to the banner, since the menu card stays hidden
+const embedMap = new URLSearchParams(location.search).get("embed");
+const status = (t) => { $("status").textContent = t; if (embedMap) banner(t); };
 
 if (!navigator.gpu) {
   status("This browser has no WebGPU. Try a recent Chrome, Edge or Safari.");
@@ -1016,13 +1019,19 @@ if (location.search.includes("debug")) window.gpuDoomDebug = { startIntermission
 
 (async () => {
   try {
+    if (embedMap) {
+      $("menu").hidden = true;
+      // sound needs a gesture inside this frame
+      for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, ensureAudio, { once: true });
+    }
     await initGPU();
     wadBuf = await fetchWad();
     await buildEngine();
     status("");
     $("play").disabled = false;
     $("play").textContent = "Back to the menu";
-    showMenu();
+    if (embedMap && engine.maps().includes(embedMap)) await start(embedMap);
+    else showMenu();
   } catch (err) {
     status(err.message);
     console.error(err);

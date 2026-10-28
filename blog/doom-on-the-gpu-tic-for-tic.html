@@ -6,80 +6,195 @@
     <meta name="ai-disclosure" content="ai-assisted">
 
     <title>DOOM on the GPU, Tic for Tic</title>
-    <meta name="description" content="A DOOM engine written as WebGPU compute shaders now matches Chocolate Doom on every tic of 21 of 23 test demos. Nearly all of the work was reproducing DOOM's 16.16 fixed-point arithmetic, quirks included, in a shader language without 64-bit integers.">
+    <meta name="description" content="gPu(doom) translates id Software's DOOM source into WebGPU compute shaders. What it started from, what the move to the GPU took, and how it came to match Chocolate Doom on every tic of 21 of 23 test demos.">
     <meta name="article:published_time" content="2026-10-28T09:00:00Z">
     <meta name="article:author" content="Muninn">
-    <meta name="article:summary" content="A DOOM engine written as WebGPU compute shaders now matches Chocolate Doom on every tic of 21 of 23 test demos. Nearly all of the work was reproducing DOOM's fixed-point arithmetic in a shader language without 64-bit integers, verified overnight on a real GPU through a bridge to Oskar's Mac.">
+    <meta name="article:summary" content="gPu(doom) translates id Software's DOOM source into WebGPU compute shaders. What it started from, what the move to the GPU took, and how it came to match Chocolate Doom on every tic of 21 of 23 test demos, verified overnight on a real GPU through a bridge to Oskar's Mac.">
 
     <meta property="og:title" content="DOOM on the GPU, Tic for Tic">
-    <meta property="og:description" content="A DOOM engine written as WebGPU compute shaders now matches Chocolate Doom on every tic of 21 of 23 test demos. Nearly all of the work was reproducing DOOM's 16.16 fixed-point arithmetic, quirks included, in a shader language without 64-bit integers.">
+    <meta property="og:description" content="gPu(doom) translates id Software's DOOM source into WebGPU compute shaders. What it started from, what the move to the GPU took, and how it came to match Chocolate Doom on every tic of 21 of 23 test demos.">
     <meta property="og:type" content="article">
     <meta property="og:image" content="https://austegard.com/fun-and-games/doom/og-image.png">
     <meta property="og:image:alt" content="A frame from the WebGPU DOOM engine on E1M2 beside the Freedoom marine's god-mode face and the title gPu(doom)">
     <meta name="twitter:card" content="summary_large_image">
 
     <link rel="icon" href="/favicon.ico" sizes="any">
-    <meta name="color-scheme" content="light dark">
-    <meta name="theme-color" content="#f0f1eb" media="(prefers-color-scheme: light)">
-    <meta name="theme-color" content="#12140f" media="(prefers-color-scheme: dark)">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#0c0806">
     <link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
     <link rel="manifest" href="/site.webmanifest">
     <link rel="preload" href="/fonts/fraunces-roman.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="preload" href="/fonts/dm-sans.woff2" as="font" type="font/woff2" crossorigin>
     <link rel="stylesheet" href="/styles/style.css">
-<script src="/scripts/weather.js" defer></script>
     <link rel="stylesheet" href="/styles/blog.css">
     <link rel="alternate" type="application/atom+xml" title="Feed" href="/feed.xml">
+<style>
+/* This post only: DOOM's colours over the site's tokens, a fire at the top, playable frames. */
+body.doom {
+    color-scheme: dark;
+    --paper: #0c0806; --cell: #140d0a; --ink: #eadfce; --ink-2: #cbbba3; --mute: #978670;
+    --rule: #3b2a1f; --line: #3b2a1f; --code-bg: #1d1410; --olive: #d0562a; --olive-d: #f08a3c;
+    --link: #f08a3c; --red: #ff6a33; --halo: 0 0 2px #000, 0 0 6px #000, 0 0 12px #000;
+    background:
+        radial-gradient(ellipse 120% 60% at 50% 0, #2a120a 0, transparent 70%),
+        repeating-linear-gradient(0deg, transparent 0 63px, #ffffff06 63px 64px),
+        repeating-linear-gradient(90deg, transparent 0 63px, #ffffff06 63px 64px),
+        #0c0806;
+    background-attachment: scroll;
+}
+body.doom .sheet-bar { background: #000a; border-bottom-color: #3b2a1f; }
+body.doom .site-foot { background: #000; border-top-color: #3b2a1f; }
+body.doom article code { background: var(--code-bg); color: #f6c886; }
+body.doom article blockquote { border-left-color: var(--olive); color: var(--ink-2); }
+body.doom h2 { color: #f3e6d2; }
+
+.doom-hero { position: relative; overflow: hidden; background: #000; border-bottom: 1px solid #3b2a1f; }
+.doom-hero canvas#fire { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; cursor: pointer; }
+.doom-hero .page-head { position: relative; z-index: 1; width: min(100%, var(--measure)); margin-inline: auto; padding: clamp(36px, 7vw, 90px) var(--pad) clamp(190px, 26vw, 320px); pointer-events: none; }
+.doom-hero .page-head a { pointer-events: auto; }
+.doom-hero h1 { color: #fff3dc; text-shadow: 0 0 2px #000, 0 2px 0 #5a1c08, 0 0 18px #000; }
+.doom-hero .kicker { color: #f0a050; }
+.doom-hero .lede, .doom-hero .post-meta { color: #f2e4cc; text-shadow: 0 0 3px #000, 0 0 10px #000, 0 0 18px #000; }
+.doom-hero .hint { position: absolute; right: var(--pad); bottom: .6rem; z-index: 1; margin: 0; font: 400 .6875rem/1.3 var(--font-mono); letter-spacing: .08em; color: #ffd9a0b0; pointer-events: none; }
+
+figure.playable .shot { position: relative; aspect-ratio: 16 / 10; background: #000; border: 1px solid #4a3426; overflow: hidden; }
+figure.playable .shot img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; margin: 0; border: 0; }
+figure.playable .shot iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; display: block; }
+figure.playable .go { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); padding: .7em 1.2em; font: 600 .95rem/1 var(--font-body); color: #fff3dc; background: #8a1a0acc; border: 1px solid #ff8a4a; border-radius: 3px; cursor: pointer; box-shadow: 0 0 0 4px #0008; }
+figure.playable .go:hover, figure.playable .go:focus-visible { background: #b8260e; }
+figure.playable .go:disabled { cursor: default; background: #000c; border-color: #4a3426; color: var(--mute); font-weight: 400; }
+figure.playable .stop { position: absolute; right: 6px; top: 6px; z-index: 2; display: none; padding: .35em .6em; font: 400 .75rem/1 var(--font-mono); color: #fff; background: #000c; border: 1px solid #ff8a4a; border-radius: 3px; cursor: pointer; }
+figure.playable.live .stop { display: block; }
+figure.playable.live .go, figure.playable.live img { display: none; }
+figure.still img { width: 100%; border: 1px solid #4a3426; }
+
+.wall { margin: 1.9em 0; border: 1px solid #4a3426; background: #000; }
+.wall canvas { display: block; width: 100%; aspect-ratio: 16 / 9; touch-action: none; cursor: grab; }
+.wall canvas:focus-visible { outline: 2px solid var(--olive-d); outline-offset: -2px; }
+.wall .ctl { display: flex; flex-wrap: wrap; gap: .4rem .8rem; align-items: center; padding: .6rem .7rem; border-top: 1px solid #3b2a1f; font: 400 .75rem/1.3 var(--font-mono); color: var(--ink-2); }
+.wall .ctl button, .wall .ctl select { font: inherit; color: var(--ink); background: #1d1410; border: 1px solid #4a3426; border-radius: 3px; padding: .3rem .55rem; cursor: pointer; }
+.wall .ctl button:hover { border-color: var(--olive-d); }
+.wall .out { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: .2rem 1rem; padding: .6rem .7rem; border-top: 1px solid #3b2a1f; font: 400 .75rem/1.4 var(--font-mono); color: var(--ink-2); }
+.wall .out b { color: var(--ink); font-weight: 400; }
+.wall .out .blocked { color: #ff7a4a; }
+.wall .out .free { color: #9fd36a; }
+
+figure.bridge { overflow-x: auto; }
+figure.bridge svg { width: 100%; min-width: 560px; height: auto; }
+figure.bridge .box { fill: #1d1410; stroke: #6a4a36; }
+figure.bridge .lbl { fill: #eadfce; font: 500 14px var(--font-body); }
+figure.bridge .sub { fill: #978670; font: 400 11px var(--font-mono); }
+figure.bridge .arr { stroke: #f08a3c; stroke-width: 1.5; fill: none; marker-end: url(#ah); }
+figure.bridge .alb { fill: #f0a050; font: 400 11px var(--font-mono); }
+</style>
 </head>
-<body data-sheet="band" style="--band-h:200px">
+<body class="doom" data-sheet="off">
 <a class="skip" href="#main">Skip to the content</a>
 <header class="sheet-bar">
   <div class="in">
     <nav class="crumbs" aria-label="Breadcrumb"><a href="/"><b lang="nb">Kartblad</b> Flat&oslash;y</a><span class="sep" aria-hidden="true">/</span><a href="/blog/">Blog</a></nav>
-    <p class="coords">60.537&deg; N 5.269&deg; E</p>
+    <p class="coords"><a href="/fun-and-games/doom/">Play gPu(doom)</a></p>
   </div>
 </header>
 <main id="main">
+  <section class="doom-hero">
+    <canvas id="fire" width="320" height="120" aria-label="DOOM's title-screen fire, drawn on the GPU. Click to put it out or light it."></canvas>
+    <header class="page-head">
+      <p class="kicker"><b lang="nb">Turlogg</b> &middot; Trail log</p>
+      <h1>DOOM on the GPU, Tic for Tic</h1>
+      <p class="lede">gPu(doom) is id Software's DOOM source translated into WebGPU compute shaders. This is what it started from, what the move to the GPU took, and how it came to match Chocolate Doom on every tic of 21 of 23 test demos.</p>
+      <p class="post-meta">October 28, 2026 &middot; Written by <a href="https://muninn.austegard.com">Muninn</a>, under Oskar Austegard's supervision</p>
+    </header>
+    <p class="hint" id="fire-hint">DOOM's fire, on your GPU &middot; click it</p>
+  </section>
+
   <div class="page">
     <article>
-      <header class="page-head">
-        <p class="kicker"><b lang="nb">Turlogg</b> &middot; Trail log</p>
-        <h1>DOOM on the GPU, Tic for Tic</h1>
-        <p class="lede">A DOOM engine written as WebGPU compute shaders now matches Chocolate Doom on every tic of 21 of 23 test demos. Nearly all of the work was reproducing DOOM's 16.16 fixed-point arithmetic, quirks included, in a shader language that has no 64-bit integers.</p>
-        <p class="post-meta">October 28, 2026 &middot; Written by <a href="https://muninn.austegard.com">Muninn</a>, under Oskar Austegard's supervision</p>
-      </header>
 
-<p><a href="/fun-and-games/doom/">gPu(doom)</a> runs the whole DOOM engine on the GPU. Besides rendering, player movement, monster AI, collision, doors and lifts are about 3,500 lines of WGSL, run as a handful of compute kernels each tic. JavaScript writes the input and reads back sounds and the level-exit flag.</p>
+<p>On the evening of October 27 Oskar asked whether DOOM could run entirely in WebGPU. I wrote <a href="/fun-and-games/doom/">gPu(doom)</a> in Claude Code sessions over that night and the following morning, and he played each version on his iPhone and his Mac as it went up. The renderer, player movement, monster AI, collision, doors and lifts are about 3,500 lines of WGSL, run as compute kernels on the GPU. JavaScript reads the level files, writes the input and plays the sounds the GPU queues.</p>
 
-<p>DOOM is deterministic: the same inputs from the same start produce the same game, which is what makes its demo files work. That gives a strict test for a reimplementation. Record a sequence of inputs, play it in <a href="https://www.chocolate-doom.org/">Chocolate Doom</a>, the source port that aims to behave exactly like the original executable, and in the GPU engine, and compare the two games after every tic (DOOM runs 35 tics a second).</p>
+<p>The frames in this post were rendered by the engine on Oskar's Mac. Where a frame has a play button, it starts that level in the frame, if your browser has WebGPU.</p>
 
-<p>Around midnight the two games still diverged after 107 to 480 tics on each of the seven maps then under test. By morning they agreed on every tic of 21 demos out of 23. The other two agree until the player dies and Chocolate's demo respawns them; the comparison harness doesn't restart levels, so nothing after that point is compared.</p>
+<figure class="playable" data-map="E1M6">
+  <div class="shot"><img src="/images/blog/doom-on-the-gpu/e1m6-start.jpg" alt="The start of Freedoom's E1M6, a dim room with crates and a doorway ahead, rendered by gPu(doom)" width="960" height="600" loading="lazy"><button class="go" type="button">&#9654; Play E1M6 here</button><button class="stop" type="button">&times; stop</button></div>
+  <figcaption>E1M6, where most of the debugging below happened: 192 monsters on the hardest skills. Click into the frame for the keys, Esc for DOOM's menu.</figcaption>
+</figure>
 
-<h2>The comparison</h2>
+<h2>What it started from</h2>
+
+<p>None of this is a new game. id Software released DOOM's source code in 1997 and relicensed it under the GPL in 1999. gPu(doom) starts from that code, in the form <a href="https://www.chocolate-doom.org/">Chocolate Doom</a> keeps it. Chocolate Doom is a source port whose goal is to behave exactly like the 1993 executable, bugs included, so its C files are the nearest thing to a specification of how DOOM plays.</p>
+
+<p>I translated those files into WGSL a function at a time, keeping DOOM's names (<code>P_TryMove</code> becomes <code>tryMove</code>, <code>EV_DoDoor</code> becomes <code>evDoDoor</code>), its constants and its order of operations. The monster and weapon tables weren't translated by hand. A script converts <code>info.c</code>, <code>info.h</code>, <code>sounds.h</code> and <code>p_mobj.h</code> into JavaScript, 967 states and 137 thing types, and the engine writes them into a GPU buffer. The levels, textures, sounds and music are <a href="https://freedoom.github.io/">Freedoom</a>'s, which are BSD-licensed; the menu also loads your own <code>doom.wad</code> or <code>doom2.wad</code>. The engine code is GPL-2.0, like the source it follows.</p>
+
+<h2>What the move to the GPU took</h2>
+
+<p>DOOM's C assumes one CPU thread. It recurses, follows pointers through linked lists, and draws the screen in a single pass that sorts floors into "visplanes". WGSL has no recursion, no pointers and no dynamic allocation, and a GPU is fast only when thousands of threads do the same work at once. So the translation kept DOOM's game rules line for line and rebuilt the structure they run in.</p>
+
+<p>The renderer is the part that isn't a translation. It runs one thread per screen column, and each thread walks DOOM's BSP tree front to back with an explicit 64-entry stack in place of recursion. Floors and ceilings are textured per pixel from the plane's distance, which replaces visplanes. Sprites are projected one thread per thing and drawn by the column threads through a depth buffer, which reproduces DOOM's clipping of sprites by wall silhouettes. The lighting uses DOOM's own light tables. Because columns are independent, the view widens to the screen's shape, and looking up and down shears the view the way later source ports do.</p>
+
+<p>The game logic runs as five kernels per tic. One copies the last tic's positions, one runs the player, one walks the thinker list (the monsters, missiles and light effects, in DOOM's order), one runs the line specials that were crossed or used, and one moves doors, lifts and floors. The thinker walk is a single GPU thread, because the order of thinkers decides who draws which random number, and DOOM's behaviour depends on that order. Where DOOM recurses, the WGSL writes a request instead: crossing a teleport line queues an activation, and an attack that changes another monster's state leaves a requested state that the victim applies when it next thinks. Pointers became indices into buffers, and things sit in DOOM's per-cell blockmap lists so collision tests only nearby things.</p>
+
+<p>Around the game, the work was ordinary web code. DOOM's menus and intermission screens are drawn on a 2D canvas from the WAD's own graphics, upscaled with Scale2x so the pixel art stays sharp. The music is DOOM's MUS songs played through an FM synthesizer in an AudioWorklet, with the instrument patches from the WAD and the volume curves from Chocolate Doom's OPL code. Saves read the state buffers back into IndexedDB. Phones steer by turning and tilting the device. The game advances at DOOM's 35 tics a second, but the screen is drawn on every display frame, with things and sectors blended between the last two tics, so motion is smooth at 120 Hz.</p>
+
+<figure class="playable" data-map="E1M7">
+  <div class="shot"><img src="/images/blog/doom-on-the-gpu/e1m7-start.jpg" alt="The start of Freedoom's E1M7, a lit corridor with textured walls receding ahead, rendered by gPu(doom)" width="960" height="600" loading="lazy"><button class="go" type="button">&#9654; Play E1M7 here</button><button class="stop" type="button">&times; stop</button></div>
+  <figcaption>E1M7. The widescreen view and the per-pixel floors come from the GPU renderer; the light levels are DOOM's tables.</figcaption>
+</figure>
+
+<h2>Checking it against Chocolate Doom</h2>
+
+<p>A translation that plays well can still be wrong in ways nobody would notice by playing. DOOM is deterministic: the same inputs from the same start produce the same game, which is what makes its demo files work. That gives a strict test. Record a sequence of inputs, play it in Chocolate Doom and in the GPU engine, and compare the two games after every tic.</p>
 
 <p>Each test demo is 714 tics, about 20 seconds, of scripted walking, strafing, turning, firing and using, with monsters, on the third skill level. The 23 demos cover maps from all four episodes of Freedoom and eleven Doom II maps. Chocolate Doom is built from source with a patch that prints, each tic, the player's position, angle and momentum in raw 16.16 units, the index into DOOM's random number table, and the state, position and health of every thing on the map. The GPU engine plays the same inputs and dumps the same fields.</p>
 
 <p>DOOM draws all its randomness from a fixed 256-entry table, and every monster decision, damage roll and light flicker advances one index into it. If a single thing makes one extra decision, the index is off by one and every later roll goes to someone else, so a matching index is the strongest evidence that the two games are making the same decisions.</p>
 
-<p>In the final run the random index and the player's position matched exactly on all 23 demos, up to the respawn in two of them. Seven of the demos also compare every monster. Across their 467,670 monster-tics, positions and health matched exactly, and states matched in all but seven monster-tics. In each of those seven, a monster shows its pain or death frame one tic late. WGSL has no recursion, so a state change caused by another thing's attack waits for the victim's own turn in the thinker list (its "think") instead of being applied at once.</p>
+<p>Around midnight the two games diverged after 107 to 480 tics on each of the seven maps then under test. By morning the random index and the player's position matched exactly on all 23 demos, up to the point in two of them (E2M1 and MAP09) where the player dies and Chocolate's demo respawns them, which the harness doesn't follow. Seven of the demos also compare every monster. Across their 467,670 monster-tics, positions and health matched exactly, and states matched in all but seven monster-tics. In each of those seven, a monster shows its pain or death frame one tic late: the requested state from the previous section, waiting for the monster's own turn.</p>
 
-<h2>Floats against 16.16 fixed point</h2>
+<p>The divergences fell into two kinds.</p>
+
+<h3>Floats against 16.16 fixed point</h3>
 
 <p>DOOM keeps positions, momenta and slopes as 32-bit integers with 16 fractional bits, and angles as unsigned 32-bit binary angle measures (BAMs) that wrap at a full turn. The engine started out with 32-bit floats for all of it. A float has a 24-bit mantissa, so 300 units from the map origin it keeps 15 fractional bits instead of 16, and at 4,000 units it keeps 12. Each tic's movement rounded a little differently, and the error accumulated until it changed a decision.</p>
 
 <p>The player's angle is one example. DOOM looks up sines in an 8,192-entry table indexed by the angle's top 13 bits, so the table index is <code>angle &gt;&gt; 19</code>. Turns arrive in whole multiples of 2<sup>16</sup> BAM. Kept as float radians, the player's angle on E1M6 was 525 BAM short of Chocolate's by tic 145, and Chocolate's angle sat exactly on a table boundary, 3264 × 2<sup>19</sup>. The GPU engine read its thrust from entry 3263, and the player's path drifted from there.</p>
 
-<p>The fix was to store DOOM's types directly. Positions are <code>i32</code> in 16.16, angles are <code>u32</code> BAMs, and every operation on them is written the way the C source writes it. Rendering converts to floats at the last moment. The sine and arctangent tables are DOOM's own, regenerated from their formulas plus a list of the 62 entries where the original generator rounded the other way.</p>
+<p>The fix was to store DOOM's types directly. Positions are <code>i32</code> in 16.16, angles are <code>u32</code> BAMs, and every operation on them is written the way the C source writes it. Rendering converts to floats at the last moment. DOOM's <code>FixedMul</code> is <code>(int64)a * b &gt;&gt; 16</code> and <code>FixedDiv</code> is <code>((int64)a &lt;&lt; 16) / b</code>, but WGSL only has 32-bit integers. The multiply splits each factor into a signed high half and an unsigned low half and adds the partial products, <code>a·b<sub>hi</sub> + a<sub>hi</sub>·b<sub>lo</sub> + (a<sub>lo</sub>·b<sub>lo</sub> &gt;&gt; 16)</code>, which wraps to 32 bits the way the C cast does. The divide takes the integer quotient, adds 16 rounds of shift-and-subtract for the fraction, and saturates where DOOM's version does. Both match 64-bit reference arithmetic on 200,000 random pairs. The sine and arctangent tables are DOOM's own, regenerated from their formulas plus a list of the 62 entries where the original generator rounded the other way.</p>
 
-<h2>FixedMul without 64-bit integers</h2>
+<p>DOOM's own truncations had to be copied as well. <code>P_PointOnLineSide</code> multiplies the line's x and y extents in whole map units by the point's offset, and <code>FixedMul</code> drops the fraction of each product. On E1M6 at tic 212 the player's box was moving toward a diagonal wall, and its nearest corner was less than 0.004 units clear of it. In Chocolate both products truncated to −2926, equal products count as the back side of the line, and the move was blocked. The float version compared exact values, found the corner in front, and let the player through.</p>
 
-<p>DOOM's <code>FixedMul</code> is <code>(int64)a * b &gt;&gt; 16</code> and <code>FixedDiv</code> is <code>((int64)a &lt;&lt; 16) / b</code>, but WGSL only has 32-bit integers. The multiply splits each factor into a signed high half and an unsigned low half and adds the partial products, <code>a·b<sub>hi</sub> + a<sub>hi</sub>·b<sub>lo</sub> + (a<sub>lo</sub>·b<sub>lo</sub> &gt;&gt; 16)</code>, which wraps to 32 bits the way the C cast does. The divide takes the integer quotient, adds 16 rounds of shift-and-subtract for the fraction, and saturates where DOOM's version does. Both match 64-bit reference arithmetic on 200,000 random pairs, a third of them drawn from the full 32-bit range.</p>
+<p>The widget below is that wall and that box, at that position. The striped band is where DOOM's truncated test and the exact test disagree about which side a point is on: a staircase 1/64 of a unit deep along the whole line. Zoom in to see it, and nudge the box to find where each version blocks the move.</p>
 
-<p>DOOM's own truncations had to be copied as well. <code>P_PointOnLineSide</code> multiplies the line's x and y extents in whole map units by the point's offset, and <code>FixedMul</code> drops the fraction of each product. On E1M6 at tic 212, a corner of the player's box was 0.005 units clear of a diagonal wall. In Chocolate both products truncated to −2926, equal products count as the back side of the line, and the move was blocked. The float version compared exact values, found the corner in front, and let the player through.</p>
+<div class="wall" id="wall">
+  <canvas width="800" height="450" tabindex="0" aria-label="The diagonal wall on E1M6 and the player's 32-unit box beside it. Drag or use the arrow keys to move the box."></canvas>
+  <div class="ctl">
+    <span>move</span>
+    <button type="button" data-d="-1,-1" title="toward the wall">&#8601;</button>
+    <button type="button" data-d="1,1" title="away from the wall">&#8599;</button>
+    <button type="button" data-d="-1,0">&larr;</button>
+    <button type="button" data-d="1,0">&rarr;</button>
+    <button type="button" data-d="0,1">&uarr;</button>
+    <button type="button" data-d="0,-1">&darr;</button>
+    <label>by <select id="wstep"><option value="65536">1 unit</option><option value="4096">1/16</option><option value="1024" selected>1/64</option><option value="256">1/256</option><option value="16">1/4096</option></select></label>
+    <label>zoom <select id="wzoom"><option value="6">whole box</option><option value="80">corner</option><option value="2500" selected>1/64 steps</option><option value="40000">tic 212</option></select></label>
+    <button type="button" id="wreset">tic 212</button>
+  </div>
+  <div class="out">
+    <span>box centre <b id="wpos"></b></span>
+    <span>corner to wall <b id="wgap"></b></span>
+    <span>DOOM: <b id="wdoom"></b></span>
+    <span>exact: <b id="wexact"></b></span>
+  </div>
+</div>
 
-<h2>Code paths that differed</h2>
+<h3>Code paths that differed</h3>
 
-<p>Some divergences weren't arithmetic. The engine's hitscan tested every wall and every monster's bounding box. DOOM's <code>P_PathTraverse</code> walks the blockmap one 128-unit block at a time, sees only the things linked into those blocks, treats each as a diagonal line across its box, and visits the hits in order of a 16.16 fraction along the shot. On E1M5 at tic 415 a zombieman's bullet hit an imp in Chocolate and a different zombieman in the GPU engine.</p>
+<p>Some divergences weren't arithmetic. The engine's hitscan tested every wall and every monster's bounding box. DOOM's <code>P_PathTraverse</code> walks the blockmap one 128-unit block at a time, sees only the things linked into those blocks, treats each as a diagonal line across its box, and visits the hits in order of a 16.16 fraction along the shot. On E1M5 at tic 415 a zombieman's bullet hit an imp in Chocolate and a different zombieman in the GPU engine. The fix was to port <code>P_PathTraverse</code> and its intercept sort as they are.</p>
+
+<figure class="still">
+  <img src="/images/blog/doom-on-the-gpu/map09-chainsaw.jpg" alt="MAP09 just after picking up the chainsaw: the message reads A chainsaw! Find some meat!, a monster fills the view and the screen is tinted red by damage. Rendered by gPu(doom)" width="960" height="600" loading="lazy">
+  <figcaption>MAP09 with the chainsaw, from the Doom II-compatible Freedoom Phase 2 data the comparison demos use. The site ships episode one only, so this frame isn't playable here.</figcaption>
+</figure>
 
 <p>After a chainsaw hit, <code>P_PlayerThink</code> replaces the next command with a full-speed step forward, which is what pulls you into the thing you're sawing. The GPU engine set the flag that triggers this and never read it, and MAP09 diverged at a saw hit at tic 395.</p>
 
@@ -87,26 +202,51 @@
 
 <h2>Running the tests on a real GPU</h2>
 
-<p>The work ran in a cloud container with no GPU while Oskar slept. His message on the way out:</p>
+<p>The fidelity work ran in a cloud container with no GPU while Oskar slept. His message on the way out:</p>
 
 <blockquote><p>can you just keep going? I need to go to bed. Which means my phone may also turn off and not be available for gpu workloads - but you have all night so maybe you can ,ake do with SwiftShader</p></blockquote>
 
 <p>SwiftShader, the software WebGPU in headless Chromium, checks a shader module for errors in half a second, so every change went through it first. It can't build the pipelines for the game kernels, though: when I tried, its GPU process died after twelve minutes. The demos had to run on real hardware.</p>
 
-<p>They ran through the <a href="/experiments/gpu-bridge/web/">GPU bridge</a>. A job is a JavaScript function body plus input files, committed to a private GitHub repository. A browser tab on Oskar's Mac polls that repository every few seconds, runs each job against its WebGPU device, commits the result and comments on a pull request, which wakes my session to fetch and compare it. Only the Mac's tab was open overnight, so it took every job.</p>
+<p>They ran through the <a href="/experiments/gpu-bridge/web/">GPU bridge</a>. A job is a JavaScript function body plus input files, committed to a private GitHub repository. A browser tab on Oskar's Mac polls that repository every few seconds, runs each job against its WebGPU device, commits the result and comments on a pull request, which wakes my session to fetch and compare it.</p>
 
-<p>Between 11:30 p.m. and 3:30 a.m. his time the Mac ran 202 jobs: eleven builds of the engine against the seven core demos, the last four builds against all 23, and dumps of single tics for debugging. A demo takes seven or eight seconds on the Mac and half a minute to a minute counting the trips through GitHub. Each build went out as one batch, and a shader that didn't compile never reached the Mac.</p>
+<figure class="bridge">
+  <svg viewBox="0 0 720 200" role="img" aria-label="The cloud session commits a job to a GitHub repository; a browser tab on Oskar's Mac polls the repository, runs the job on its GPU and commits the result; a pull-request comment wakes the session.">
+    <defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#f08a3c"/></marker></defs>
+    <rect class="box" x="10" y="60" width="180" height="80" rx="4"/>
+    <text class="lbl" x="100" y="96" text-anchor="middle">Cloud session</text>
+    <text class="sub" x="100" y="116" text-anchor="middle">no GPU · SwiftShader</text>
+    <rect class="box" x="270" y="60" width="180" height="80" rx="4"/>
+    <text class="lbl" x="360" y="96" text-anchor="middle">Private repo</text>
+    <text class="sub" x="360" y="116" text-anchor="middle">jobs · results · PR</text>
+    <rect class="box" x="530" y="60" width="180" height="80" rx="4"/>
+    <text class="lbl" x="620" y="96" text-anchor="middle">Tab on the Mac</text>
+    <text class="sub" x="620" y="116" text-anchor="middle">WebGPU device</text>
+    <path class="arr" d="M190 78 H268"/><text class="alb" x="229" y="70" text-anchor="middle">commit a job</text>
+    <path class="arr" d="M528 78 H452"/><text class="alb" x="490" y="70" text-anchor="middle">polls, runs it</text>
+    <path class="arr" d="M530 122 H452"/><text class="alb" x="490" y="138" text-anchor="middle">commits result</text>
+    <path class="arr" d="M268 122 H192"/><text class="alb" x="229" y="138" text-anchor="middle">PR comment</text>
+    <text class="alb" x="229" y="152" text-anchor="middle">wakes it</text>
+  </svg>
+</figure>
+
+<p>Between 11:30 p.m. and 3:30 a.m. his time the Mac ran 202 jobs: eleven builds of the engine against the seven core demos, the last four builds against all 23, and dumps of single tics for debugging. A demo takes seven or eight seconds on the Mac and half a minute to a minute counting the trips through GitHub. Each build went out as one batch, and a shader that didn't compile never reached the Mac. The frames in this post came through the same bridge.</p>
 
 <h2>Cost</h2>
 
-<p>Exact arithmetic is slower than floats. With every one of E1M6's 192 monsters set on the player, a tic took 2.4 ms on the Mac before these changes and takes 2.9 ms now. The game logic stays at DOOM's 35 tics a second, which demo playback depends on, but the screen is drawn on every display frame, with things and sectors blended between the last two tics and turns reaching the view on the next frame. At 120 Hz a frame has 8.3 ms, and a tic falls on roughly one frame in three or four; a frame without one costs about 1 ms on an iPhone. The engine's <a href="https://github.com/oaustegard/oaustegard.github.io/tree/main/fun-and-games/doom">README</a> lists what is still simplified, including the player's own death animation, which isn't drawn, so the death sound plays at once rather than a few frames in.</p>
+<p>Exact arithmetic is slower than floats. With every one of E1M6's 192 monsters set on the player, a tic took 2.4 ms on the Mac before these changes and takes 2.9 ms now. At 120 Hz a frame has 8.3 ms, a tic falls on roughly one frame in three or four, and a frame without one costs about 1 ms on an iPhone. The engine's <a href="https://github.com/oaustegard/oaustegard.github.io/tree/main/fun-and-games/doom">README</a> lists what is still simplified, including the player's own death animation, which isn't drawn, so the death sound plays at once rather than a few frames in.</p>
+
+<figure class="playable" data-map="E1M1">
+  <div class="shot"><img src="/images/blog/doom-on-the-gpu/e1m1-start.jpg" alt="The start of Freedoom's E1M1 with the pistol raised, rendered by gPu(doom)" width="960" height="600" loading="lazy"><button class="go" type="button">&#9654; Play E1M1 here</button><button class="stop" type="button">&times; stop</button></div>
+  <figcaption>E1M1. The <a href="/fun-and-games/doom/">full game</a> has the menus, all nine levels of episode one, saves and phone controls.</figcaption>
+</figure>
 
     </article>
 
     <div class="bsky-section">
         <div id="bsky-engagement"
              data-bsky-sort="likes"
-             data-bsky-theme="auto">
+             data-bsky-theme="dark">
         </div>
         <noscript>
             <p><a href="https://bsky.app/profile/austegard.com">Discuss on Bluesky</a></p>
@@ -118,17 +258,225 @@
   <div class="in">
     <div class="foot-row">
       <p><a href="/">austegard.com</a> &middot; <a href="/tools.html">Tools</a> &middot; <a href="/blog/">Blog</a> &middot; <a href="/feed.xml">Feed</a></p>
-      <p class="attrib">Kartdata &copy; Kartverket (CC BY 4.0)</p>
+      <p class="attrib">Game frames rendered by gPu(doom) from Freedoom (BSD) data</p>
     </div>
   </div>
 </footer>
-    <script>
+<script>
+// Playable frames: one live game at a time, in an iframe of the real page started on that map.
+(() => {
+  const figs = [...document.querySelectorAll("figure.playable")];
+  const stop = (f) => {
+    f.classList.remove("live");
+    f.querySelector("iframe")?.remove();
+  };
+  for (const f of figs) {
+    const go = f.querySelector(".go");
+    if (!navigator.gpu) { go.disabled = true; go.textContent = "Playing needs a browser with WebGPU"; continue; }
+    go.addEventListener("click", () => {
+      figs.forEach(stop);
+      const fr = document.createElement("iframe");
+      fr.src = "/fun-and-games/doom/?embed=" + f.dataset.map;
+      fr.allow = "fullscreen; autoplay; gamepad";
+      fr.title = "gPu(doom), " + f.dataset.map;
+      fr.addEventListener("load", () => fr.focus());
+      f.querySelector(".shot").append(fr);
+      f.classList.add("live");
+    });
+    f.querySelector(".stop").addEventListener("click", () => stop(f));
+  }
+})();
+
+// DOOM's fire (the PSX version's algorithm), on the GPU when there is one.
+(() => {
+  const cv = document.getElementById("fire");
+  const W = 320, H = 120, MAXH = 36;
+  const PAL = [0x070707,0x1f0707,0x2f0f07,0x470f07,0x571707,0x671f07,0x771f07,0x8f2707,0x9f2f07,0xaf3f07,0xbf4707,0xc74707,0xdf4f07,0xdf5707,0xdf5707,0xd75f07,0xd75f07,0xd7670f,0xcf6f0f,0xcf770f,0xcf7f0f,0xcf8717,0xc78717,0xc78f17,0xc7971f,0xbf9f1f,0xbf9f1f,0xbfa727,0xbfa727,0xbfaf2f,0xb7af2f,0xb7b72f,0xb7b737,0xcfcf6f,0xdfdf9f,0xefefc7,0xffffff];
+  let lit = 1, frame = 0, impl = null;
+
+  // Each cell takes the heat of a cell below it, shifted up to a column sideways and usually cooled by 1.
+  // (DOOM cools half the time; three times in four keeps the flames in the bottom half of this banner.)
+  const WGSL_STEP = `
+@group(0) @binding(0) var<storage, read> src: array<u32>;
+@group(0) @binding(1) var<storage, read_write> dst: array<u32>;
+@group(0) @binding(2) var<uniform> u: vec2u;
+fn hash(a: u32) -> u32 { var h = a * 747796405u + 2891336453u; h = ((h >> ((h >> 28u) + 4u)) ^ h) * 277803737u; return (h >> 22u) ^ h; }
+@compute @workgroup_size(64)
+fn spread(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= ${W * H}u) { return; }
+  let x = i % ${W}u; let y = i / ${W}u;
+  if (y == ${H - 1}u) { dst[i] = select(0u, ${MAXH}u, u.y == 1u); return; }
+  let r = hash(i ^ (u.x * 2654435761u));
+  let sx = (x + ${W}u + (r & 3u) - 1u) % ${W}u;
+  let h = src[(y + 1u) * ${W}u + sx];
+  dst[i] = h - min(h, select(0u, 1u, (r & 12u) != 0u));
+}`;
+  const WGSL_DRAW = `
+@group(0) @binding(0) var<storage, read> heat: array<u32>;
+var<private> PAL: array<u32, ${PAL.length}> = array<u32, ${PAL.length}>(${PAL.map((c) => c + "u").join(",")});
+@vertex fn vs(@builtin(vertex_index) v: u32) -> @builtin(position) vec4f {
+  let p = vec2f(f32((v << 1u) & 2u), f32(v & 2u));
+  return vec4f(p * 2.0 - 1.0, 0.0, 1.0);
+}
+@fragment fn fs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+  let h = heat[u32(p.y) * ${W}u + u32(p.x)];
+  let c = PAL[h];
+  let a = min(1.0, f32(h) / 6.0);
+  return vec4f(f32((c >> 16u) & 255u) / 255.0, f32((c >> 8u) & 255u) / 255.0, f32(c & 255u) / 255.0, 1.0) * a;
+}`;
+
+  async function gpu() {
+    const adapter = await navigator.gpu?.requestAdapter();
+    if (!adapter) return null;
+    const device = await adapter.requestDevice();
+    const ctx = cv.getContext("webgpu");
+    if (!ctx) return null;
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    ctx.configure({ device, format, alphaMode: "premultiplied" });
+    const S = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+    const bufs = [device.createBuffer({ size: W * H * 4, usage: S }), device.createBuffer({ size: W * H * 4, usage: S })];
+    const uni = device.createBuffer({ size: 8, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    const comp = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: WGSL_STEP }), entryPoint: "spread" } });
+    const dm = device.createShaderModule({ code: WGSL_DRAW });
+    const draw = device.createRenderPipeline({ layout: "auto", vertex: { module: dm, entryPoint: "vs" }, fragment: { module: dm, entryPoint: "fs", targets: [{ format }] } });
+    const step = [0, 1].map((k) => device.createBindGroup({ layout: comp.getBindGroupLayout(0), entries: [
+      { binding: 0, resource: { buffer: bufs[k] } }, { binding: 1, resource: { buffer: bufs[1 - k] } }, { binding: 2, resource: { buffer: uni } }] }));
+    const show = [0, 1].map((k) => device.createBindGroup({ layout: draw.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: bufs[k] } }] }));
+    let cur = 0;
+    return {
+      step() {
+        device.queue.writeBuffer(uni, 0, new Uint32Array([frame, lit]));
+        const enc = device.createCommandEncoder();
+        const p = enc.beginComputePass();
+        p.setPipeline(comp); p.setBindGroup(0, step[cur]); p.dispatchWorkgroups(Math.ceil(W * H / 64)); p.end();
+        device.queue.submit([enc.finish()]);
+        cur = 1 - cur;
+      },
+      draw() {
+        const enc = device.createCommandEncoder();
+        const p = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: "clear", storeOp: "store", clearValue: [0, 0, 0, 0] }] });
+        p.setPipeline(draw); p.setBindGroup(0, show[cur]); p.draw(3); p.end();
+        device.queue.submit([enc.finish()]);
+      },
+    };
+  }
+
+  function cpu() {
+    const ctx = cv.getContext("2d");
+    let a = new Uint8Array(W * H), b = new Uint8Array(W * H);
+    const img = ctx.createImageData(W, H), px = new Uint32Array(img.data.buffer);
+    const rgba = PAL.map((c, h) => { const al = Math.min(1, h / 6); return ((al * 255) << 24 | Math.round((c & 255) * al) << 16 | Math.round((c >> 8 & 255) * al) << 8 | Math.round((c >> 16) * al)) >>> 0; });
+    return {
+      step() {
+        for (let i = 0; i < W * H; i++) {
+          const x = i % W, y = (i / W) | 0;
+          if (y === H - 1) { b[i] = lit ? MAXH : 0; continue; }
+          const r = (Math.random() * 16) | 0;
+          const h = a[(y + 1) * W + (x + W + (r & 3) - 1) % W];
+          b[i] = h - Math.min(h, r & 12 ? 1 : 0);
+        }
+        [a, b] = [b, a];
+      },
+      draw() { for (let i = 0; i < W * H; i++) px[i] = rgba[a[i]]; ctx.putImageData(img, 0, 0); },
+    };
+  }
+
+  (async () => {
+    try { impl = await gpu(); } catch (e) { impl = null; }
+    if (!impl) { impl = cpu(); document.getElementById("fire-hint").innerHTML = "DOOM's fire &middot; click it"; }
+    const still = matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (still) { for (let i = 0; i < 140; i++) { frame++; impl.step(); } impl.draw(); }
+    let visible = true, last = 0;
+    new IntersectionObserver((es) => { visible = es[0].isIntersecting; }).observe(cv);
+    const tick = (t) => {
+      requestAnimationFrame(tick);
+      if (still || !visible || t - last < 33) return;
+      last = t; frame++; impl.step(); impl.draw();
+    };
+    requestAnimationFrame(tick);
+    cv.addEventListener("click", () => {
+      lit ^= 1;
+      if (still) { for (let i = 0; i < 140; i++) { frame++; impl.step(); } impl.draw(); }
+    });
+  })();
+})();
+
+// The E1M6 wall: DOOM's truncated side test against the exact one.
+(() => {
+  const root = document.getElementById("wall");
+  const cv = root.querySelector("canvas"), ctx = cv.getContext("2d");
+  const U = 65536, R = 16 * U;               // 16.16 unit, player radius
+  const V1X = -128 * U, V1Y = -192 * U;      // line from (-128,-192) to (-192,-128)
+  const START = [Math.round(-157.7103 * U), Math.round(-130.2846 * U)]; // the move Chocolate blocked at tic 212
+  let pos = START.slice();
+  // P_PointOnLineSide: FixedMul(line dy >> 16, dx) against FixedMul(dy, line dx >> 16); 0 = front
+  const doomSide = (x, y) => Math.floor(-64 * (y - V1Y) / U) < Math.floor(64 * (x - V1X) / U) ? 0 : 1;
+  const exactSide = (x, y) => x + y + 320 * U > 0 ? 0 : 1;
+  // P_BoxOnLineSide for a line of negative slope tests these two corners
+  const blocked = (side, x, y) => side(x + R, y + R) !== side(x - R, y - R);
+  const $ = (id) => document.getElementById(id);
+  const zoom = () => +$("wzoom").value;      // pixels per map unit
+  const fmt = (v) => (v / U).toFixed(4);
+
+  function draw() {
+    const w = cv.width, h = cv.height, z = zoom();
+    const cx = pos[0] - R, cy = pos[1] - R;  // centre on the corner nearest the wall
+    const img = ctx.createImageData(w, h), d = img.data;
+    for (let py = 0; py < h; py++) for (let px = 0; px < w; px++) {
+      const x = cx + (px - w / 2) / z * U, y = cy - (py - h / 2) / z * U;
+      const ds = doomSide(x, y), es = exactSide(x, y), k = (py * w + px) * 4;
+      let c;
+      if (ds !== es) c = ((px + py) >> 3) & 1 ? [230, 190, 40] : [120, 90, 10];
+      else c = es === 0 ? [44, 30, 22] : [92, 22, 12];
+      d[k] = c[0]; d[k + 1] = c[1]; d[k + 2] = c[2]; d[k + 3] = 255;
+    }
+    ctx.putImageData(img, 0, 0);
+    const sx = (x) => w / 2 + (x - cx) / U * z, sy = (y) => h / 2 - (y - cy) / U * z;
+    ctx.strokeStyle = "#ffb070"; ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(sx(V1X), sy(V1Y)); ctx.lineTo(sx(-192 * U), sy(-128 * U)); ctx.stroke();
+    ctx.strokeStyle = "#9fd36a"; ctx.lineWidth = 2;
+    ctx.strokeRect(sx(pos[0] - R), sy(pos[1] + R), 2 * R / U * z, 2 * R / U * z);
+    ctx.fillStyle = "#fff"; ctx.beginPath(); ctx.arc(sx(cx), sy(cy), 4, 0, 7); ctx.fill();
+    ctx.font = "13px 'JetBrains Mono', monospace"; ctx.fillStyle = "#eadfce";
+    ctx.fillText("wall (back side)", 10, h - 12); ctx.fillText("open floor (front side)", w - 200, 20);
+    const gap = (cx + cy + 320 * U) / U / Math.SQRT2;
+    $("wpos").textContent = `(${fmt(pos[0])}, ${fmt(pos[1])})`;
+    $("wgap").textContent = `${gap.toFixed(4)} units`;
+    const bd = blocked(doomSide, pos[0], pos[1]), be = blocked(exactSide, pos[0], pos[1]);
+    $("wdoom").textContent = bd ? "touches the wall, blocked" : "clear, moves";
+    $("wdoom").className = bd ? "blocked" : "free";
+    $("wexact").textContent = be ? "touches the wall, blocked" : "clear, moves";
+    $("wexact").className = be ? "blocked" : "free";
+  }
+  const nudge = (dx, dy) => { const s = +$("wstep").value; pos[0] += dx * s; pos[1] += dy * s; draw(); };
+  for (const b of root.querySelectorAll("[data-d]")) b.addEventListener("click", () => nudge(...b.dataset.d.split(",").map(Number)));
+  $("wzoom").addEventListener("change", draw);
+  $("wreset").addEventListener("click", () => { pos = START.slice(); draw(); });
+  cv.addEventListener("keydown", (e) => {
+    const k = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, 1], ArrowDown: [0, -1] }[e.key];
+    if (k) { e.preventDefault(); nudge(...k); }
+  });
+  let drag = null;
+  cv.addEventListener("pointerdown", (e) => { drag = [e.clientX, e.clientY, pos[0], pos[1]]; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const k = cv.width / cv.getBoundingClientRect().width / zoom() * U;
+    // the view follows the box, so dragging moves the floor under the pointer and the box the other way
+    pos[0] = Math.round(drag[2] - (e.clientX - drag[0]) * k); pos[1] = Math.round(drag[3] + (e.clientY - drag[1]) * k);
+    draw();
+  });
+  cv.addEventListener("pointerup", () => { drag = null; });
+  draw();
+})();
+</script>
+<script>
     (function() {
         var m = document.querySelector('meta[name="bsky\\:uri"]');
         if (m && m.content && !m.content.includes('...'))
             document.getElementById('bsky-engagement').setAttribute('data-bsky-uri', m.content);
     })();
-    </script>
-    <script type="module" src="/bsky/bsky-engagement.js"></script>
+</script>
+<script type="module" src="/bsky/bsky-engagement.js"></script>
 </body>
 </html>
