@@ -40,6 +40,7 @@ import json
 import math
 import os
 import pickle
+import re
 import sys
 import time
 import urllib.parse
@@ -55,6 +56,7 @@ from scipy import ndimage as ndi
 from shapely import affinity
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon, box
 from shapely.ops import unary_union
+from shapely.prepared import prep
 from skimage import measure
 from skimage.morphology import skeletonize
 
@@ -546,6 +548,115 @@ def fkb_quays(cache, bbox, px=0.25):
     return building_footprints(m, (bbox[0], bbox[3]), px, 4.0)
 
 
+def fkb_slips(cache, bbox, sea, px=0.25):
+    """Slipways and quay edges: the FKB bygnanlegglinje lines that run into the sea, traced from the render."""
+    a = wms_mosaic_rgba(cache, 'wms.fkb', 'bygnanlegglinje', bbox, px, tile=400)[..., 3] >= 128
+    lab, n = ndi.label(a, structure=np.ones((3, 3)))
+    wet = prep(sea.buffer(0.4))
+    x0, y1 = bbox[0], bbox[3]
+    keep = np.zeros(n + 1, bool)
+    for i, sl in enumerate(ndi.find_objects(lab), 1):
+        rr, cc = np.nonzero(lab[sl] == i)
+        k = np.linspace(0, len(rr) - 1, min(len(rr), 40)).astype(int)
+        keep[i] = any(wet.contains(Point(x0 + (cc[j] + sl[1].start + 0.5) * px, y1 - (rr[j] + sl[0].start + 0.5) * px)) for j in k)
+    out = []
+    for l in skeleton_lines(keep[lab], (x0, y1), px, min_spur=1.0):
+        l = l.simplify(0.2)
+        if l.length >= 3:
+            out.append(l)
+    return out
+
+
+# ---------------------------------------------------------------- seabed at Austegardsfjæra (for the tide)
+FJAERA = dict(file='austegardsfjaera-seabed.png', c=(295481.6, 6716926.8), half=70, px=0.5)
+NN2000_CD = 1.026   # NN2000 is 102.6 cm above chart datum at the Bergen tide gauge (Kartverket, Se havnivå)
+SEABED_ZERO, SEABED_STEP = -6.0, 1 / 30   # PNG grey v -> height v * step + zero, metres above chart datum
+
+
+def dybde_band(cache, bbox, i, j, W, H):
+    """Depth range (min, max, metres below chart datum) of the Dybdelag area at pixel (i, j), from GetFeatureInfo."""
+    x0, y0, x1, y1 = bbox
+    url = ('https://wms.geonorge.no/skwms1/wms.dybdedata2?service=WMS&version=1.3.0&request=GetFeatureInfo&layers=Dybdelag'
+           f'&query_layers=Dybdelag&styles=&crs=EPSG:25832&bbox={x0},{y0},{x1},{y1}&width={W}&height={H}&format=image/png'
+           f'&info_format=application/vnd.ogc.gml&i={i}&j={j}&feature_count=1')
+    t = open(cached(cache, 'gfi_' + hashlib.md5(url.encode()).hexdigest()[:10] + '.xml', url), encoding='utf8').read()
+    lo, hi = re.search(r'<minimumsdybde>([^<]*)<', t), re.search(r'<maksimumsdybde>([^<]*)<', t)
+    return (float(lo.group(1)), float(hi.group(1))) if lo and hi else None
+
+
+def build_seabed(cache, out, log):
+    """Height of the shore and seabed around Austegardsfjæra, metres above chart datum, as a grey PNG.
+    Land and the upper shore from the 1 m DTM (NN2000, shifted to chart datum). The drying zone and the sea from the
+    chart (wms.dybdedata2): the drying line is 0, each depth area (Dybdelag) lies between its minimum and maximum
+    depth. Known heights are fixed on land and on every line between areas; the rest is filled by a Laplace solve."""
+    from scipy.sparse import coo_matrix
+    from scipy.sparse.linalg import spsolve
+    f = FJAERA
+    (cx, cy), r, px = f['c'], f['half'], f['px']
+    bbox = (cx - r, cy - r, cx + r, cy + r)
+    n = int(round(2 * r / px))
+    dtm = fetch_dtm(cache, bbox, 1.0)
+    dtm = ndi.zoom(dtm, n / dtm.shape[0], order=1)[:n, :n]
+    lag = wms_raster(cache, 'wms.dybdedata2', 'Dybdelag', bbox, px)
+    tor = wms_raster(cache, 'wms.dybdedata2', 'Torrfall', bbox, px)[..., 3] > 25   # drawn at about 20% opacity
+    known = np.full((n, n), np.nan)
+    land = dtm > 0.05
+    known[land] = dtm[land] + NN2000_CD
+    # depth areas: one id per same-coloured connected area, its range from the service
+    rgb = lag[..., 0].astype(int) * 65536 + lag[..., 1].astype(int) * 256 + lag[..., 2]
+    ids = np.zeros((n, n), int)
+    rng = {}
+    for col in np.unique(rgb[lag[..., 3] > 200]):
+        lab, k = ndi.label((rgb == col) & (lag[..., 3] > 200))
+        for c in range(1, k + 1):
+            m = lab == c
+            if m.sum() < 8:
+                continue
+            dt = ndi.distance_transform_edt(m)
+            j, i = np.unravel_index(np.argmax(dt), dt.shape)
+            b = dybde_band(cache, bbox, i, j, n, n)
+            if b:
+                key = len(rng) + 1
+                rng[key] = b
+                ids[m] = key
+    ids[tor] = -1   # drying zone: from 0 at the drying line up to the shore
+    # fix the height on every edge between two areas: the depth they share, 0 on the drying line
+    for dy, dx in ((0, 1), (1, 0)):
+        a, b_ = ids[:n - dy, :n - dx], ids[dy:, dx:]
+        for ya, xa in zip(*np.nonzero((a != b_) & (a != 0) & (b_ != 0))):
+            p, q = a[ya, xa], b_[ya, xa]
+            if -1 in (p, q):
+                v = 0.0
+            else:
+                (p0, p1), (q0, q1) = rng[p], rng[q]
+                v = -(p1 if abs(p1 - q0) < abs(q1 - p0) else q1)
+            for yy, xx in ((ya, xa), (ya + dy, xa + dx)):
+                if np.isnan(known[yy, xx]):
+                    known[yy, xx] = v
+    unk = np.isnan(known)
+    idx = -np.ones((n, n), int)
+    idx[unk] = np.arange(unk.sum())
+    rows, cols, vals = [], [], []
+    rhs = np.zeros(unk.sum())
+    ys, xs = np.nonzero(unk)
+    for dy, dx in ((0, 1), (0, -1), (1, 0), (-1, 0)):
+        yy, xx = ys + dy, xs + dx
+        ok = (yy >= 0) & (yy < n) & (xx >= 0) & (xx < n)
+        e = idx[ys[ok], xs[ok]]
+        rows.append(e); cols.append(e); vals.append(np.ones(ok.sum()))
+        nb_unk = unk[yy[ok], xx[ok]]
+        rows.append(e[nb_unk]); cols.append(idx[yy[ok][nb_unk], xx[ok][nb_unk]]); vals.append(-np.ones(nb_unk.sum()))
+        np.add.at(rhs, e[~nb_unk], known[yy[ok][~nb_unk], xx[ok][~nb_unk]])
+    A = coo_matrix((np.concatenate(vals), (np.concatenate(rows), np.concatenate(cols))), shape=(unk.sum(),) * 2).tocsr()
+    h = known.copy()
+    h[unk] = spsolve(A, rhs)
+    v = np.clip(np.round((h - SEABED_ZERO) / SEABED_STEP), 0, 255).astype(np.uint8)
+    Image.fromarray(v, 'L').save(os.path.join(out, f['file']), optimize=True)
+    log(f"seabed: {n}x{n} at {px} m, {len(rng)} depth areas, drying zone {int(tor.sum() * px * px)} m2, "
+        f"heights {h.min():.2f}..{h.max():.2f} m CD, bbox {bbox}")
+    return bbox
+
+
 def forest_rings(cache, bbox, s):
     px = s['fpx']
     a = wms_mosaic_rgba(cache, 'wms.topo', 'ar5', bbox, px)
@@ -627,7 +738,8 @@ CSS = ('svg{--w:#2d6477;--wl:#2d6477;--o:#5d6d3b;--ol:#5d6d3b;--c:#666963;--i:#2
        '.bd,.b2{stroke:var(--i);stroke-opacity:var(--bo);stroke-linecap:square}'
        '.bd{stroke-width:%(bd)spx}.b2{stroke-width:%(bd2)spx}'
        '.bp{fill:var(--i);fill-opacity:var(--bo)}'
-       '.kq{fill:var(--c);fill-opacity:.45;stroke:var(--i);stroke-opacity:.55;stroke-width:.6px}')
+       '.kq{fill:var(--c);fill-opacity:.45;stroke:var(--i);stroke-opacity:.55;stroke-width:.6px}'
+       '.kl{stroke:var(--i);stroke-opacity:.7;stroke-width:.8px}')
 
 
 def svg_doc(enc, layers, stroke):
@@ -744,6 +856,7 @@ def build_sheet(name, s, data, cache, log):
         return [(cls, d, '') for d in enc.chunks(items, cell=cell)]
 
     quays = fkb_quays(cache, bbox) if fkb else []
+    slips = fkb_slips(cache, bbox, sea_c) if fkb else []
     layers = ([('sea', sea_d, ''),
                ('fo', enc.d(fo_rings, close=True), ' fill-rule="evenodd"'),
                ('lk', enc.d(lk_rings, close=True), ' fill-rule="evenodd"'),
@@ -754,11 +867,12 @@ def build_sheet(name, s, data, cache, log):
               + strokes('r2', (l.coords for l in roads_minor))
               + strokes('tk', (l.coords for l in tracks))
               + strokes('sh', (l.coords for l in shore_l))
+              + strokes('kl', (l.coords for l in slips))
               + bld_layers)
     svg = svg_doc(enc, layers, s['stroke'])
     log(f'{name}: {len(svg)/1024:.1f} KB raw, {len(gzip.compress(svg.encode(), 9))/1024:.1f} KB gzip; '
         f'contours {len(ct)}+{len(ci)} lines, roads {len(roads_major)}+{len(roads_minor)}, buildings {nb}, '
-        f'forest rings {len(fo_rings)}, lakes {len(lake_polys)}, shore {len(shore_l)}, quays {len(quays)}')
+        f'forest rings {len(fo_rings)}, lakes {len(lake_polys)}, shore {len(shore_l)}, quays {len(quays)}, slipway lines {len(slips)}')
     return svg, enc
 
 
@@ -793,9 +907,12 @@ def main():
     cache = Cache(args.cache)
     os.makedirs(args.out, exist_ok=True)
     log = lambda m: print(m, flush=True)  # noqa: E731
-    data = load_n50(cache)
+    data = load_n50(cache) if set(args.only.split(',')) - {'seabed'} else None
     built = {}
     for name in args.only.split(','):
+        if name == 'seabed':
+            build_seabed(cache, args.out, log)
+            continue
         s = SHEETS[name]
         svg, enc = build_sheet(name, s, data, cache, log)
         with open(os.path.join(args.out, s['file']), 'w', encoding='utf8') as f:

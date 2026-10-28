@@ -76,17 +76,41 @@
                     .replace('andthunder', ' and thunder').replace('showers', ' showers');
   }
 
+  /* Norwegian clock time of a date or ISO string */
+  function clock(t) {
+    var dt = new Date(t);
+    try { return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo' }).format(dt); }
+    catch (e) { return dt.toISOString().slice(11, 16); }
+  }
+
+  /* a small engraved sky symbol for a MET Norway symbol code: sun or moon, cloud, rain, snow, sleet, thunder, fog */
+  var SUN = '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v3M12 18.5v3M2.5 12h3M18.5 12h3M5.3 5.3l2.1 2.1M16.6 16.6l2.1 2.1M5.3 18.7l2.1-2.1M16.6 7.4l2.1-2.1"/>',
+      MOON = '<path d="M15.5 3.5a8.5 8.5 0 1 0 5 15 7 7 0 0 1-5-15z"/>',
+      CLOUD = '<path d="M7 19h10.5a4 4 0 0 0 .4-8 5.5 5.5 0 0 0-10.6 1.2A3.4 3.4 0 0 0 7 19z"/>';
+  function icon(sym) {
+    var s = (sym || '').replace(/_(day|night|polartwilight)$/, ''), lit = /_night$/.test(sym) ? MOON : SUN, g = '';
+    if (!s) return '';
+    if (s === 'clearsky') g = lit;
+    else if (s === 'fair' || s === 'partlycloudy') g = '<g transform="translate(-1 -1) scale(.62)">' + lit + '</g><g transform="translate(3 3) scale(.85)">' + CLOUD + '</g>';
+    else if (s === 'cloudy') g = CLOUD;
+    else if (s === 'fog') g = '<path d="M3 8h18M5 12h14M3 16h18"/>';
+    else {
+      g = '<g transform="translate(0 -4)">' + CLOUD + '</g>';
+      if (/rain|sleet/.test(s)) g += '<path d="M8.5 18l-1.2 3M16.5 18l-1.2 3"/>';
+      if (/snow|sleet/.test(s)) g += '<path d="M12.5 19.5h.01M8 22h.01M16 22h.01" stroke-width="2.6"/>';
+      if (/thunder/.test(s)) g += '<path d="M12.5 14.5l-2.5 4h3l-2 4"/>';
+    }
+    return '<svg class="wx-ico" viewBox="0 0 24 24" aria-hidden="true">' + g + '</svg>';
+  }
+
   /* the weather report card in #place: the hour now and the next twelve hours */
   function report(w, src) {
     var card = d.getElementById('wx-card');
     if (!card) return;
-    var hh = function (iso) {
-      try { return new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Oslo' }).format(new Date(iso)); }
-      catch (e) { return iso.slice(11, 16); }
-    }, arrow = function (deg) {   /* the arrow points where the wind blows to */
+    var hh = clock, arrow = function (deg) {   /* the arrow points where the wind blows to */
       return '<i class="wx-arrow" style="transform:rotate(' + Math.round(deg + 180) + 'deg)" aria-hidden="true">&uarr;</i>';
     }, row = function (x, when) {
-      return '<tr><th scope="row">' + when + '</th><td>' + sky(x.sym) + '</td><td>' + Math.round(x.t) + '&deg;</td><td>' +
+      return '<tr><th scope="row">' + when + '</th><td>' + icon(x.sym) + sky(x.sym) + '</td><td>' + Math.round(x.t) + '&deg;</td><td>' +
         arrow(x.wd) + DIRS[Math.round(x.wd / 22.5) % 16] + ' ' + Math.round(x.ws) + '</td><td>' +
         (x.pr ? x.pr.toFixed(1) : '&ndash;') + '</td></tr>';
     };
@@ -101,7 +125,7 @@
     if (home) {
       var el = d.getElementById('wx');
       if (!el) return;
-      el.querySelector('dd').innerHTML = deg + 'C' + (what ? ', ' + what : '') + '<br>wind ' + wind +
+      el.querySelector('dd').innerHTML = icon(w.sym) + deg + 'C' + (what ? ', ' + what : '') + '<br>wind ' + wind +
         ' &middot; <a href="' + src + '">MET Norway</a>';
       el.hidden = false;
       report(w, src);
@@ -117,6 +141,83 @@
     }
   }
 
+  /* ── the tide ─────────────────────────────────────────────────
+     Kartverket's Se havnivå predictions for the fjære (from the Bergen gauge), in metres above chart datum, every
+     ten minutes from three hours ago to thirty hours ahead, with the high and low waters; kept three hours */
+  var TIDE = 'https://vannstand.kartverket.no/tideapi.php?tide_request=locationdata&lat=60.5361&lon=5.2714&refcode=CD&lang=en&dst=0&tzone=0&datatype=',
+      tide = null, tideOff = 0,             /* tideOff: minutes ahead of now that the close view shows */
+      redrawFjaera = function () {};
+
+  function loadTide() {
+    var c = null, now = Date.now();
+    try { c = JSON.parse(localStorage.getItem('tide1')); } catch (e) {}
+    if (c && c.exp > now) return Promise.resolve(c.v);
+    var iso = function (ms) { return new Date(ms).toISOString().slice(0, 16); },
+        q = '&fromtime=' + iso(now - 108e5) + '&totime=' + iso(now + 108e6),
+        get = function (u) {
+          return fetch(TIDE + u + q, { priority: 'low' }).then(function (r) { if (!r.ok) throw r.status; return r.text(); }).then(function (t) {
+            return [].map.call(new DOMParser().parseFromString(t, 'text/xml').querySelectorAll('waterlevel'), function (e) {
+              return [Date.parse(e.getAttribute('time')), parseFloat(e.getAttribute('value')) / 100, e.getAttribute('flag')];
+            });
+          });
+        };
+    return Promise.all([get('PRE&interval=10'), get('TAB')]).then(function (r) {
+      if (!r[0].length) throw 'no tide';
+      var v = { pre: r[0].map(function (x) { return [x[0], x[1]]; }), tab: r[1] };
+      try { localStorage.setItem('tide1', JSON.stringify({ exp: now + 108e5, v: v })); } catch (e) {}
+      return v;
+    }).catch(function () { return c ? c.v : null; });
+  }
+
+  function levelAt(ms) {
+    var v = tide.pre, i = 1;
+    if (ms <= v[0][0]) return v[0][1];
+    while (i < v.length && v[i][0] < ms) i++;
+    if (i >= v.length) return v[v.length - 1][1];
+    var a = v[i - 1], b_ = v[i];
+    return a[1] + (b_[1] - a[1]) * (ms - a[0]) / (b_[0] - a[0]);
+  }
+  function tideLevel() { return tide ? levelAt(Date.now() + tideOff * 6e4) : 0.95; }
+
+  /* the tide panel in the card: the next 24 hours as a curve, the level at the time shown, a scrubber and play */
+  function tideUI(card) {
+    var box = card.querySelector('.wx-tide');
+    if (!box || !tide) return;
+    var now = Date.now(), W = 240, H = 44, lo = 0, hi = 2, svg = box.querySelector('svg'),
+        y = function (lv) { return (H - (lv - lo) / (hi - lo) * H).toFixed(1); }, pts = [];
+    for (var k = 0; k <= 144; k++) pts.push((k / 144 * W).toFixed(1) + ',' + y(levelAt(now + k * 6e5)));
+    svg.querySelector('.tc').setAttribute('points', pts.join(' '));
+    box.querySelector('.tide-turns').textContent = tide.tab.filter(function (e) { return e[0] > now && e[0] < now + 864e5; })
+      .map(function (e) { return (e[2] === 'high' ? 'High ' : 'Low ') + clock(e[0]) + ' (' + e[1].toFixed(2) + ' m)'; }).join(' · ');
+    var input = box.querySelector('input'), out = box.querySelector('output'), mk = svg.querySelector('.tm'), play = box.querySelector('button'), raf = 0;
+    function show() {
+      var ms = now + tideOff * 6e4, lv = levelAt(ms), dl = levelAt(ms + 6e5) - lv;
+      mk.setAttribute('cx', (tideOff / 1440 * W).toFixed(1)); mk.setAttribute('cy', y(lv));
+      out.textContent = (tideOff ? clock(ms) : 'Now') + ': ' + lv.toFixed(2) + ' m, ' + (dl > .002 ? 'rising' : dl < -.002 ? 'falling' : 'turning');
+      redrawFjaera();
+    }
+    input.addEventListener('input', function () { tideOff = +input.value; show(); });
+    play.addEventListener('click', function () {
+      if (raf) { cancelAnimationFrame(raf); raf = 0; play.setAttribute('aria-pressed', 'false'); return; }
+      var t0 = performance.now(), o0 = tideOff;
+      (function step(ts) {   /* the next 24 hours in 16 seconds, round and round */
+        tideOff = Math.round((o0 + (ts - t0) / 16000 * 1440) % 1440);
+        input.value = tideOff; show();
+        raf = requestAnimationFrame(step);
+      })(t0);
+      play.setAttribute('aria-pressed', 'true');
+    });
+    box.hidden = false;
+    show();
+  }
+
+  /* the close view draws its own water, so the map under it loses the sea's flat tint */
+  function stripSea(img) {
+    fetch(img.getAttribute('src')).then(function (r) { return r.text(); }).then(function (t) {
+      img.src = URL.createObjectURL(new Blob([t.replace(/\.sea\{[^}]*\}/, '.sea{fill:none}')], { type: 'image/svg+xml' }));
+    });
+  }
+
   /* shader parameters from the weather; null gives a calm, half-cloudy default */
   function params(w) {
     w = w || { ws: 3, wd: 220, cl: 40, fog: 0, pr: 0, sym: '' };
@@ -129,6 +230,7 @@
       rain: wet ? Math.min(.06 + w.pr / 8, .5) : 0,
       snow: white ? Math.min(.15 + w.pr / 4, .6) : 0,
       night: /_night$/.test(s) ? 1 : 0,
+      sun: /_night$/.test(s) ? 0 : ({ clearsky: 1, fair: .8, partlycloudy: .45 })[s.replace(/_\w+$/, '')] || 0,
       fog: Math.min((w.fog || 0) / 100, 1)
     };
   }
@@ -185,11 +287,14 @@ struct U {
   dir: vec2f, ws: f32, cl: f32,        // wind (blows to), wind 0..1, cloud cover 0..1
   rain: f32, snow: f32, night: f32, px: f32,   // px: canvas px per CSS px
   water: vec4f, ink: vec4f,
-  geo: vec4f,                          // metres per map unit; map origin in metres east and south of the sheet's top left; surf (0 or 1)
+  geo: vec4f,                          // metres per map unit; map origin in metres east and south of the sheet's top left; close view (0 or 1)
+  tide: vec4f,                         // water level (m above chart datum), sunshine 0..1, seabed present (0 or 1)
+  bed: vec4f,                          // the seabed texture's box in map units: x0, y0, x1, y1
 };
 @group(0) @binding(0) var<uniform> u: U;
 @group(0) @binding(1) var tex: texture_2d<f32>;
 @group(0) @binding(2) var smp: sampler;
+@group(0) @binding(3) var bedtex: texture_2d<f32>;   // heights above chart datum, grey v -> v * 255 / 30 - 6 m
 
 const MAXD = ${MAXT * TEXEL}.0;
 
@@ -221,6 +326,117 @@ fn stroke(dm: f32, w: f32) -> f32 {
   return 1.0 - smoothstep(h - 0.6, h + 0.6, x);
 }
 
+fn over(dst: vec4f, rgb: vec3f, a: f32) -> vec4f {
+  let k = clamp(a, 0.0, 1.0);
+  return vec4f(rgb * k + dst.rgb * (1.0 - k), k + dst.a * (1.0 - k));
+}
+
+// The close view of the fjære, everything drawn large and fast on purpose. The tide floods the seabed texture to
+// the water level: water is tinted by depth, the seabed it bares is stippled, and the waterline is drawn. Wave lines
+// follow the depth contours (waves turn to the shore as the water shoals), foam bursts at the waterline, rain rings
+// spread on the water and splash on dry ground, the sun glitters on the ripples.
+fn bedh(bu: vec2f) -> f32 { return textureSampleLevel(bedtex, smp, bu, 0.0).r * 255.0 / 30.0 - 6.0; }
+
+fn fjaera(m: vec2f, sea: f32, t: f32) -> vec4f {
+  let P = 1.0 / (u.scale * u.px);               // CSS px per map unit
+  let mp = m * P;                               // map position in CSS px
+  let span = u.bed.zw - u.bed.xy;
+  let bu = (m - u.bed.xy) / span;
+  let inb = step(0.0, bu.x) * step(bu.x, 1.0) * step(0.0, bu.y) * step(bu.y, 1.0) * u.tide.z;
+  let h = mix(select(2.5, -2.0, sea > 0.5), bedh(bu), inb);         // metres above chart datum
+  let e = 6.0 / vec2f(textureDimensions(bedtex));   // slope over six texels (3 m), smooth enough for clean wave lines
+  let g = vec2f(bedh(bu + vec2f(e.x, 0.0)) - bedh(bu - vec2f(e.x, 0.0)),
+                bedh(bu + vec2f(0.0, e.y)) - bedh(bu - vec2f(0.0, e.y))) / (2.0 * e * span) * inb;   // m per map unit
+  let slope = max(length(g), 0.004);
+  let up = g / max(length(g), 1e-5);            // uphill: towards the shore
+  let depth = u.tide.x - h;
+  let water = sea * smoothstep(-0.01, 0.01, depth);
+  let bare = sea * (1.0 - water);               // seabed the tide has left
+  let dpx = max(depth, 0.0) / slope * P;        // CSS px out from the waterline
+  var o = vec4f(0.0);
+
+  // water, darker as it deepens; the bared seabed, damp near the water, stippled with stones
+  o = over(o, u.water.rgb, water * (0.1 + 0.14 * smoothstep(0.0, 6.0, depth)));
+  o = over(o, vec3f(0.56, 0.5, 0.36), bare * (0.16 + 0.16 * exp(depth / 0.12)));
+  let st = mp / 3.4; let si = floor(st);
+  let so = vec2f(hash(si + vec2f(7.0, 1.0)), hash(si + vec2f(2.0, 9.0))) * 0.6 + 0.2;
+  let pr = 0.45 + 0.9 * hash(si + vec2f(5.0, 5.0));
+  o = over(o, u.ink.rgb, bare * (1.0 - smoothstep(pr * 0.6, pr, length(st - si - so) * 3.4)) * step(hash(si + vec2f(3.0, 3.0)), 0.5) * 0.55);
+  // the waterline
+  o = over(o, u.water.rgb, sea * (1.0 - smoothstep(0.7, 1.8, abs(depth) / slope * P)) * 0.95);
+
+  // wave lines along the depth contours, rolling in on the shores the wind faces
+  let face = clamp(dot(u.dir, up), 0.0, 1.0);
+  let wob = (noise(mp / 60.0 + vec2f(t * 0.1, 0.0)) - 0.5) * 4.0 * (0.4 + u.ws);
+  let ph = (dpx + wob) / 18.0 + t * (0.5 + 1.6 * u.ws) * (0.35 + 0.65 * face);
+  let kk = floor(ph + 0.5);
+  let nl = 1.5 + 2.5 * u.ws * (0.3 + 0.7 * face);
+  let brk = smoothstep(0.12, 0.28, noise(mp / 30.0 + vec2f(kk * 7.31, kk * 3.17)));
+  let line = (1.0 - smoothstep(0.8, 1.9, abs(ph - kk) * 18.0)) * smoothstep(3.0, 9.0, dpx)
+           * (1.0 - smoothstep(18.0 * (nl - 1.0), 18.0 * nl, dpx)) * brk;
+  o = over(o, u.water.rgb, water * line * (0.6 + 0.4 * face));
+
+  // foam at the waterline, thrown up as each wave line arrives
+  let burst = pow(1.0 - fract(ph - dpx / 18.0), 2.5) * (0.4 + 0.6 * face) * (0.3 + u.ws);
+  let fe = 3.0 + 12.0 * burst;
+  let ft = mp / 2.6; let fi = floor(ft);
+  let fo = vec2f(hash(fi + vec2f(2.0, 11.0)), hash(fi + vec2f(13.0, 3.0))) * 0.6 + 0.2;
+  let fd = 1.0 - smoothstep(0.45, 1.0, length(ft - fi - fo) * 2.6);
+  let fden = (1.0 - smoothstep(fe * 0.5, fe, dpx)) * (0.25 + 0.45 * burst);
+  o = over(o, u.water.rgb, water * fd * step(hash(fi + vec2f(floor(t * 6.0), 7.0)), fden) * 0.9);
+
+  // crest dashes on open water, large and fast
+  let nr = vec2f(-u.dir.y, u.dir.x);
+  let cell = vec2f(30.0, 70.0);
+  let q = vec2f(dot(mp, u.dir), dot(mp, nr)) - vec2f(t * (8.0 + 30.0 * u.ws), 0.0);
+  let id = floor(q / cell);
+  let h1 = hash(id); let h2 = hash(id + vec2f(17.0, 5.0)); let h3 = hash(id + vec2f(3.0, 29.0));
+  let rel = q - (id + 0.5 + (vec2f(h1, h3) - 0.5) * vec2f(0.4, 0.5)) * cell;
+  let L = cell.y * (0.18 + 0.35 * u.ws) * sin(3.14159 * fract(t * 0.12 + h1 * 7.0));
+  let dash = (1.0 - smoothstep(0.6, 1.5, abs(rel.x + rel.y * rel.y / (cell.y * 1.6)))) * (1.0 - smoothstep(L * 0.55, L, abs(rel.y)));
+  o = over(o, u.water.rgb, water * dash * step(h2, 0.06 + 0.5 * u.ws) * smoothstep(24.0, 48.0, dpx) * 0.7);
+
+  // rain: big rings on the water, splashes on the bared seabed
+  if (u.rain > 0.0) {
+    let rc = 34.0;
+    let rp = mp / rc + vec2f(0.37, 0.71); let ri = floor(rp);
+    let rt = t * 1.3 + hash(ri + vec2f(41.0, 7.0)) * 13.0;
+    let rl = fract(rt); let cyc = floor(rt);
+    let ro = vec2f(hash(ri + vec2f(cyc, 3.0)), hash(ri + vec2f(5.0, cyc))) * 0.6 + 0.2;
+    let rr = length(rp - ri - ro) * rc;
+    let on = step(hash(ri + vec2f(cyc, cyc)), min(u.rain * 2.2, 0.95)) * (1.0 - rl);
+    o = over(o, u.water.rgb, water * on * (1.0 - smoothstep(0.5, 1.4, abs(rr - rl * 14.0))) * 0.85);
+    o = over(o, u.ink.rgb, bare * on * (1.0 - smoothstep(1.0, 2.2, rr)) * 0.5);
+  }
+
+  // sunshine: glitter on the ripples, and a little warmth over everything
+  if (u.tide.y > 0.0) {
+    let gc = mp / 7.0; let gi = floor(gc);
+    let gp = vec2f(hash(gi + vec2f(4.0, 8.0)), hash(gi + vec2f(9.0, 1.0))) * 0.7 + 0.15;
+    let tw = floor(t * 7.0 + hash(gi) * 40.0);
+    let gl = (1.0 - smoothstep(0.4, 1.6, length(gc - gi - gp) * 7.0)) * step(hash(gi + vec2f(tw, 3.0)), u.tide.y * (0.06 + 0.2 * u.ws));
+    o = over(o, vec3f(0.95, 0.72, 0.22), water * gl);
+    o = over(o, vec3f(0.98, 0.8, 0.35), u.tide.y * 0.05);
+  }
+
+  // snow: big flakes drifting with the wind
+  if (u.snow > 0.0) {
+    let sp = (mp - u.dir * t * (12.0 + 30.0 * u.ws) - vec2f(t * 3.0, t * 6.0)) / 16.0;
+    let fl = floor(sp);
+    let fp = vec2f(hash(fl), hash(fl + vec2f(1.0, 9.0))) * 0.7 + 0.15;
+    o = over(o, u.ink.rgb, (1.0 - smoothstep(1.2, 2.2, length(sp - fl - fp) * 16.0)) * step(hash(fl + vec2f(4.0, 4.0)), u.snow) * 0.6);
+  }
+
+  // cloud shadows (the same sky as the maps behind) and the night
+  let wm = u.geo.yz + m * u.geo.x;
+  let cn = fbm((wm - u.dir * t * (2.0 + 14.0 * u.ws)) * 0.00096 + vec2f(0.0, t * 0.003));
+  let th = mix(0.8, 0.34, u.cl);
+  let cd = smoothstep(th, th + 0.2, cn);
+  let hatch = 1.0 - smoothstep(0.35, 1.0, abs(fract((mp.x + mp.y) / 6.0 + 0.5) - 0.5) * 6.0 * 0.7071);
+  o = over(o, u.ink.rgb, cd * (0.05 + 0.14 * hatch) + u.night * 0.1);
+  return o;
+}
+
 @fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
   let m = u.origin + fc.xy * u.scale;
   let uv = m / u.map;
@@ -233,6 +449,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
                 textureSampleLevel(tex, smp, uv + vec2f(0.0, e.y), 0.0).g - textureSampleLevel(tex, smp, uv - vec2f(0.0, e.y), 0.0).g);
   let out = g / max(length(g), 1e-6);          // points out to sea
   let t = u.time;
+  if (u.geo.w > 0.5) { return fjaera(m, smoothstep(0.35, 0.65, s.r), t) * inside; }
   let k1 = max(1.0, u.scale * u.px);           // map units per CSS px, at least one
   var wa = 0.0;
 
@@ -258,19 +475,6 @@ fn stroke(dm: f32, w: f32) -> f32 {
   let L = cell.y * (0.14 + 0.3 * u.ws) * sin(3.14159 * life);
   let dash = stroke(rel.x + rel.y * rel.y / (cell.y * 1.6), 0.85) * (1.0 - smoothstep(L * 0.55, L, abs(rel.y)));
   wa = max(wa, dash * step(h2, 0.03 + 0.4 * u.ws * sqrt(u.ws)) * smoothstep(S * 1.4, S * 3.5, dist) * 0.55);
-
-  // 2b. surf, in a close view: stippled foam on the shore, thrown up as each wave line arrives
-  if (u.geo.w > 0.0) {
-    let reach = fract(ph - dist / S);                       // phase of the next line to reach the shore
-    let burst = pow(1.0 - reach, 3.0) * (0.35 + 0.65 * face) * (0.4 + 0.9 * u.ws);
-    let edge = S * (0.35 + 1.3 * burst + 0.2 * noise(m * 0.05 / k1 + vec2f(t * 0.2, 0.0)));
-    let sc = 1.7 * k1;
-    let fi = floor(m / sc);
-    let fo = vec2f(hash(fi + vec2f(2.0, 11.0)), hash(fi + vec2f(13.0, 3.0))) * 0.6 + 0.2;
-    let dot = 1.0 - smoothstep(0.5, 1.1, length(m / sc - fi - fo) * sc / u.scale / u.px);
-    let dens = (1.0 - smoothstep(edge * 0.4, edge, dist)) * (0.35 + 0.5 * burst);
-    wa = max(wa, dot * step(hash(fi + vec2f(floor(t * 3.0), 7.0)), dens) * 0.85);
-  }
 
   // 3. rain rings
   if (u.rain > 0.0) {
@@ -352,7 +556,10 @@ fn stroke(dm: f32, w: f32) -> f32 {
         dev.createComputePipelineAsync({ layout: 'auto', compute: { module: dev.createShaderModule({ code: JFA }), entryPoint: 'main' } }),
         dev.createRenderPipelineAsync({ layout: 'auto', vertex: { module: mod, entryPoint: 'vs' },
           fragment: { module: mod, entryPoint: 'fs', targets: [{ format: fmt }] }, primitive: { topology: 'triangle-list' } })
-      ]).then(function (r) { return { dev: dev, jfa: r[0], pipe: r[1], fmt: fmt }; });
+      ]).then(function (r) {
+        var none = dev.createTexture({ size: [1, 1], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING });
+        return { dev: dev, jfa: r[0], pipe: r[1], fmt: fmt, none: none.createView() };
+      });
     }));
   }
 
@@ -386,20 +593,35 @@ fn stroke(dm: f32, w: f32) -> f32 {
     }));
   }
 
-  function gpu(cv, url, MW, MH, view, geo) {
-    var dev, ctx, pipe, bind, ubuf, data = new Float32Array(28), cur = null, aim = null, last = -1e9, raf = 0, on = true, c;
+  /* the seabed heights as a texture (a grey PNG made by scripts/map/build_flatoy.py) */
+  function seabed(dev, src) {
+    return fetch(src).then(function (r) { return r.blob(); }).then(createImageBitmap).then(function (bm) {
+      var t = dev.createTexture({ size: [bm.width, bm.height], format: 'rgba8unorm',
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+      dev.queue.copyExternalImageToTexture({ source: bm }, { texture: t }, [bm.width, bm.height]);
+      return t.createView();
+    });
+  }
+
+  /* opt (the close view only): bed = { src, box: [x0, y0, x1, y1] map units }, level() = the water level to draw */
+  function gpu(cv, url, MW, MH, view, geo, opt) {
+    var dev, ctx, pipe, bind, ubuf, data = new Float32Array(36), cur = null, aim = null, last = -1e9, raf = 0, on = true, c, bv;
+    opt = opt || {};
     var TW = MW / TEXEL, TH = MH / TEXEL;
     return shared().then(function (cc) {
       c = cc; dev = c.dev; pipe = c.pipe;
-      return field(c, url, TW, TH);
-    }).then(function (fv) {
+      return Promise.all([field(c, url, TW, TH), opt.bed ? seabed(dev, opt.bed.src) : c.none]);
+    }).then(function (r) {
+      var fv = r[0];
+      bv = r[1];
       var fmt = c.fmt, B = GPUBufferUsage;
       ctx = cv.getContext('webgpu');
       ctx.configure({ device: dev, format: fmt, alphaMode: 'premultiplied' });
       ubuf = dev.createBuffer({ size: data.byteLength, usage: B.UNIFORM | B.COPY_DST });
       bind = dev.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: [
         { binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: fv },
-        { binding: 2, resource: dev.createSampler({ magFilter: 'linear', minFilter: 'linear' }) }] });
+        { binding: 2, resource: dev.createSampler({ magFilter: 'linear', minFilter: 'linear' }) },
+        { binding: 3, resource: bv }] });
       dev.lost.then(function (i) { on = false; cv.remove(); console.warn('weather.js: device lost', i.message); });
 
       var dark = matchMedia('(prefers-color-scheme: dark)');
@@ -410,6 +632,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
       }
       inks();
       data.set(geo, 24);
+      if (opt.bed) data.set(opt.bed.box, 32);
       dark.addEventListener('change', function () { inks(); render(); });
 
       function size() {
@@ -429,6 +652,7 @@ fn stroke(dm: f32, w: f32) -> f32 {
         var dl = Math.hypot(cur.dir[0], cur.dir[1]) || 1;
         data.set([cv.width, cv.height, v.scale / px, t, v.x, v.y, MW, MH,
                   cur.dir[0] / dl, cur.dir[1] / dl, cur.ws, cur.cl, cur.rain, cur.snow, cur.night, px]);
+        data.set([opt.level ? opt.level() : 0.95, cur.sun || 0, opt.bed ? 1 : 0, 0], 28);
         dev.queue.writeBuffer(ubuf, 0, data);
         var e = dev.createCommandEncoder(), p = e.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(),
           loadOp: 'clear', clearValue: [0, 0, 0, 0], storeOp: 'store' }] });
@@ -466,11 +690,11 @@ fn stroke(dm: f32, w: f32) -> f32 {
 
   /* one canvas of sea and sky over a map: url and size in map units, view(W, H) gives the map units at the
      canvas's top left and per CSS px, geo = [metres per unit, origin metres east, origin metres south] of the sheet */
-  function paint(p, before, url, MW, MH, view, geo, hook) {
+  function paint(p, before, url, MW, MH, view, geo, hook, opt) {
     var cv = d.createElement('canvas');
     cv.className = 'wx-sky'; cv.setAttribute('aria-hidden', 'true');
     before.parentNode.insertBefore(cv, before);
-    gpu(cv, url, MW, MH, view, geo.length > 3 ? geo : geo.concat(0)).then(function (g) {
+    gpu(cv, url, MW, MH, view, geo.length > 3 ? geo : geo.concat(0), opt).then(function (g) {
       g.set(p);
       if (hook) hook(g);
       else if (window.IntersectionObserver) new IntersectionObserver(function (es) { g.pause(!es[0].isIntersecting); }).observe(cv);
@@ -490,6 +714,8 @@ fn stroke(dm: f32, w: f32) -> f32 {
       }, [2.5, 852.9, 1796.3]);
       return;
     }
+    var card = d.getElementById('wx-card');
+    if (card) loadTide().then(function (v) { tide = v; tideUI(card); });
     var plane = d.getElementById('plane');
     if (plane) {
       /* sheet.js sets plane.x / plane.y (its translate) and calls plane.onmove as it pans */
@@ -502,10 +728,15 @@ fn stroke(dm: f32, w: f32) -> f32 {
     /* the lenses on the inset map (the loupe, the fjære in the weather report): data-view is the map units at the
        top left and the units across; data-detail draws the surf. Each starts when it comes near the window */
     [].forEach.call(d.querySelectorAll('.lens[data-view]'), function (lens) {
-      var v = lens.getAttribute('data-view').split(' ').map(Number), go = function () {
+      var v = lens.getAttribute('data-view').split(' ').map(Number), detail = lens.hasAttribute('data-detail'),
+          bed = lens.getAttribute('data-bed'), go = function () {
         paint(p, lens.firstElementChild, lens.getAttribute('data-map'), 2400, 2400, function (W) {
           return { x: v[0], y: v[1], scale: v[2] / W };
-        }, [0.5, 3252.9, 1946.3, lens.hasAttribute('data-detail') ? 1 : 0]);
+        }, [0.5, 3252.9, 1946.3, detail ? 1 : 0], detail ? function (g) {
+          stripSea(lens.querySelector('img'));
+          redrawFjaera = function () { if (still) g.render(); };   /* the animation reads the level every frame */
+          if (window.IntersectionObserver) new IntersectionObserver(function (es) { g.pause(!es[0].isIntersecting); }).observe(lens);
+        } : null, detail && bed ? { bed: { src: lens.getAttribute('data-bed-src'), box: bed.split(' ').map(Number) }, level: tideLevel } : null);
       };
       if (window.IntersectionObserver) {
         var io = new IntersectionObserver(function (es) { if (es[0].isIntersecting) { io.disconnect(); go(); } }, { rootMargin: '400px' });
