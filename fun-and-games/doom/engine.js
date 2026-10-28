@@ -2,9 +2,9 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs } from "./wad.js?v=20261028015152";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028015152";
-import { STATES, SFX } from "./info.js?v=20261028015152";
+import { readWad, buildGfx, buildMap, spawnMobjs } from "./wad.js?v=20261028020204";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028020204";
+import { STATES, SFX } from "./info.js?v=20261028020204";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -14,6 +14,7 @@ export const W = { // World word offsets (see struct World)
   killcount: 40, itemcount: 41, secretcount: 42, message: 43, messagetics: 44, viscount: 45, sndcount: 46,
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
+  face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
 };
 
 export function freshPlayer() {
@@ -98,7 +99,7 @@ export class Engine {
     const cached = this.pipeCache.get(code);
     if (cached) Object.assign(this, cached);
     else await this.compile(code);
-    this.pipeCache.set(code, { renderPipe: this.renderPipe, projectPipe: this.projectPipe, hudPipe: this.hudPipe, ticPipes: this.ticPipes });
+    this.pipeCache.set(code, { renderPipe: this.renderPipe, projectPipe: this.projectPipe, hudPipe: this.hudPipe, ticPipes: this.ticPipes, amClearPipe: this.amClearPipe, amLinesPipe: this.amLinesPipe });
     if (this.pipeCache.size > 3) this.pipeCache.delete(this.pipeCache.keys().next().value);
     this.initLevel(map, player);
     return map;
@@ -122,6 +123,8 @@ export class Engine {
     this.renderPipe = await mk("render");
     this.projectPipe = await mk("project");
     this.hudPipe = await mk("hud");
+    this.amClearPipe = await mk("amClear");
+    this.amLinesPipe = await mk("amLines");
     this.ticPipes = [];
     for (const k of ["ticPlayer", "ticSight", "ticMobjs", "ticActivate", "ticWorld"]) this.ticPipes.push(await mk(k));
   }
@@ -185,6 +188,7 @@ export class Engine {
     for (let k = 0; k < 4; k++) { wi[W.ammo + k] = player.ammo[k]; wi[W.maxammo + k] = player.maxammo[k]; }
     wi[W.totalkills] = kills; wi[W.totalitems] = items; wi[W.totalsecrets] = totalSecrets;
     wi[W.fixedcolormap] = -1; wi[W.skill] = this.skill - 1; wi[W.attacker] = -1;
+    wi[W.oldhealth] = player.health; wi[W.lastattackdown] = -1; wu[W.oldweapons] = player.weapons;
     mi[15] = player.health; // player mobj health
 
     for (const b of [this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf]) b?.destroy();
@@ -219,6 +223,8 @@ export class Engine {
     ff[4] = this.width / 2; ff[5] = this.viewh / 2 + shear; ff[6] = proj;
     ff[8] = input.forward || 0; ff[9] = input.side || 0; ff[10] = input.turn || 0; ff[11] = input.mouseturn || 0;
     fu[12] = (input.fire ? 1 : 0) | (input.use ? 2 : 0); fu[13] = input.weapon || 0;
+    // automap: Doom's 0.2 pixels per unit at 320 columns, times the zoom
+    ff[7] = 0.2 * (this.height * 1.6 / 320) * (input.amzoom || 1); fu[15] = input.automap ? 1 : 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, fu);
     this.device.queue.writeBuffer(this.worldBuf, W.viscount * 4, new Uint32Array([0]));
     const pass = encoder.beginComputePass();
@@ -226,10 +232,17 @@ export class Engine {
     // ticSight is one thread per thing; the other tic kernels are single-threaded
     const sightGroups = Math.ceil(this.maxMobjs / 64);
     for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 1 ? sightGroups : 1); });
-    pass.setPipeline(this.projectPipe);
-    pass.dispatchWorkgroups(Math.ceil(this.maxMobjs / 64));
-    pass.setPipeline(this.renderPipe);
-    pass.dispatchWorkgroups(Math.ceil(this.width / 64));
+    if (input.automap) {
+      pass.setPipeline(this.amClearPipe);
+      pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.viewh / 8));
+      pass.setPipeline(this.amLinesPipe);
+      pass.dispatchWorkgroups(Math.ceil((this.map.lines.length + 7) / 64));
+    } else {
+      pass.setPipeline(this.projectPipe);
+      pass.dispatchWorkgroups(Math.ceil(this.maxMobjs / 64));
+      pass.setPipeline(this.renderPipe);
+      pass.dispatchWorkgroups(Math.ceil(this.width / 64));
+    }
     pass.setPipeline(this.hudPipe);
     pass.dispatchWorkgroups(Math.ceil(this.width / 8), Math.ceil(this.height / 8));
     pass.end();

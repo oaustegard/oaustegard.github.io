@@ -40,6 +40,11 @@ button.go:disabled { opacity: .5; cursor: wait; }
 #bUse { right: max(16px, env(safe-area-inset-right)); bottom: 196px; }
 #bFire { right: max(16px, env(safe-area-inset-right)); bottom: 100px; width: 84px; height: 84px; border-color: rgba(220, 80, 60, .7); }
 #bCentre { right: max(72px, calc(env(safe-area-inset-right) + 72px)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 18px; }
+#bMap { right: max(128px, calc(env(safe-area-inset-right) + 128px)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 11px; }
+#bZoomIn, #bZoomOut { left: max(16px, env(safe-area-inset-left)); width: 44px; height: 44px; font-size: 22px; }
+#bZoomIn { top: max(16px, env(safe-area-inset-top)); }
+#bZoomOut { top: max(72px, calc(env(safe-area-inset-top) + 72px)); }
+.tbtn[hidden] { display: none; }
 #bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
 #stick { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
 #nub { position: absolute; left: 50px; top: 50px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
@@ -58,6 +63,9 @@ button.go:disabled { opacity: .5; cursor: wait; }
   <div class="tbtn" id="bFire">FIRE</div>
   <div class="tbtn" id="bMenu">II</div>
   <div class="tbtn" id="bCentre">◎</div>
+  <div class="tbtn" id="bMap">MAP</div>
+  <div class="tbtn am" id="bZoomIn" hidden>+</div>
+  <div class="tbtn am" id="bZoomOut" hidden>−</div>
 </div>
 
 <div class="overlay" id="menu">
@@ -89,6 +97,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <b>shift</b><span>run</span>
       <b>ctrl / F / click</b><span>fire</span>
       <b>1 – 7</b><span>weapons</span>
+      <b>tab / M</b><span>automap; + and − or the mouse wheel zoom it</span>
       <b>space / E</b><span>open doors, press switches</span>
       <b>alt + ← →</b><span>strafe with the arrows</span>
       <b>esc</b><span>this menu</span>
@@ -106,7 +115,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
 </div>
 
 <script type="module">
-import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028015152";
+import { Engine, unpackWad, freshPlayer, W } from "./engine.js?v=20261028020204";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -218,10 +227,20 @@ $("wide").addEventListener("change", applySize);
 // ---------------------------------------------------------------- input
 const keys = new Set();
 let mouseDX = 0, turnHeld = 0, weaponKey = 0;
+let automap = false, amzoom = 1;
+function toggleMap() {
+  automap = !automap;
+  for (const id of ["bZoomIn", "bZoomOut"]) $(id).hidden = !(automap && isTouch);
+}
+const zoomMap = (f) => { amzoom = Math.max(0.15, Math.min(8, amzoom * f)); };
+addEventListener("wheel", (e) => { if (running && automap) zoomMap(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: true });
 const isTouch = matchMedia("(pointer: coarse)").matches;
 addEventListener("keydown", (e) => {
   if (e.code === "Escape") { if (running) { running = false; showMenu(); } else if (engine?.map) { hideMenu(); running = true; lastTime = performance.now(); } return; }
   if (/^Digit[1-9]$/.test(e.code)) weaponKey = +e.code.slice(5);
+  if (running && (e.code === "Tab" || e.code === "KeyM")) { toggleMap(); e.preventDefault(); return; }
+  if (running && automap && (e.code === "Equal" || e.code === "NumpadAdd")) zoomMap(1.25);
+  if (running && automap && (e.code === "Minus" || e.code === "NumpadSubtract")) zoomMap(0.8);
   keys.add(e.code);
   if (running && ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
 });
@@ -344,6 +363,9 @@ if (isTouch) {
   $("bFire").addEventListener("touchstart", (e) => { touch.fire = true; e.preventDefault(); e.stopPropagation(); });
   $("bFire").addEventListener("touchend", (e) => { touch.fire = false; e.preventDefault(); });
   $("bCentre").addEventListener("touchstart", (e) => { recentre(); e.preventDefault(); e.stopPropagation(); });
+  $("bMap").addEventListener("touchstart", (e) => { toggleMap(); e.preventDefault(); e.stopPropagation(); });
+  $("bZoomIn").addEventListener("touchstart", (e) => { zoomMap(1.4); e.preventDefault(); e.stopPropagation(); });
+  $("bZoomOut").addEventListener("touchstart", (e) => { zoomMap(1 / 1.4); e.preventDefault(); e.stopPropagation(); });
   $("bMenu").addEventListener("touchstart", (e) => { running = false; showMenu(); e.preventDefault(); e.stopPropagation(); });
 }
 
@@ -372,7 +394,7 @@ function readInput() {
   const use = k("Space", "KeyE", "Enter") || touch.use;
   const fire = k("ControlLeft", "ControlRight", "KeyF") || mouseFire || touch.fire;
   const w = weaponKey; weaponKey = 0;
-  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, fire, weapon: w, pitch: lookPitch() };
+  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, fire, weapon: w, pitch: lookPitch(), automap, amzoom };
 }
 
 // ---------------------------------------------------------------- sound

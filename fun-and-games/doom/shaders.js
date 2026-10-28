@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028015152";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028015152";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028020204";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028020204";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -118,13 +118,15 @@ struct World {
   pspstate: array<u32, 2>,
   psptics: array<i32, 2>,
   pspsx: f32, pspsy: f32, refire: i32, attacker: i32,
-  pad2: array<u32, 56>,
+  face: i32, facecount: i32, facepri: i32, oldhealth: i32,
+  lastattackdown: i32, oldweapons: u32,
+  pad2: array<u32, 50>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
-  centerx: f32, centery: f32, proj: f32, pad0: u32,
+  centerx: f32, centery: f32, proj: f32, amscale: f32,
   forward: f32, side: f32, turn: f32, mouseturn: f32,
-  buttons: u32, weapon: u32, run: u32, pad1: u32,
+  buttons: u32, weapon: u32, run: u32, automap: u32,
 }
 
 @group(0) @binding(0) var<storage, read> G: array<u32>;
@@ -150,7 +152,9 @@ fn lineBack(l: u32) -> i32 { return bitcast<i32>(M[M_LINE + 8u * l + 7u]); }
 fn sideSector(sd: u32) -> u32 { return M[M_SIDE + 4u * sd + 2u]; }
 fn sideTex(sd: u32, part: u32) -> u32 { return LS[NUMLINES + 3u * sd + part]; } // 0 top, 1 bottom, 2 mid
 fn setSideTex(sd: u32, part: u32, t: u32) { LS[NUMLINES + 3u * sd + part] = t; }
-fn lineSpecial(l: u32) -> u32 { return LS[l]; }
+// LS[l]: the line's special in the low bits, bit 31 once the renderer has drawn it (the automap's ML_MAPPED)
+fn lineSpecial(l: u32) -> u32 { return LS[l] & 0xffffu; }
+fn clearSpecial(l: u32) { LS[l] &= 0x80000000u; }
 
 fn texel(off: u32) -> u32 { let w = G[G_TEXELS + (off >> 1u)]; return (w >> ((off & 1u) * 16u)) & 0xffffu; }
 fn cmap(level: u32, c: u32) -> u32 { return G[G_CMAP + level * 256u + (c & 255u)]; }
@@ -331,6 +335,7 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
       if (s < 0.0 || s > 1.0 || t <= 0.01) { continue; }
 
       let line = M[sg + 2u]; let segside = M[sg + 3u]; let sdef = M[sg + 5u];
+      if ((LS[line] & 0x80000000u) == 0u) { LS[line] |= 0x80000000u; }
       let lflags = lineFlags(line);
       let fsec = sideSector(sdef);
       let F = S[fsec];
@@ -507,7 +512,8 @@ var<private> HUD_YSNUM = ${hudArr([0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map((i) => "STY
 var<private> HUD_GNUM = ${hudArr([2, 3, 4, 5, 6, 7].map((i) => "STGNUM" + i))};
 var<private> HUD_KEYS = ${hudArr([0, 1, 2, 3, 4, 5].map((i) => "STKEYS" + i))};
 const HUD_STBAR = ${hud("STBAR")}u; const HUD_STARMS = ${hud("STARMS")}u; const HUD_PRCNT = ${hud("STTPRCNT")}u;
-const HUD_FACE = ${hud("STFST01")}u; const HUD_FACEDEAD = ${hud("STFDEAD0")}u;
+// faces in ST_updateFaceWidget's order: per pain level 0-4, straight x3, turn right, turn left, ouch, evil grin, rampage; then god, dead
+var<private> HUD_FACES = ${hudArr([0, 1, 2, 3, 4].flatMap((p) => ["STFST" + p + "0", "STFST" + p + "1", "STFST" + p + "2", "STFTR" + p + "0", "STFTL" + p + "0", "STFOUCH" + p, "STFEVL" + p, "STFKILL" + p]).concat(["STFGOD0", "STFDEAD0"]))};
 var<private> HUD_FONT = ${hudArr(Array.from({ length: 63 }, (_, i) => "STCFN" + String(i + 33).padStart(3, "0")))};
 
 // Sample one HUD patch at virtual 320x200 coords (vx, vy) drawn at (px, py). Returns texel or 0.
@@ -571,7 +577,7 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
       let idx = select(HUD_GNUM[i], HUD_YSNUM[i + 2u], owned);
       o = hudPatch(idx, 111.0 + f32(i % 3u) * 12.0, 172.0 + f32(i / 3u) * 10.0, vx, vy);
     }
-    if (o == 0u) { o = hudPatch(select(HUD_FACE, HUD_FACEDEAD, P.health <= 0), 143.0, 168.0, vx, vy); }
+    if (o == 0u) { o = hudPatch(HUD_FACES[clamp(P.face, 0, 41)], 143.0, 168.0, vx, vy); }
     for (var k = 0u; k < 3u && o == 0u; k++) {
       var card = -1;
       if ((P.cards & (1u << k)) != 0u) { card = i32(k); }
@@ -605,7 +611,7 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
     }
   }
   // the player's weapon and its muzzle flash (R_DrawPSprite), flash on top
-  for (var pp = 0u; pp < 2u; pp++) {
+  for (var pp = 0u; pp < 2u && U.automap == 0u; pp++) { // the automap hides the gun
     let pos = 1u - pp;
     let st = P.pspstate[pos];
     if (st == 0u) { continue; }
@@ -1263,7 +1269,7 @@ fn evVerticalDoor(l: u32, mi: u32, ty: i32, key: u32) {
   S[sec].mtype = 1u; S[sec].msub = ty; S[sec].mdir = 1; S[sec].mwait = 150;
   S[sec].mspeed = select(2.0, 8.0, ty == DOOR_blazeRaise || ty == DOOR_blazeOpen);
   S[sec].mtop = findLowestCeilingSurrounding(sec) - 4.0;
-  if (ty == DOOR_open || ty == DOOR_blazeOpen) { LS[l] = 0u; }
+  if (ty == DOOR_open || ty == DOOR_blazeOpen) { clearSpecial(l); }
 }
 
 fn evDoFloor(l: u32, ty: i32) -> bool {
@@ -1546,7 +1552,7 @@ fn runAction(l: u32, mi: u32, side: u32, spec: u32) -> bool {
 }
 
 fn changeSwitchTexture(l: u32, useAgain: bool) {
-  if (!useAgain) { LS[l] = 0u; }
+  if (!useAgain) { clearSpecial(l); }
   let sd = lineSide(l, 0u);
   if (sd < 0) { return; }
   let n = G[G_SWITCH];
@@ -1602,7 +1608,7 @@ fn crossSpecialLine(l: u32, side: u32, mi: u32) {
   let did = runAction(l, mi, side, spec);
   let rep = ((spec >> 3u) & 1u) != 0u;
   let ac = (spec >> 8u) & 0xffu;
-  if (!rep && (did || ac != AC_TELEPORT)) { LS[l] = 0u; }
+  if (!rep && (did || ac != AC_TELEPORT)) { clearSpecial(l); }
 }
 
 fn shootSpecialLine(l: u32, mi: u32) {
@@ -2769,6 +2775,111 @@ fn ticActivate() {
   }
 }
 
+
+// ---- the status bar face (ST_updateFaceWidget)
+fn painOffset() -> i32 { return 8 * (((100 - clamp(P.health, 0, 100)) * 5) / 101); }
+fn updateFace() {
+  var pri = P.facepri;
+  if (pri < 10 && P.health <= 0) { pri = 9; P.face = 41; P.facecount = 1; }
+  if (pri < 9 && P.bonuscount > 0 && P.weapons != P.oldweapons) {
+    pri = 8; P.face = painOffset() + 6; P.facecount = 70;
+  }
+  P.oldweapons = P.weapons;
+  if (pri < 8 && P.damagecount > 0 && P.attacker > 0 && O[P.attacker].inuse != 0u) {
+    pri = 7;
+    if (P.oldhealth - P.health > 20) { P.face = painOffset() + 5; }
+    else {
+      let d = wrapPi(angleTo(mpos(0u), mpos(u32(P.attacker))) - O[0].angle);
+      if (abs(d) < PI / 4.0) { P.face = painOffset() + 7; }
+      else if (d > 0.0) { P.face = painOffset() + 4; }
+      else { P.face = painOffset() + 3; }
+    }
+    P.facecount = 35;
+  }
+  if (pri < 7 && P.damagecount > 0) {
+    pri = 6;
+    P.face = painOffset() + select(7, 5, P.oldhealth - P.health > 20);
+    P.facecount = 35;
+  }
+  if (pri < 6) {
+    if (P.attackdown != 0u) {
+      if (P.lastattackdown == -1) { P.lastattackdown = 70; }
+      else {
+        P.lastattackdown -= 1;
+        if (P.lastattackdown <= 0) { pri = 5; P.face = painOffset() + 7; P.facecount = 1; P.lastattackdown = 1; }
+      }
+    } else { P.lastattackdown = -1; }
+  }
+  if (pri < 5 && P.powers[0] > 0) { pri = 4; P.face = 40; P.facecount = 1; }
+  if (P.facecount <= 0) { P.face = painOffset() + P_Random() % 3; P.facecount = 17; pri = 0; }
+  P.facecount -= 1;
+  P.facepri = pri;
+  P.oldhealth = P.health;
+}
+
+// =====================================================================
+// AUTOMAP: clear the view, then one thread per line (and a few for the arrow)
+// =====================================================================
+
+fn amPlot(x: i32, y: i32, c: u32) {
+  if (x < 0 || y < 0 || x >= i32(U.width) || y >= i32(U.viewh)) { return; }
+  FB[u32(y) * U.width + u32(x)] = c;
+}
+// world to screen: follows the player, north up; vertical pixels are 1.2 times taller
+fn amScreen(p: vec2f) -> vec2f {
+  let d = p - vec2f(P.viewx, P.viewy);
+  return vec2f(f32(U.width) / 2.0 + d.x * U.amscale, f32(U.viewh) / 2.0 - d.y * U.amscale / 1.2);
+}
+fn amLine(a: vec2f, b: vec2f, c: u32) {
+  let pa = amScreen(a); let pb = amScreen(b);
+  let w = f32(U.width); let h = f32(U.viewh);
+  if (max(pa.x, pb.x) < 0.0 || min(pa.x, pb.x) >= w || max(pa.y, pb.y) < 0.0 || min(pa.y, pb.y) >= h) { return; }
+  let n = min(i32(max(abs(pb.x - pa.x), abs(pb.y - pa.y))) + 1, 4096);
+  for (var i = 0; i <= n; i++) {
+    let q = mix(pa, pb, f32(i) / f32(max(n, 1)));
+    amPlot(i32(floor(q.x)), i32(floor(q.y)), c);
+  }
+}
+
+@compute @workgroup_size(8, 8)
+fn amClear(@builtin(global_invocation_id) gid: vec3u) {
+  if (gid.x < U.width && gid.y < U.viewh) { FB[gid.y * U.width + gid.x] = 0u; }
+}
+
+@compute @workgroup_size(64)
+fn amLines(@builtin(global_invocation_id) gid: vec3u) {
+  let i = gid.x;
+  if (i < NUMLINES) {
+    let flags = lineFlags(i);
+    if ((flags & 128u) != 0u) { return; } // ML_DONTDRAW
+    let mapped = (LS[i] & 0x80000000u) != 0u || (flags & 256u) != 0u;
+    var c = 0u;
+    if (mapped) {
+      let bk = lineBack(i);
+      if (bk < 0 || (flags & ML_TWOSIDED) == 0u) { c = 176u; }
+      else if (lineSpecial(i) == 39u) { c = 184u; }
+      else if ((flags & ML_SECRET) != 0u) { c = 176u; }
+      else if (S[bk].floorh != S[lineFront(i)].floorh) { c = 64u; }
+      else if (S[bk].ceilh != S[lineFront(i)].ceilh) { c = 231u; }
+    } else if (P.powers[4] != 0) { c = 99u; }
+    if (c != 0u) { amLine(lineA(i), lineB(i), c); }
+    return;
+  }
+  // the player's arrow, DOOM's player_arrow drawn at twice size so it reads on a phone
+  let k = i - NUMLINES;
+  if (k >= 7u) { return; }
+  let R = 2.0 * 8.0 * 16.0 / 7.0;
+  var a = array<vec4f, 7>(
+    vec4f(-R + R / 8.0, 0.0, R, 0.0), vec4f(R, 0.0, R - R / 2.0, R / 4.0), vec4f(R, 0.0, R - R / 2.0, -R / 4.0),
+    vec4f(-R + R / 8.0, 0.0, -R - R / 8.0, R / 4.0), vec4f(-R + R / 8.0, 0.0, -R - R / 8.0, -R / 4.0),
+    vec4f(-R + 3.0 * R / 8.0, 0.0, -R + R / 8.0, R / 4.0), vec4f(-R + 3.0 * R / 8.0, 0.0, -R + R / 8.0, -R / 4.0));
+  let seg = a[k];
+  let c = cos(P.viewangle); let s = sin(P.viewangle);
+  let rot = mat2x2f(c, s, -s, c);
+  let o = vec2f(P.viewx, P.viewy);
+  amLine(o + rot * seg.xy, o + rot * seg.zw, 209u);
+}
+
 @compute @workgroup_size(1)
 fn ticWorld() {
   if (P.exit != 0u) { return; }
@@ -2792,6 +2903,7 @@ fn ticWorld() {
     }
   }
   if (P.messagetics > 0) { P.messagetics -= 1; }
+  updateFace();
   var pal = 0u;
   if (P.damagecount > 0) { pal = min(u32((P.damagecount + 7) >> 3u), 7u) + 1u; }
   else if (P.bonuscount > 0) { pal = min(u32((P.bonuscount + 7) >> 3u), 3u) + 9u; }

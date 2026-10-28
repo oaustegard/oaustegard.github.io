@@ -19,6 +19,7 @@ Edge or Safari.
 | alt + ← → | strafe with the arrow keys |
 | ctrl, F, click | fire |
 | 1 – 7 | weapons |
+| tab, M | automap; + and − or the mouse wheel zoom it (MAP and +/− buttons on a phone) |
 | esc | menu |
 | phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn |
 
@@ -60,6 +61,11 @@ level.
 - **Specials as data.** `specials.js` encodes Doom's 140-odd line specials as one word each:
   trigger, repeatability, action, argument and key. The WGSL dispatches on the action code.
   `info.js` holds Doom's state and thing tables, generated from `info.c`.
+- **Automap and face.** The renderer sets bit 31 of a line's special word when it draws the
+  line, which stands in for DOOM's `ML_MAPPED`. With the map open, `amClear` blanks the view and
+  `amLines` runs one thread per line, plus seven for the player's arrow, each drawing its line
+  in DOOM's colours. The status bar face is DOOM's `ST_updateFaceWidget`, run once a tic in
+  `ticWorld`.
 - **What JavaScript does each frame.** It writes the input, encodes N tics plus the render and
   status bar passes, and copies 1 KB of the world buffer back to the CPU. That readback carries the
   sound queue and the level-exit flag.
@@ -73,7 +79,7 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Not done yet
 
-The automap, menus, the intermission screens and the status bar face. Monster behaviour is a
+Menus, skill selection, the intermission screens, music, and smooth motion between tics. Monster behaviour is a
 port of DOOM's `A_Look`, `A_Chase` and attack functions, but it has had little play-testing.
 
 ## Licences
