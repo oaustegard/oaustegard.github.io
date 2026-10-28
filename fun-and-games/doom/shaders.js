@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028143147";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028143147";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028161355";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028161355";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -31,7 +31,7 @@ export function makeWGSL({ gfx, map, maxMobjs }) {
   const hud = (n) => gfx.hudIndex.get(n) ?? 0xffff;
   const hudArr = (names) => `array<u32, ${names.length}>(${names.map((n) => hud(n) + "u").join(", ")})`;
   const msgId = (m) => MSG[m] ?? 0;
-  return /* wgsl */ `
+  return opaqueLoops(/* wgsl */ `
 // ---- layout
 const G_PAL = ${G.PAL}u; const G_CMAP = ${G.CMAP}u; const G_TEXDIR = ${G.TEXDIR}u; const G_FLATDIR = ${G.FLATDIR}u;
 const G_SPRDIR = ${G.SPRDIR}u; const G_HUDDIR = ${G.HUDDIR}u; const G_SPRFRAMES = ${G.SPRFRAMES}u; const G_FRAMEROT = ${G.FRAMEROT}u;
@@ -138,7 +138,7 @@ struct Frame {
   centerx: f32, centery: f32, proj: f32, amscale: f32,
   forward: f32, side: f32, turn: f32, mouseturn: f32,
   buttons: u32, weapon: u32, run: u32, automap: u32,
-  frac: f32, lookturn: f32, pad0: u32, pad1: u32,
+  frac: f32, lookturn: f32, pad0: u32, zero: u32, // zero: always 0, read by opaqueLoops' bounds
 }
 
 @group(0) @binding(0) var<storage, read> G: array<u32>;
@@ -3468,7 +3468,17 @@ fn ticWorld() {
   P.viewx = fxf(O[0].x); P.viewy = fxf(O[0].y); P.viewangle = bamToRad(O[0].angle);
   P.leveltime += 1u;
 }
-`;
+`);
+}
+
+// Every for-loop with a constant bound (a level's sector or line count, a literal, an ALLCAPS const)
+// gets a bound the compiler cannot know: U.zero is 0 at run time, but the compiler can't see that.
+// With constant bounds, D3D12's and Adreno's compilers unroll these loops and copy their inlined
+// bodies once per iteration: on an RTX 50-series, ticMobjs took 271-359 s to compile; with this, 48 s.
+function opaqueLoops(code) {
+  return code.replace(/(for \(var \w+ = [^;]+; \w+ <=? )([^;]+);/g, (m, head, bound) =>
+    /^[\s(]*(NUM\w+|\d+u?|[A-Z][A-Z0-9_]+)([\s)+\-*/]*(NUM\w+|\d+u?|[A-Z][A-Z0-9_]+))*[\s)]*$/.test(bound)
+      ? `${head}select((${bound}), (${bound}) - 1, U.zero != 0u);` : m);
 }
 
 // Fullscreen triangle that maps palette indices through PLAYPAL.

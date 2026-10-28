@@ -25,9 +25,9 @@
   <pre id="out">Press "Run the check".</pre>
 </main>
 <script type="module">
-import { unpackWad } from "./engine.js?v=20261028143147";
-import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028143147";
-import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028143147";
+import { unpackWad } from "./engine.js?v=20261028161355";
+import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028161355";
+import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028161355";
 
 const out = document.getElementById("out");
 const KEY = "gpudoom-check";
@@ -49,19 +49,6 @@ const brief = (m) => {
   return errs.length ? errs.slice(0, 6).join("\n    ") : m.length > 800 ? "…" + m.slice(-800) : m;
 };
 const ms = (t) => Math.round(performance.now() - t) + " ms";
-
-// Variant: every loop with a constant bound (a level's sector or line count, a literal) gets a bound
-// the compiler cannot know, OPQ being 0 at run time but read from a buffer. A compiler that unrolls
-// constant loops copies their inlined bodies once per iteration; this one cannot.
-function opaqueVariant(code) {
-  let n = 0;
-  const out = code.replace(/(for \(var \w+ = [^;]+; \w+ <=? )([^;]+);/g, (m, a, b) => {
-    if (!/^[\s(]*(NUM\w+|\d+u?|[A-Z][A-Z0-9_]+)([\s)+\-*/]*(NUM\w+|\d+u?|[A-Z][A-Z0-9_]+))*[\s)]*$/.test(b)) return m;
-    n++;
-    return `${a}select((${b}), (${b}) - 1, OPQ != 0u);`;
-  });
-  return [out + "\n@group(1) @binding(0) var<storage, read> OPQ: u32;\n", n];
-}
 
 async function module(device, code, label) {
   const t = performance.now();
@@ -125,15 +112,9 @@ async function check() {
   const eps = [...code.matchAll(/@compute[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*fn (\w+)/g)].map((m) => m[1]);
   const mod = await module(device, code, "game   ");
   if (!mod) return;
-  // the quick kernels as shipped; then the four slow ones with opaque loop bounds; then, last, the
-  // slow ones as shipped, which take minutes on some GPUs (stop there if you already measured them)
+  // one at a time, so each time is that kernel's own; the four that were slow on D3D12 and Adreno go last
   const SLOW = ["ticWorld", "ticActivate", "ticPlayer", "ticMobjs"];
-  for (const ep of eps.filter((e) => !SLOW.includes(e))) await pipeline(device, mod, ep, "game");
-  const [vcode, nloops] = opaqueVariant(code);
-  log(`opaque  ${nloops} loops given bounds the compiler cannot know`);
-  const vmod = await module(device, vcode, "opaque ");
-  if (vmod) for (const ep of SLOW) await pipeline(device, vmod, ep, "opaque");
-  for (const ep of SLOW) await pipeline(device, mod, ep, "game");
+  for (const ep of [...eps.filter((e) => !SLOW.includes(e)), ...SLOW]) await pipeline(device, mod, ep, "game");
   log("done");
 }
 
