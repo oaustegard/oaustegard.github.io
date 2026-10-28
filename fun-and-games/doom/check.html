@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex">
+<title>gPu(doom) GPU check</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #0c0806; color: #eadfce; font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; }
+  h1 { font-size: 1.3rem; margin: 0 0 .4rem; }
+  p { margin: .4rem 0 .8rem; color: #cbbba3; }
+  button { font: inherit; color: #fff3dc; background: #8a1a0a; border: 1px solid #ff8a4a; border-radius: 4px; padding: .55em 1em; margin: 0 .5rem .5rem 0; cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  pre { white-space: pre-wrap; overflow-wrap: anywhere; background: #000; border: 1px solid #4a3426; padding: 12px; font: 12.5px/1.45 ui-monospace, Menlo, monospace; min-height: 6em; }
+  .ok { color: #9fd36a; } .bad { color: #ff7a4a; }
+</style>
+</head>
+<body>
+<main>
+  <h1>gPu(doom) GPU check</h1>
+  <p>This page compiles every GPU kernel of <a href="./" style="color:#f08a3c">gPu(doom)</a> on this device, one at a time, and reports which ones fail and why. It takes up to a minute and plays nothing. When it finishes, copy the report and send it back.</p>
+  <button id="run" type="button">Run the check</button><button id="copy" type="button" disabled>Copy the report</button>
+  <pre id="out">Press "Run the check".</pre>
+</main>
+<script type="module">
+import { unpackWad } from "./engine.js?v=20261028130626";
+import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028130626";
+import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028130626";
+
+const out = document.getElementById("out");
+const lines = [];
+const log = (t, cls) => {
+  lines.push(t);
+  const s = document.createElement("span");
+  if (cls) s.className = cls;
+  s.textContent = t + "\n";
+  out.append(s);
+};
+// A WebGPU compiler message can carry the whole generated source; keep the lines that say what failed.
+const brief = (m) => {
+  const errs = m.split("\n").filter((l) => /error/i.test(l) && l.length < 400);
+  return errs.length ? errs.slice(0, 6).join("\n    ") : m.length > 800 ? "…" + m.slice(-800) : m;
+};
+const ms = (t) => Math.round(performance.now() - t) + " ms";
+
+async function check() {
+  out.textContent = "";
+  log("page    " + location.href);
+  log("agent   " + navigator.userAgent);
+  if (!navigator.gpu) { log("navigator.gpu is missing: this browser has no WebGPU", "bad"); return; }
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) { log("requestAdapter returned null: WebGPU is present but no GPU adapter is available", "bad"); return; }
+  const i = adapter.info || {};
+  log(`adapter ${i.vendor || "?"} / ${i.architecture || "?"} / ${i.device || "?"} / ${i.description || "?"}`);
+  const L = adapter.limits;
+  log(`limits  storage buffers/stage ${L.maxStorageBuffersPerShaderStage}, binding ${L.maxStorageBufferBindingSize}, buffer ${L.maxBufferSize}, invocations ${L.maxComputeInvocationsPerWorkgroup}`);
+  let device;
+  try {
+    device = await adapter.requestDevice({ requiredLimits: { maxStorageBufferBindingSize: L.maxStorageBufferBindingSize, maxBufferSize: L.maxBufferSize } });
+  } catch (e) { log("requestDevice failed: " + e.message, "bad"); return; }
+  device.lost.then((x) => log("DEVICE LOST: " + x.reason + " " + x.message, "bad"));
+  device.addEventListener("uncapturederror", (e) => log("uncaptured GPU error: " + brief(e.error.message), "bad"));
+
+  let t = performance.now();
+  const r = await fetch("e1.wad.gz");
+  const wad = readWad(await unpackWad(new Uint8Array(await r.arrayBuffer())));
+  const gfx = buildGfx(wad);
+  log("wad     loaded in " + ms(t));
+
+  t = performance.now();
+  const pm = device.createShaderModule({ code: PRESENT_WGSL });
+  const pi = (await pm.getCompilationInfo()).messages.filter((m) => m.type === "error");
+  log("present " + (pi.length ? "WGSL errors: " + pi.map((m) => m.lineNum + ": " + m.message).join("; ") : "module ok, " + ms(t)), pi.length ? "bad" : "ok");
+
+  for (const name of ["E1M1"]) {
+    const map = buildMap(wad, gfx, name, 3);
+    const code = makeWGSL({ gfx, map, maxMobjs: map.things.length + 1 + 768 });
+    t = performance.now();
+    const mod = device.createShaderModule({ code });
+    const errs = (await mod.getCompilationInfo()).messages.filter((m) => m.type === "error");
+    if (errs.length) {
+      const src = code.split("\n");
+      for (const m of errs.slice(0, 6)) log(`WGSL ${m.lineNum}:${m.linePos} ${m.message}\n    ${src[m.lineNum - 1]?.trim()}`, "bad");
+      return;
+    }
+    log(`${name}    module ok (${src_lines(code)} lines), ${ms(t)}`, "ok");
+    const eps = [...code.matchAll(/@compute[^\n]*\n(?:\s*\/\/[^\n]*\n)*\s*fn (\w+)/g)].map((m) => m[1]);
+    let bad = 0;
+    for (const ep of eps) {
+      t = performance.now();
+      try {
+        await device.createComputePipelineAsync({ layout: "auto", compute: { module: mod, entryPoint: ep } });
+        log(`  ${ep.padEnd(12)} ok   ${ms(t)}`, "ok");
+      } catch (e) {
+        bad++;
+        log(`  ${ep.padEnd(12)} FAIL ${ms(t)}\n    ${brief(e.message)}`, "bad");
+      }
+    }
+    log(bad ? `${bad} of ${eps.length} kernels failed` : `all ${eps.length} kernels compiled`, bad ? "bad" : "ok");
+  }
+}
+const src_lines = (c) => c.split("\n").length;
+
+const run = document.getElementById("run"), copy = document.getElementById("copy");
+run.addEventListener("click", async () => {
+  run.disabled = true; copy.disabled = true; lines.length = 0;
+  try { await check(); } catch (e) { log("check stopped: " + (e.stack || e.message), "bad"); }
+  run.disabled = false; copy.disabled = false;
+});
+copy.addEventListener("click", async () => {
+  const text = lines.join("\n");
+  try { await navigator.clipboard.writeText(text); copy.textContent = "Copied"; }
+  catch { const s = getSelection(), rg = document.createRange(); rg.selectNodeContents(out); s.removeAllRanges(); s.addRange(rg); copy.textContent = "Selected: copy it"; }
+  setTimeout(() => (copy.textContent = "Copy the report"), 2500);
+});
+</script>
+</body>
+</html>
