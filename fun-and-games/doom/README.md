@@ -57,7 +57,7 @@ level.
   - `ticWorld` moves doors, lifts, floors and crushers, and runs switch timers and the face.
 
   Things sit in per-cell lists of the blockmap, as in DOOM, so collision tests only the things
-  near a move. With every one of E1M6's 192 monsters awake, a tic takes about 2.4 ms on a Mac.
+  near a move. With every one of E1M6's 192 monsters awake, a tic takes about 2.9 ms on a Mac.
 
   WGSL forbids recursion, and DOOM's game code recurses in two places. Crossing a teleport line
   calls `tryMove` from inside `tryMove`, so line activations go through a queue in the world
@@ -107,21 +107,35 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 The engine is checked against Chocolate Doom tic for tic. Scripted inputs go into a demo lump for
 a Chocolate Doom build patched to print the player, every thing and every sector each tic, and
-into the GPU engine, and the two traces are compared. On E1M1–E1M6 the random number index,
-every monster's state, position and health, and door timing agree tic for tic until a fixed-point
-tie: the GPU keeps positions in 32-bit floats, which can't hold DOOM's 1/65536 steps above 256
-units, so now and then a move that touches a wall or another thing exactly is decided the other
-way. With 36 monsters awake on E1M6 that happens after about 80 tics; on E1M4 the engines agree
-for 480. Getting this far took DOOM's random table and its call order, the thinker order, sight
-through the BSP (`P_CheckSight`), `P_SlideMove`, `P_BoxOnLineSide` and the fine sine table.
+into the GPU engine, and the two traces are compared. On 23 demos of 714 tics each (E1M1, E1M2,
+E1M4, E1M5 and E1M6, seven maps from episodes 2 to 4, and eleven Doom II maps from MAP01 to MAP32)
+the random number index and the player's position, to the last 1/65536 of a unit, agree on every
+tic. On the seven E1 and Doom II demos that also track monsters, their positions and health agree
+on all 467,670 monster-tics. Their states differ on 7 of them, each a pain or death state set by another
+thing's attack showing one tic late, because a state change requested from outside is applied at
+the monster's next think. One demo stops agreeing where the player dies and Chocolate's demo
+respawns them, which the comparison harness doesn't do.
+
+Getting there took DOOM's arithmetic rather than an approximation of it:
+
+- Positions are 16.16 integers and angles 32-bit BAMs, as DOOM keeps them. `FixedMul` and
+  `FixedDiv` are emulated in 32-bit WGSL (split multiplies, long division), and DOOM's
+  `finesine` and `tantoangle` tables are in the graphics buffer.
+- The side-of-line tests (`P_PointOnLineSide`, `R_PointOnSide`, `P_PointOnDivlineSide`,
+  `P_DivlineSide`) keep their truncated products, so a point within about 1/64 unit of a line
+  falls where vanilla puts it.
+- Movement, `P_SlideMove`, `P_CheckPosition`, sight through the BSP, hitscans
+  (`P_PathTraverse` over the blockmap) and `P_RadiusAttack` follow p_map.c, p_maputl.c and
+  p_sight.c, including the order in which they visit lines and things.
+- Random numbers come from DOOM's table, drawn in DOOM's call order and thinker order.
 
 ## Not done yet
 
-- Positions in fixed point, which would carry the agreement with Chocolate Doom past those ties.
-  WGSL has no 64-bit integers, so `FixedMul` would need emulating.
+- The player's own thing doesn't animate its death: the view sinks as in DOOM, but the death
+  sound plays at once rather than at `A_PlayerScream`'s frame.
 - The music synth has been checked by its spectrum, not by ear.
-- The monsters of episodes 2–4 and Doom II run code that has not been exercised, since the
-  bundled WAD is episode one.
+- The site ships episode one only; the other episodes and Doom II are exercised by the comparison
+  demos, not by play.
 
 ## Licences
 

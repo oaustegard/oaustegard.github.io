@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028064133";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028064133";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028073025";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028073025";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -130,7 +130,8 @@ struct World {
   playerslot: u32,                          // the player's thinker runs before this thing (its THINGS place)
   spawncursor: u32,                         // where spawnMobj looks first, so new things append
   mobjtop: u32,                             // one past the highest thing slot ever used: loops stop there
-  pad2: array<u32, 4>,
+  cmdmove: u32, // this tic's command moves the player (P_XYMovement's stop test reads it)
+  pad2: array<u32, 3>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -2024,14 +2025,14 @@ fn ipos(i: u32) -> vec2i { return vec2i(O[i].x, O[i].y); }
 // the things in it, newest first, so collision looks only at the cells around a move, in DOOM's order.
 // The heads live in LS after the side textures, as thing index + 1 (0 is empty).
 const BLOCKHEADS = NUMLINES + 3u * NUMSIDES;
-fn blockCell(p: vec2f) -> i32 {
-  let bx = i32(floor((p.x - BM_X) / 128.0)); let by = i32(floor((p.y - BM_Y) / 128.0));
+fn blockCell(p: vec2i) -> i32 {
+  let bx = (p.x - (i32(BM_X) << 16u)) >> 23u; let by = (p.y - (i32(BM_Y) << 16u)) >> 23u;
   if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { return -1; }
   return by * BM_W + bx;
 }
 fn unlinkThing(mi: u32) {
   if ((O[mi].flags & MF_NOBLOCKMAP) != 0u) { return; }
-  let c = blockCell(mpos(mi));
+  let c = blockCell(ipos(mi));
   if (c < 0) { return; }
   let h = BLOCKHEADS + u32(c);
   if (LS[h] == mi + 1u) { LS[h] = u32(O[mi].bnext); return; }
@@ -2045,7 +2046,7 @@ fn unlinkThing(mi: u32) {
 fn linkThing(mi: u32) {
   O[mi].bnext = 0;
   if ((O[mi].flags & MF_NOBLOCKMAP) != 0u) { return; }
-  let c = blockCell(mpos(mi));
+  let c = blockCell(ipos(mi));
   if (c < 0) { return; }
   let h = BLOCKHEADS + u32(c);
   O[mi].bnext = i32(LS[h]); LS[h] = mi + 1u;
@@ -2054,46 +2055,45 @@ fn removeMobj(mi: u32) { unlinkThing(mi); O[mi].inuse = 0u; }
 
 // ---- sight (P_CheckSight): REJECT, then DOOM's walk of the BSP from eye to target (p_sight.c).
 // P_DivlineSide with its integer-truncated products and its x == node->y slip, kept as vanilla has them.
-fn sightSide(p: vec2f, o: vec2f, d: vec2f) -> u32 {
-  if (d.x == 0.0) {
+// P_DivlineSide: only the integer parts of both products, ties return 2 ("on")
+fn sightSide(p: vec2i, o: vec2i, d: vec2i) -> u32 {
+  if (d.x == 0) {
     if (p.x == o.x) { return 2u; }
-    if (p.x <= o.x) { return select(0u, 1u, d.y > 0.0); }
-    return select(0u, 1u, d.y < 0.0);
+    if (p.x <= o.x) { return select(0u, 1u, d.y > 0); }
+    return select(0u, 1u, d.y < 0);
   }
-  if (d.y == 0.0) {
-    if (p.x == o.y) { return 2u; }
-    if (p.y <= o.y) { return select(0u, 1u, d.x < 0.0); }
-    return select(0u, 1u, d.x > 0.0);
+  if (d.y == 0) {
+    if (p.x == o.y) { return 2u; } // sic: vanilla compares x with the node's y here
+    if (p.y <= o.y) { return select(0u, 1u, d.x < 0); }
+    return select(0u, 1u, d.x > 0);
   }
-  let left = (fixedOf(d.y) >> 16u) * ((fixedOf(p.x) - fixedOf(o.x)) >> 16u);
-  let right = ((fixedOf(p.y) - fixedOf(o.y)) >> 16u) * (fixedOf(d.x) >> 16u);
+  let left = (d.y >> 16u) * ((p.x - o.x) >> 16u);
+  let right = ((p.y - o.y) >> 16u) * (d.x >> 16u);
   if (right < left) { return 0u; }
   if (left == right) { return 2u; }
   return 1u;
 }
-var<private> sightTop: f32;
-var<private> sightBottom: f32;
-var<private> sightZ: f32;
-// P_CrossSubsector
-fn crossSubsector(num: u32, p0: vec2f, p1: vec2f) -> bool {
+var<private> sightTop: i32;
+var<private> sightBottom: i32;
+var<private> sightZ: i32;
+// P_CrossSubsector in 16.16
+fn crossSubsector(num: u32, p0: vec2i, p1: vec2i) -> bool {
   let d = p1 - p0;
   let n = M[M_SSEC + 4u * num]; let first = M[M_SSEC + 4u * num + 1u];
   for (var k = 0u; k < n; k++) {
     let l = M[M_SEG + 6u * (first + k) + 2u];
-    let a = lineA(l); let b = lineB(l); let dl = b - a;
+    let a = fxv(lineA(l)); let b = fxv(lineB(l)); let dl = b - a;
     if (sightSide(a, p0, d) == sightSide(b, p0, d)) { continue; }
     if (sightSide(p0, a, dl) == sightSide(p1, a, dl)) { continue; }
     if (lineBack(l) < 0 || (lineFlags(l) & ML_TWOSIDED) == 0u) { return false; }
     let F = S[lineFront(l)]; let B = S[lineBack(l)];
     if (F.floorh == B.floorh && F.ceilh == B.ceilh) { continue; }
-    let opentop = min(F.ceilh, B.ceilh); let openbottom = max(F.floorh, B.floorh);
+    let opentop = fixedOf(min(F.ceilh, B.ceilh)); let openbottom = fixedOf(max(F.floorh, B.floorh));
     if (openbottom >= opentop) { return false; }
-    // P_InterceptVector2
-    let den = dl.y * d.x - dl.x * d.y;
-    var frac = 0.0;
-    if (den != 0.0) { frac = ((a.x - p0.x) * dl.y + (p0.y - a.y) * dl.x) / den; }
-    if (F.floorh != B.floorh) { sightBottom = max(sightBottom, (openbottom - sightZ) / frac); }
-    if (F.ceilh != B.ceilh) { sightTop = min(sightTop, (opentop - sightZ) / frac); }
+    // P_InterceptVector2 is P_InterceptVector
+    let frac = interceptVector(p0, d, a, dl);
+    if (F.floorh != B.floorh) { sightBottom = max(sightBottom, fxDiv(openbottom - sightZ, frac)); }
+    if (F.ceilh != B.ceilh) { sightTop = min(sightTop, fxDiv(opentop - sightZ, frac)); }
     if (sightTop <= sightBottom) { return false; }
   }
   return true;
@@ -2102,10 +2102,11 @@ fn checkSight(a: u32, b: u32) -> bool {
   let s1 = O[a].sector; let s2 = O[b].sector;
   let pnum = s1 * NUMSECTORS + s2;
   if (((M[M_REJECT + (pnum >> 5u)] >> (pnum & 31u)) & 1u) != 0u) { return false; }
-  sightZ = O[a].z + O[a].height - O[a].height / 4.0;
-  sightTop = O[b].z + O[b].height - sightZ;
-  sightBottom = O[b].z - sightZ;
-  let p0 = mpos(a); let p1 = mpos(b);
+  let ah = fixedOf(O[a].height);
+  sightZ = fixedOf(O[a].z) + ah - (ah >> 2u);
+  sightTop = fixedOf(O[b].z) + fixedOf(O[b].height) - sightZ;
+  sightBottom = fixedOf(O[b].z) - sightZ;
+  let p0 = ipos(a); let p1 = ipos(b);
   // P_CrossBSPNode, with an explicit stack in its visiting order
   var stack: array<u32, 64>;
   stack[0] = select(0x8000u, NUMNODES - 1u, NUMNODES > 0u);
@@ -2118,7 +2119,7 @@ fn checkSight(a: u32, b: u32) -> bool {
       continue;
     }
     let o = M_NODE + 14u * n;
-    let no = vec2f(mf(o), mf(o + 1u)); let nd = vec2f(mf(o + 2u), mf(o + 3u));
+    let no = fxv(vec2f(mf(o), mf(o + 1u))); let nd = fxv(vec2f(mf(o + 2u), mf(o + 3u)));
     var side = sightSide(p0, no, nd);
     if (side == 2u) { side = 0u; }
     if (sightSide(p1, no, nd) != side && sp < 64u) { stack[sp] = M[o + 12u + (side ^ 1u)]; sp += 1u; }
@@ -2306,14 +2307,28 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
   }
 }
 
+// P_RadiusAttack: the blockmap's thing lists within reach, rows of blocks outer, as vanilla walks them
 fn radiusAttack(spot: u32, source: i32, damage: i32) {
-  for (var j = 0u; j < mobjEnd(); j++) {
-    if (O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
-    if (O[j].mtype == MT_CYBORG || O[j].mtype == MT_SPIDER) { continue; }
-    let d = abs(mpos(j) - mpos(spot));
-    let dist = max(i32(max(d.x, d.y) - O[j].radius), 0);
-    if (dist >= damage) { continue; }
-    if (checkSight(j, spot)) { damageMobj(j, i32(spot), source, damage - dist); }
+  let reach = (damage + 32) << 16u; // + MAXRADIUS
+  let bmo = vec2i(i32(BM_X) << 16u, i32(BM_Y) << 16u);
+  let c = ipos(spot);
+  let yl = (c.y - reach - bmo.y) >> 23u; let yh = (c.y + reach - bmo.y) >> 23u;
+  let xl = (c.x - reach - bmo.x) >> 23u; let xh = (c.x + reach - bmo.x) >> 23u;
+  for (var by = yl; by <= yh; by++) {
+    for (var bx = xl; bx <= xh; bx++) {
+      if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { continue; }
+      var cur = LS[BLOCKHEADS + u32(by * BM_W + bx)];
+      for (var guard = 0; guard < 1024 && cur != 0u; guard++) {
+        let j = cur - 1u;
+        cur = u32(O[j].bnext);
+        if ((O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
+        if (O[j].mtype == MT_CYBORG || O[j].mtype == MT_SPIDER) { continue; }
+        let d = abs(ipos(j) - c);
+        let dist = max((max(d.x, d.y) - fixedOf(O[j].radius)) >> 16u, 0);
+        if (dist >= damage) { continue; }
+        if (checkSight(j, spot)) { damageMobj(j, i32(spot), source, damage - dist); }
+      }
+    }
   }
 }
 
@@ -3185,6 +3200,13 @@ fn playerThink() {
     if (O[0].req == u32(info(MT_PLAYER, MI_PAINSTATE)) && P.dead == 0u) { mobjSound(0u, SFX_plpain); }
     O[0].req = NOREQ;
   }
+  // the chainsaw's lunge: after a hit, P_PlayerThink replaces the command with a full-speed step forward
+  var fwd = U.forward; var side = U.side; var turn = U.turn + select(0.0, U.mouseturn, first);
+  if ((O[0].flags & MF_JUSTATTACKED) != 0u) {
+    fwd = 100.0; side = 0.0; turn = 0.0;
+    O[0].flags &= ~MF_JUSTATTACKED;
+  }
+  P.cmdmove = select(0u, 1u, fwd != 0.0 || side != 0.0);
   if (P.dead != 0u) {
     // fall to the floor, face the killer, wait for use to restart
     if (P.viewheight > 6.0) { P.viewheight -= 1.0; }
@@ -3206,15 +3228,14 @@ fn playerThink() {
     O[0].reactiontime -= 1;
   } else {
     // angleturn << 16: the turn in 1/65536ths of a circle
-    let turn = U.turn + select(0.0, U.mouseturn, first);
     O[0].angle += u32(i32(round(turn / TAU * 65536.0))) << 16u;
-    if (first) { P.pva += U.mouseturn; }
+    if (first && turn != 0.0) { P.pva += U.mouseturn; } // not during the lunge, which drops the turn
     // P_Thrust through DOOM's finesine table: 8192 steps
     let fa = O[0].angle >> 19u;
     if (onground) {
       // P_Thrust: FixedMul(move * 2048, finecosine) is (move * finecosine) >> 5, floored
-      if (U.forward != 0.0) { let fm = i32(U.forward); O[0].momx += f32((fm * fineCosFx(fa)) >> 5u) / 65536.0; O[0].momy += f32((fm * fineSinFx(fa)) >> 5u) / 65536.0; }
-      if (U.side != 0.0) { let sm = i32(U.side); let fs = (fa + 6144u) & 8191u; O[0].momx += f32((sm * fineCosFx(fs)) >> 5u) / 65536.0; O[0].momy += f32((sm * fineSinFx(fs)) >> 5u) / 65536.0; }
+      if (fwd != 0.0) { let fm = i32(fwd); O[0].momx += f32((fm * fineCosFx(fa)) >> 5u) / 65536.0; O[0].momy += f32((fm * fineSinFx(fa)) >> 5u) / 65536.0; }
+      if (side != 0.0) { let sm = i32(side); let fs = (fa + 6144u) & 8191u; O[0].momx += f32((sm * fineCosFx(fs)) >> 5u) / 65536.0; O[0].momy += f32((sm * fineSinFx(fs)) >> 5u) / 65536.0; }
     }
   }
   // P_PlayerThink: the view height follows the thrust, before the thinkers move the player
@@ -3250,7 +3271,7 @@ fn ticPlayer() {
 }
 // The player's P_MobjThinker: its movement, which DOOM runs at the player's place in the thinker list
 fn playerMobjThink() {
-  let hasCmd = U.forward != 0.0 || U.side != 0.0;
+  let hasCmd = P.cmdmove != 0u;
   numcross = 0u;
   if (O[0].momx != 0.0 || O[0].momy != 0.0) { playerXY(hasCmd); processCrossings(0u); }
   if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
