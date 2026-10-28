@@ -13,8 +13,8 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028033804";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028033804";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261028040004";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261028040004";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -1974,7 +1974,9 @@ fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
     O[tgt].targ = source;
     O[tgt].threshold = 100;
     let see = info(O[tgt].mtype, MI_SEESTATE);
-    if (O[tgt].state == u32(info(O[tgt].mtype, MI_SPAWNSTATE)) && see != 0) { O[tgt].req = u32(see); }
+    // a pain state asked for above counts as the current state, as DOOM had already set it
+    let cur = select(O[tgt].state, O[tgt].req, O[tgt].req != NOREQ);
+    if (cur == u32(info(O[tgt].mtype, MI_SPAWNSTATE)) && see != 0) { O[tgt].req = u32(see); }
   }
 }
 
