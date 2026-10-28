@@ -37,9 +37,10 @@ button.go:disabled { opacity: .5; cursor: wait; }
 #touch[hidden] { display: none; }
 .tbtn { position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .5); background: rgba(40, 30, 16, .45); color: var(--ink); font: 12px ui-monospace, monospace; display: flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; }
 #bUse { right: max(16px, env(safe-area-inset-right)); bottom: 120px; }
+#bCentre { right: max(72px, calc(env(safe-area-inset-right) + 72px)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 18px; }
 #bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
-#stick { position: absolute; width: 120px; height: 120px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
-#nub { position: absolute; left: 40px; top: 40px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
+#stick { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
+#nub { position: absolute; left: 50px; top: 50px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
 #fps { position: fixed; left: 8px; top: 6px; font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; }
 </style>
 </head>
@@ -50,6 +51,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
   <div id="stick"><div id="nub"></div></div>
   <div class="tbtn" id="bUse">USE</div>
   <div class="tbtn" id="bMenu">II</div>
+  <div class="tbtn" id="bCentre">◎</div>
 </div>
 
 <div class="overlay" id="menu">
@@ -65,21 +67,23 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <option value="1280x800">1280 × 800</option>
     </select></label>
     <div id="tiltOpts" hidden>
-      <label>Turn by turning the phone <input type="checkbox" id="tilt" checked></label>
-      <label>Tilt speed <input type="range" id="tiltSpeed" min="0.5" max="3" step="0.1" value="1.4"></label>
-      <label>Reverse tilt direction <input type="checkbox" id="tiltRev"></label>
+      <label>Swivel to turn <input type="checkbox" id="tilt" checked></label>
+      <label>Tilt sideways to turn <input type="checkbox" id="tiltRoll" checked></label>
+      <label>Tilt forward and back to look up and down <input type="checkbox" id="tiltPitch" checked></label>
+      <label>Turn speed <input type="range" id="tiltSpeed" min="0.4" max="2.5" step="0.1" value="1"></label>
+      <label>Reverse turning <input type="checkbox" id="tiltRev"></label>
     </div>
     <label>Your own WAD <input type="file" id="wadfile" accept=".wad,.WAD"></label>
     <div id="status" class="mute"></div>
     <button class="go" id="play" disabled>Loading…</button>
     <div class="keys">
       <b>W A S D / arrows</b><span>move and turn (A/D strafe)</span>
-      <b>mouse</b><span>turn (click the screen to capture it)</span>
+      <b>mouse</b><span>turn and look up or down (click the screen to capture it)</span>
       <b>shift</b><span>run</span>
       <b>space / E</b><span>open doors, press switches</span>
       <b>alt + ← →</b><span>strafe with the arrows</span>
       <b>esc</b><span>this menu</span>
-      <b>phone</b><span>turn the phone to look around; drag the left thumb to walk and strafe, drag the right thumb to fine-tune the turn; USE button</span>
+      <b>phone</b><span>swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb walks and strafes, the right thumb drags to turn</span>
     </div>
   </div>
 </div>
@@ -160,6 +164,7 @@ async function start(mapName, carry = freshPlayer()) {
   $("play").disabled = false;
   $("play").textContent = "Resume";
   hideMenu();
+  recentre();
   running = true;
   lastTime = performance.now(); ticAccum = 0;
 }
@@ -188,39 +193,66 @@ addEventListener("keydown", (e) => {
 addEventListener("keyup", (e) => keys.delete(e.code));
 addEventListener("blur", () => keys.clear());
 canvas.addEventListener("click", () => { if (running && !isTouch) canvas.requestPointerLock?.(); });
-addEventListener("mousemove", (e) => { if (document.pointerLockElement === canvas) mouseDX += e.movementX; });
+let mouseDY = 0, mousePitch = 0;
+addEventListener("mousemove", (e) => { if (document.pointerLockElement === canvas) { mouseDX += e.movementX; mouseDY += e.movementY; } });
 
-// touch: left half is a floating stick, right half drags to turn
-// gyro look: the rotation rate projected on gravity is the yaw rate, whatever way the phone is held
-const gyro = { on: false, turn: 0, last: 0, g: [0, 0, -1] };
+// Phone motion. Gravity gives the pose: the back camera's elevation is the look pitch and the
+// screen's right edge against the horizon is the steering roll, both relative to the pose at Play
+// (or the last recentre). Swivel is the rotation rate projected on gravity. iOS reports gravity
+// with the opposite sign to the spec, so "up" flips there.
+const gyro = { on: false, turn: 0, last: 0, g: [0, 0, -1], pitch: 0, roll: 0, pitch0: null, roll0: null };
 const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+function screenAxes() {
+  const th = ((screen.orientation?.angle ?? window.orientation ?? 0) * Math.PI) / 180;
+  return { right: [Math.cos(th), -Math.sin(th), 0], up: [Math.sin(th), Math.cos(th), 0] };
+}
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 function onMotion(e) {
   const a = e.accelerationIncludingGravity, r = e.rotationRate;
   if (a && a.x != null) {
     const m = Math.hypot(a.x, a.y, a.z) || 1;
     // low-pass the gravity direction so hand shake doesn't leak into it
-    for (const [i, v] of [a.x, a.y, a.z].entries()) gyro.g[i] = gyro.g[i] * 0.8 + (v / m) * 0.2;
+    for (const [i, v] of [a.x, a.y, a.z].entries()) gyro.g[i] = gyro.g[i] * 0.85 + (v / m) * 0.15;
   }
   const now = performance.now();
   const dt = gyro.last ? Math.min((now - gyro.last) / 1000, 0.1) : 0;
   gyro.last = now;
-  if (!gyro.on || !running || !r || r.alpha == null) return;
   const gm = Math.hypot(...gyro.g) || 1;
-  const yaw = (r.beta * gyro.g[0] + r.gamma * gyro.g[1] + r.alpha * gyro.g[2]) / gm; // deg/s
-  const sign = (isIOS ? -1 : 1) * ($("tiltRev").checked ? -1 : 1);
-  if (Math.abs(yaw) > 1.5) gyro.turn += sign * yaw * dt * Math.PI / 180 * +$("tiltSpeed").value;
+  const up = gyro.g.map((v) => (isIOS ? -v : v) / gm);
+  const ax = screenAxes();
+  gyro.pitch = Math.asin(Math.max(-1, Math.min(1, -up[2])));
+  gyro.roll = Math.asin(Math.max(-1, Math.min(1, dot3(ax.right, up))));
+  if (gyro.pitch0 === null) { gyro.pitch0 = gyro.pitch; gyro.roll0 = gyro.roll; }
+  if (!gyro.on || !running) return;
+  const speed = +$("tiltSpeed").value, rev = $("tiltRev").checked ? -1 : 1;
+  if ($("tilt").checked && r && r.alpha != null) {
+    const yaw = (r.beta * gyro.g[0] + r.gamma * gyro.g[1] + r.alpha * gyro.g[2]) / gm; // deg/s
+    if (Math.abs(yaw) > 1.5) gyro.turn += (isIOS ? -1 : 1) * rev * yaw * dt * Math.PI / 180 * speed;
+  }
+  if ($("tiltRoll").checked) {
+    const rel = gyro.roll - gyro.roll0, dz = 0.09;
+    if (Math.abs(rel) > dz) gyro.turn += rev * Math.sign(rel) * (Math.abs(rel) - dz) * 2.6 * speed * dt;
+  }
 }
+function lookPitch() {
+  let p = mousePitch;
+  if (gyro.on && $("tiltPitch").checked && gyro.pitch0 !== null) p += (gyro.pitch - gyro.pitch0) * 1.2;
+  return Math.max(-0.75, Math.min(0.75, p));
+}
+function recentre() { gyro.pitch0 = null; gyro.roll0 = null; mousePitch = 0; }
 async function enableGyro() {
   gyro.on = false;
-  if (!isTouch || !$("tilt").checked || typeof DeviceMotionEvent === "undefined") return;
+  if (!isTouch || typeof DeviceMotionEvent === "undefined") return;
   try {
     if (typeof DeviceMotionEvent.requestPermission === "function" && (await DeviceMotionEvent.requestPermission()) !== "granted") return;
     if (!enableGyro.added) { addEventListener("devicemotion", onMotion); enableGyro.added = true; }
     gyro.on = true;
-  } catch { /* permission refused: drag to turn still works */ }
+    recentre();
+  } catch { /* permission refused: dragging still works */ }
 }
-$("tilt").addEventListener("change", enableGyro);
 
+// touch: the left half is a floating stick, the right half drags to turn
+const STICK = 70;
 const touch = { stickId: null, sx: 0, sy: 0, dx: 0, dy: 0, turnId: null, tx: 0, use: false };
 if (isTouch) {
   $("touch").hidden = false;
@@ -232,8 +264,8 @@ if (isTouch) {
       if (t.target.closest?.(".tbtn")) continue;
       if (t.clientX < innerWidth / 2 && touch.stickId === null) {
         touch.stickId = t.identifier; touch.sx = t.clientX; touch.sy = t.clientY; touch.dx = touch.dy = 0;
-        stick.style.display = "block"; stick.style.left = t.clientX - 60 + "px"; stick.style.top = t.clientY - 60 + "px";
-        nub.style.left = "40px"; nub.style.top = "40px";
+        stick.style.display = "block"; stick.style.left = t.clientX - STICK + "px"; stick.style.top = t.clientY - STICK + "px";
+        nub.style.left = STICK - 20 + "px"; nub.style.top = STICK - 20 + "px";
       } else if (touch.turnId === null) { touch.turnId = t.identifier; touch.tx = t.clientX; }
     }
     e.preventDefault();
@@ -242,10 +274,14 @@ if (isTouch) {
     for (const t of e.changedTouches) {
       if (t.identifier === touch.stickId) {
         let dx = t.clientX - touch.sx, dy = t.clientY - touch.sy;
-        const m = Math.hypot(dx, dy); if (m > 50) { dx *= 50 / m; dy *= 50 / m; }
-        touch.dx = dx / 50; touch.dy = dy / 50;
-        nub.style.left = 40 + dx + "px"; nub.style.top = 40 + dy + "px";
-      } else if (t.identifier === touch.turnId) { mouseDX += (t.clientX - touch.tx) * 2.2; touch.tx = t.clientX; }
+        const m = Math.hypot(dx, dy);
+        if (m > STICK) { dx *= STICK / m; dy *= STICK / m; }
+        // dead zone, then a soft curve so small thumb drifts walk instead of sprint
+        const n = Math.min(m, STICK) / STICK, dz = 0.15;
+        const k = n <= dz ? 0 : Math.pow((n - dz) / (1 - dz), 1.7) / (n || 1);
+        touch.dx = (dx / STICK) * k; touch.dy = (dy / STICK) * k;
+        nub.style.left = STICK - 20 + dx + "px"; nub.style.top = STICK - 20 + dy + "px";
+      } else if (t.identifier === touch.turnId) { mouseDX += (t.clientX - touch.tx) * 1.1; touch.tx = t.clientX; }
     }
     e.preventDefault();
   }, { passive: false });
@@ -258,6 +294,7 @@ if (isTouch) {
   addEventListener("touchend", end); addEventListener("touchcancel", end);
   $("bUse").addEventListener("touchstart", (e) => { touch.use = true; e.preventDefault(); e.stopPropagation(); });
   $("bUse").addEventListener("touchend", (e) => { touch.use = false; e.preventDefault(); });
+  $("bCentre").addEventListener("touchstart", (e) => { recentre(); e.preventDefault(); e.stopPropagation(); });
   $("bMenu").addEventListener("touchstart", (e) => { running = false; showMenu(); e.preventDefault(); e.stopPropagation(); });
 }
 
@@ -281,10 +318,11 @@ function readInput() {
     forward += -touch.dy * 50; side += touch.dx * 40;
   }
   const mouseturn = -mouseDX * 0.0028 + gyro.turn;
-  mouseDX = 0; gyro.turn = 0;
+  mousePitch = Math.max(-0.75, Math.min(0.75, mousePitch - mouseDY * 0.0022));
+  mouseDX = 0; mouseDY = 0; gyro.turn = 0;
   const use = k("Space", "KeyE", "Enter") || touch.use;
   const w = weaponKey; weaponKey = 0;
-  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, weapon: w };
+  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, weapon: w, pitch: lookPitch() };
 }
 
 // ---------------------------------------------------------------- sound

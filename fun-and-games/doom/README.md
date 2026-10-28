@@ -12,14 +12,14 @@ Edge or Safari.
 | input | does |
 |---|---|
 | W A S D, arrows | move and turn; A and D strafe |
-| mouse | turn, after a click on the screen captures the pointer |
+| mouse | turn and look up or down, after a click on the screen captures the pointer |
 | shift | run |
 | space, E | open doors and press switches |
 | alt + ← → | strafe with the arrow keys |
 | esc | menu |
-| phone | turn the phone to look around (gyroscope); the left thumb drags a floating stick to walk and strafe; the right thumb drags to fine-tune the turn; USE button on the right |
+| phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn |
 
-On a phone, the menu has a tilt speed slider and a switch that reverses the tilt direction. The view turns by the phone's rotation rate projected on gravity, so it works the same in portrait and landscape. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
+On a phone, the pose at Play is level: the back camera's elevation against gravity sets the look pitch, the screen's roll steers, and swivel (the rotation rate projected on gravity) turns directly. The menu switches each one on or off and sets the turn speed. Looking up and down shears the view by moving the horizon row, as later source ports do; the original engine could not. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
 `doom.wad` or `doom2.wad`.
 
 ## How it is built

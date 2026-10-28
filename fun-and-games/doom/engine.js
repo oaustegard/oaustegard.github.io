@@ -186,7 +186,9 @@ export class Engine {
   encodeFrame(encoder, tics, input = {}) {
     const fu = new Uint32Array(16), ff = new Float32Array(fu.buffer);
     fu[0] = this.width; fu[1] = this.height; fu[2] = this.viewh; fu[3] = ++this.frameNo;
-    ff[4] = this.width / 2; ff[5] = this.viewh / 2; ff[6] = this.width / 2;
+    // looking up and down shears the view: the horizon row moves, as in later source ports
+    const shear = Math.max(-0.45, Math.min(0.45, Math.tan(input.pitch || 0) * this.width / 2 / this.viewh)) * this.viewh;
+    ff[4] = this.width / 2; ff[5] = this.viewh / 2 + shear; ff[6] = this.width / 2;
     ff[8] = input.forward || 0; ff[9] = input.side || 0; ff[10] = input.turn || 0; ff[11] = input.mouseturn || 0;
     fu[12] = (input.fire ? 1 : 0) | (input.use ? 2 : 0); fu[13] = input.weapon || 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, fu);
