@@ -2,11 +2,12 @@
 // lives in GPU buffers. JS writes the cursor, the click, the chosen skill and the release rate into
 // a uniform buffer and reads back a small world block for the panel and the sounds.
 
-import { makeWGSL, PRESENT_WGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029034843";
-import { buildSprites } from "./sprites.js?v=20261029034843";
-import { buildTerrain, themeWords } from "./levels.js?v=20261029034843";
+import { makeWGSL, PRESENT_WGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029041012";
+import { buildSprites } from "./sprites.js?v=20261029041012";
+import { buildTerrain, themeWords } from "./levels.js?v=20261029041012";
 
 export const MINIMAP_H = 32;
+export const VIEW_H = 160;   // a taller level scrolls vertically
 const TICK_KERNELS = ["begin", "pick", "assign", "fieldStamp", "classify"];
 const ARG_KERNELS = ["queueArgs", "editArgs"];
 const LAST_KERNELS = ["carve", "lay", "sprites", "composite"];
@@ -115,21 +116,24 @@ export class Game {
     this.world = null;
     this.ticks = 0;
     this.lemGroups = Math.ceil(level.count / 64);
+    this.camY = 0;
     this.setView(0, Math.min(level.w, 320));
   }
 
-  // vw level pixels across; the view always shows the level's full height plus the minimap
-  setView(camX, vw) {
-    this.vw = Math.max(16, Math.min(Math.floor(vw), this.W, Math.floor(MAXVIEW / (this.H + MINIMAP_H))));
+  // vw level pixels across and vh down (VIEW_H at most, or the whole level for a picture of it)
+  setView(camX, vw, camY = this.camY, vh = Math.min(this.H, VIEW_H)) {
+    this.vh = Math.min(vh, this.H);
+    this.vw = Math.max(16, Math.min(Math.floor(vw), this.W, Math.floor(MAXVIEW / (this.vh + MINIMAP_H))));
     this.camX = Math.max(0, Math.min(Math.round(camX), this.W - this.vw));
+    this.camY = Math.max(0, Math.min(Math.round(camY), this.H - this.vh));
   }
 
-  get rows() { return this.H + MINIMAP_H; }
+  get rows() { return this.vh + MINIMAP_H; }
 
   writeInput() {
     const i = this.input, a = new Int32Array(12), u = new Uint32Array(a.buffer);
     a[0] = i.curX; a[1] = i.curY; u[2] = i.click; u[3] = i.skill; u[4] = i.rr; u[5] = i.nuke;
-    a[6] = this.camX; u[7] = this.vw; u[8] = this.H; u[9] = MINIMAP_H; u[10] = this.time; u[11] = 0;
+    a[6] = this.camX; u[7] = this.vw; u[8] = this.vh; u[9] = MINIMAP_H; u[10] = this.time; a[11] = this.camY;
     this.device.queue.writeBuffer(this.inpBuf, 0, a);
     this.device.queue.writeBuffer(this.dimsBuf, 0, new Uint32Array([this.vw, this.rows, MAXVIEW, 0]));
   }

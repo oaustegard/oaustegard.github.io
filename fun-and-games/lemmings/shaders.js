@@ -60,7 +60,7 @@ const M_BRICK = 3u;
 const M_DECOR = 4u;   // scenery: drawn, but lemmings pass through it
 
 struct Lem { x: i32, y: i32, dir: i32, state: u32, frame: u32, fall: i32, flags: u32, timer: i32 }
-struct Inp { curX: i32, curY: i32, click: u32, skill: u32, rr: u32, nuke: u32, camX: i32, vw: u32, vh: u32, mmh: u32, time: u32, pad: u32 }
+struct Inp { curX: i32, curY: i32, click: u32, skill: u32, rr: u32, nuke: u32, camX: i32, vw: u32, vh: u32, mmh: u32, time: u32, camY: i32 }
 
 @group(0) @binding(0) var<storage, read> rom: array<u32>;
 @group(0) @binding(1) var<storage, read_write> ter: array<u32>;
@@ -580,10 +580,11 @@ fn pal(i: u32) -> vec3f {
 }
 
 fn plot(x: i32, y: i32, c: u32, i: u32) {
-  if (y < 0 || y >= i32(inp.vh)) { return; }
+  let sy = y - inp.camY;
+  if (sy < 0 || sy >= i32(inp.vh)) { return; }
   let sx = x - inp.camX;
   if (sx < 0 || sx >= i32(inp.vw)) { return; }
-  atomicMax(&fb[u32(y) * inp.vw + u32(sx)], ((i + 1u) << 4u) | c);
+  atomicMax(&fb[u32(sy) * inp.vw + u32(sx)], ((i + 1u) << 4u) | c);
 }
 
 fn drawFrame(fr: u32, x: i32, y: i32, dir: i32, i: u32) {
@@ -608,7 +609,7 @@ fn drawFrame(fr: u32, x: i32, y: i32, dir: i32, i: u32) {
   let mx = u32(clamp(l.x, 0, LW() - 1)) * inp.vw / u32(LW());
   let my = inp.vh + u32(clamp(l.y - 4, 0, LH() - 1)) * inp.mmh / u32(LH());
   atomicMax(&fb[my * inp.vw + mx], ((i + 1u) << 4u) | 15u);
-  if (l.x < inp.camX - 8 || l.x > inp.camX + i32(inp.vw) + 8) { return; }
+  if (l.x < inp.camX - 8 || l.x > inp.camX + i32(inp.vw) + 8 || l.y < inp.camY - 4 || l.y > inp.camY + i32(inp.vh) + 20) { return; }
   let m = R_SMETA + l.state * 4u;
   let fr = rom[m] + (l.frame >> rom[m + 2u]) % rom[m + 1u];
   drawFrame(fr, l.x, l.y, l.dir, i);
@@ -696,7 +697,7 @@ fn exitColor(x: i32, y: i32, ex: i32, ey: i32, c: vec3f) -> vec3f {
 
 // two silhouette layers behind the terrain, scrolling slower than it; the theme picks their shape
 fn ridge(bx: f32, kind: u32, near: bool) -> f32 {
-  let h = f32(LH());
+  let h = 160.0;
   let s = select(1.0, 0.7, near);
   switch (kind) {
     case 1u: { // crystal spires
@@ -723,8 +724,11 @@ fn sceneColor(x: i32, y: i32) -> vec3f {
   var c = mix(theme(3u), theme(4u), fy);
   let sx = f32(x - inp.camX); let cx = f32(inp.camX);
   let kind = rom[R_THEME + 8u];
-  if (f32(y) > ridge(sx + cx * 0.6, kind, true)) { c = mix(theme(7u), theme(4u), 0.15 * fy); }
-  else if (f32(y) > ridge(sx + cx * 0.3, kind, false)) { c = mix(theme(6u), theme(4u), 0.2 * fy); }
+  // in a level taller than the view, the ridges sit at the bottom and drop away as the view rises
+  let rise = f32(LH() - i32(inp.vh) - inp.camY);
+  let by = f32(y - inp.camY) + f32(i32(inp.vh) - 160);
+  if (by - rise * 0.5 > ridge(sx + cx * 0.6, kind, true)) { c = mix(theme(7u), theme(4u), 0.15 * fy); }
+  else if (by - rise * 0.25 > ridge(sx + cx * 0.3, kind, false)) { c = mix(theme(6u), theme(4u), 0.2 * fy); }
   else {
     let star = hf(x, y * 3 + 5);
     if (star > 0.9965) { c += vec3f(0.5 + 0.4 * sin(f32(inp.time) * 0.05 + star * 900.0)) * (1.0 - fy); }
@@ -773,7 +777,7 @@ fn miniColor(x: i32, y: i32) -> vec3f {
   atomicStore(&fb[p], 0u);
   var c: vec3f;
   if (g.y < vh) {
-    let x = inp.camX + i32(g.x); let y = i32(g.y);
+    let x = inp.camX + i32(g.x); let y = inp.camY + i32(g.y);
     if (o != 0u) { c = pal(o & 15u); } else { c = sceneColor(x, y); }
     let hv = ldw(W_HOV);
     if (hv != 0u) {
@@ -787,8 +791,10 @@ fn miniColor(x: i32, y: i32) -> vec3f {
     let x = i32(g.x) * LW() / i32(vw); let y = my * LH() / i32(inp.mmh);
     if (o != 0u) { c = pal(15u); } else { c = miniColor(x, y); }
     let v0 = inp.camX * i32(vw) / LW(); let v1 = (inp.camX + i32(vw)) * i32(vw) / LW() - 1;
+    let w0 = inp.camY * i32(inp.mmh) / LH(); let w1 = (inp.camY + i32(vh)) * i32(inp.mmh) / LH() - 1;
     let gx = i32(g.x);
-    if (((gx == v0 || gx == v1) || ((my == 0 || my == i32(inp.mmh) - 1) && gx >= v0 && gx <= v1))) { c = vec3f(0.95, 0.85, 0.2); }
+    let inX = gx >= v0 && gx <= v1; let inY = my >= w0 && my <= w1;
+    if (((gx == v0 || gx == v1) && inY) || ((my == w0 || my == w1) && inX)) { c = vec3f(0.95, 0.85, 0.2); }
     if (my == 0 && (gx < v0 || gx > v1)) { c = vec3f(0.25); }
   }
   atomicStore(&fb[COL + p], pack(c));

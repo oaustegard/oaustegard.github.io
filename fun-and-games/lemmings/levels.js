@@ -6,7 +6,8 @@
 // ground and masses (theme earth, material 1 unless given):
 //   ["rect", x, y, w, h, mat]             ["ellipse", cx, cy, rx, ry, mat]
 //   ["hills", x0, x1, top, amp, seed, bottom = H]      ground whose top wanders by ±amp
-//   ["slab", x0, x1, top, bottom, seed]   a floating mass with a flat-ish top and a ragged underside
+//   ["slab", x0, x1, top, bottom, seed, ends = 3]   a floating mass with a flat-ish top and a ragged
+//                                         underside; ends 1 tapers the left end, 2 the right, 3 both
 //   ["blob", cx, cy, rx, ry, seed, mat]   a lumpy ellipse; mat 0 carves a cave
 // drawn pieces, in their own colours; a last argument of 1 makes a piece decor:
 //   ["column", cx, base, h, w, hue]       fluted column with plinth and capital, standing on row base - 1
@@ -41,6 +42,7 @@ const HUES = {
   brick: ["#5a2018", "#8c3624", "#a84a30", "#c8b8a0"],
   ice: ["#2a5c9c", "#4a90d8", "#8cc8f4", "#e4f6ff"],
   amethyst: ["#4a1c78", "#7a3cb4", "#b070e4", "#ecd0ff"],
+  amber: ["#7a3c08", "#c06a14", "#f0a030", "#ffe8a0"],
   toadstool: ["#7a1010", "#c42020", "#ee4a3a", "#fff4e8"],
   candycap: ["#8a1a5a", "#d0408c", "#f080b8", "#fff0f8"],
   stem: ["#a89878", "#d0c4a4", "#ece2c8", "#fffaf0"],
@@ -133,22 +135,42 @@ export const LEVELS = [
     ],
   },
   {
-    name: "Up, up and away", hint: "Climbers scale walls; floaters survive any fall. Some lemmings need both.",
-    w: 800, h: 160, theme: "candy", count: 20, need: 80, rr: 30, minutes: 6,
+    name: "Up, up and away", hint: "Climbers scale walls; floaters survive any fall. This tower needs both.",
+    w: 640, h: 320, theme: "candy", count: 20, need: 80, rr: 30, minutes: 7,
     skills: { climber: 20, floater: 20 },
-    hatches: [[120, 100]], exits: [[640, 151]],
+    hatches: [[120, 240]], exits: [[500, 311]],
     shapes: [
-      ["blob", 6, 80, 30, 110, 11], ["blob", 794, 80, 30, 110, 12],
-      ["mushroom", 200, 130, 26, 16, "candycap", 1],
-      ["mushroom", 70, 130, 14, 10, "candycap", 1],
-      ["mushroom", 460, 152, 50, 26, "candycap", 1],
-      ["mushroom", 560, 152, 30, 16, "toadstool", 1],
-      ["crystals", 410, 152, 12, "amethyst", 21, 1],
-      ["rect", 24, 130, 300, 30],
-      ["bricks", 300, 40, 24, 120, "candycap"],
-      ["mushroom", 312, 41, 0, 14, "candycap", 1],
-      ["rect", 324, 152, 452, 8],
-      ["mushroom", 744, 154, 40, 20, "candycap"],
+      ["blob", 6, 160, 30, 200, 11], ["blob", 634, 160, 30, 200, 12],
+      ["mushroom", 190, 270, 30, 18, "candycap", 1],
+      ["mushroom", 60, 270, 14, 10, "candycap", 1],
+      ["mushroom", 380, 312, 150, 40, "candycap", 1],
+      ["mushroom", 450, 312, 70, 22, "toadstool", 1],
+      ["mushroom", 560, 312, 40, 18, "candycap", 1],
+      ["crystals", 330, 312, 14, "amethyst", 21, 1], ["crystals", 230, 270, 10, "amethyst", 22, 1],
+      ["rect", 24, 270, 236, 50],
+      ["bricks", 260, 40, 30, 280, "candycap"],
+      ["mushroom", 275, 41, 0, 18, "candycap", 1],
+      ["rect", 290, 312, 326, 8],
+      ["mushroom", 604, 314, 44, 18, "candycap"],
+    ],
+  },
+  {
+    name: "Switchback", hint: "The crowd zigzags down six ledges on its own. The last drop is too far for anyone without an umbrella.",
+    w: 480, h: 400, theme: "rust", count: 20, need: 50, rr: 40, minutes: 7,
+    skills: { floater: 12 },
+    hatches: [[80, 30]], exits: [[220, 389]],
+    shapes: [
+      ["bricks", 0, 0, 24, 400, "brick"], ["bricks", 456, 0, 24, 400, "brick"],
+      ["arch", 240, 390, 60, 70, "redrock", 1],
+      ["chain", 420, 0, 90], ["chain", 60, 70, 60], ["chain", 430, 190, 50], ["chain", 40, 230, 70],
+      ["slab", 24, 380, 60, 72, 21, 2], ["slab", 100, 456, 100, 112, 22, 1], ["slab", 24, 380, 140, 152, 23, 2],
+      ["slab", 100, 456, 180, 192, 24, 1], ["slab", 24, 380, 220, 232, 25, 2], ["slab", 100, 456, 260, 272, 26, 1],
+      ["vines", 24, 456, 30],
+      ["column", 340, 100, 28, 10, "redrock", 1], ["column", 140, 140, 28, 10, "redrock", 1],
+      ["column", 340, 180, 28, 10, "redrock", 1], ["column", 140, 220, 28, 10, "redrock", 1],
+      ["column", 340, 260, 28, 10, "redrock", 1],
+      ["rect", 24, 390, 432, 10],
+      ["crystals", 60, 390, 16, "amber", 31, 1], ["crystals", 400, 390, 20, "amber", 32, 1],
     ],
   },
   {
@@ -257,9 +279,9 @@ export function buildTerrain(level) {
         for (let j = y; j < bottom; j++) put(i, j, m);
       }
     },
-    slab(x0, x1, top, bottom, seed) {
+    slab(x0, x1, top, bottom, seed, ends = 3) {
       for (let i = x0; i < x1; i++) {
-        const e = Math.min(i - x0, x1 - 1 - i), taper = e < 10 ? 10 - e : 0;
+        const e = Math.min(ends & 1 ? i - x0 : 99, ends & 2 ? x1 - 1 - i : 99), taper = e < 10 ? 10 - e : 0;
         const y0 = Math.round(top + 0.6 * wander(i, seed) + taper * 0.3);
         const y1 = Math.round(bottom + 3 * wander(i * 2.3, seed + 5) - taper * 1.1);
         for (let j = y0; j < y1; j++) put(i, j, 1);

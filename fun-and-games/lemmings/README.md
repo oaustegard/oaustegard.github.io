@@ -21,15 +21,17 @@ pixels kills, a builder lays twelve bricks, bashers and miners stop at steel.
 | P, space | pause; skills can still be given while paused |
 | F | fast forward |
 | N twice | nuke: every lemming becomes a bomber |
-| ← → / A D, wheel, drag, screen edges | scroll; click or drag the map under the level to jump |
+| arrows / W A S D, wheel, drag, screen edges | scroll; click or drag the map under the level to jump |
 | esc | the level menu |
 
 ## Levels
 
-Seven levels, each built around a skill: digging through a floating island, a bridge held by a
+Eight levels, each built around a skill: digging through a floating island, a bridge held by a
 blocker under a hanging ceiling, bashing through columns, mining under a steel wall into a crystal
-cave, climbing and floating among giant mushrooms, a level that needs all of these, and Exodus,
-which releases 10,000 lemmings from eight hatches into an autumn forest.
+cave, climbing a candy tower two screens tall and floating down its far side, zigzagging down six
+ledges of a 400-pixel shaft, a level that needs several skills, and Exodus, which releases 10,000
+lemmings from eight hatches into an autumn forest. A level taller than the 160-pixel view scrolls
+up and down as well as sideways.
 
 `levels.js` describes each level as a list of shapes and pieces: ground, floating slabs, lumpy
 masses and caves in the theme's shaded earth, then drawn pieces with their own colours (fluted

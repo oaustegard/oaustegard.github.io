@@ -66,7 +66,8 @@ const PLANS = {
     { skill: "climber", pick: "l => l.state === 2 && !(l.flags & 1)" },
     { skill: "floater", pick: "l => l.state === 2 && !(l.flags & 2)" },
   ]).flat(),
-  5: [
+  5: Array.from({ length: 12 }, () => ({ skill: "floater", pick: "l => l.state === 2 && !(l.flags & 2)" })),
+  6: [
     { skill: "digger", pick: "l => l.state === 1 && l.x >= 180 && l.x <= 200" },
     { id: "b1", skill: "builder", pick: "l => l.state === 1 && l.x >= 553 && l.x <= 556 && l.dir > 0" },
     { needs: "b1", skill: "blocker", pick: "l => l.state === 1 && l.x >= 330 && l.x <= 548 && l.dir > 0" },
@@ -74,7 +75,7 @@ const PLANS = {
     { skill: "basher", pick: "l => l.state === 1 && l.dir > 0 && l.x >= 788 && l.x <= 796" },
     { skill: "bomber", after: "w => w.tick > 1500", pick: "l => l.state === 11" },
   ],
-  6: [
+  7: [
     { id: "b", skill: "builder", pick: "l => l.state === 1 && l.dir > 0 && l.x >= 1228 && l.x <= 1236" },
     { needs: "b", skill: "blocker", pick: "l => l.state === 1 && l.dir > 0 && l.x >= 1180 && l.x <= 1220" },
     { id: "w", skill: "basher", pick: "l => l.state === 1 && l.dir > 0 && l.x >= 1468 && l.x <= 1476" },
@@ -100,7 +101,7 @@ if (process.env.PREVIEW) {
   for (const [li] of setup.levels.entries()) {
     if (only.length && !only.includes(li)) continue;
     const r = await page.evaluate(async (li) => {
-      const g = window.game; g.loadLevel(window.LEVELS[li]); g.setView(0, g.W);
+      const g = window.game; g.loadLevel(window.LEVELS[li]); g.setView(0, g.W, 0, g.H);
       for (let k = 0; k < 5; k++) g.frame(8);
       return { px: Array.from(await g.readPixels()), vw: g.vw, rows: g.rows };
     }, li);
@@ -147,7 +148,7 @@ for (const [li, name] of setup.levels.entries()) {
       w = await g.readWorld();
       if (!mid && shotAt && w.tick >= shotAt[0]) {
         const keep = [g.camX, g.vw];
-        g.setView(shotAt[1], 480); g.frame(0);
+        g.setView(shotAt[1], 480, shotAt[2] ?? 0); g.frame(0);
         mid = { px: Array.from(await g.readPixels()), vw: g.vw };
         g.setView(...keep);
       }
