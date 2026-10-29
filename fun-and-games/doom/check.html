@@ -20,14 +20,14 @@
 <body>
 <main>
   <h1>gPu(doom) GPU check</h1>
-  <p>This page compiles every GPU kernel of <a href="./" style="color:#f08a3c">gPu(doom)</a> on this device, one at a time, and reports which ones fail and why. It takes up to a minute and plays nothing. Copy the report at any point, even while it runs, and send it back. It is saved as it goes, so it survives a reload.</p>
+  <p>This page compiles every GPU kernel of <a href="./" style="color:#f08a3c">gPu(doom)</a> on this device, one at a time, and reports which ones fail and why. It takes a minute or more, then times a few seconds of real game tics on E1M1, stopping at once if the GPU is dangerously slow. Copy the report at any point, even while it runs, and send it back. It is saved as it goes, so it survives a reload.</p>
   <button id="run" type="button">Run the check</button><button id="copy" type="button" disabled>Copy the report</button>
   <pre id="out">Press "Run the check".</pre>
 </main>
 <script type="module">
-import { unpackWad } from "./engine.js?v=20261028170147";
-import { readWad, buildGfx, buildMap } from "./wad.js?v=20261028170147";
-import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261028170147";
+import { unpackWad, Engine } from "./engine.js?v=20261029013442";
+import { readWad, buildGfx, buildMap } from "./wad.js?v=20261029013442";
+import { makeWGSL, PRESENT_WGSL } from "./shaders.js?v=20261029013442";
 
 const out = document.getElementById("out");
 const KEY = "gpudoom-check";
@@ -102,7 +102,8 @@ async function check() {
 
   let t = performance.now();
   const r = await fetch("e1.wad.gz");
-  const wad = readWad(await unpackWad(new Uint8Array(await r.arrayBuffer())));
+  const wadBytes = await unpackWad(new Uint8Array(await r.arrayBuffer()));
+  const wad = readWad(wadBytes);
   const gfx = buildGfx(wad);
   log("wad     loaded in " + ms(t));
   await module(device, PRESENT_WGSL, "present");
@@ -115,6 +116,28 @@ async function check() {
   // one at a time, so each time is that kernel's own; the four that were slow on D3D12 and Adreno go last
   const SLOW = ["ticWorld", "ticActivate", "ticPlayer", "ticMobjs"];
   for (const ep of [...eps.filter((e) => !SLOW.includes(e)), ...SLOW]) await pipeline(device, mod, ep, "game");
+
+  // Tic speed: real tics on E1M1, each its own submission, as the game sends them. It stops at the first
+  // tic over 150 ms, long before the two seconds after which Windows resets the graphics driver.
+  log("tics    building the game for a speed test (a second compile, with the game's own layout)");
+  t = performance.now();
+  const eng = await Engine.create(device, wadBytes, { width: 320, height: 200, skill: 3 });
+  await eng.loadMap("E1M1");
+  log("tics    built in " + ms(t));
+  const times = [];
+  for (let k = 0; k < 70; k++) {
+    t = performance.now();
+    const enc = device.createCommandEncoder();
+    eng.encodeFrame(enc, 1, {});
+    device.queue.submit([enc.finish()]);
+    await device.queue.onSubmittedWorkDone();
+    const dt = performance.now() - t;
+    times.push(dt);
+    if (dt > 150) { log(`tics    stopped at tic ${k + 1}: it took ${Math.round(dt)} ms`, "bad"); break; }
+  }
+  const sorted = times.slice().sort((a, b) => a - b);
+  const med = sorted[sorted.length >> 1], max = sorted[sorted.length - 1];
+  log(`tics    ${times.length} tics with the frame drawn: median ${med.toFixed(1)} ms, slowest ${max.toFixed(1)} ms (a tic has 28 ms)`, max < 28 ? "ok" : "bad");
   log("done");
 }
 

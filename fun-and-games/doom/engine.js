@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261028170147";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261028170147";
-import { STATES, SFX, MF } from "./info.js?v=20261028170147";
-import { MSG } from "./specials.js?v=20261028170147";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029013442";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261029013442";
+import { STATES, SFX, MF } from "./info.js?v=20261029013442";
+import { MSG } from "./specials.js?v=20261029013442";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -265,11 +265,20 @@ export class Engine {
     ff[16] = Math.max(0, Math.min(1, input.frac ?? 1)); ff[17] = input.lookturn || 0;
     this.device.queue.writeBuffer(this.frameBuf, 0, fu);
     this.device.queue.writeBuffer(this.worldBuf, W.viscount * 4, new Uint32Array([0]));
+    // ticSave runs one thread per thing (or sector); the rest are single-threaded. Each tic goes to the
+    // GPU as a submission of its own, ahead of the caller's encoder: on a slow GPU one long submission
+    // can hit Windows' two-second limit, and a driver that fails to recover takes the machine with it.
+    const saveGroups = Math.ceil(Math.max(this.maxMobjs, this.map.sectors.length) / 64);
+    for (let i = 0; i < tics; i++) {
+      const te = this.device.createCommandEncoder();
+      const tp = te.beginComputePass();
+      tp.setBindGroup(0, this.bind);
+      this.ticPipes.forEach((p, k) => { tp.setPipeline(p); tp.dispatchWorkgroups(k === 0 ? saveGroups : 1); });
+      tp.end();
+      this.device.queue.submit([te.finish()]);
+    }
     const pass = encoder.beginComputePass();
     pass.setBindGroup(0, this.bind);
-    // ticSave runs one thread per thing (or sector); the rest are single-threaded
-    const saveGroups = Math.ceil(Math.max(this.maxMobjs, this.map.sectors.length) / 64);
-    for (let i = 0; i < tics; i++) this.ticPipes.forEach((p, k) => { pass.setPipeline(p); pass.dispatchWorkgroups(k === 0 ? saveGroups : 1); });
     pass.setPipeline(this.viewSetupPipe);
     pass.dispatchWorkgroups(1);
     if (input.automap) {

@@ -127,8 +127,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261028170147";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261028170147";
+import { Music, musicLumpFor } from "./music.js?v=20261029013442";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261029013442";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -197,7 +197,7 @@ async function buildEngine() {
 function banner(html) { const b = $("banner"); b.hidden = !html; b.innerHTML = html || ""; }
 const esc = (t) => String(t).replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`);
 async function start(mapName, carry = freshPlayer(), saved = null) {
-  loading = true;
+  loading = true; slowNotice = false;
   status(`Compiling shaders for ${mapName}…`);
   $("play").disabled = true;
   // the first compile of a level takes seconds on most GPUs and minutes on some: show which kernels remain
@@ -490,6 +490,16 @@ function playSound(ev, view) {
 
 // ---------------------------------------------------------------- loop
 let lastTime = 0, ticAccum = 0, frames = 0, fpsT = 0;
+// GPU back-pressure and a watchdog: no new frame while two are unfinished, so a slow GPU slows the game
+// instead of queueing work; and tics far slower than DOOM's 28 ms pause the game before they grow
+// toward the two seconds after which Windows resets the graphics driver.
+let inFlight = 0, slowFrames = 0, slowNotice = false;
+const SLOW_TIC_MS = 150;
+function gpuTooSlow(msPerTic) {
+  showMenu();
+  slowNotice = true; // kept up until the game resumes, over the readbacks still in flight
+  banner(`Paused: this GPU takes ${Math.round(msPerTic)} ms a tic<small>DOOM needs under 28 ms. Playing on could hang the graphics driver</small>`);
+}
 const NEXT = { E1M1: "E1M2", E1M2: "E1M3", E1M3: "E1M4", E1M4: "E1M5", E1M5: "E1M6", E1M6: "E1M7", E1M7: "E1M8", E1M9: "E1M4",
   E2M1: "E2M2", E2M2: "E2M3", E2M3: "E2M4", E2M4: "E2M5", E2M5: "E2M6", E2M6: "E2M7", E2M7: "E2M8", E2M9: "E2M6",
   E3M1: "E3M2", E3M2: "E3M3", E3M3: "E3M4", E3M4: "E3M5", E3M5: "E3M6", E3M6: "E3M7", E3M7: "E3M8", E3M9: "E3M7" };
@@ -498,7 +508,7 @@ let pendingExit = null;
 
 function frame(now) {
   requestAnimationFrame(frame);
-  if (!running || loading || !engine?.map) { lastTime = now; return; }
+  if (!running || loading || !engine?.map || inFlight >= 2) { lastTime = now; return; }
   ticAccum += (now - lastTime) * 35 / 1000;
   lastTime = now;
   let tics = Math.floor(ticAccum);
@@ -521,6 +531,14 @@ function frame(now) {
   engine.present(enc, context.getCurrentTexture().createView());
   const rb = engine.readWorld(enc);
   device.queue.submit([enc.finish()]);
+  const t0 = performance.now();
+  inFlight++;
+  device.queue.onSubmittedWorkDone().then(() => {
+    inFlight--;
+    if (tics === 0 || !running) return;
+    slowFrames = (performance.now() - t0) / tics > SLOW_TIC_MS ? slowFrames + 1 : 0;
+    if (slowFrames >= 3) { slowFrames = 0; gpuTooSlow((performance.now() - t0) / tics); }
+  });
   if (rb) engine.finishRead(rb).then(onWorld);
   frames++;
 }
@@ -540,7 +558,7 @@ function onWorld(buf) {
   for (const ev of engine.soundEvents(buf)) playSound(ev, view);
   const exit = wu[W.exit];
   if (wu[W.dead] && !exit) banner(`YOU DIED<small>${isTouch ? "tap FIRE or USE" : "press fire or use"} to restart the level</small>`);
-  else if (!loading) banner("");
+  else if (!loading && !slowNotice) banner("");
   if (exit && !inter && running) {
     running = false;
     document.exitPointerLock?.();
@@ -777,7 +795,7 @@ function showMenu() {
 }
 function hideMenu() { menu = null; dmenu.hidden = true; $("menu").hidden = true; }
 function openOptions() { dmenu.hidden = true; $("menu").hidden = false; }
-function resume() { hideMenu(); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); }
+function resume() { hideMenu(); slowNotice = false; banner(""); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); }
 function ensureAudio() {
   if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
   audio?.resume?.();
