@@ -65,12 +65,14 @@ button.go:disabled { opacity: .5; cursor: wait; }
 #dmenu[hidden] { display: none; }
 #banner { position: fixed; left: 0; right: 0; top: 38%; text-align: center; font-size: 20px; color: #f0c060; text-shadow: 2px 2px 0 #000, 0 0 8px #000; pointer-events: none; }
 #banner small { display: block; font-size: 14px; color: var(--ink); margin-top: 6px; }
+#pos { position: fixed; left: 50%; transform: translateX(-50%); top: max(24px, calc(env(safe-area-inset-top) + 18px)); font-size: 12px; color: #f0c060; text-shadow: 1px 1px 0 #000; pointer-events: none; white-space: nowrap; }
 #fps { position: fixed; left: 50%; transform: translateX(-50%); top: max(6px, env(safe-area-inset-top)); font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; white-space: nowrap; }
 </style>
 </head>
 <body>
 <div id="stage"><canvas id="screen" width="640" height="400"></canvas></div>
 <div id="fps"></div>
+<div id="pos" hidden></div>
 <div id="banner" hidden></div>
 <div id="touch" hidden>
   <div id="stick"><div id="nub"></div></div>
@@ -129,8 +131,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261029044500";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261029044500";
+import { Music, musicLumpFor } from "./music.js?v=20261029122954";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261029122954";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -279,7 +281,7 @@ const zoomMap = (f) => { amzoom = Math.max(0.15, Math.min(8, amzoom * f)); };
 addEventListener("wheel", (e) => { if (running && automap) zoomMap(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: true });
 const isTouch = matchMedia("(pointer: coarse)").matches;
 // DOOM's cheat codes, typed while playing
-let typed = "";
+let typed = "", posUntil = 0; // idmypos shows the player's position until posUntil
 function cheatKey(e) {
   if (!running || !engine || e.key.length !== 1) return;
   typed = (typed + e.key.toLowerCase()).slice(-12);
@@ -289,6 +291,10 @@ function cheatKey(e) {
     if (engine.maps().includes(m)) { typed = ""; start(m, freshPlayer()); }
     return;
   }
+  const behold = /idbehold([vsiral])$/.exec(typed);
+  if (behold) { typed = ""; engine.cheat("idbehold" + behold[1]); return; }
+  if (typed.endsWith("idbehold")) { engine.cheat("idbehold"); return; } // keep it: a letter may follow
+  if (typed.endsWith("idmypos")) { typed = ""; posUntil = performance.now() + 5000; return; }
   for (const c of ["iddqd", "idkfa", "idfa", "idclip", "idspispopd", "iddt"]) {
     if (typed.endsWith(c) && engine.cheat(c)) { typed = ""; return; }
   }
@@ -298,7 +304,8 @@ addEventListener("keydown", (e) => {
   cheatKey(e);
   if (e.code === "Escape") { if (running) showMenu(); return; }
   if (/^Digit[1-9]$/.test(e.code)) weaponKey = +e.code.slice(5);
-  if (running && (e.code === "Tab" || e.code === "KeyM")) { toggleMap(); e.preventDefault(); return; }
+  // the M of idmypos is part of the cheat, not the map key
+  if (running && (e.code === "Tab" || (e.code === "KeyM" && !typed.endsWith("idm")))) { toggleMap(); e.preventDefault(); return; }
   if (running && automap && (e.code === "Equal" || e.code === "NumpadAdd")) zoomMap(1.25);
   if (running && automap && (e.code === "Minus" || e.code === "NumpadSubtract")) zoomMap(0.8);
   keys.add(e.code);
@@ -558,6 +565,12 @@ setInterval(() => {
 function onWorld(buf) {
   const wf = new Float32Array(buf), wi = new Int32Array(buf), wu = new Uint32Array(buf);
   const view = { x: wf[W.viewx], y: wf[W.viewy], angle: wf[W.viewangle] };
+  const showPos = performance.now() < posUntil;
+  $("pos").hidden = !showPos;
+  if (showPos) {
+    const deg = Math.round((((view.angle * 180) / Math.PI) % 360 + 360) % 360);
+    $("pos").textContent = `x ${Math.round(view.x)}  y ${Math.round(view.y)}  angle ${deg}°`;
+  }
   for (const ev of engine.soundEvents(buf)) playSound(ev, view);
   const exit = wu[W.exit];
   if (wu[W.dead] && !exit) banner(`YOU DIED<small>${isTouch ? "tap FIRE or USE" : "press fire or use"} to restart the level</small>`);

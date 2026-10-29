@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029044500";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS, levelHeader, LEVEL_HEADER } from "./shaders.js?v=20261029044500";
-import { STATES, SFX, MF } from "./info.js?v=20261029044500";
-import { MSG } from "./specials.js?v=20261029044500";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029122954";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS, levelHeader, LEVEL_HEADER } from "./shaders.js?v=20261029122954";
+import { STATES, SFX, MF } from "./info.js?v=20261029122954";
+import { MSG } from "./specials.js?v=20261029122954";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -16,7 +16,7 @@ export const W = { // World word offsets (see struct World)
   nummobjs: 47, totalkills: 48, totalitems: 49, totalsecrets: 50, onground: 51, fixedcolormap: 52, skill: 53,
   snd: 64, buttons: 192, pspstate: 256, psptics: 258, pspsx: 260, pspsy: 261, refire: 262, attacker: 263,
   face: 264, facecount: 265, facepri: 266, oldhealth: 267, lastattackdown: 268, oldweapons: 269,
-  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311, initmobjs: 312, playerslot: 313, spawncursor: 314, mobjtop: 315,
+  pvx: 270, pvy: 271, pvz: 272, pva: 273, rx: 274, ry: 275, rz: 276, ra: 277, cheats: 310, mrng: 311, initmobjs: 312, playerslot: 313, spawncursor: 314, mobjtop: 315, behold: 317,
 };
 
 // P_SetThingPosition for every thing in spawn order: each blockmap cell lists its things newest
@@ -371,7 +371,7 @@ export class Engine {
   }
   say(m) { this.device.queue.writeBuffer(this.worldBuf, W.message * 4, new Int32Array([MSG[m] ?? 0, 140])); }
 
-  // DOOM's cheat codes that change the player: iddqd, idkfa, idfa, idclip/idspispopd, iddt.
+  // DOOM's cheat codes that change the player: iddqd, idkfa, idfa, idclip/idspispopd, iddt, idbehold.
   // Returns false for anything else (idclev is the page's, since it loads a level).
   cheat(code) {
     const q = this.device.queue, wb = this.worldBuf;
@@ -385,6 +385,9 @@ export class Engine {
           q.writeBuffer(this.mobjBuf, 15 * 4, new Int32Array([100]));
         }
         return true;
+      case "idbehold": say("INVULN, STR, INVISO, RAD, ALLMAP, OR LITE-AMP"); return true;
+      case "idbeholdv": case "idbeholds": case "idbeholdi": case "idbeholdr": case "idbeholda": case "idbeholdl":
+        put("behold", new Uint32Array([1 + "vsiral".indexOf(code[8])])); say("POWER-UP TOGGLED"); return true;
       case "idclip": case "idspispopd": toggle(1, "NO CLIPPING MODE ON", "NO CLIPPING MODE OFF"); return true;
       case "iddt": this.cheats = ((this.cheats || 0) & ~4) | (this.cheats & 4 ? 0 : 4); put("cheats", new Uint32Array([this.cheats])); return true;
       case "idkfa": case "idfa": {

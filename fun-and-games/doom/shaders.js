@@ -13,8 +13,8 @@
 // one thread for the player, the specials and the queues), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029044500";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029044500";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029122954";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029122954";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -169,7 +169,8 @@ struct World {
   spawncursor: u32,                         // where spawnMobj looks first, so new things append
   mobjtop: u32,                             // one past the highest thing slot ever used: loops stop there
   cmdmove: u32, // this tic's command moves the player (P_XYMovement's stop test reads it)
-  pad2: array<u32, 3>,
+  behold: u32,                              // idbehold: 1 + the power to toggle, 0 none
+  pad2: array<u32, 2>,
 }
 struct Frame {
   width: u32, height: u32, viewh: u32, frame: u32,
@@ -3539,6 +3540,12 @@ fn playerThink() {
   // dead or alive, one call site (the shader compiler inlines every call); a dead player stops here
   runPsprites();
   if (wasDead) { return; }
+  if (P.behold != 0u) {
+    // idbehold: give the power, or take it away (strength and the map at once, the rest at the next count)
+    let pw = i32(P.behold) - 1;
+    P.behold = 0u;
+    if (P.powers[pw] == 0) { _ = givePower(pw); } else if (pw == 1 || pw == 4) { P.powers[pw] = 0; } else { P.powers[pw] = 1; }
+  }
   for (var i = 0; i < 6; i++) {
     if (P.powers[i] > 0 && i != 1 && i != 4) {
       P.powers[i] -= 1;
