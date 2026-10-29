@@ -21,9 +21,9 @@ export const SND = ["letsgo", "assign", "ohno", "pop", "splat", "yippee", "drown
 // world words (WD in WGSL)
 export const WD = { TICK: 0, REL: 1, SAVED: 3, DEAD: 4, RR: 5, SPAWNT: 6, NUKED: 7, NUKEC: 8, TIME: 9, HOVKEY: 10,
   HOV: 11, CLICK: 12, NREM: 14, NADD: 15, SKILL: 16, SND: 24, QC: 32, DONE: 51, HOVSTATE: 52, HOVFLAGS: 53, WORDS: 64 };
-// rom: level header at 0, sprite meta at SMETA, sprite frames at SPR
+// rom: level header at 0, terrain palette at PAL, sprite meta at SMETA, sprite frames at SPR
 export const ROM = { W: 0, H: 1, COUNT: 2, NHATCH: 3, NEXIT: 4, NWATER: 5, RRMIN: 6, BURST: 7, DIGITS: 8,
-  HATCH: 16, EXIT: 32, WATER: 48, THEME: 80, SMETA: 128, SPR: 256 };
+  HATCH: 16, EXIT: 32, WATER: 48, THEME: 80, PAL: 128, SMETA: 384, SPR: 512 };
 export const ARGS_WORDS = (NS + 2) * 3;
 const EOFF = NS * MAXL, AOFF = EOFF + MAXE * 4, FOFF = AOFF + MAXE * 4;
 export const AUX_FIELD = FOFF;
@@ -57,6 +57,7 @@ const M_AIR = 0u;
 const M_DIRT = 1u;
 const M_STEEL = 2u;
 const M_BRICK = 3u;
+const M_DECOR = 4u;   // scenery: drawn, but lemmings pass through it
 
 struct Lem { x: i32, y: i32, dir: i32, state: u32, frame: u32, fall: i32, flags: u32, timer: i32 }
 struct Inp { curX: i32, curY: i32, click: u32, skill: u32, rr: u32, nuke: u32, camX: i32, vw: u32, vh: u32, mmh: u32, time: u32, pad: u32 }
@@ -82,7 +83,8 @@ fn terr(x: i32, y: i32) -> u32 {
   if (y < 0 || y >= LH()) { return M_AIR; }
   return ter[u32(y * LW() + x)] & 255u;
 }
-fn solid(x: i32, y: i32) -> bool { return terr(x, y) != M_AIR; }
+fn isSolid(m: u32) -> bool { return m != M_AIR && m != M_DECOR; }
+fn solid(x: i32, y: i32) -> bool { return isSolid(terr(x, y)); }
 `;
 
 const SIM = /* wgsl */ `
@@ -405,7 +407,7 @@ fn doBash() {
     for (var dx = 1; dx <= 12; dx++) {
       for (var dy = 0; dy <= 9; dy++) {
         let m = terr(L.x + L.dir * dx, L.y - dy);
-        if (m != M_AIR) { any = true; if (m == M_STEEL && dx <= 8) { steel = true; } }
+        if (isSolid(m)) { any = true; if (m == M_STEEL && dx <= 8) { steel = true; } }
       }
     }
     if (steel) { L.dir = -L.dir; toState(S_WALK); sound(7u); return; }
@@ -530,7 +532,7 @@ fn applyEdit(o: u32, li: u32) {
     if (px < 0 || px >= LW() || py < 0 || py >= LH()) { continue; }
     let p = u32(py * LW() + px);
     let m = ter[p] & 255u;
-    if (kind == K_BRICK) { if (m == M_AIR) { ter[p] = M_BRICK; } }
+    if (kind == K_BRICK) { if (!isSolid(m)) { ter[p] = M_BRICK; } }
     else if (m != M_STEEL) { ter[p] = M_AIR; }
   }
 }
@@ -618,7 +620,18 @@ fn drawFrame(fr: u32, x: i32, y: i32, dir: i32, i: u32) {
 
 fn theme(k: u32) -> vec3f { return rgb(rom[R_THEME + k]); }
 
-fn terrainColor(x: i32, y: i32, m: u32) -> vec3f {
+fn open(x: i32, y: i32) -> bool { return !isSolid(terr(x, y)); }
+
+fn terrainColor(x: i32, y: i32, m: u32, ci: u32) -> vec3f {
+  if (ci != 0u) {
+    // a drawn piece: its own shaded colour, a little grain, and lit and shadowed edges
+    var c = rgb(rom[R_PAL + ci]) * (0.94 + 0.12 * hf(x, y));
+    if (m != M_DECOR) {
+      if (open(x, y - 1)) { c = c * 1.18 + vec3f(0.03); }
+      else if (open(x, y + 1)) { c *= 0.7; }
+    }
+    return c;
+  }
   if (m == M_STEEL) {
     let tx = x & 7; let ty = y & 7;
     var v = 0.52 + 0.06 * hf(x >> 3, y >> 3);
@@ -640,11 +653,11 @@ fn terrainColor(x: i32, y: i32, m: u32) -> vec3f {
   let grass = 1 + i32(hash(x, 99) % 3u);
   var lit = false;
   for (var k = 1; k <= 3; k++) {
-    if (terr(x, y - k) == M_AIR) { if (k <= grass) { c = theme(2u) * (1.15 - 0.15 * f32(k)); } else { c = mix(c, theme(2u), 0.35); } lit = true; break; }
+    if (open(x, y - k)) { if (k <= grass) { c = theme(2u) * (1.15 - 0.15 * f32(k)); } else { c = mix(c, theme(2u), 0.35); } lit = true; break; }
   }
   if (!lit) {
-    if (terr(x, y + 1) == M_AIR) { c *= 0.6; }
-    else if (terr(x - 1, y) == M_AIR || terr(x + 1, y) == M_AIR) { c *= 0.8; }
+    if (open(x, y + 1)) { c *= 0.6; }
+    else if (open(x - 1, y) || open(x + 1, y)) { c *= 0.8; }
   }
   return c;
 }
@@ -681,13 +694,44 @@ fn exitColor(x: i32, y: i32, ex: i32, ey: i32, c: vec3f) -> vec3f {
   return mix(vec3f(0.12, 0.04, 0.02), vec3f(0.95, 0.55, 0.15), glow * glow * (0.8 + 0.2 * hf(t, x)));
 }
 
+// two silhouette layers behind the terrain, scrolling slower than it; the theme picks their shape
+fn ridge(bx: f32, kind: u32, near: bool) -> f32 {
+  let h = f32(LH());
+  let s = select(1.0, 0.7, near);
+  switch (kind) {
+    case 1u: { // crystal spires
+      let cell = floor(bx / 14.0); let f = fract(bx / 14.0);
+      let tall = 0.25 + 0.75 * hf(i32(cell), select(3, 9, near));
+      return select(h * 0.42, h * 0.6, near) + (1.0 - tall * (1.0 - abs(f - 0.5) * 2.0)) * h * 0.35 * s;
+    }
+    case 2u: { // forest
+      let base = select(h * 0.5, h * 0.66, near) + 10.0 * vnoise(bx / 50.0, select(1.0, 5.0, near));
+      return base - 9.0 * s * pow(abs(sin(bx * 0.21 + 1.7 * vnoise(bx / 9.0, 2.0))), 3.0);
+    }
+    case 3u: { // ruined city: flat-topped towers
+      let cell = floor(bx / select(18.0, 26.0, near));
+      return select(h * 0.4, h * 0.6, near) + h * 0.3 * s * hf(i32(cell), select(11, 17, near));
+    }
+    default: { // mountains
+      return select(h * 0.42, h * 0.62, near) + 22.0 * s * vnoise(bx / 70.0, select(2.0, 7.0, near)) + 7.0 * vnoise(bx / 17.0, select(4.0, 8.0, near));
+    }
+  }
+}
+
 fn sceneColor(x: i32, y: i32) -> vec3f {
   let fy = f32(y) / f32(LH());
   var c = mix(theme(3u), theme(4u), fy);
-  let star = hf(x, y * 3 + 5);
-  if (star > 0.9965) { c += vec3f(0.5 + 0.4 * sin(f32(inp.time) * 0.05 + star * 900.0)) * (1.0 - fy); }
-  let m = terr(x, y);
-  if (m != M_AIR) { c = terrainColor(x, y, m); }
+  let sx = f32(x - inp.camX); let cx = f32(inp.camX);
+  let kind = rom[R_THEME + 8u];
+  if (f32(y) > ridge(sx + cx * 0.6, kind, true)) { c = mix(theme(7u), theme(4u), 0.15 * fy); }
+  else if (f32(y) > ridge(sx + cx * 0.3, kind, false)) { c = mix(theme(6u), theme(4u), 0.2 * fy); }
+  else {
+    let star = hf(x, y * 3 + 5);
+    if (star > 0.9965) { c += vec3f(0.5 + 0.4 * sin(f32(inp.time) * 0.05 + star * 900.0)) * (1.0 - fy); }
+  }
+  let w = ter[u32(y * LW() + x)];
+  let m = w & 255u;
+  if (m != M_AIR) { c = terrainColor(x, y, m, (w >> 8u) & 255u); }
   else {
     for (var k = 0u; k < rom[R_NWATER]; k++) {
       let o = R_WATER + k * 3u;
@@ -708,7 +752,9 @@ fn sceneColor(x: i32, y: i32) -> vec3f {
 }
 
 fn miniColor(x: i32, y: i32) -> vec3f {
-  let m = max(terr(x, y), terr(x, y + 2));
+  var m = terr(x, y);
+  if (!isSolid(m)) { m = terr(x, y + 2); }
+  if (m == M_DECOR) { m = M_AIR; }
   if (m == M_STEEL) { return vec3f(0.6); }
   if (m == M_BRICK) { return vec3f(0.8, 0.7, 0.45); }
   if (m == M_DIRT) { return theme(0u) * 0.9 + vec3f(0.05); }

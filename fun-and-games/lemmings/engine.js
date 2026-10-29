@@ -2,9 +2,9 @@
 // lives in GPU buffers. JS writes the cursor, the click, the chosen skill and the release rate into
 // a uniform buffer and reads back a small world block for the panel and the sounds.
 
-import { makeWGSL, PRESENT_WGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029031630";
-import { buildSprites } from "./sprites.js?v=20261029031630";
-import { buildTerrain, themeWords } from "./levels.js?v=20261029031630";
+import { makeWGSL, PRESENT_WGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029034843";
+import { buildSprites } from "./sprites.js?v=20261029034843";
+import { buildTerrain, themeWords } from "./levels.js?v=20261029034843";
 
 export const MINIMAP_H = 32;
 const TICK_KERNELS = ["begin", "pick", "assign", "fieldStamp", "classify"];
@@ -92,11 +92,13 @@ export class Game {
     hatches.forEach(([x, y], i) => { rom[ROM.HATCH + 2 * i] = x; rom[ROM.HATCH + 2 * i + 1] = y; });
     exits.forEach(([x, y], i) => { rom[ROM.EXIT + 2 * i] = x; rom[ROM.EXIT + 2 * i + 1] = y; });
     water.forEach(([x0, x1, y], i) => { rom.set([x0, x1, y], ROM.WATER + 3 * i); });
+    const terrain = buildTerrain(level);
     rom.set(themeWords(level), ROM.THEME);
+    rom.set(terrain.palette, ROM.PAL);
     rom.set(this.sprites.meta, ROM.SMETA);
     rom.set(this.sprites.words, ROM.SPR);
     this.romBuf = this.buffer(rom, GPUBufferUsage.STORAGE);
-    this.terBuf = this.buffer(buildTerrain(level), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    this.terBuf = this.buffer(terrain.words, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.lemBuf = d.createBuffer({ size: MAXL * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const wd = new Uint32Array(WD.WORDS);
     SKILLS.forEach((s, i) => { wd[WD.SKILL + i] = level.skills[s] || 0; });

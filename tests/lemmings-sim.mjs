@@ -52,9 +52,9 @@ await page.goto(base + "/fun-and-games/lemmings/sprites.js");
 const PLANS = {
   0: [{ skill: "digger", pick: "l => l.state === 1 && l.x > 200 && l.x < 400" }],
   1: [
-    { skill: "builder", pick: "l => l.state === 1 && l.x >= 326 && l.x <= 334 && l.dir > 0" },
-    { skill: "blocker", pick: "l => l.state === 1 && l.x >= 280 && l.x <= 310 && l.dir > 0" },
-    { skill: "bomber", after: "w => w.tick > 900", pick: "l => l.state === 11" },
+    { id: "b", skill: "builder", pick: "l => l.state === 1 && l.x >= 326 && l.x <= 334 && l.dir > 0" },
+    { id: "k", needs: "b", skill: "blocker", pick: "l => l.state === 1 && l.x >= 280 && l.x <= 310 && l.dir > 0" },
+    { needs: "k", skill: "bomber", after: "w => w.tick > 900", pick: "l => l.state === 11" },
   ],
   2: [
     { skill: "basher", pick: "l => l.state === 1 && l.dir > 0 && l.x >= 250 && l.x <= 258" },
@@ -94,6 +94,21 @@ const setup = await page.evaluate(async () => {
   return { ms: Math.round(performance.now() - t0), levels: LEVELS.map((l) => l.name), kernels: Object.keys(window.game.pipe).length };
 });
 console.log(`compiled ${setup.kernels} kernels in ${setup.ms} ms`);
+
+// PREVIEW=1: render each whole level at tick 40 and write level<i>-full.png, without playing
+if (process.env.PREVIEW) {
+  for (const [li] of setup.levels.entries()) {
+    if (only.length && !only.includes(li)) continue;
+    const r = await page.evaluate(async (li) => {
+      const g = window.game; g.loadLevel(window.LEVELS[li]); g.setView(0, g.W);
+      for (let k = 0; k < 5; k++) g.frame(8);
+      return { px: Array.from(await g.readPixels()), vw: g.vw, rows: g.rows };
+    }, li);
+    await mkdir(shotDir, { recursive: true });
+    await writeFile(join(shotDir, `level${li}-full.png`), png(r.vw, r.rows, new Uint8Array(r.px)));
+  }
+  await browser.close(); server.close(); process.exit(0);
+}
 
 let failed = 0;
 for (const [li, name] of setup.levels.entries()) {

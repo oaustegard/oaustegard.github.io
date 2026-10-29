@@ -26,9 +26,17 @@ pixels kills, a builder lays twelve bricks, bashers and miners stop at steel.
 
 ## Levels
 
-Seven levels, each teaching a skill: digging, a bridge held by a blocker, bashing, mining under
-steel, climbing and floating, a level that needs all of these, and Exodus, which releases 10,000
-lemmings from eight hatches.
+Seven levels, each built around a skill: digging through a floating island, a bridge held by a
+blocker under a hanging ceiling, bashing through columns, mining under a steel wall into a crystal
+cave, climbing and floating among giant mushrooms, a level that needs all of these, and Exodus,
+which releases 10,000 lemmings from eight hatches into an autumn forest.
+
+`levels.js` describes each level as a list of shapes and pieces: ground, floating slabs, lumpy
+masses and caves in the theme's shaded earth, then drawn pieces with their own colours (fluted
+columns, arches, crystals, mushrooms, brick walls, boulders, stalactites, trees, chains, vines).
+Each terrain pixel stores a material and a palette colour. Decor is a fifth material that is drawn
+but that lemmings walk through, so scenery never changes a puzzle. Behind the terrain, two
+silhouette layers (mountains, spires, forest or towers, per theme) scroll more slowly than the level.
 
 ## How it is built
 
