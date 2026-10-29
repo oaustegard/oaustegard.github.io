@@ -1,4 +1,4 @@
-// gPu(lemmings) — scales the composited frame onto the canvas.
+// Lemmings — scales the composited frame onto the canvas.
 
 struct Dims { w: u32, h: u32, col: u32, pad: u32 }
 @group(0) @binding(0) var<storage, read> fb: array<u32>;

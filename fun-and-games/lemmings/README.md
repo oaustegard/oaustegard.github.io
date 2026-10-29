@@ -1,4 +1,4 @@
-# gPu(lemmings)
+# Lemmings
 
 A Lemmings-style game written as WebGPU compute shaders. The lemmings, the terrain they carve and the
 picture all live in GPU buffers. JavaScript writes the cursor, the chosen skill and the release rate

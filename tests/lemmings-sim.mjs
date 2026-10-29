@@ -1,4 +1,4 @@
-// Headless checks for gPu(lemmings) under SwiftShader: compiles every kernel, then plays each
+// Headless checks for Lemmings under SwiftShader: compiles every kernel, then plays each
 // level's scripted solution and checks that enough lemmings get home.
 //   node tests/lemmings-sim.mjs [levelIndex ...] [--shots DIR]
 // Needs Playwright's Chromium. Serves the repo itself on a free port.

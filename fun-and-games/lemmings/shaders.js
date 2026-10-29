@@ -1,4 +1,4 @@
-// Constants and WGSL loading for gPu(lemmings). The kernels live in common.wgsl, sim.wgsl,
+// Constants and WGSL loading for Lemmings. The kernels live in common.wgsl, sim.wgsl,
 // render.wgsl and present.wgsl; this file generates the constants they share and joins them. Every lemming state is its own small kernel. Each tick, classify puts every
 // live lemming's index on the queue for its current state, args turns the queue lengths into
 // indirect dispatch sizes, and each state kernel runs only over its own queue. Terrain edits (bash,

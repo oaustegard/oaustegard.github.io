@@ -1,4 +1,4 @@
-// gPu(lemmings) — drawing: lemming sprites into an overlay, then one thread per screen pixel.
+// Lemmings — drawing: lemming sprites into an overlay, then one thread per screen pixel.
 
 fn hash(x: i32, y: i32) -> u32 {
   var h = bitcast<u32>(x) * 374761393u + bitcast<u32>(y) * 668265263u;

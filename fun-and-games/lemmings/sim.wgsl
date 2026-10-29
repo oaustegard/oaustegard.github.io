@@ -1,4 +1,4 @@
-// gPu(lemmings) — the game tick: begin, pick, assign, fieldStamp, classify, the queue sizes,
+// Lemmings — the game tick: begin, pick, assign, fieldStamp, classify, the queue sizes,
 // one kernel per lemming state, and the terrain edits.
 
 fn pushEdit(base: u32, ctr: u32, kind: u32, x: i32, y: i32, dir: i32) {

@@ -1,10 +1,10 @@
-// GPU plumbing for gPu(lemmings): buffers, pipelines and the per-tick encode. The whole game state
+// GPU plumbing for Lemmings: buffers, pipelines and the per-tick encode. The whole game state
 // lives in GPU buffers. JS writes the cursor, the click, the chosen skill and the release rate into
 // a uniform buffer and reads back a small world block for the panel and the sounds.
 
-import { loadWGSL, loadPresentWGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029050339";
-import { buildSprites } from "./sprites.js?v=20261029050339";
-import { buildTerrain, themeWords } from "./levels.js?v=20261029050339";
+import { loadWGSL, loadPresentWGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029120633";
+import { buildSprites } from "./sprites.js?v=20261029120633";
+import { buildTerrain, themeWords } from "./levels.js?v=20261029120633";
 
 export const MINIMAP_H = 32;
 export const VIEW_H = 160;   // a taller level scrolls vertically
