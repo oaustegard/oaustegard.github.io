@@ -45,23 +45,25 @@ level.
   an atomic counter. The column threads then draw masked mid-textures and sprites through a depth
   buffer. A floor or ceiling pixel stores the depth of the wall that ended its span, which
   reproduces Doom's sprite clipping by wall silhouettes.
-- **Game tic.** A tic is a dozen kernels in a row. The things think in parallel, one thread each,
+- **Game tic.** A tic is seventeen kernels in a row. The things think in parallel, one thread each,
   split by what they do, as in Laine et al.'s "Megakernels Considered Harmful": one small shader
   per kind of work instead of one large one, so each compiles quickly and threads that do
   different work don't wait on each other.
   - `ticSave` (one thread per thing and sector) keeps the last tic's positions for smooth motion.
-  - `ticPlayer` does `P_PlayerThink` (input, thrust, the view height, use, and the weapon's state
-    machine and shots) and then moves the player, with `P_SlideMove` and stepping.
+  - `plThink` does `P_PlayerThink` (input, thrust, the view height, use, and the weapon's state
+    machine), `plShoot` fires the shot the weapon asked for, and `plMove` moves the player, with
+    `P_SlideMove` and stepping.
   - `thMove` moves every other thing: momentum, missiles, falling.
   - `thState` counts each thing's state down and sets the next. Cheap actions (sounds, flags) run
     there; a look, a chase or an attack is left for its kernel: `acLook`, `acChase` (`P_Move`,
-    `P_NewChaseDir`) and `acAttack` (hitscans, missiles, melee, explosions), each checking sight
-    by DOOM's walk of the BSP.
+    `P_NewChaseDir`), `acAttack` (hitscans, missiles, melee) and `acExplode` (`A_Explode`), each
+    checking sight by DOOM's walk of the BSP.
   - `ticActivate` runs the line specials that were crossed or used during the tic, and a boss's
     death.
   - `ticWorld` moves doors, lifts, floors and crushers, and runs switch timers and the face.
-  - `drain` (one thread) applies the tic's damage, pickups and spawns, which the parallel kernels
-    queue instead of doing: several threads can hit the same monster in one tic.
+  - `drainDamage`, `drainTouch` and `drainSpawn` (one thread each) apply the tic's damage,
+    pickups and spawns, which the parallel kernels queue instead of doing: several threads can hit
+    the same monster in one tic.
   - `relink` rebuilds the blockmap's per-cell lists of things, which moves no longer edit, and
     `thLights` runs the flickering and glowing sectors.
 
@@ -74,7 +76,10 @@ level.
   decides how long a first load takes: on an RTX 50-series under D3D12, the single thinker kernel
   this replaced once took over four minutes to compile, and an Adreno 7xx phone never finished
   it. Every loop's bound comes from a uniform the compiler can't see (`opaqueLoops` in
-  `shaders.js`), and heavy functions are reached through as few call sites as possible.
+  `shaders.js`), and heavy functions are reached through as few call sites as possible. The level's sizes and the
+  offsets of its parts are read from the head of the map buffer (`loadLevel()`), not written into
+  the source, so every level of a WAD compiles to the same shader: only the first level compiles,
+  and changing level takes milliseconds.
 - **Specials as data.** `specials.js` encodes Doom's 140-odd line specials as one word each:
   trigger, repeatability, action, argument and key. The WGSL dispatches on the action code.
   `info.js` holds Doom's state and thing tables, generated from `info.c`.

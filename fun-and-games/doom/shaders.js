@@ -2,19 +2,19 @@
 // level, so every table is a constant index into one of four arrays.
 //
 //   G  gfx: palette, colormaps, textures, flats, sprites, state and thing tables
-//   M  map: vertexes, lines, sides, segs, subsectors, nodes, blockmap
+//   M  map: a header (sizes, offsets: loadLevel), vertexes, lines, sides, segs, subsectors, nodes, blockmap
 //   S  sectors (read-write: heights, light, movers)
 //   O  mobjs (read-write)
 //   LS line specials and side textures (read-write)
 //   P  world: the player, counters, sound and button queues
 //   FB palette-index framebuffer, depth, visible sprites
 //
-// Kernels: ticPlayer, ticMobjs, ticActivate, ticWorld (one thread each, one
-// game tic between them), project (one thread per mobj),
+// Kernels: the game tic's, listed in TIC_KERNELS (one thread per thing for the thinkers,
+// one thread for the player, the specials and the queues), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029022420";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029022420";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029042442";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029042442";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -24,15 +24,28 @@ export const MAXVIS = 256;
 export const queueBytes = (maxMobjs) => Math.ceil((16 + 256 * 16 + 256 * 48 + 64 * 8 + 4 * maxMobjs) / 16) * 16;
 // The tic's kernels in order, and how many threads each runs: "save" one per thing or sector, "mobj" one
 // per thing slot, "sector" one per sector, 1 a single thread
-export const TIC_KERNELS = [["ticSave", "save"], ["ticPlayer", 1], ["thMove", "mobj"], ["thState", "mobj"],
-  ["acLook", "mobj"], ["acChase", "mobj"], ["acAttack", "mobj"], ["ticActivate", 1], ["ticWorld", 1],
-  ["drain", 1], ["relink", 1], ["thLights", "sector"]];
+export const TIC_KERNELS = [["ticSave", "save"], ["plThink", 1], ["plShoot", 1], ["plMove", 1], ["thMove", "mobj"],
+  ["thState", "mobj"], ["acLook", "mobj"], ["acChase", "mobj"], ["acAttack", "mobj"], ["acExplode", "mobj"], ["ticActivate", 1],
+  ["ticWorld", 1], ["drainDamage", 1], ["drainTouch", 1], ["drainSpawn", 1], ["relink", 1], ["thLights", "sector"]];
 
 const constBlock = (prefix, obj, type = "u32") =>
   Object.entries(obj).map(([k, v]) => `const ${prefix}${k.replace(/[^A-Za-z0-9_]/g, "_")}: ${type} = ${v}${type === "u32" ? "u" : ""};`).join("\n");
 
-export function makeWGSL({ gfx, map, maxMobjs }) {
-  const G = gfx.layout, M = map.layout, c = map.counts;
+// The head of the map buffer, which loadLevel() reads: offsets into M (counted after the head), sizes,
+// the blockmap, the thing slots and the game. The shader itself is the same for every level of a WAD.
+export const LEVEL_HEADER = 32;
+export function levelHeader(map, maxMobjs) {
+  const M = map.layout, c = map.counts, h = new Uint32Array(LEVEL_HEADER), f = new Float32Array(h.buffer);
+  ["VERT", "LINE", "SIDE", "SEG", "SSEC", "NODE", "REJECT", "THINGS", "BMCELL", "BMLIST", "SECLINE", "SECLIST"]
+    .forEach((k, i) => { h[i] = M[k] + LEVEL_HEADER; });
+  h[12] = c.lines; h[13] = c.sides; h[14] = c.sectors; h[15] = c.nodes;
+  f[16] = map.bmap.x; f[17] = map.bmap.y; h[18] = map.bmap.w; h[19] = map.bmap.h;
+  h[20] = maxMobjs; h[21] = map.episode; h[22] = map.mapnum; h[23] = map.commercial ? 1 : 0; h[24] = map.shareware ? 1 : 0;
+  return h;
+}
+
+export function makeWGSL({ gfx }) {
+  const G = gfx.layout;
   const spr = Object.fromEntries(SPRNAMES.map((n, i) => [n, i]));
   const sfx = Object.fromEntries(SFX.map((n, i) => [n, i]));
   const hud = (n) => gfx.hudIndex.get(n) ?? 0xffff;
@@ -45,11 +58,28 @@ const G_SPRDIR = ${G.SPRDIR}u; const G_HUDDIR = ${G.HUDDIR}u; const G_SPRFRAMES 
 const G_RNDTABLE = ${G.RNDTABLE}u; const G_FINESINE = ${G.FINESINE}u; const G_TANTOANGLE = ${G.TANTOANGLE}u; const G_STATES = ${G.STATES}u; const G_MOBJINFO = ${G.MOBJINFO}u; const G_TEXELS = ${G.TEXELS}u; const G_LSPEC = ${G.LSPEC}u;
 const G_ANIMTEX = ${G.ANIMTEX}u; const G_ANIMFLAT = ${G.ANIMFLAT}u; const G_SWITCH = ${G.SWITCH}u;
 const G_MSGDIR = ${G.MSGDIR}u; const G_MSGCHARS = ${G.MSGCHARS}u;
-const M_VERT = ${M.VERT}u; const M_LINE = ${M.LINE}u; const M_SIDE = ${M.SIDE}u; const M_SEG = ${M.SEG}u; const M_SSEC = ${M.SSEC}u;
-const M_NODE = ${M.NODE}u; const M_REJECT = ${M.REJECT}u; const M_THINGS = ${M.THINGS}u; const M_BMCELL = ${M.BMCELL}u; const M_BMLIST = ${M.BMLIST}u; const M_SECLINE = ${M.SECLINE}u; const M_SECLIST = ${M.SECLIST}u;
-const NUMLINES = ${c.lines}u; const NUMSIDES = ${c.sides}u; const NUMSECTORS = ${c.sectors}u; const NUMNODES = ${c.nodes}u;
-const BM_X = ${map.bmap.x}.0; const BM_Y = ${map.bmap.y}.0; const BM_W = ${map.bmap.w}; const BM_H = ${map.bmap.h};
-const MAXMOBJS = ${maxMobjs}u; const MAXVIS = ${MAXVIS}u;
+// The level: its sizes and the offsets of its parts in M, read from M's head by loadLevel() at the
+// start of every kernel, so all the levels of a WAD compile to one shader and share its pipelines
+var<private> M_VERT: u32; var<private> M_LINE: u32; var<private> M_SIDE: u32; var<private> M_SEG: u32;
+var<private> M_SSEC: u32; var<private> M_NODE: u32; var<private> M_REJECT: u32; var<private> M_THINGS: u32;
+var<private> M_BMCELL: u32; var<private> M_BMLIST: u32; var<private> M_SECLINE: u32; var<private> M_SECLIST: u32;
+var<private> NUMLINES: u32; var<private> NUMSIDES: u32; var<private> NUMSECTORS: u32; var<private> NUMNODES: u32;
+var<private> BM_X: f32; var<private> BM_Y: f32; var<private> BM_W: i32; var<private> BM_H: i32;
+var<private> MAXMOBJS: u32; var<private> GAMEEPISODE: i32; var<private> GAMEMAP: i32;
+var<private> COMMERCIAL: bool; var<private> SHAREWARE: bool;
+var<private> BLOCKHEADS: u32; var<private> BMCELLS: u32;
+fn loadLevel() {
+  M_VERT = M[0]; M_LINE = M[1]; M_SIDE = M[2]; M_SEG = M[3]; M_SSEC = M[4]; M_NODE = M[5];
+  M_REJECT = M[6]; M_THINGS = M[7]; M_BMCELL = M[8]; M_BMLIST = M[9]; M_SECLINE = M[10]; M_SECLIST = M[11];
+  NUMLINES = M[12]; NUMSIDES = M[13]; NUMSECTORS = M[14]; NUMNODES = M[15];
+  BM_X = bitcast<f32>(M[16]); BM_Y = bitcast<f32>(M[17]); BM_W = i32(M[18]); BM_H = i32(M[19]);
+  MAXMOBJS = M[20]; GAMEEPISODE = i32(M[21]); GAMEMAP = i32(M[22]);
+  COMMERCIAL = M[23] != 0u; SHAREWARE = M[24] != 0u;
+  // the blockmap's thing-list heads live in LS after the line specials and the side textures
+  BLOCKHEADS = NUMLINES + 3u * NUMSIDES;
+  BMCELLS = u32(BM_W * BM_H);
+}
+const MAXVIS = ${MAXVIS}u;
 const SKYFLAT = ${gfx.skyFlat}u; const SKYTEX = ${gfx.texIndex.get("SKY1") ?? 0}u;
 const NOTEX = 0xffffu;
 // The screen size comes from the frame uniform (U.width, U.height, U.viewh), so turning the
@@ -72,7 +102,6 @@ const MI_SPAWNSTATE = 1u; const MI_SPAWNHEALTH = 2u; const MI_SEESTATE = 3u; con
 const MI_PAINSTATE = 7u; const MI_PAINCHANCE = 8u; const MI_PAINSOUND = 9u; const MI_MELEESTATE = 10u; const MI_MISSILESTATE = 11u;
 const MI_DEATHSTATE = 12u; const MI_XDEATHSTATE = 13u; const MI_DEATHSOUND = 14u; const MI_SPEED = 15u; const MI_RADIUS = 16u;
 const MI_HEIGHT = 17u; const MI_MASS = 18u; const MI_DAMAGE = 19u; const MI_ACTIVESOUND = 20u;
-const GAMEEPISODE = ${map.episode}; const GAMEMAP = ${map.mapnum}; const COMMERCIAL = ${map.commercial}; const SHAREWARE = ${map.shareware};
 ${constBlock("AC_", AC)}
 ${constBlock("TR_", TR)}
 ${constBlock("DOOR_", DOOR, "i32")}
@@ -120,7 +149,9 @@ struct World {
   killcount: i32, itemcount: i32, secretcount: i32, message: i32,
   messagetics: i32, viscount: atomic<u32>, sndcount: atomic<u32>, nummobjs: u32,
   totalkills: i32, totalitems: i32, totalsecrets: i32, onground: u32,
-  fixedcolormap: i32, skill: i32, nact: atomic<u32>, pad1: array<u32, 9>,
+  fixedcolormap: i32, skill: i32, nact: atomic<u32>,
+  shotkind: u32, shotcount: i32, shotaccurate: u32, shotmissile: u32, // the shot a weapon asked for: plShoot fires it
+  pad1: array<u32, 5>,
   snd: array<vec4<f32>, 32>,
   buttons: array<vec4<i32>, 16>,
   pspstate: array<u32, 2>,
@@ -166,7 +197,7 @@ struct Queues {
   dmg: array<vec4i, 256>,          // target, inflictor, source, damage
   spawn: array<SpawnReq, 256>,
   touch: array<vec2u, 64>,         // item, toucher
-  act: array<u32, MAXMOBJS>,
+  act: array<u32>,                 // one per thing slot
 }
 @group(0) @binding(8) var<storage, read_write> Q: Queues;
 
@@ -326,6 +357,7 @@ fn drawPlane(x: u32, y0: i32, y1: i32, h: f32, pic: u32, light: i32, depth: f32,
 
 @compute @workgroup_size(64)
 fn render(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let x = gid.x;
   if (x >= U.width) { return; }
   let VH = i32(U.viewh);
@@ -507,6 +539,7 @@ fn render(@builtin(global_invocation_id) gid: vec3u) {
 
 @compute @workgroup_size(64)
 fn project(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let i = gid.x;
   if (i == 0u || i >= MAXMOBJS) { return; }
   var m = O[i];
@@ -592,6 +625,7 @@ fn hudNum(n: i32, digits: i32, x: f32, y: f32, vx: f32, vy: f32, big: bool) -> u
 
 @compute @workgroup_size(8, 8)
 fn hud(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let x = gid.x; let y = gid.y;
   if (x >= U.width || y >= U.height) { return; }
   // status bar coordinates: the original 320 columns, centred
@@ -1053,9 +1087,10 @@ fn xyMovement(mi: u32, isPlayer: bool, hasCmd: bool) {
         let lead = pos + vec2i(select(-r, r, mom.x > 0), select(-r, r, mom.y > 0));
         let trail = pos - vec2i(select(-r, r, mom.x > 0), select(-r, r, mom.y > 0));
         bestslidefrac = 65537; bestslideline = -1;
-        slideTrace(lead, mom);
-        slideTrace(vec2i(trail.x, lead.y), mom);
-        slideTrace(vec2i(lead.x, trail.y), mom);
+        // from the leading corner, then the two trailing ones, through one call site
+        for (var c = 0u; c < 3u; c++) {
+          slideTrace(select(select(lead, vec2i(trail.x, lead.y), c == 1u), vec2i(lead.x, trail.y), c == 2u), mom);
+        }
         if (bestslideline < 0) { st = 5u; }
         else {
           bestslidefrac -= 0x800; // fudge a bit to make sure it doesn't hit
@@ -1104,6 +1139,46 @@ fn xyMovement(mi: u32, isPlayer: bool, hasCmd: bool) {
   let m2 = vec2f(O[mi].momx, O[mi].momy);
   // the player keeps sliding while a move is held
   if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED && !(isPlayer && hasCmd)) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
+  else { O[mi].momx = friction(m2.x); O[mi].momy = friction(m2.y); }
+}
+
+// P_XYMovement for everything but the player, which alone slides along walls: a blocked step ends the move
+fn thingXY(mi: u32) {
+  var mom = vec2f(O[mi].momx, O[mi].momy);
+  if (mom.x == 0.0 && mom.y == 0.0) {
+    if ((O[mi].flags & MF_SKULLFLY) != 0u) {
+      O[mi].flags &= ~MF_SKULLFLY; O[mi].momz = 0.0;
+      O[mi].req = u32(info(O[mi].mtype, MI_SPAWNSTATE));
+    }
+    return;
+  }
+  mom = clamp(mom, vec2f(-MAXMOVE), vec2f(MAXMOVE));
+  O[mi].momx = mom.x; O[mi].momy = mom.y;
+  var xmove = fixedOf(mom.x); var ymove = fixedOf(mom.y);
+  for (var guard = 0; guard < 8; guard++) {
+    // as for the player: only a positive move is halved
+    var step = vec2i(xmove, ymove);
+    if (xmove > HALFMOVE || ymove > HALFMOVE) { step = vec2i(xmove / 2, ymove / 2); xmove >>= 1u; ymove >>= 1u; }
+    else { xmove = 0; ymove = 0; }
+    if (!tryMove(mi, ipos(mi) + step)) {
+      if ((O[mi].flags & MF_MISSILE) != 0u) {
+        // hitting a sky wall makes the missile vanish instead of exploding
+        if (tmceilline >= 0) {
+          let bk = lineBack(u32(tmceilline));
+          if (bk >= 0 && S[bk].ceilpic == SKYFLAT) { removeMobj(mi); return; }
+        }
+        explodeMissile(mi);
+      } else {
+        O[mi].momx = 0.0; O[mi].momy = 0.0;
+      }
+      break;
+    }
+    if (xmove == 0 && ymove == 0) { break; }
+  }
+  if ((O[mi].flags & (MF_MISSILE | MF_SKULLFLY)) != 0u) { return; }
+  if (O[mi].z > O[mi].floorz || corpseSlides(mi)) { return; }
+  let m2 = vec2f(O[mi].momx, O[mi].momy);
+  if (abs(m2.x) < STOPSPEED && abs(m2.y) < STOPSPEED) { O[mi].momx = 0.0; O[mi].momy = 0.0; }
   else { O[mi].momx = friction(m2.x); O[mi].momy = friction(m2.y); }
 }
 
@@ -1707,8 +1782,8 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
 }
 
 // Run the action of a special. Returns true when something happened.
-fn runAction(l: u32, mi: u32, side: u32, spec: u32) -> bool {
-  actTag = lineTag(l);
+fn runAction(l: u32, mi: u32, side: u32, spec: u32, tag: i32) -> bool {
+  actTag = tag;
   let ac = (spec >> 8u) & 0xffu;
   let arg = i32((spec >> 16u) & 0xfffu);
   let key = spec >> 28u;
@@ -1745,6 +1820,47 @@ fn runAction(l: u32, mi: u32, side: u32, spec: u32) -> bool {
   return did;
 }
 
+// P_CrossSpecialLine (kind 0), P_UseSpecialLine (1), P_ShootSpecialLine (2) and A_BossDeath's floor
+// or door (3) as one: the checks differ by kind, then one runAction call site (every call is inlined),
+// then what each does with the result
+fn activateLine(l0: u32, side: u32, kind: u32, mi: u32) {
+  var l = l0; var spec = 0u; var tag = 0;
+  if (kind == 3u) {
+    let b = bossSpec(mi);
+    if (b.x == 0u) { return; }
+    l = 0u; spec = b.x; tag = i32(b.y);
+  } else {
+    if (l >= NUMLINES) { return; }
+    let special = lineSpecial(l);
+    if (special == 0u) { return; }
+    spec = G[G_LSPEC + min(special, 255u)];
+    tag = lineTag(l);
+    let tr = spec & 7u;
+    if (kind == 0u) {
+      if (tr != TR_W) { return; }
+      let mon = (spec >> 4u) & 3u;
+      if (mi != 0u) { if ((O[mi].flags & MF_MISSILE) != 0u || mon == 0u) { return; } }
+      else if (mon == 2u) { return; }
+    } else if (kind == 1u) {
+      if (side != 0u && special != 124u) { return; }
+      if (mi != 0u && ((lineFlags(l) & ML_SECRET) != 0u || ((spec >> 4u) & 1u) == 0u)) { return; }
+      if (tr != TR_D && tr != TR_S) { return; }
+    } else {
+      if (tr != TR_G) { return; }
+      if (mi != 0u && ((spec >> 4u) & 1u) == 0u) { return; }
+    }
+  }
+  let did = runAction(l, mi, select(side, 0u, kind == 2u), spec, tag);
+  if (kind == 3u) { return; }
+  let tr = spec & 7u;
+  let rep = ((spec >> 3u) & 1u) != 0u;
+  let ac = (spec >> 8u) & 0xffu;
+  if (kind == 0u) { if (!rep && (did || ac != AC_TELEPORT)) { clearSpecial(l); } return; }
+  // a switch (used, or shot) changes its texture when it did something
+  let sw = (kind == 1u && tr == TR_S && (did || ac == AC_EXIT || ac == AC_SECRETEXIT || ac == AC_LIGHT)) || (kind == 2u && did);
+  if (sw) { changeSwitchTexture(l, rep); }
+}
+
 fn changeSwitchTexture(l: u32, useAgain: bool) {
   if (!useAgain) { clearSpecial(l); }
   let sd = lineSide(l, 0u);
@@ -1768,49 +1884,6 @@ fn changeSwitchTexture(l: u32, useAgain: bool) {
       return;
     }
   }
-}
-
-fn useSpecialLine(l: u32, side: u32, mi: u32) -> bool {
-  let special = lineSpecial(l);
-  let spec = G[G_LSPEC + min(special, 255u)];
-  let tr = spec & 7u;
-  if (side != 0u && special != 124u) { return false; }
-  if (mi != 0u) {
-    if ((lineFlags(l) & ML_SECRET) != 0u) { return false; }
-    if (((spec >> 4u) & 1u) == 0u) { return false; }
-  }
-  if (tr != TR_D && tr != TR_S) { return false; }
-  let did = runAction(l, mi, side, spec); // one call site for both kinds: every call is inlined
-  if (tr == TR_D) { return did; }
-  let rep = ((spec >> 3u) & 1u) != 0u;
-  let ac = (spec >> 8u) & 0xffu;
-  if (did || ac == AC_EXIT || ac == AC_SECRETEXIT || ac == AC_LIGHT) {
-    changeSwitchTexture(l, rep);
-  }
-  return true;
-}
-
-fn crossSpecialLine(l: u32, side: u32, mi: u32) {
-  let special = lineSpecial(l);
-  let spec = G[G_LSPEC + min(special, 255u)];
-  if ((spec & 7u) != TR_W) { return; }
-  let mon = (spec >> 4u) & 3u;
-  if (mi != 0u) {
-    if ((O[mi].flags & MF_MISSILE) != 0u) { return; }
-    if (mon == 0u) { return; }
-  } else if (mon == 2u) { return; }
-  let did = runAction(l, mi, side, spec);
-  let rep = ((spec >> 3u) & 1u) != 0u;
-  let ac = (spec >> 8u) & 0xffu;
-  if (!rep && (did || ac != AC_TELEPORT)) { clearSpecial(l); }
-}
-
-fn shootSpecialLine(l: u32, mi: u32) {
-  let special = lineSpecial(l);
-  let spec = G[G_LSPEC + min(special, 255u)];
-  if ((spec & 7u) != TR_G) { return; }
-  if (mi != 0u && ((spec >> 4u) & 1u) == 0u) { return; }
-  if (runAction(l, mi, 0u, spec)) { changeSwitchTexture(l, ((spec >> 3u) & 1u) != 0u); }
 }
 
 // P_UseLines: walk the lines crossed by the use trace, nearest first.
@@ -2045,8 +2118,6 @@ fn ipos(i: u32) -> vec2i { return vec2i(O[i].x, O[i].y); }
 // cells around a move. Things move in parallel, so the lists aren't edited as they move: the relink
 // kernel rebuilds them once a tic, and a walk skips a thing removed since.
 // The heads live in LS after the side textures, as thing index + 1 (0 is empty).
-const BLOCKHEADS = NUMLINES + 3u * NUMSIDES;
-const BMCELLS = u32(BM_W * BM_H);
 fn blockCell(p: vec2i) -> i32 {
   let bx = (p.x - (i32(BM_X) << 16u)) >> 23u; let by = (p.y - (i32(BM_Y) << 16u)) >> 23u;
   if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { return -1; }
@@ -2370,7 +2441,6 @@ var<private> linetarget: i32;
 var<private> icFrac: array<i32, 128>;
 var<private> icId: array<u32, 128>;
 var<private> icN: u32;
-var<private> icSeen: array<u32, (NUMLINES + 31u) / 32u>; // validcount: each line is tested once a trace
 var<private> trP: vec2i;
 var<private> trD: vec2i;
 // the crossing test (P_PointOnDivlineSide for a long trace, P_PointOnLineSide for a short one) and
@@ -2401,6 +2471,11 @@ fn addIntercept(frac: i32, id: u32) {
   if (frac < 0 || icN >= 128u) { return; }
   icFrac[icN] = frac; icId[icN] = id; icN += 1u;
 }
+// a line already in this trace's intercepts (a line that missed the trace is simply tested again)
+fn lineQueued(l: u32) -> bool {
+  for (var k = 0u; k < icN; k++) { if (icId[k] == l) { return true; } }
+  return false;
+}
 fn blockIntercepts(bx: i32, by: i32) {
   if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { return; }
   let cell = M_BMCELL + 2u * u32(by * BM_W + bx);
@@ -2409,9 +2484,7 @@ fn blockIntercepts(bx: i32, by: i32) {
   for (var k = 0u; k <= n; k++) {
     var l = 0u;
     if (k > 0u) { l = M[M_BMLIST + start + k - 1u]; }
-    let bit = 1u << (l & 31u);
-    if ((icSeen[l >> 5u] & bit) != 0u) { continue; }
-    icSeen[l >> 5u] |= bit;
+    if (lineQueued(l)) { continue; } // validcount: each line is tested once a trace
     addIntercept(lineIntercept(l, trP, trD), l);
   }
   var cur = LS[BLOCKHEADS + u32(by * BM_W + bx)];
@@ -2425,7 +2498,6 @@ fn blockIntercepts(bx: i32, by: i32) {
 // P_PathTraverse's block walk, intercepts only
 fn pathTraverse(p1: vec2i, p2: vec2i) {
   icN = 0u;
-  for (var k = 0u; k < (NUMLINES + 31u) / 32u; k++) { icSeen[k] = 0u; }
   let bmo = vec2i(i32(BM_X) << 16u, i32(BM_Y) << 16u);
   var x1 = p1.x; var y1 = p1.y;
   // don't side exactly on a line
@@ -2753,7 +2825,9 @@ fn chase(mi: u32) {
   if (chased && act != 0 && P_Random() < 3) { mobjSound(mi, u32(act)); }
 }
 
-fn bossDeath(mi: u32) {
+// A_BossDeath: the special its death sets off, as a runAction word (action 1 door, 2 floor, << 8; its
+// argument << 16) and a tag, or 0 for none. Ending the level is done here.
+fn bossSpec(mi: u32) -> vec2u {
   let ty = O[mi].mtype;
   var ok = false;
   if (COMMERCIAL) { ok = GAMEMAP == 7 && (ty == MT_FATSO || ty == MT_BABY); }
@@ -2766,27 +2840,27 @@ fn bossDeath(mi: u32) {
       default: { ok = GAMEMAP == 8; }
     }
   }
-  if (!ok || P.health <= 0) { return; }
+  if (!ok || P.health <= 0) { return vec2u(0u); }
   for (var j = 1u; j < mobjEnd(); j++) {
-    if (j != mi && O[j].inuse != 0u && O[j].mtype == ty && O[j].health > 0) { return; }
+    if (j != mi && O[j].inuse != 0u && O[j].mtype == ty && O[j].health > 0) { return vec2u(0u); }
   }
-  // the floors that move share one evDoFloor call site (every call is inlined)
-  var floor = -1;
+  let floor = 2u << 8u; let door = 1u << 8u;
   if (COMMERCIAL) {
-    if (ty == MT_FATSO) { actTag = 666; floor = FLOOR_lowerFloorToLowest; }
-    else { actTag = 667; floor = FLOOR_raiseToTexture; }
+    if (ty == MT_FATSO) { return vec2u(floor | (u32(FLOOR_lowerFloorToLowest) << 16u), 666u); }
+    return vec2u(floor | (u32(FLOOR_raiseToTexture) << 16u), 667u);
   }
-  else if (GAMEEPISODE == 1 || (GAMEEPISODE == 4 && GAMEMAP == 8)) { actTag = 666; floor = FLOOR_lowerFloorToLowest; }
-  else if (GAMEEPISODE == 4 && GAMEMAP == 6) { actTag = 666; _ = evDoDoor(0u, DOOR_blazeOpen); return; }
-  if (floor >= 0) { _ = evDoFloor(0u, floor); return; }
+  if (GAMEEPISODE == 1 || (GAMEEPISODE == 4 && GAMEMAP == 8)) { return vec2u(floor | (u32(FLOOR_lowerFloorToLowest) << 16u), 666u); }
+  if (GAMEEPISODE == 4 && GAMEMAP == 6) { return vec2u(door | (u32(DOOR_blazeOpen) << 16u), 666u); }
   P.exit = 1u;
+  return vec2u(0u);
 }
 
-// Which kernel runs a state's action: 1 acLook, 2 acChase, 3 acAttack, and 0 the cheap ones, which run
+// Which kernel runs a state's action: 1 acLook, 2 acChase, 3 acAttack, 5 acExplode, and 0 the cheap ones, which run
 // in thState as the state is set
 fn actionKind(act: u32) -> u32 {
   switch (act) {
     case A_Look: { return 1u; }
+    case A_Explode: { return 5u; }
     case A_Chase, A_VileChase, A_Hoof, A_Metal, A_BabyMetal: { return 2u; }
     case A_Scream, A_XScream, A_Pain, A_PlayerScream, A_Fall, A_BossDeath, A_KeenDie, A_SkelWhoosh: { return 0u; }
     default: { return 3u; }
@@ -2853,7 +2927,6 @@ fn callAction(mi: u32, act: u32) {
       O[mi].momz = fxf((fixedOf(O[t].z) + (fixedOf(O[t].height) >> 1u) - fixedOf(O[mi].z)) / dist);
       return;
     }
-    case A_Explode: { radiusAttack(mi, O[mi].targ, 128); return; }
     case A_BFGSpray: { if (O[mi].targ < 0) { return; } bfg = true; }
     default: { return; }
   }
@@ -2948,9 +3021,14 @@ fn nightmareRespawn(mi: u32) {
 fn prepSight(mi: u32) {
   sightPlayer = false; sightTarget = false;
   if ((O[mi].flags & MF_SHOOTABLE) == 0u || info(O[mi].mtype, MI_SEESTATE) == 0) { return; }
-  sightPlayer = checkSight(mi, 0u);
   let t = O[mi].targ;
-  if (t > 0 && O[t].inuse != 0u) { sightTarget = checkSight(mi, u32(t)); }
+  // the player, then the target, through one checkSight call site (every call is inlined)
+  for (var k = 0u; k < 2u; k++) {
+    var who = 0u;
+    if (k == 1u) { if (t <= 0 || O[t].inuse == 0u) { break; } who = u32(t); }
+    let seen = checkSight(mi, who);
+    if (k == 0u) { sightPlayer = seen; } else { sightTarget = seen; }
+  }
 }
 
 // ---- the thinkers, one thread per thing. P_MobjThinker is split: thMove moves, thState counts the
@@ -2959,12 +3037,13 @@ fn thinking(mi: u32) -> bool { return mi > 0u && mi < mobjEnd() && O[mi].inuse !
 
 @compute @workgroup_size(64)
 fn thMove(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let mi = gid.x;
   if (!thinking(mi)) { return; }
   seedRandom(mi * 8u + 1u);
   numcross = 0u;
   if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (O[mi].flags & MF_SKULLFLY) != 0u) {
-    xyMovement(mi, false, false); processCrossings(mi);
+    thingXY(mi); processCrossings(mi);
   }
   if (O[mi].inuse == 0u) { return; }
   if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, false); }
@@ -2972,6 +3051,7 @@ fn thMove(@builtin(global_invocation_id) gid: vec3u) {
 
 @compute @workgroup_size(64)
 fn thState(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let mi = gid.x;
   if (mi < MAXMOBJS) { Q.act[mi] = 0u; }
   if (!thinking(mi)) { return; }
@@ -3014,6 +3094,7 @@ fn acting(mi: u32, kind: u32) -> bool {
 
 @compute @workgroup_size(64)
 fn acLook(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let mi = gid.x;
   if (!acting(mi, 1u)) { return; }
   seedRandom(mi * 8u + 3u);
@@ -3023,6 +3104,7 @@ fn acLook(@builtin(global_invocation_id) gid: vec3u) {
 
 @compute @workgroup_size(64)
 fn acChase(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let mi = gid.x;
   if (!acting(mi, 2u)) { return; }
   seedRandom(mi * 8u + 4u);
@@ -3038,7 +3120,17 @@ fn acChase(@builtin(global_invocation_id) gid: vec3u) {
 }
 
 @compute @workgroup_size(64)
+fn acExplode(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
+  let mi = gid.x;
+  if (!acting(mi, 5u)) { return; }
+  seedRandom(mi * 8u + 7u);
+  radiusAttack(mi, O[mi].targ, 128);
+}
+
+@compute @workgroup_size(64)
 fn acAttack(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let mi = gid.x;
   if (!acting(mi, 3u)) { return; }
   seedRandom(mi * 8u + 5u);
@@ -3046,17 +3138,28 @@ fn acAttack(@builtin(global_invocation_id) gid: vec3u) {
   callAction(mi, Q.act[mi]);
 }
 
-// The tic's damage, pickups and spawns, in the order they were asked for
+// The tic's damage, pickups and spawns, each in the order they were asked for, one kernel apiece
 @compute @workgroup_size(1)
-fn drain() {
+fn drainDamage() {
+  loadLevel();
   seedRandom(0x5eedu);
   let nd = min(atomicExchange(&Q.ndmg, 0u), 256u);
   for (var k = 0u; k < nd; k++) { let d = Q.dmg[k]; damageNow(u32(d.x), d.y, d.z, d.w); }
+}
+@compute @workgroup_size(1)
+fn drainTouch() {
+  loadLevel();
+  seedRandom(0x5eeeu);
   let nt = min(atomicExchange(&Q.ntouch, 0u), 64u);
   for (var k = 0u; k < nt; k++) {
     let t = Q.touch[k];
     if (O[t.x].inuse != 0u && O[t.y].inuse != 0u) { touchSpecialThing(t.x, t.y); }
   }
+}
+@compute @workgroup_size(1)
+fn drainSpawn() {
+  loadLevel();
+  seedRandom(0x5eefu);
   let ns = min(atomicExchange(&Q.nspawn, 0u), 256u);
   for (var k = 0u; k < ns; k++) { spawnNow(Q.spawn[k]); }
 }
@@ -3064,12 +3167,14 @@ fn drain() {
 // The blockmap's thing lists, rebuilt from where everything ended the tic
 @compute @workgroup_size(1)
 fn relink() {
+  loadLevel();
   for (var c = 0u; c < BMCELLS; c++) { LS[BLOCKHEADS + c] = 0u; }
   for (var i = 0u; i < mobjEnd(); i++) { if (O[i].inuse != 0u) { linkThing(i); } }
 }
 
 @compute @workgroup_size(64)
 fn thLights(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let s = gid.x;
   if (s >= NUMSECTORS || P.exit != 0u) { return; }
   seedRandom(s * 8u + 6u);
@@ -3123,10 +3228,7 @@ fn bringUpWeapon() {
 
 var<private> wantFire: bool;
 var<private> wantCheckAmmo: bool;
-var<private> shotKind: u32;   // 0 none, 1 bullets, 2 missile, 3 punch, 4 saw
-var<private> shotCount: i32;
-var<private> shotAccurate: bool;
-var<private> shotMissile: u32;
+// P.shotkind: 0 none, 1 bullets, 2 missile, 3 punch, 4 saw
 
 fn pspAction(pos: u32, act: u32) {
   let w = clamp(P.readyweapon, 0, 8);
@@ -3167,29 +3269,29 @@ fn pspAction(pos: u32, act: u32) {
     case A_GunFlash: { setPsp(1u, W_FLASH[w]); }
     case A_FirePistol: {
       mobjSound(0u, SFX_pistol); P.ammo[am] -= 1; setPsp(1u, W_FLASH[w]);
-      shotKind = 1u; shotCount = 1; shotAccurate = P.refire == 0;
+      P.shotkind = 1u; P.shotcount = 1; P.shotaccurate = select(0u, 1u, P.refire == 0);
     }
     case A_FireShotgun: {
       mobjSound(0u, SFX_shotgn); P.ammo[am] -= 1; setPsp(1u, W_FLASH[w]);
-      shotKind = 1u; shotCount = 7; shotAccurate = false;
+      P.shotkind = 1u; P.shotcount = 7; P.shotaccurate = select(0u, 1u, false);
     }
     case A_FireShotgun2: {
       mobjSound(0u, SFX_dshtgn); P.ammo[am] -= 2; setPsp(1u, W_FLASH[w]);
-      shotKind = 1u; shotCount = 20; shotAccurate = false;
+      P.shotkind = 1u; P.shotcount = 20; P.shotaccurate = select(0u, 1u, false);
     }
     case A_FireCGun: {
       mobjSound(0u, SFX_pistol);
       if (P.ammo[am] <= 0) { return; }
       P.ammo[am] -= 1;
       setPsp(1u, W_FLASH[w] + (P.pspstate[0] - S_CHAIN1));
-      shotKind = 1u; shotCount = 1; shotAccurate = P.refire == 0;
+      P.shotkind = 1u; P.shotcount = 1; P.shotaccurate = select(0u, 1u, P.refire == 0);
     }
-    case A_FireMissile: { P.ammo[am] -= 1; shotKind = 2u; shotMissile = MT_ROCKET; }
-    case A_FirePlasma: { P.ammo[am] -= 1; setPsp(1u, W_FLASH[w] + u32(P_Random() & 1)); shotKind = 2u; shotMissile = MT_PLASMA; }
-    case A_FireBFG: { P.ammo[am] -= 40; shotKind = 2u; shotMissile = MT_BFG; }
+    case A_FireMissile: { P.ammo[am] -= 1; P.shotkind = 2u; P.shotmissile = MT_ROCKET; }
+    case A_FirePlasma: { P.ammo[am] -= 1; setPsp(1u, W_FLASH[w] + u32(P_Random() & 1)); P.shotkind = 2u; P.shotmissile = MT_PLASMA; }
+    case A_FireBFG: { P.ammo[am] -= 40; P.shotkind = 2u; P.shotmissile = MT_BFG; }
     case A_BFGsound: { mobjSound(0u, SFX_bfg); }
-    case A_Punch: { shotKind = 3u; }
-    case A_Saw: { shotKind = 4u; }
+    case A_Punch: { P.shotkind = 3u; }
+    case A_Saw: { P.shotkind = 4u; }
     case A_OpenShotgun2: { mobjSound(0u, SFX_dbopn); }
     case A_LoadShotgun2: { mobjSound(0u, SFX_dbload); }
     case A_CloseShotgun2: {
@@ -3203,8 +3305,8 @@ fn pspAction(pos: u32, act: u32) {
 
 // Fire what the actions asked for: one trace call site for aiming, one for shooting.
 fn playerShoot() {
-  let kind = shotKind;
-  shotKind = 0u;
+  let kind = P.shotkind;
+  P.shotkind = 0u;
   if (kind == 0u) { return; }
   let melee = kind >= 3u;
   var an = O[0].angle; var dmg = 0; var range = 1024.0;
@@ -3219,8 +3321,8 @@ fn playerShoot() {
   // side; then the hits. P_GunShot draws the damage before the spread; the super shotgun spreads
   // twice as wide and also up and down (A_FireShotgun2).
   var offs = array<u32, 3>(0u, 1u << 26u, 0u - (1u << 26u));
-  let ssg = shotCount == 20;
-  let nshots = select(shotCount, 1, melee);
+  let ssg = P.shotcount == 20;
+  let nshots = select(P.shotcount, 1, melee);
   var slope = 0.0; var found = false; var aims = 0; var shots = 0; var lt = -1;
   for (var guard = 0; guard < 26; guard++) {
     let aiming = !found && aims < select(3, 1, melee);
@@ -3235,7 +3337,7 @@ fn playerShoot() {
         tdmg = 5 * (P_Random() % 3 + 1);
         ta = O[0].angle; trange = MISSILERANGE;
         if (ssg) { ta += bitcast<u32>(subRandomI() << 19u); tsl += f32(subRandomI() << 5u) / 65536.0; }
-        else if (!shotAccurate) { ta += bitcast<u32>(subRandomI() << 18u); }
+        else if (P.shotaccurate == 0u) { ta += bitcast<u32>(subRandomI() << 18u); }
       }
       shots += 1;
     }
@@ -3248,7 +3350,7 @@ fn playerShoot() {
   }
   if (kind == 2u) {
     if (!found) { an = O[0].angle; slope = 0.0; }
-    spawnMissile(0u, -1, shotMissile, an, slope);
+    spawnMissile(0u, -1, P.shotmissile, an, slope);
     return;
   }
   if (!melee) { return; }
@@ -3267,7 +3369,7 @@ fn playerShoot() {
 }
 
 fn runPsprites() {
-  shotKind = 0u;
+  P.shotkind = 0u;
   // a level's first tic first does P_SetupPsprites (the weapon's raise state and its first action),
   // which DOOM ran at spawn, before any tic; then the tic's P_MovePsprites
   let setup = P.pspstate[0] == 0u && P.dead == 0u && P.health > 0;
@@ -3318,7 +3420,6 @@ fn runPsprites() {
     pspCur = 9u;
   }
   }
-  playerShoot();
 }
 
 fn calcHeight(onground: bool) {
@@ -3437,12 +3538,27 @@ fn playerThink() {
 }
 
 @compute @workgroup_size(1)
-fn ticPlayer() {
+fn plThink() {
+  loadLevel();
   if (P.exit != 0u) { return; }
   seedRandom(0x9147u);
   playerThink();
   if ((P.cheats & 1u) != 0u) { O[0].flags |= MF_NOCLIP; } else { O[0].flags &= ~MF_NOCLIP; }
-  // the player's P_MobjThinker: its movement
+}
+// the shot the weapon's action asked for: a kernel of its own for the hitscan's size
+@compute @workgroup_size(1)
+fn plShoot() {
+  loadLevel();
+  if (P.exit != 0u) { return; }
+  seedRandom(0x9149u);
+  playerShoot();
+}
+// the player's P_MobjThinker: its movement, with P_SlideMove
+@compute @workgroup_size(1)
+fn plMove() {
+  loadLevel();
+  if (P.exit != 0u) { return; }
+  seedRandom(0x9148u);
   numcross = 0u;
   if (O[0].momx != 0.0 || O[0].momy != 0.0) { xyMovement(0u, true, P.cmdmove != 0u); processCrossings(0u); }
   if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
@@ -3450,6 +3566,7 @@ fn ticPlayer() {
 // Start of a tic: remember where everything was, so frames between tics can blend.
 @compute @workgroup_size(64)
 fn ticSave(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let i = gid.x;
   if (P.exit != 0u) { return; }
   if (i == 0u) { P.pvx = P.viewx; P.pvy = P.viewy; P.pvz = P.viewz; P.pva = P.viewangle; }
@@ -3460,6 +3577,7 @@ fn ticSave(@builtin(global_invocation_id) gid: vec3u) {
 // Each frame: the view between the last two tics, plus turning not yet given to a tic.
 @compute @workgroup_size(1)
 fn viewSetup() {
+  loadLevel();
   let f = U.frac;
   P.rx = mix(P.pvx, P.viewx, f); P.ry = mix(P.pvy, P.viewy, f); P.rz = mix(P.pvz, P.viewz, f);
   P.ra = P.pva + wrapPi(P.viewangle - P.pva) * f + U.lookturn;
@@ -3467,17 +3585,14 @@ fn viewSetup() {
 
 @compute @workgroup_size(1)
 fn ticActivate() {
+  loadLevel();
   let n = min(atomicExchange(&P.nact, 0u), 32u);
   if (P.exit != 0u) { return; }
   seedRandom(0xac7u);
   for (var k = 0u; k < n; k++) {
     let a = P.act[k];
     let l = a & 0xffffu; let side = (a >> 16u) & 1u; let kind = (a >> 17u) & 3u; let mi = a >> 19u;
-    if (kind == 3u) { bossDeath(mi); continue; }
-    if (l >= NUMLINES || lineSpecial(l) == 0u) { continue; }
-    if (kind == 0u) { crossSpecialLine(l, side, mi); }
-    else if (kind == 1u) { _ = useSpecialLine(l, side, mi); }
-    else { shootSpecialLine(l, mi); }
+    activateLine(l, side, kind, mi);
   }
 }
 
@@ -3552,11 +3667,13 @@ fn amLine(a: vec2f, b: vec2f, c: u32) {
 
 @compute @workgroup_size(8, 8)
 fn amClear(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   if (gid.x < U.width && gid.y < U.viewh) { FB[gid.y * U.width + gid.x] = 0u; }
 }
 
 @compute @workgroup_size(64)
 fn amLines(@builtin(global_invocation_id) gid: vec3u) {
+  loadLevel();
   let i = gid.x;
   if (i < NUMLINES) {
     let flags = lineFlags(i);
@@ -3592,6 +3709,7 @@ fn amLines(@builtin(global_invocation_id) gid: vec3u) {
 
 @compute @workgroup_size(1)
 fn ticWorld() {
+  loadLevel();
   if (P.exit != 0u) { return; }
   seedRandom(0x3071du);
   for (var s = 0u; s < NUMSECTORS; s++) {

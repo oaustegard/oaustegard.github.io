@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029022420";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS } from "./shaders.js?v=20261029022420";
-import { STATES, SFX, MF } from "./info.js?v=20261029022420";
-import { MSG } from "./specials.js?v=20261029022420";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029042442";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS, levelHeader, LEVEL_HEADER } from "./shaders.js?v=20261029042442";
+import { STATES, SFX, MF } from "./info.js?v=20261029042442";
+import { MSG } from "./specials.js?v=20261029042442";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -115,7 +115,7 @@ export class Engine {
     this.maxMobjs = map.things.length + 1 + 768;
 
     const code = makeWGSL({ gfx: this.gfx, map, maxMobjs: this.maxMobjs });
-    // restarting a level produces the same WGSL: reuse its pipelines instead of compiling again
+    // every level of a WAD produces the same WGSL (the level is data at the head of M): compile once
     this.pipeCache ||= new Map();
     const cached = this.pipeCache.get(code);
     if (cached) Object.assign(this, cached);
@@ -229,7 +229,10 @@ export class Engine {
     mi[15] = player.health; // player mobj health
 
     for (const b of [this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf, this.queueBuf]) b?.destroy();
-    this.mapBuf = this.buffer(map.words, GPUBufferUsage.STORAGE);
+    // the level's sizes and offsets head the map words, so one shader serves every level
+    const mw = new Uint32Array(LEVEL_HEADER + map.words.length);
+    mw.set(levelHeader(map, this.maxMobjs)); mw.set(map.words, LEVEL_HEADER);
+    this.mapBuf = this.buffer(mw, GPUBufferUsage.STORAGE);
     this.secBuf = this.buffer(new Uint32Array(sec), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.mobjBuf = this.buffer(new Uint32Array(mobjs.buf), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.lsBuf = this.buffer(ls, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
