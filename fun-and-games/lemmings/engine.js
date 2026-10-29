@@ -2,9 +2,9 @@
 // lives in GPU buffers. JS writes the cursor, the click, the chosen skill and the release rate into
 // a uniform buffer and reads back a small world block for the panel and the sounds.
 
-import { makeWGSL, PRESENT_WGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029041012";
-import { buildSprites } from "./sprites.js?v=20261029041012";
-import { buildTerrain, themeWords } from "./levels.js?v=20261029041012";
+import { loadWGSL, loadPresentWGSL, MAXL, MAXVIEW, NS, WD, ROM, ARGS_WORDS, AUX_FIELD, STATE_KERNELS, SKILLS } from "./shaders.js?v=20261029050339";
+import { buildSprites } from "./sprites.js?v=20261029050339";
+import { buildTerrain, themeWords } from "./levels.js?v=20261029050339";
 
 export const MINIMAP_H = 32;
 export const VIEW_H = 160;   // a taller level scrolls vertically
@@ -26,7 +26,7 @@ export class Game {
       { binding: 6, ...st("uniform") },
     ] });
     g.layout1 = device.createBindGroupLayout({ entries: [{ binding: 0, ...st("storage") }] });
-    const code = makeWGSL();
+    const code = await loadWGSL();
     const mod = device.createShaderModule({ code });
     const info = await mod.getCompilationInfo();
     const errs = info.messages.filter((m) => m.type === "error");
@@ -56,7 +56,7 @@ export class Game {
     g.dimsBuf = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     g.argsGroup = device.createBindGroup({ layout: g.layout1, entries: [{ binding: 0, resource: { buffer: g.argsBuf } }] });
     if (format) {
-      const pm = device.createShaderModule({ code: PRESENT_WGSL });
+      const pm = device.createShaderModule({ code: await loadPresentWGSL() });
       g.presentPipe = device.createRenderPipeline({
         layout: "auto",
         vertex: { module: pm, entryPoint: "vs" },
@@ -67,7 +67,7 @@ export class Game {
         { binding: 0, resource: { buffer: g.fbBuf } }, { binding: 1, resource: { buffer: g.dimsBuf } },
       ] });
     }
-    g.input = { curX: -9999, curY: -9999, click: 0, skill: 99, rr: 50, nuke: 0 };
+    g.input = { curX: -9999, curY: -9999, click: 0, skill: 99, rr: 50, nuke: 0, pickR: 6 };
     g.time = 0;
     g.world = null;
     return g;
@@ -131,9 +131,9 @@ export class Game {
   get rows() { return this.vh + MINIMAP_H; }
 
   writeInput() {
-    const i = this.input, a = new Int32Array(12), u = new Uint32Array(a.buffer);
+    const i = this.input, a = new Int32Array(16), u = new Uint32Array(a.buffer);
     a[0] = i.curX; a[1] = i.curY; u[2] = i.click; u[3] = i.skill; u[4] = i.rr; u[5] = i.nuke;
-    a[6] = this.camX; u[7] = this.vw; u[8] = this.vh; u[9] = MINIMAP_H; u[10] = this.time; a[11] = this.camY;
+    a[6] = this.camX; u[7] = this.vw; u[8] = this.vh; u[9] = MINIMAP_H; u[10] = this.time; a[11] = this.camY; u[12] = i.pickR;
     this.device.queue.writeBuffer(this.inpBuf, 0, a);
     this.device.queue.writeBuffer(this.dimsBuf, 0, new Uint32Array([this.vw, this.rows, MAXVIEW, 0]));
   }
@@ -221,6 +221,7 @@ export class Game {
       out: w[WD.REL] - w[WD.SAVED] - w[WD.DEAD], rr: w[WD.RR], time: w[WD.TIME], done: w[WD.DONE] !== 0,
       nuked: w[WD.NUKED] !== 0, hovered: w[WD.HOV], hovState: w[WD.HOVSTATE], hovFlags: w[WD.HOVFLAGS],
       skills, snd: Array.from(w.subarray(WD.SND, WD.SND + 8)),
+      assign: { result: w[WD.ARES], seq: w[WD.ASEQ], skill: w[WD.ASKILL] },
     };
   }
 

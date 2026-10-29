@@ -50,7 +50,7 @@ await page.goto(base + "/fun-and-games/lemmings/sprites.js");
 // the first lemming for which `pick` (a function source over a lemming record) is true, once `after`
 // holds for the world and the step named `needs` is done. Steps fire in any order, one per tick.
 const PLANS = {
-  0: [{ skill: "digger", pick: "l => l.state === 1 && l.x > 200 && l.x < 400" }],
+  0: [{ skill: "digger", pick: "l => l.state === 1 && l.x > 300 && l.x < 420" }],
   1: [
     { id: "b", skill: "builder", pick: "l => l.state === 1 && l.x >= 326 && l.x <= 334 && l.dir > 0" },
     { id: "k", needs: "b", skill: "blocker", pick: "l => l.state === 1 && l.x >= 280 && l.x <= 310 && l.dir > 0" },
@@ -111,10 +111,9 @@ if (process.env.PREVIEW) {
   await browser.close(); server.close(); process.exit(0);
 }
 
-let failed = 0;
-for (const [li, name] of setup.levels.entries()) {
-  if (only.length && !only.includes(li)) continue;
-  const r = await page.evaluate(async ({ li, plan, trace, shotAt }) => {
+// plays level li with the given plan in the page; plan [] is the idle run
+function runLevel(li, plan) {
+  return page.evaluate(async ({ li, plan, trace, shotAt }) => {
     const g = window.game, lvl = window.LEVELS[li], { SKILLS } = await import("./shaders.js");
     g.loadLevel(lvl);
     const steps = plan.map((s) => ({ ...s, pick: eval(s.pick), after: s.after ? eval(s.after) : () => true }));
@@ -161,11 +160,24 @@ for (const [li, name] of setup.levels.entries()) {
     }
     const px = await g.readPixels();
     return { mid, w, log, ms: Math.round(performance.now() - t0), vw: g.vw, rows: g.rows, px: Array.from(px), need: Math.ceil(lvl.need * lvl.count / 100) };
-  }, { li, plan: PLANS[li] || [], trace: Number(process.env.TRACE ?? -1), shotAt: process.env.SHOT ? process.env.SHOT.split(":").map(Number) : null });
+  }, { li, plan, trace: Number(process.env.TRACE ?? -1), shotAt: process.env.SHOT ? process.env.SHOT.split(":").map(Number) : null });
+}
+
+let failed = 0;
+for (const [li, name] of setup.levels.entries()) {
+  if (only.length && !only.includes(li)) continue;
+  const r = await runLevel(li, process.env.NOPLAN ? [] : PLANS[li] || []);
   const ok = r.w.saved >= r.need;
   if (!ok) failed++;
   console.log(`${ok ? "ok  " : "FAIL"} ${li} ${name}: saved ${r.w.saved}/${setup.levels.length && r.need} needed, dead ${r.w.dead}, ${r.w.tick} ticks in ${r.ms} ms`);
   for (const l of r.log) console.log("     " + l);
+  // no level may solve itself: with no skills given, too few lemmings may get home
+  if (!process.env.NOPLAN && !process.env.TRACE) {
+    const idle = await runLevel(li, []);
+    const solves = idle.w.saved >= idle.need;
+    if (solves) failed++;
+    console.log(`${solves ? "FAIL" : "ok  "} ${li} ${name} left alone: saved ${idle.w.saved}/${idle.need}`);
+  }
   if (shotDir) {
     await mkdir(shotDir, { recursive: true });
     await writeFile(join(shotDir, `level${li}.png`), png(r.vw, r.rows, new Uint8Array(r.px)));

@@ -10,6 +10,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 version = time.strftime("%Y%m%d%H%M%S", time.gmtime())
+# the .wgsl files are fetched with shaders.js's own stamp, so they need none of their own
 for f in ["index.html", "engine.js", "shaders.js", "levels.js", "sprites.js"]:
     p = HERE / f
     s = p.read_text()

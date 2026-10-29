@@ -22,6 +22,7 @@ pixels kills, a builder lays twelve bricks, bashers and miners stop at steel.
 | F | fast forward |
 | N twice | nuke: every lemming becomes a bomber |
 | arrows / W A S D, wheel, drag, screen edges | scroll; click or drag the map under the level to jump |
+| H, ? | the skills sheet |
 | esc | the level menu |
 
 ## Levels
@@ -45,8 +46,11 @@ silhouette layers (mountains, spires, forest or towers, per theme) scroll more s
 The DOOM port next door ([gPu(doom)](../doom/README.md)) runs most of DOOM's game logic in one kernel,
 `ticMobjs`, which compiles to one enormous function, and GPU compilers take minutes over a function
 that size on some Android and Windows drivers. This game is shaped so that no kernel grows like that.
-`shaders.js` builds one WGSL module of about 880 lines with 28 entry points, and the largest kernel
-holds one state's update and its helpers.
+The WGSL is in four files: [`common.wgsl`](common.wgsl) (bindings and terrain helpers),
+[`sim.wgsl`](sim.wgsl) (the tick, one kernel per lemming state, the terrain edits),
+[`render.wgsl`](render.wgsl) and [`present.wgsl`](present.wgsl). `shaders.js` prepends the constants
+they share and joins them into one module of about 900 lines with 28 entry points; the largest
+kernel holds one state's update and its helpers.
 
 A tick is five compute passes:
 

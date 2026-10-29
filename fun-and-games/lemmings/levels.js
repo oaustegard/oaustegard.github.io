@@ -55,29 +55,30 @@ const HUES = {
 
 export const LEVELS = [
   {
-    name: "Straight down", hint: "The exit is underneath you. Pick the digger, then click a lemming on the island.",
+    name: "Straight down", hint: "The exit is underneath the island, and so is a pool. Dig where there is ground to land on.",
     w: 800, h: 160, theme: "earth", count: 10, need: 50, rr: 50, minutes: 5,
-    skills: { digger: 10 },
-    hatches: [[180, 66]], exits: [[600, 147]],
+    skills: { digger: 2 },
+    hatches: [[180, 66]], exits: [[620, 147]], water: [[24, 206, 150]],
     shapes: [
       ["blob", 6, 80, 30, 110, 3], ["blob", 796, 80, 28, 110, 4],
+      ["tree", 450, 147, 30, 9], ["tree", 690, 147, 30, 4],
       ["hills", 24, 776, 147, 1, 1],
+      ["rect", 24, 147, 184, 13, 0], ["rect", 24, 156, 184, 4],
+      ["boulder", 214, 145, 9, "basalt"],
       ["slab", 90, 520, 92, 114, 2],
       ["stalactites", 110, 500, 5, 12, 1],
       ["vines", 100, 510, 8],
       ["column", 102, 93, 34, 12, "marble"],
-      ["crystals", 508, 94, 18, "amethyst", 3],
-      ["mushroom", 60, 150, 25, 18, "toadstool"],
-      ["mushroom", 88, 150, 14, 10, "toadstool"],
+      ["column", 510, 93, 34, 14, "marble"],
       ["crystals", 742, 151, 24, "ice", 7],
-      ["mushroom", 690, 147, 16, 12, "toadstool", 1],
-      ["tree", 300, 147, 40, 4], ["tree", 450, 147, 34, 9],
+      ["mushroom", 560, 147, 16, 12, "toadstool", 1],
+      ["crystals", 110, 156, 10, "ice", 8, 1], ["crystals", 170, 156, 8, "ice", 9, 1],
     ],
   },
   {
     name: "Bridge over troubled water", hint: "A blocker holds the crowd back while a builder spans the gap. A bomber clears the blocker afterwards.",
     w: 800, h: 160, theme: "rust", count: 20, need: 70, rr: 40, minutes: 5,
-    skills: { blocker: 1, builder: 4, bomber: 1 },
+    skills: { builder: 4, blocker: 1, bomber: 1 },
     hatches: [[90, 80]], exits: [[700, 105]], water: [[340, 352, 140]],
     shapes: [
       ["blob", 6, 80, 30, 110, 5], ["blob", 796, 80, 30, 110, 6],
@@ -176,7 +177,7 @@ export const LEVELS = [
   {
     name: "Odd jobs", hint: "Dig, build, block, bash. Keep the crowd off the bridge until it is finished.",
     w: 1280, h: 160, theme: "moss", count: 30, need: 60, rr: 30, minutes: 8,
-    skills: { digger: 1, blocker: 1, builder: 3, bomber: 1, basher: 2 },
+    skills: { digger: 1, builder: 3, blocker: 1, basher: 2, bomber: 1 },
     hatches: [[80, 40]], exits: [[1150, 145]], water: [[560, 600, 152]],
     shapes: [
       ["blob", 6, 80, 30, 110, 13], ["blob", 1274, 80, 30, 110, 14],
@@ -197,7 +198,7 @@ export const LEVELS = [
   {
     name: "Exodus", hint: "Ten thousand lemmings, every one of them a GPU thread. Save a quarter of them.",
     w: 1920, h: 160, theme: "autumn", count: 10000, need: 25, rr: 99, minutes: 8, burst: 3,
-    skills: { climber: 500, floater: 500, bomber: 500, blocker: 500, builder: 500, basher: 500, miner: 500, digger: 500 },
+    skills: { builder: 500, blocker: 500, basher: 500, miner: 500, digger: 500, climber: 500, floater: 500, bomber: 500 },
     hatches: [[150, 80], [260, 74], [370, 80], [480, 74], [590, 80], [700, 74], [810, 80], [920, 74]],
     exits: [[1740, 119], [1840, 119]], water: [[1240, 1252, 140]],
     shapes: [

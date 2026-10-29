@@ -64,6 +64,16 @@ button.go:disabled { opacity: .5; cursor: wait; }
 .keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; margin-top: 12px; }
 .keys b { color: var(--gold); font-weight: normal; }
 #status { min-height: 1.4em; white-space: pre-wrap; overflow-wrap: anywhere; }
+#tap { position: fixed; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 2px solid var(--gold); border-radius: 50%; pointer-events: none; opacity: 0; }
+#tap.on { animation: tap .45s ease-out; }
+@keyframes tap { from { opacity: 1; transform: scale(.4); } to { opacity: 0; transform: scale(1.3); } }
+#note { position: fixed; left: 0; right: 0; bottom: calc(env(safe-area-inset-bottom) + 150px); text-align: center; font-size: 15px; color: var(--ink); text-shadow: 1px 1px 0 #000, 0 0 6px #000; pointer-events: none; padding: 0 16px; }
+#note.good { color: var(--green); font-size: 18px; letter-spacing: .08em; }
+.sheet { display: grid; grid-template-columns: 30px 1fr; gap: 8px 12px; align-items: center; margin: 12px 0; }
+.sheet canvas { width: 24px; height: 30px; image-rendering: pixelated; }
+.sheet b { color: var(--gold); font-weight: normal; }
+.rules { margin: 10px 0 0; padding-left: 18px; font-size: 13px; color: var(--mute); }
+.rules li { margin: 3px 0; }
 #toast { position: fixed; left: 0; right: 0; top: 18%; text-align: center; font-size: 22px; color: var(--gold); text-shadow: 2px 2px 0 #000; pointer-events: none; }
 </style>
 </head>
@@ -74,6 +84,25 @@ button.go:disabled { opacity: .5; cursor: wait; }
   <div id="panel"></div>
 </div>
 <div id="toast" hidden></div>
+<div id="note" hidden></div>
+<div id="tap"></div>
+
+<div class="overlay" id="skills" hidden>
+  <div class="card">
+    <h2>The skills</h2>
+    <p class="mute">Pick a skill on the panel, then click or tap a lemming. A ring shows who took it; the line above the panel says why when nobody did.</p>
+    <div class="sheet" id="sheet"></div>
+    <ul class="rules">
+      <li>A fall of more than 60 pixels kills a lemming, unless it is floating.</li>
+      <li>Water drowns, and so does falling out of the bottom of the level.</li>
+      <li>Riveted grey steel cannot be dug, bashed, mined or blown up.</li>
+      <li>Walkers step up anything 6 pixels or lower and turn back at anything higher, unless they climb.</li>
+      <li>Climber, floater and bomber can be given at any time, even in mid-air. The other skills only go to a lemming on the ground, walking or working.</li>
+      <li>The game can be paused and skills still given. The release rate sets how fast lemmings come out of the hatch.</li>
+    </ul>
+    <button class="go" id="skillsClose">Back</button>
+  </div>
+</div>
 
 <div class="overlay" id="menu">
   <div class="card">
@@ -81,6 +110,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
     <p>A Lemmings-style game written as WebGPU compute shaders. Every lemming state (walking, falling, building, bashing, mining, digging…) is its own small GPU kernel, run only over the lemmings in that state. The terrain is a GPU bitmap that bashers, miners, diggers and bombers carve. JavaScript writes the cursor and the chosen skill, and plays the sounds.</p>
     <p class="mute">Not affiliated with the original 1991 game. The levels, art and sounds are made for this page.</p>
     <ol id="levels"></ol>
+    <div class="row"><button id="menuSkills">The skills</button></div>
     <div id="status" class="mute"></div>
     <div class="keys">
       <b>click / tap</b><span>give the chosen skill to the lemming under the cursor</span>
@@ -90,6 +120,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
       <b>F</b><span>fast forward</span>
       <b>N twice</b><span>nuke: every lemming becomes a bomber</span>
       <b>arrows / WASD, wheel, drag</b><span>scroll; click or drag the map below the level to jump</span>
+      <b>H, ?</b><span>the skills sheet</span>
       <b>esc</b><span>this menu</span>
     </div>
   </div>
@@ -100,6 +131,7 @@ button.go:disabled { opacity: .5; cursor: wait; }
     <h2 id="bTitle"></h2>
     <div class="facts" id="bFacts"></div>
     <p id="bHint" class="mute"></p>
+    <div class="row"><button id="bSkills">The skills</button></div>
     <button class="go" id="bStart" disabled>Let's go!</button>
     <div class="row"><button id="bBack">Levels</button></div>
   </div>
@@ -114,10 +146,10 @@ button.go:disabled { opacity: .5; cursor: wait; }
 </div>
 
 <script type="module">
-import { Game } from "./engine.js?v=20261029041012";
-import { LEVELS } from "./levels.js?v=20261029041012";
-import { SKILLS, STATE_NAMES, TPS, SND, S } from "./shaders.js?v=20261029041012";
-import { drawIcon } from "./sprites.js?v=20261029041012";
+import { Game } from "./engine.js?v=20261029050339";
+import { LEVELS } from "./levels.js?v=20261029050339";
+import { SKILLS, STATE_NAMES, TPS, SND, S, ASSIGN } from "./shaders.js?v=20261029050339";
+import { drawIcon } from "./sprites.js?v=20261029050339";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -184,6 +216,47 @@ SKILLS.forEach((s, i) => pbutton(s, s, ICON[s], String(i + 1), () => selectSkill
 pbutton("pause", "II", null, "P", () => setPaused(!paused));
 pbutton("fast", "»", null, "F", () => { fast = !fast; buttons.fast.classList.toggle("on", fast); });
 pbutton("nuke", "✺", null, "N", () => nuke());
+pbutton("help", "?", null, "H", () => openSkills());
+
+const SKILL_TEXT = {
+  climber: "Climbs any wall it walks into, for the rest of its life. It keeps any other skill too.",
+  floater: "Opens an umbrella when it falls and survives any fall. Also for life.",
+  bomber: "Counts down five seconds, says oh no, and explodes, blowing a hole in earth (not steel). It dies.",
+  blocker: "Stands with its arms out. Every lemming that reaches it turns around. It stays until it explodes or the ground goes.",
+  builder: "Lays twelve bricks as a staircase rising forward, about 27 pixels across and 12 up, then shrugs. Give it the skill again to keep going.",
+  basher: "Punches a level tunnel forward until it breaks through. Stops at steel.",
+  miner: "Digs a tunnel diagonally down and forward. Stops at steel.",
+  digger: "Digs straight down until there is nothing left under it. Stops at steel.",
+};
+const sheet = $("sheet");
+SKILLS.forEach((s, i) => {
+  const cv = document.createElement("canvas"); cv.width = 24; cv.height = 30;
+  drawIcon(cv.getContext("2d"), ICON[s], 3);
+  const d = document.createElement("div");
+  d.innerHTML = `<b>${i + 1}. ${s}</b> ${SKILL_TEXT[s]}`;
+  sheet.append(cv, d);
+});
+let pausedBySheet = false;
+function openSkills() {
+  if (playing && !paused) { setPaused(true); pausedBySheet = true; }
+  $("skills").hidden = false;
+}
+$("skillsClose").onclick = () => { $("skills").hidden = true; if (pausedBySheet) { setPaused(false); pausedBySheet = false; } };
+$("menuSkills").onclick = openSkills;
+$("bSkills").onclick = openSkills;
+
+let noteTimer = 0;
+function note(t, good = false, ms = 1800) {
+  const el = $("note");
+  el.textContent = t; el.className = good ? "good" : ""; el.hidden = !t;
+  clearTimeout(noteTimer);
+  if (t) noteTimer = setTimeout(() => { el.hidden = true; }, ms);
+}
+function tapMark(x, y) {
+  const el = $("tap");
+  el.style.left = x + "px"; el.style.top = y + "px";
+  el.classList.remove("on"); void el.offsetWidth; el.classList.add("on");
+}
 
 function selectSkill(i) {
   if (!game) return;
@@ -248,6 +321,7 @@ canvas.addEventListener("pointerdown", (e) => {
   try { canvas.setPointerCapture(e.pointerId); } catch {}
   const p = toLevel(e);
   if (p.mini) { drag = { mini: true }; miniJump(p); return; }
+  game.input.pickR = e.pointerType === "mouse" ? 6 : 12;
   if (e.pointerType === "mouse" && e.button === 0) { setCursor(p); game.input.click++; return; }
   drag = { x: e.clientX, y: e.clientY, cam: camX, camY, moved: false, touch: e.pointerType !== "mouse", p };
   if (drag.touch) setCursor(p);
@@ -265,10 +339,16 @@ canvas.addEventListener("pointermove", (e) => {
   if (e.pointerType === "mouse" || drag) setCursor(p);
 });
 canvas.addEventListener("pointerup", (e) => {
-  if (drag && drag.touch && !drag.moved) { setCursor(toLevel(e)); game.input.click++; }
+  if (drag && drag.touch && !drag.moved) { setCursor(toLevel(e)); game.input.click++; tapMark(e.clientX, e.clientY); }
   drag = null;
 });
-canvas.addEventListener("pointerleave", () => { mouseX = null; mouseY = null; if (!drag) setCursor(null); });
+// only a mouse leaving clears the cursor: a finger "leaves" right after every tap, before the
+// next frame has given the tapped lemming its skill
+canvas.addEventListener("pointerleave", (e) => {
+  if (e.pointerType !== "mouse") return;
+  mouseX = null; mouseY = null;
+  if (!drag) setCursor(null);
+});
 // the wheel scrolls up and down in a tall level, sideways otherwise; shift swaps
 canvas.addEventListener("wheel", (e) => {
   e.preventDefault();
@@ -288,13 +368,14 @@ addEventListener("keydown", (e) => {
   else if (k === "p" || k === " ") { e.preventDefault(); setPaused(!paused); }
   else if (k === "f") buttons.fast.dispatchEvent(new Event("pointerdown"));
   else if (k === "n") nuke();
+  else if (k === "h" || k === "?") openSkills();
   else held.add(k);
 });
 addEventListener("keyup", (e) => held.delete(e.key.toLowerCase()));
 document.addEventListener("visibilitychange", () => { if (document.hidden && playing) setPaused(true); });
 
 // ---- the loop
-let last = 0, acc = 0, lastSnd = null;
+let last = 0, acc = 0, lastSnd = null, lastAseq = 0;
 function loop(now) {
   requestAnimationFrame(loop);
   if (!playing) { last = now; return; }
@@ -346,6 +427,18 @@ function hud(w) {
   buttons.rrUp.querySelector(".n").textContent = game.input.rr;
   if (lastSnd) SND.forEach((k, i) => { if (w.snd[i] > lastSnd[i]) sfx(k); });
   lastSnd = w.snd;
+  if (w.assign.seq !== lastAseq) {
+    lastAseq = w.assign.seq;
+    const name = SKILLS[w.assign.skill] || "skill";
+    const say = {
+      [ASSIGN.GIVEN]: [name.toUpperCase(), true],
+      [ASSIGN.NOBODY]: ["No lemming there. Tap right on one."],
+      [ASSIGN.CANNOT]: [`That lemming can't be a ${name} now. ${["climber", "floater", "bomber"].includes(name) ? "It already is one." : "It has to be on the ground, walking or working."}`],
+      [ASSIGN.NONE_LEFT]: [`No ${name}s left.`],
+      [ASSIGN.NO_SKILL]: ["Pick a skill on the panel first."],
+    }[w.assign.result];
+    if (say && w.assign.seq) note(say[0], say[1], say[1] ? 900 : 2600);
+  }
   if (w.done && !shownResult) { shownResult = true; setTimeout(() => showResult(w), 600); }
 }
 
@@ -381,13 +474,15 @@ function startLevel() {
   game.loadLevel(level);
   camX = Math.max(0, level.hatches[0][0] - 160);
   camY = Math.max(0, level.hatches[0][1] - 50);
-  shownResult = false; lastSnd = null; fast = false; nukeArm = 0;
+  shownResult = false; lastSnd = null; fast = false; nukeArm = 0; lastAseq = game.input.click;
   buttons.fast.classList.remove("on");
   setPaused(false);
-  selectSkill(SKILLS.findIndex((s) => level.skills[s]));
+  // the level lists its skills in the order you are likely to need them
+  selectSkill(SKILLS.indexOf(Object.keys(level.skills)[0]));
   $("brief").hidden = true; $("menu").hidden = true; $("result").hidden = true;
   playing = true;
   layout();
+  note(level.hint, false, 6000);
 }
 
 function showResult(w) {
