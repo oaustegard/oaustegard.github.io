@@ -22,7 +22,7 @@ Edge or Safari.
 | tab, M | automap; + and − or the mouse wheel zoom it (MAP and +/− buttons on a phone) |
 | esc | DOOM's menu: New Game picks the episode and skill, Load Game and Save Game use six slots kept in the browser, Options holds resolution, tilt and level warp |
 | iddqd, idkfa, idfa, idclip, iddt, idclevXY | DOOM's cheats, typed while playing |
-| phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn |
+| phone | swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb drags a floating stick to walk and strafe, the right thumb drags to turn, WPN steps to the next weapon that has ammo |
 
 On a phone, the pose at Play is level: the back camera's elevation against gravity sets the look pitch, the screen's roll steers, and swivel (the rotation rate projected on gravity) turns directly. The menu switches each one on or off and sets the turn speed. Looking up and down shears the view by moving the horizon row, as later source ports do; the original engine could not. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
 `doom.wad` or `doom2.wad`.

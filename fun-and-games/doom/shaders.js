@@ -13,8 +13,8 @@
 // one thread for the player, the specials and the queues), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029042442";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029042442";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029044500";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029044500";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
@@ -3515,7 +3515,20 @@ fn playerThink() {
     if ((U.buttons & 2u) != 0u) {
       if (P.usedown == 0u) { useLines(); P.usedown = 1u; }
     } else { P.usedown = 0u; }
-    if (U.weapon != 0u && U.weapon <= 9u) {
+    if (U.weapon == 10u) {
+      // the next weapon owned that has ammo for a shot, in DOOM's slot order (the phone's WPN button)
+      var order = array<i32, 9>(0, 7, 1, 2, 8, 3, 4, 5, 6);
+      let cur = select(P.readyweapon, P.pendingweapon, P.pendingweapon >= 0);
+      var at = 0u;
+      for (var k = 0u; k < 9u; k++) { if (order[k] == cur) { at = k; } }
+      for (var k = 1u; k < 9u; k++) {
+        let w = order[(at + k) % 9u];
+        let am = W_AMMO[w];
+        if ((P.weapons & (1u << u32(w))) == 0u || (am >= 0 && P.ammo[am] < ammoPerShot(w))) { continue; }
+        if (w != P.readyweapon) { P.pendingweapon = w; }
+        break;
+      }
+    } else if (U.weapon != 0u && U.weapon <= 9u) {
       var w = i32(U.weapon) - 1;
       // 1 toggles fist and chainsaw, 3 toggles the shotguns
       if (w == 0 && (P.weapons & 128u) != 0u && !(P.readyweapon == 7 && P.powers[1] != 0)) { w = 7; }
