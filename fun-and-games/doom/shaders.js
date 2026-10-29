@@ -13,13 +13,20 @@
 // game tic between them), project (one thread per mobj),
 // render (one thread per screen column), hud (one thread per pixel).
 
-import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029013442";
-import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029013442";
+import { SPRNAMES, SFX, MT, S as ST, MF, ACTIONS } from "./info.js?v=20261029022420";
+import { AC, TR, DOOR, FLOOR, PLAT, CEIL, MSG } from "./specials.js?v=20261029022420";
 
 export const MOBJ_WORDS = 32;
 export const SECTOR_WORDS = 32;
 export const WORLD_WORDS = 320;
 export const MAXVIS = 256;
+// bytes of the Queues buffer (binding 8): counters, 256 hits, 256 spawns, 64 pickups, an action per thing
+export const queueBytes = (maxMobjs) => Math.ceil((16 + 256 * 16 + 256 * 48 + 64 * 8 + 4 * maxMobjs) / 16) * 16;
+// The tic's kernels in order, and how many threads each runs: "save" one per thing or sector, "mobj" one
+// per thing slot, "sector" one per sector, 1 a single thread
+export const TIC_KERNELS = [["ticSave", "save"], ["ticPlayer", 1], ["thMove", "mobj"], ["thState", "mobj"],
+  ["acLook", "mobj"], ["acChase", "mobj"], ["acAttack", "mobj"], ["ticActivate", 1], ["ticWorld", 1],
+  ["drain", 1], ["relink", 1], ["thLights", "sector"]];
 
 const constBlock = (prefix, obj, type = "u32") =>
   Object.entries(obj).map(([k, v]) => `const ${prefix}${k.replace(/[^A-Za-z0-9_]/g, "_")}: ${type} = ${v}${type === "u32" ? "u" : ""};`).join("\n");
@@ -111,9 +118,9 @@ struct World {
   powers: array<i32, 6>,
   dead: u32, exit: u32,
   killcount: i32, itemcount: i32, secretcount: i32, message: i32,
-  messagetics: i32, viscount: atomic<u32>, sndcount: u32, nummobjs: u32,
+  messagetics: i32, viscount: atomic<u32>, sndcount: atomic<u32>, nummobjs: u32,
   totalkills: i32, totalitems: i32, totalsecrets: i32, onground: u32,
-  fixedcolormap: i32, skill: i32, nact: u32, pad1: array<u32, 9>,
+  fixedcolormap: i32, skill: i32, nact: atomic<u32>, pad1: array<u32, 9>,
   snd: array<vec4<f32>, 32>,
   buttons: array<vec4<i32>, 16>,
   pspstate: array<u32, 2>,
@@ -149,6 +156,19 @@ struct Frame {
 @group(0) @binding(5) var<storage, read_write> P: World;
 @group(0) @binding(6) var<storage, read_write> FB: array<u32>;
 @group(0) @binding(7) var<uniform> U: Frame;
+
+// Work handed between kernels within a tic. Many threads move and fight at once, so damage, spawns and
+// pickups wait here for the single-threaded drain kernel, which applies them one at a time; act is the
+// action each thing's new state runs, picked up by the kernel for its family.
+struct SpawnReq { kind: u32, ty: u32, src: i32, dst: i32, x: i32, y: i32, z: f32, a: u32, b: f32, c: i32, pad0: u32, pad1: u32 }
+struct Queues {
+  ndmg: atomic<u32>, nspawn: atomic<u32>, ntouch: atomic<u32>, pad: u32,
+  dmg: array<vec4i, 256>,          // target, inflictor, source, damage
+  spawn: array<SpawnReq, 256>,
+  touch: array<vec2u, 64>,         // item, toucher
+  act: array<u32, MAXMOBJS>,
+}
+@group(0) @binding(8) var<storage, read_write> Q: Queues;
 
 // ---- accessors
 fn mf(i: u32) -> f32 { return bitcast<f32>(M[i]); }
@@ -670,15 +690,21 @@ fn hud(@builtin(global_invocation_id) gid: vec3u) {
 // TIC: one thread runs a whole game tic
 // =====================================================================
 
-// P_Random: DOOM's table, so the game's random numbers follow vanilla's sequence
+// P_Random: numbers from DOOM's table, but each thread walks it on its own stream, seeded by the thing
+// and the tic: things think in parallel, so a shared index would race. (Vanilla's single sequence,
+// and with it demo compatibility, went with ticMobjs' single thread.)
+var<private> rs: u32;
+fn seedRandom(salt: u32) {
+  rs = (salt * 2654435761u) ^ (P.leveltime * 2246822519u) ^ 0x9e3779b9u;
+  rs ^= rs >> 15u; rs *= 2246822519u; rs ^= rs >> 13u;
+}
 fn P_Random() -> i32 {
-  P.rng = (P.rng + 1u) & 255u;
-  return i32(G[G_RNDTABLE + P.rng]);
+  rs = rs * 1664525u + 1013904223u;
+  return i32(G[G_RNDTABLE + (rs >> 24u)]);
 }
 fn startSound(sfx: u32, x: f32, y: f32) {
-  let i = P.sndcount % 32u;
+  let i = atomicAdd(&P.sndcount, 1u) % 32u;
   P.snd[i] = vec4f(f32(sfx), x, y, 0.0);
-  P.sndcount += 1u;
 }
 fn mobjSound(mi: u32, sfx: u32) { startSound(sfx, fxf(O[mi].x), fxf(O[mi].y)); }
 fn sectorSound(sec: u32, sfx: u32) {
@@ -830,10 +856,15 @@ fn checkPosition(mi: u32, pos: vec2i) -> bool {
       return false;
     }
     if ((th.flags & MF_SPECIAL) != 0u) {
-      if ((me.flags & MF_PICKUP) != 0u) { touchSpecialThing(j, mi); }
+      if ((me.flags & MF_PICKUP) != 0u) { touchLater(j, mi); }
       if ((th.flags & MF_SOLID) == 0u) { continue; }
     }
-    if ((th.flags & MF_SOLID) != 0u) { return false; }
+    if ((th.flags & MF_SOLID) != 0u) {
+      // things that moved in the same dispatch can end up overlapping: let them move apart
+      let was = abs(vec2i(th.x, th.y) - vec2i(me.x, me.y)); let now = abs(vec2i(th.x, th.y) - pos);
+      if (was.x < bd && was.y < bd && max(now.x, now.y) > max(was.x, was.y)) { continue; }
+      return false;
+    }
   }
   // lines via the blockmap
   let x0 = max((lo.x - bmo.x) >> 23u, 0); let x1 = min((hi.x - bmo.x) >> 23u, BM_W - 1);
@@ -888,9 +919,7 @@ fn tryMove(mi: u32, pos: vec2i) -> bool {
   }
   let old = vec2i(me.x, me.y);
   O[mi].floorz = tmfloorz; O[mi].ceilingz = tmceilingz; O[mi].dropoffz = tmdropoffz;
-  unlinkThing(mi);
   O[mi].x = pos.x; O[mi].y = pos.y;
-  linkThing(mi);
   O[mi].sector = sectorAt(pos);
   if ((me.flags & (MF_TELEPORT | MF_NOCLIP)) == 0u) {
     let n = numspechit;
@@ -906,8 +935,10 @@ fn tryMove(mi: u32, pos: vec2i) -> bool {
 
 // Specials crossed during movement run after it, which keeps the call graph acyclic.
 // Activations wait in World until the activate kernel runs: line | side<<16 | kind<<17 | mobj<<19.
+// kind 0 crossed, 1 used, 2 shot, 3 a boss died (A_BossDeath, l unused)
 fn queueActivation(l: u32, side: u32, kind: u32, mi: u32) {
-  if (P.nact < 32u) { P.act[P.nact] = l | (side << 16u) | (kind << 17u) | (mi << 19u); P.nact += 1u; }
+  let k = atomicAdd(&P.nact, 1u);
+  if (k < 32u) { P.act[k] = l | (side << 16u) | (kind << 17u) | (mi << 19u); }
 }
 fn processCrossings(mi: u32) {
   let n = numcross; numcross = 0u;
@@ -1655,9 +1686,7 @@ fn evTeleport(l: u32, side: u32, mi: u32) -> bool {
         }
       }
       let dsec = sectorAt(dest);
-      unlinkThing(mi);
       O[mi].x = dest.x; O[mi].y = dest.y; O[mi].sector = dsec;
-      linkThing(mi);
       O[mi].floorz = S[dsec].floorh; O[mi].ceilingz = S[dsec].ceilh; O[mi].dropoffz = S[dsec].floorh;
       O[mi].z = O[mi].floorz;
       if (mi == 0u) { P.viewz = O[mi].z + P.viewheight; }
@@ -1870,6 +1899,10 @@ fn givePower(pw: i32) -> bool {
   }
 }
 
+fn touchLater(sp: u32, toucher: u32) {
+  let k = atomicAdd(&Q.ntouch, 1u);
+  if (k < 64u) { Q.touch[k] = vec2u(sp, toucher); }
+}
 fn touchSpecialThing(sp: u32, toucher: u32) {
   if (toucher != 0u) { return; }
   let delta = O[sp].z - O[toucher].z;
@@ -2008,27 +2041,16 @@ fn mobjEnd() -> u32 { return select(min(P.mobjtop, MAXMOBJS), MAXMOBJS, P.mobjto
 fn mpos(i: u32) -> vec2f { return vec2f(fxf(O[i].x), fxf(O[i].y)); }
 fn ipos(i: u32) -> vec2i { return vec2i(O[i].x, O[i].y); }
 
-// ---- blocklinks (P_SetThingPosition / P_UnsetThingPosition): each blockmap cell keeps a list of
-// the things in it, newest first, so collision looks only at the cells around a move, in DOOM's order.
+// ---- blocklinks: each blockmap cell keeps a list of the things in it, so collision looks only at the
+// cells around a move. Things move in parallel, so the lists aren't edited as they move: the relink
+// kernel rebuilds them once a tic, and a walk skips a thing removed since.
 // The heads live in LS after the side textures, as thing index + 1 (0 is empty).
 const BLOCKHEADS = NUMLINES + 3u * NUMSIDES;
+const BMCELLS = u32(BM_W * BM_H);
 fn blockCell(p: vec2i) -> i32 {
   let bx = (p.x - (i32(BM_X) << 16u)) >> 23u; let by = (p.y - (i32(BM_Y) << 16u)) >> 23u;
   if (bx < 0 || by < 0 || bx >= BM_W || by >= BM_H) { return -1; }
   return by * BM_W + bx;
-}
-fn unlinkThing(mi: u32) {
-  if ((O[mi].flags & MF_NOBLOCKMAP) != 0u) { return; }
-  let c = blockCell(ipos(mi));
-  if (c < 0) { return; }
-  let h = BLOCKHEADS + u32(c);
-  if (LS[h] == mi + 1u) { LS[h] = u32(O[mi].bnext); return; }
-  var cur = LS[h];
-  for (var guard = 0; guard < 4096 && cur != 0u; guard++) {
-    let nx = u32(O[cur - 1u].bnext);
-    if (nx == mi + 1u) { O[cur - 1u].bnext = O[mi].bnext; return; }
-    cur = nx;
-  }
 }
 fn linkThing(mi: u32) {
   O[mi].bnext = 0;
@@ -2038,7 +2060,7 @@ fn linkThing(mi: u32) {
   let h = BLOCKHEADS + u32(c);
   O[mi].bnext = i32(LS[h]); LS[h] = mi + 1u;
 }
-fn removeMobj(mi: u32) { unlinkThing(mi); O[mi].inuse = 0u; }
+fn removeMobj(mi: u32) { O[mi].inuse = 0u; }
 
 // ---- sight (P_CheckSight): REJECT, then DOOM's walk of the BSP from eye to target (p_sight.c).
 // P_DivlineSide with its integer-truncated products and its x == node->y slip, kept as vanilla has them.
@@ -2166,19 +2188,36 @@ fn spawnMobjI(p: vec2i, z: f32, ty: u32) -> i32 {
     m.req = NOREQ; m.inuse = 1u; m.spawnidx = NOREQ;
     m.px = fxf(m.x); m.py = fxf(m.y); m.pz = m.z;
     O[j] = m;
-    linkThing(j);
     return i32(j);
   }
   return -1;
 }
-fn spawnPuff(p: vec2i, z0: f32, melee: bool) {
+fn spawnLater(kind: u32, ty: u32, src: i32, dst: i32, p: vec2i, z: f32, a: u32, b: f32, c: i32) {
+  let k = atomicAdd(&Q.nspawn, 1u);
+  if (k < 256u) { Q.spawn[k] = SpawnReq(kind, ty, src, dst, p.x, p.y, z, a, b, c, 0u, 0u); }
+}
+// kinds: 0 a thing, 1 a puff, 2 blood, 3 a missile, 4 a Nightmare respawn
+fn spawnPuff(p: vec2i, z0: f32, melee: bool) { spawnLater(1u, MT_PUFF, -1, -1, p, z0, 0u, 0.0, select(0, 1, melee)); }
+fn spawnBlood(p: vec2i, z0: f32, damage: i32) { spawnLater(2u, MT_BLOOD, -1, -1, p, z0, 0u, 0.0, damage); }
+fn spawnMissile(src: u32, dst: i32, ty: u32, an0: u32, slope: f32) { spawnLater(3u, ty, i32(src), dst, vec2i(0), 0.0, an0, slope, 0); }
+fn spawnNow(r: SpawnReq) {
+  switch (r.kind) {
+    case 0u: { _ = spawnMobjI(vec2i(r.x, r.y), r.z, r.ty); }
+    case 1u: { spawnPuffNow(vec2i(r.x, r.y), r.z, r.c != 0); }
+    case 2u: { spawnBloodNow(vec2i(r.x, r.y), r.z, r.c); }
+    case 3u: { if (O[r.src].inuse != 0u) { spawnMissileNow(u32(r.src), r.dst, r.ty, r.a, r.b); } }
+    case 4u: { if (O[r.src].inuse != 0u) { nightmareRespawn(u32(r.src)); } }
+    default: {}
+  }
+}
+fn spawnPuffNow(p: vec2i, z0: f32, melee: bool) {
   let th = spawnMobjI(p, z0 + subRandom() / 64.0, MT_PUFF);
   if (th < 0) { return; }
   O[th].momz = 1.0;
   O[th].tics = max(O[th].tics - (P_Random() & 3), 1);
   if (melee) { O[th].state = S_PUFF3; O[th].tics = gi(G_STATES + 8u * S_PUFF3 + 2u); }
 }
-fn spawnBlood(p: vec2i, z0: f32, damage: i32) {
+fn spawnBloodNow(p: vec2i, z0: f32, damage: i32) {
   let th = spawnMobjI(p, z0 + subRandom() / 64.0, MT_BLOOD);
   if (th < 0) { return; }
   O[th].momz = 2.0;
@@ -2189,7 +2228,7 @@ fn spawnBlood(p: vec2i, z0: f32, damage: i32) {
 }
 
 // P_SpawnMissile / P_SpawnPlayerMissile in one: aimed at dst, or along angle and slope when dst < 0.
-fn spawnMissile(src: u32, dst: i32, ty: u32, an0: u32, slope: f32) {
+fn spawnMissileNow(src: u32, dst: i32, ty: u32, an0: u32, slope: f32) {
   let th = spawnMobjI(ipos(src), O[src].z + 32.0, ty);
   if (th < 0) { return; }
   let t = u32(th);
@@ -2213,11 +2252,11 @@ fn spawnMissile(src: u32, dst: i32, ty: u32, an0: u32, slope: f32) {
     O[t].momz = fxf(fxMul(i32(speed) << 16u, fixedOf(slope)));
   }
   O[t].momx = f32(i32(speed) * fineCosFx(fa)) / 65536.0; O[t].momy = f32(i32(speed) * fineSinFx(fa)) / 65536.0;
-  // P_CheckMissileSpawn: step half a tic forward (momx >> 1 in 16.16) so a point-blank shot still hits
+  // P_CheckMissileSpawn's half step forward; the first tic's move finds what it hits
   O[t].tics = max(O[t].tics - (P_Random() & 3), 1);
   O[t].x += fixedOf(O[t].momx) >> 1u; O[t].y += fixedOf(O[t].momy) >> 1u;
   O[t].z += f32(fixedOf(O[t].momz) >> 1u) / 65536.0;
-  if (!tryMove(t, ipos(t))) { explodeMissile(t); }
+  O[t].px = fxf(O[t].x); O[t].py = fxf(O[t].y); O[t].pz = O[t].z;
 }
 
 // ---- damage
@@ -2252,7 +2291,13 @@ fn killMobj(source: i32, tgt: u32) {
   }
 }
 
-fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
+// Damage waits for the drain kernel, which applies the hits of a tic one at a time: hits from many
+// threads can land on the same thing.
+fn damageMobj(tgt: u32, inflictor: i32, source: i32, damage: i32) {
+  let k = atomicAdd(&Q.ndmg, 1u);
+  if (k < 256u) { Q.dmg[k] = vec4i(i32(tgt), inflictor, source, damage); }
+}
+fn damageNow(tgt: u32, inflictor: i32, source: i32, damage0: i32) {
   if ((O[tgt].flags & MF_SHOOTABLE) == 0u || O[tgt].health <= 0) { return; }
   var damage = damage0;
   if ((O[tgt].flags & MF_SKULLFLY) != 0u) { O[tgt].momx = 0.0; O[tgt].momy = 0.0; O[tgt].momz = 0.0; }
@@ -2308,7 +2353,7 @@ fn radiusAttack(spot: u32, source: i32, damage: i32) {
       for (var guard = 0; guard < 1024 && cur != 0u; guard++) {
         let j = cur - 1u;
         cur = u32(O[j].bnext);
-        if ((O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
+        if (O[j].inuse == 0u || (O[j].flags & MF_SHOOTABLE) == 0u) { continue; }
         if (O[j].mtype == MT_CYBORG || O[j].mtype == MT_SPIDER) { continue; }
         let d = abs(ipos(j) - c);
         let dist = max((max(d.x, d.y) - fixedOf(O[j].radius)) >> 16u, 0);
@@ -2373,6 +2418,7 @@ fn blockIntercepts(bx: i32, by: i32) {
   for (var guard = 0; guard < 1024 && cur != 0u; guard++) {
     let j = cur - 1u;
     cur = u32(O[j].bnext);
+    if (O[j].inuse == 0u) { continue; }
     addIntercept(thingIntercept(j, trP, trD), j | 0x80000000u);
   }
 }
@@ -2554,10 +2600,18 @@ fn pMove(mi: u32) -> bool {
     }
     if (numspechit == 0u) { return false; }
     O[mi].movedir = 8;
+    // the doors and lifts a monster may use open in the activate kernel; one that it may use counts as a way on
     var good = false;
     let n = numspechit;
     var hits = spechit;
-    for (var k = n; k > 0u; k--) { if (useSpecialLine(hits[k - 1u], 0u, mi)) { good = true; } }
+    for (var k = n; k > 0u; k--) {
+      let l = hits[k - 1u];
+      let spec = G[G_LSPEC + min(lineSpecial(l), 255u)];
+      let tr = spec & 7u;
+      if ((lineFlags(l) & ML_SECRET) == 0u && ((spec >> 4u) & 1u) != 0u && (tr == TR_D || tr == TR_S)) {
+        queueActivation(l, 0u, 1u, mi); good = true;
+      }
+    }
     return good;
   }
   O[mi].flags &= ~MF_INFLOAT;
@@ -2728,20 +2782,44 @@ fn bossDeath(mi: u32) {
   P.exit = 1u;
 }
 
-// Monster state actions. Each shared primitive has one call site at the end,
+// Which kernel runs a state's action: 1 acLook, 2 acChase, 3 acAttack, and 0 the cheap ones, which run
+// in thState as the state is set
+fn actionKind(act: u32) -> u32 {
+  switch (act) {
+    case A_Look: { return 1u; }
+    case A_Chase, A_VileChase, A_Hoof, A_Metal, A_BabyMetal: { return 2u; }
+    case A_Scream, A_XScream, A_Pain, A_PlayerScream, A_Fall, A_BossDeath, A_KeenDie, A_SkelWhoosh: { return 0u; }
+    default: { return 3u; }
+  }
+}
+fn miscAction(mi: u32, act: u32) {
+  let ty = O[mi].mtype;
+  switch (act) {
+    case A_SkelWhoosh: { faceTarget(mi); mobjSound(mi, SFX_skeswg); }
+    case A_Scream: {
+      var s = info(ty, MI_DEATHSOUND);
+      if (s == 0) { return; }
+      if (u32(s) >= SFX_podth1 && u32(s) <= SFX_podth3) { s = i32(SFX_podth1) + P_Random() % 3; }
+      else if (u32(s) == SFX_bgdth1 || u32(s) == SFX_bgdth2) { s = i32(SFX_bgdth1) + P_Random() % 2; }
+      mobjSound(mi, u32(s));
+    }
+    case A_XScream: { mobjSound(mi, SFX_slop); }
+    case A_Pain: { let s = info(ty, MI_PAINSOUND); if (s != 0) { mobjSound(mi, u32(s)); } }
+    case A_PlayerScream: { mobjSound(mi, SFX_pldeth); }
+    case A_Fall, A_KeenDie: { O[mi].flags &= ~MF_SOLID; }
+    case A_BossDeath: { queueActivation(0u, 0u, 3u, mi); } // the floors it moves are the activate kernel's
+    default: {}
+  }
+}
+
+// The attack actions (acAttack). Each shared primitive has one call site at the end,
 // so the compiler inlines the movement and attack code once.
 fn callAction(mi: u32, act: u32) {
   let ty = O[mi].mtype;
-  var doLook = false; var doChase = false; var preSound = 0u;
   var face = false; var shots = 0; var shotSound = 0u; var dmgMod = 5; var dmgMul = 3;
   var meleeMod = 0; var meleeMul = 0; var meleeSound = 0u;
   var missile = -1; var bfg = false;
   switch (act) {
-    case A_Look: { doLook = true; }
-    case A_Chase, A_VileChase: { doChase = true; }
-    case A_Hoof: { preSound = SFX_hoof; doChase = true; }
-    case A_Metal: { preSound = SFX_metal; doChase = true; }
-    case A_BabyMetal: { preSound = SFX_bspwlk; doChase = true; }
     case A_FaceTarget, A_VileStart, A_VileTarget, A_VileAttack, A_FatRaise: { face = true; }
     case A_PosAttack: { face = true; shots = 1; shotSound = SFX_pistol; }
     case A_SPosAttack: { face = true; shots = 3; shotSound = SFX_shotgn; }
@@ -2761,7 +2839,6 @@ fn callAction(mi: u32, act: u32) {
     case A_BspiAttack: { face = true; missile = i32(MT_ARACHPLAZ); }
     case A_SkelMissile: { face = true; missile = i32(MT_TRACER); }
     case A_FatAttack1, A_FatAttack2, A_FatAttack3: { face = true; missile = i32(MT_FATSHOT); }
-    case A_SkelWhoosh: { faceTarget(mi); mobjSound(mi, SFX_skeswg); return; }
     case A_SkelFist: { face = true; meleeMod = 10; meleeMul = 6; meleeSound = SFX_skepch; }
     case A_SkullAttack: {
       let t = O[mi].targ;
@@ -2776,21 +2853,7 @@ fn callAction(mi: u32, act: u32) {
       O[mi].momz = fxf((fixedOf(O[t].z) + (fixedOf(O[t].height) >> 1u) - fixedOf(O[mi].z)) / dist);
       return;
     }
-    case A_Scream: {
-      var s = info(ty, MI_DEATHSOUND);
-      if (s == 0) { return; }
-      if (u32(s) >= SFX_podth1 && u32(s) <= SFX_podth3) { s = i32(SFX_podth1) + P_Random() % 3; }
-      else if (u32(s) == SFX_bgdth1 || u32(s) == SFX_bgdth2) { s = i32(SFX_bgdth1) + P_Random() % 2; }
-      mobjSound(mi, u32(s));
-      return;
-    }
-    case A_XScream: { mobjSound(mi, SFX_slop); return; }
-    case A_Pain: { let s = info(ty, MI_PAINSOUND); if (s != 0) { mobjSound(mi, u32(s)); } return; }
-    case A_PlayerScream: { mobjSound(mi, SFX_pldeth); return; }
-    case A_Fall: { O[mi].flags &= ~MF_SOLID; return; }
     case A_Explode: { radiusAttack(mi, O[mi].targ, 128); return; }
-    case A_BossDeath: { bossDeath(mi); return; }
-    case A_KeenDie: { O[mi].flags &= ~MF_SOLID; return; }
     case A_BFGSpray: { if (O[mi].targ < 0) { return; } bfg = true; }
     default: { return; }
   }
@@ -2799,9 +2862,6 @@ fn callAction(mi: u32, act: u32) {
   var steps = 0; var melee = false;
   if (bfg) { steps = 40; }
   else {
-    if (preSound != 0u) { mobjSound(mi, preSound); }
-    if (doLook) { look(mi); return; }
-    if (doChase) { chase(mi); return; }
     let t = O[mi].targ;
     if (t < 0) { return; }
     if (face) { faceTarget(mi); }
@@ -2824,7 +2884,7 @@ fn callAction(mi: u32, act: u32) {
       if (!bfg && k == 0) { slope = r; }
       if (bfg && linetarget >= 0) {
         let lt = u32(linetarget);
-        _ = spawnMobjI(ipos(lt), O[lt].z + O[lt].height / 4.0, MT_EXTRABFG);
+        spawnLater(0u, MT_EXTRABFG, -1, -1, ipos(lt), O[lt].z + O[lt].height / 4.0, 0u, 0.0, 0);
         for (var j = 0; j < 15; j++) { dmg += (P_Random() & 7) + 1; }
         victim = linetarget; attacker = i32(src);
       }
@@ -2833,8 +2893,9 @@ fn callAction(mi: u32, act: u32) {
   }
 }
 
-// P_SetMobjState with actions. An action or a hit asks for a new state by
-// writing req; this loop is the only place states change, so nothing recurses.
+// P_SetMobjState. A cheap action runs here; a look, chase or attack is left in Q.act for its kernel
+// later in the tic, and ends the loop: one such action a think, and a state it asks for comes at the
+// next think. A hit asks for a new state by writing req; this loop is the only place states change.
 fn setMobjState(mi: u32, st0: u32) -> bool {
   var st = st0;
   for (var guard = 0; guard < 32; guard++) {
@@ -2845,9 +2906,12 @@ fn setMobjState(mi: u32, st0: u32) -> bool {
     if (P.skill == 4 && st >= S_SARG_RUN1 && st <= S_SARG_PAIN2) { O[mi].tics = O[mi].tics >> 1u; }
     O[mi].req = NOREQ;
     let act = G[G_STATES + 8u * st + 3u];
-    if (act != 0u) { callAction(mi, act); }
-    if (O[mi].inuse == 0u) { return false; }
-    if (O[mi].req != NOREQ) { st = O[mi].req; continue; }
+    if (act != 0u) {
+      if (actionKind(act) != 0u) { Q.act[mi] = act; return true; }
+      miscAction(mi, act);
+      if (O[mi].inuse == 0u) { return false; }
+      if (O[mi].req != NOREQ) { st = O[mi].req; continue; }
+    }
     if (O[mi].tics != 0) { return true; }
     st = stateNext(st);
   }
@@ -2858,7 +2922,12 @@ fn setMobjState(mi: u32, st0: u32) -> bool {
 fn nightmareRespawn(mi: u32) {
   let t = M_THINGS + 4u * O[mi].spawnidx;
   let sp = vec2f(mf(t), mf(t + 1u));
-  if (!checkPosition(mi, fxv(sp))) { return; }
+  let spi = fxv(sp);
+  for (var k = 0u; k < mobjEnd(); k++) {
+    if (k == mi || O[k].inuse == 0u || (O[k].flags & MF_SOLID) == 0u) { continue; }
+    let bd = fixedOf(O[k].radius + O[mi].radius);
+    if (abs(O[k].x - spi.x) < bd && abs(O[k].y - spi.y) < bd) { return; }
+  }
   let f1 = spawnMobjI(ipos(mi), S[O[mi].sector].floorh, MT_TFOG);
   if (f1 >= 0) { mobjSound(u32(f1), SFX_telept); }
   let f2 = spawnMobj(sp.x, sp.y, ONFLOORZ, MT_TFOG);
@@ -2875,18 +2944,41 @@ fn nightmareRespawn(mi: u32) {
   removeMobj(mi);
 }
 
-// P_MobjThinker. The player (mi 0) only moves here: its state and weapons run in ticPlayer.
-fn mobjThink(mi: u32, isPlayer: bool) {
+// Sight to the player and to the target, checked once before the action kernels' AI asks
+fn prepSight(mi: u32) {
+  sightPlayer = false; sightTarget = false;
+  if ((O[mi].flags & MF_SHOOTABLE) == 0u || info(O[mi].mtype, MI_SEESTATE) == 0) { return; }
+  sightPlayer = checkSight(mi, 0u);
+  let t = O[mi].targ;
+  if (t > 0 && O[t].inuse != 0u) { sightTarget = checkSight(mi, u32(t)); }
+}
+
+// ---- the thinkers, one thread per thing. P_MobjThinker is split: thMove moves, thState counts the
+// state's tics and sets the next, and the action kernels run what a new state calls for.
+fn thinking(mi: u32) -> bool { return mi > 0u && mi < mobjEnd() && O[mi].inuse != 0u && P.exit == 0u; }
+
+@compute @workgroup_size(64)
+fn thMove(@builtin(global_invocation_id) gid: vec3u) {
+  let mi = gid.x;
+  if (!thinking(mi)) { return; }
+  seedRandom(mi * 8u + 1u);
   numcross = 0u;
-  if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (!isPlayer && (O[mi].flags & MF_SKULLFLY) != 0u)) {
-    xyMovement(mi, isPlayer, P.cmdmove != 0u); processCrossings(mi);
+  if (O[mi].momx != 0.0 || O[mi].momy != 0.0 || (O[mi].flags & MF_SKULLFLY) != 0u) {
+    xyMovement(mi, false, false); processCrossings(mi);
   }
   if (O[mi].inuse == 0u) { return; }
-  if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, isPlayer); }
-  if (isPlayer || O[mi].inuse == 0u) { return; }
+  if (O[mi].z != O[mi].floorz || O[mi].momz != 0.0) { zMovement(mi, false); }
+}
+
+@compute @workgroup_size(64)
+fn thState(@builtin(global_invocation_id) gid: vec3u) {
+  let mi = gid.x;
+  if (mi < MAXMOBJS) { Q.act[mi] = 0u; }
+  if (!thinking(mi)) { return; }
+  seedRandom(mi * 8u + 2u);
   var next = NOREQ;
-  // a state asked for from outside (damage, death, an explosion): DOOM had already set it, so after
-  // setting it here this think also counts its first tic, as P_MobjThinker would have
+  // a state asked for from outside (damage, death, an explosion), or by the thing's own last action:
+  // set it, then count its first tic, as P_MobjThinker would have
   let outside = O[mi].req != NOREQ;
   if (outside) { next = O[mi].req; }
   else if (O[mi].tics != -1) {
@@ -2895,22 +2987,12 @@ fn mobjThink(mi: u32, isPlayer: bool) {
   } else if (P.skill == 4 && (O[mi].flags & MF_COUNTKILL) != 0u && O[mi].spawnidx != NOREQ) {
     // Nightmare: a corpse that has lain 12 seconds may rise at its spawn point
     O[mi].movecount += 1;
-    if (O[mi].movecount >= 12 * 35 && (P.leveltime & 31u) == 0u && P_Random() <= 4) { nightmareRespawn(mi); return; }
-  }
-  if (next != NOREQ) {
-    // the actions about to run ask P_CheckSight; nothing moves before they do, so look once here
-    sightPlayer = false; sightTarget = false;
-    if ((O[mi].flags & MF_SHOOTABLE) != 0u && info(O[mi].mtype, MI_SEESTATE) != 0) {
-      let t = O[mi].targ;
-      for (var k = 0; k < 2; k++) {
-        var who = 0u;
-        if (k == 1) { if (t <= 0 || O[t].inuse == 0u) { break; } who = u32(t); }
-        let seen = checkSight(mi, who);
-        if (k == 0) { sightPlayer = seen; } else { sightTarget = seen; }
-      }
+    if (O[mi].movecount >= 12 * 35 && (P.leveltime & 31u) == 0u && P_Random() <= 4) {
+      spawnLater(4u, 0u, i32(mi), -1, vec2i(0), 0.0, 0u, 0.0, 0);
+      return;
     }
   }
-  for (var pass2 = 0; pass2 < 2 && next != NOREQ; pass2++) {
+  for (var pass2 = 0; pass2 < 2 && next != NOREQ && Q.act[mi] == 0u; pass2++) {
     if (!setMobjState(mi, next)) { return; }
     next = NOREQ;
     if (pass2 == 0 && outside) {
@@ -2924,8 +3006,74 @@ fn mobjThink(mi: u32, isPlayer: bool) {
       }
     }
   }
+}
+
+fn acting(mi: u32, kind: u32) -> bool {
+  return thinking(mi) && Q.act[mi] != 0u && actionKind(Q.act[mi]) == kind;
+}
+
+@compute @workgroup_size(64)
+fn acLook(@builtin(global_invocation_id) gid: vec3u) {
+  let mi = gid.x;
+  if (!acting(mi, 1u)) { return; }
+  seedRandom(mi * 8u + 3u);
+  prepSight(mi);
+  look(mi);
+}
+
+@compute @workgroup_size(64)
+fn acChase(@builtin(global_invocation_id) gid: vec3u) {
+  let mi = gid.x;
+  if (!acting(mi, 2u)) { return; }
+  seedRandom(mi * 8u + 4u);
+  let act = Q.act[mi];
+  if (act == A_Hoof) { mobjSound(mi, SFX_hoof); }
+  else if (act == A_Metal) { mobjSound(mi, SFX_metal); }
+  else if (act == A_BabyMetal) { mobjSound(mi, SFX_bspwlk); }
+  prepSight(mi);
+  numcross = 0u;
+  chase(mi);
   // lines a monster walked over in its chase (P_Move): teleporters, monster doors and lifts
   processCrossings(mi);
+}
+
+@compute @workgroup_size(64)
+fn acAttack(@builtin(global_invocation_id) gid: vec3u) {
+  let mi = gid.x;
+  if (!acting(mi, 3u)) { return; }
+  seedRandom(mi * 8u + 5u);
+  prepSight(mi);
+  callAction(mi, Q.act[mi]);
+}
+
+// The tic's damage, pickups and spawns, in the order they were asked for
+@compute @workgroup_size(1)
+fn drain() {
+  seedRandom(0x5eedu);
+  let nd = min(atomicExchange(&Q.ndmg, 0u), 256u);
+  for (var k = 0u; k < nd; k++) { let d = Q.dmg[k]; damageNow(u32(d.x), d.y, d.z, d.w); }
+  let nt = min(atomicExchange(&Q.ntouch, 0u), 64u);
+  for (var k = 0u; k < nt; k++) {
+    let t = Q.touch[k];
+    if (O[t.x].inuse != 0u && O[t.y].inuse != 0u) { touchSpecialThing(t.x, t.y); }
+  }
+  let ns = min(atomicExchange(&Q.nspawn, 0u), 256u);
+  for (var k = 0u; k < ns; k++) { spawnNow(Q.spawn[k]); }
+}
+
+// The blockmap's thing lists, rebuilt from where everything ended the tic
+@compute @workgroup_size(1)
+fn relink() {
+  for (var c = 0u; c < BMCELLS; c++) { LS[BLOCKHEADS + c] = 0u; }
+  for (var i = 0u; i < mobjEnd(); i++) { if (O[i].inuse != 0u) { linkThing(i); } }
+}
+
+@compute @workgroup_size(64)
+fn thLights(@builtin(global_invocation_id) gid: vec3u) {
+  let s = gid.x;
+  if (s >= NUMSECTORS || P.exit != 0u) { return; }
+  seedRandom(s * 8u + 6u);
+  lightThink(s);
 }
 
 // ---- the player's weapons (P_SetPsprite and friends)
@@ -3291,8 +3439,13 @@ fn playerThink() {
 @compute @workgroup_size(1)
 fn ticPlayer() {
   if (P.exit != 0u) { return; }
+  seedRandom(0x9147u);
   playerThink();
   if ((P.cheats & 1u) != 0u) { O[0].flags |= MF_NOCLIP; } else { O[0].flags &= ~MF_NOCLIP; }
+  // the player's P_MobjThinker: its movement
+  numcross = 0u;
+  if (O[0].momx != 0.0 || O[0].momy != 0.0) { xyMovement(0u, true, P.cmdmove != 0u); processCrossings(0u); }
+  if (O[0].z != O[0].floorz || O[0].momz != 0.0) { zMovement(0u, true); }
 }
 // Start of a tic: remember where everything was, so frames between tics can blend.
 @compute @workgroup_size(64)
@@ -3313,34 +3466,14 @@ fn viewSetup() {
 }
 
 @compute @workgroup_size(1)
-// DOOM's thinker list in its order: the map's things as P_LoadThings spawned them (the player's
-// movement among them), then the light thinkers P_SpawnSpecials made, then everything spawned since.
-fn ticMobjs() {
-  if (P.exit != 0u) { return; }
-  // the bound is read each pass: a thing spawned this tic was appended to DOOM's list and thinks this tic too
-  // the player gets a pass of its own at its place, so that mobjThink has one call site
-  var playerDue = true;
-  for (var i = 1u; i < max(mobjEnd(), P.initmobjs + 1u);) {
-    var mi = 0u; var isPlayer = false;
-    if (i == P.playerslot && playerDue) { playerDue = false; isPlayer = true; }
-    else {
-      if (i == P.initmobjs) { for (var s = 0u; s < NUMSECTORS; s++) { lightThink(s); } }
-      mi = i;
-      i += 1u;
-      if (O[mi].inuse == 0u) { continue; }
-    }
-    mobjThink(mi, isPlayer);
-  }
-}
-
-@compute @workgroup_size(1)
 fn ticActivate() {
-  let n = min(P.nact, 32u);
-  P.nact = 0u;
+  let n = min(atomicExchange(&P.nact, 0u), 32u);
   if (P.exit != 0u) { return; }
+  seedRandom(0xac7u);
   for (var k = 0u; k < n; k++) {
     let a = P.act[k];
     let l = a & 0xffffu; let side = (a >> 16u) & 1u; let kind = (a >> 17u) & 3u; let mi = a >> 19u;
+    if (kind == 3u) { bossDeath(mi); continue; }
     if (l >= NUMLINES || lineSpecial(l) == 0u) { continue; }
     if (kind == 0u) { crossSpecialLine(l, side, mi); }
     else if (kind == 1u) { _ = useSpecialLine(l, side, mi); }
@@ -3460,6 +3593,7 @@ fn amLines(@builtin(global_invocation_id) gid: vec3u) {
 @compute @workgroup_size(1)
 fn ticWorld() {
   if (P.exit != 0u) { return; }
+  seedRandom(0x3071du);
   for (var s = 0u; s < NUMSECTORS; s++) {
     // the plane moves first, then the thinker reads the result, as each T_ thinker does around its call
     let plan = moverPlan(s);

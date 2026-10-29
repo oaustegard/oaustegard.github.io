@@ -45,31 +45,36 @@ level.
   an atomic counter. The column threads then draw masked mid-textures and sprites through a depth
   buffer. A floor or ceiling pixel stores the depth of the wall that ended its span, which
   reproduces Doom's sprite clipping by wall silhouettes.
-- **Game tic.** A tic is five kernels in a row, four of them single-threaded:
+- **Game tic.** A tic is a dozen kernels in a row. The things think in parallel, one thread each,
+  split by what they do, as in Laine et al.'s "Megakernels Considered Harmful": one small shader
+  per kind of work instead of one large one, so each compiles quickly and threads that do
+  different work don't wait on each other.
   - `ticSave` (one thread per thing and sector) keeps the last tic's positions for smooth motion.
-  - `ticPlayer` does `P_PlayerThink`: input, thrust, the view height, use, and the weapon's state
-    machine and shots.
-  - `ticMobjs` walks DOOM's thinker list in its order: the map's things as they were spawned,
-    with the player's movement (`P_SlideMove` and stepping) at its own place among them, then the
-    light effects, then everything spawned since. Monsters look, chase and attack here, checking
-    sight by DOOM's walk of the BSP.
-  - `ticActivate` runs the line specials that were crossed or used during the tic.
+  - `ticPlayer` does `P_PlayerThink` (input, thrust, the view height, use, and the weapon's state
+    machine and shots) and then moves the player, with `P_SlideMove` and stepping.
+  - `thMove` moves every other thing: momentum, missiles, falling.
+  - `thState` counts each thing's state down and sets the next. Cheap actions (sounds, flags) run
+    there; a look, a chase or an attack is left for its kernel: `acLook`, `acChase` (`P_Move`,
+    `P_NewChaseDir`) and `acAttack` (hitscans, missiles, melee, explosions), each checking sight
+    by DOOM's walk of the BSP.
+  - `ticActivate` runs the line specials that were crossed or used during the tic, and a boss's
+    death.
   - `ticWorld` moves doors, lifts, floors and crushers, and runs switch timers and the face.
+  - `drain` (one thread) applies the tic's damage, pickups and spawns, which the parallel kernels
+    queue instead of doing: several threads can hit the same monster in one tic.
+  - `relink` rebuilds the blockmap's per-cell lists of things, which moves no longer edit, and
+    `thLights` runs the flickering and glowing sectors.
 
-  Things sit in per-cell lists of the blockmap, as in DOOM, so collision tests only the things
-  near a move. With every one of E1M6's 192 monsters awake, a tic takes about 2.9 ms on a Mac.
+  Each thread draws random numbers from DOOM's table on a stream of its own, and a state that an
+  action asks for comes at the thing's next think. Things that step into the same space in one
+  tic are allowed to move apart. Collision tests only the things in the blockmap cells near a
+  move, as in DOOM.
 
-  WGSL forbids recursion, and DOOM's game code recurses in two places. Crossing a teleport line
-  calls `tryMove` from inside `tryMove`, so line activations go through a queue in the world
-  buffer. A monster's state action can change its own state, or damage something whose state
-  then changes, so actions and damage write a requested state that only the state loop applies.
   Native shader compilers inline every call and unroll loops with a constant bound, so code size
-  decides how long a first load takes: on an RTX 50-series under D3D12, `ticMobjs` once took
-  over four minutes to compile. Every loop's bound therefore comes from a uniform the compiler
-  can't see (`opaqueLoops` in `shaders.js`), and heavy functions are reached through as few call
-  sites as possible: one `movePlane` (P_ChangeSector) for all the movers, one `mobjThink` and one
-  `xyMovement` for the player and every other thing, one hitscan `trace` per kernel, one P_Move
-  shared by A_Chase and P_NewChaseDir.
+  decides how long a first load takes: on an RTX 50-series under D3D12, the single thinker kernel
+  this replaced once took over four minutes to compile, and an Adreno 7xx phone never finished
+  it. Every loop's bound comes from a uniform the compiler can't see (`opaqueLoops` in
+  `shaders.js`), and heavy functions are reached through as few call sites as possible.
 - **Specials as data.** `specials.js` encodes Doom's 140-odd line specials as one word each:
   trigger, repeatability, action, argument and key. The WGSL dispatches on the action code.
   `info.js` holds Doom's state and thing tables, generated from `info.c`.
@@ -113,18 +118,16 @@ minutes on its own clock, so without the stamp a phone can run a new `index.html
 
 ## Accuracy
 
-The engine is checked against Chocolate Doom tic for tic. Scripted inputs go into a demo lump for
-a Chocolate Doom build patched to print the player, every thing and every sector each tic, and
-into the GPU engine, and the two traces are compared. On 23 demos of 714 tics each (E1M1, E1M2,
-E1M4, E1M5 and E1M6, seven maps from episodes 2 to 4, and eleven Doom II maps from MAP01 to MAP32)
-the random number index and the player's position, to the last 1/65536 of a unit, agree on every
-tic. On the seven E1 and Doom II demos that also track monsters, their positions and health agree
-on all 467,670 monster-tics. Their states differ on 7 of them, each a pain or death state set by another
-thing's attack showing one tic late, because a state change requested from outside is applied at
-the monster's next think. Two demos (E2M1 and MAP09) are compared only up to tic 565, where the
-player has died and Chocolate's demo respawns them; the comparison harness doesn't restart levels.
+Until 29 October 2026 the engine matched Chocolate Doom tic for tic: on 23 demos of 714 tics
+each, from all four Freedoom episodes and eleven Doom II maps, the random number index and the
+player's position agreed on every tic, to the last 1/65536 of a unit, and monsters' positions and
+health on all 467,670 monster-tics of the seven demos that tracked them. That version, with a
+single-threaded thinker kernel, is tagged `gpu-doom-before-split`, and the blog post "DOOM on the
+GPU, Tic for Tic" describes how it got there.
 
-Getting there took DOOM's arithmetic rather than an approximation of it:
+The parallel thinkers gave that up for compile time: random numbers no longer come in vanilla's
+single sequence, so monsters make different choices and demos drift within a few seconds. What
+stays is DOOM's arithmetic:
 
 - Positions are 16.16 integers and angles 32-bit BAMs, as DOOM keeps them. `FixedMul` and
   `FixedDiv` are emulated in 32-bit WGSL (split multiplies, long division), and DOOM's
@@ -134,8 +137,10 @@ Getting there took DOOM's arithmetic rather than an approximation of it:
   falls where vanilla puts it.
 - Movement, `P_SlideMove`, `P_CheckPosition`, sight through the BSP, hitscans
   (`P_PathTraverse` over the blockmap) and `P_RadiusAttack` follow p_map.c, p_maputl.c and
-  p_sight.c, including the order in which they visit lines and things.
-- Random numbers come from DOOM's table, drawn in DOOM's call order and thinker order.
+  p_sight.c.
+
+So the player still moves exactly as in Chocolate Doom until a monster does something different:
+on the E1M1 test demo the player's path matches for all 714 tics.
 
 ## Not done yet
 

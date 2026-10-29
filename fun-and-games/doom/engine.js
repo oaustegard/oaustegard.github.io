@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029013442";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS } from "./shaders.js?v=20261029013442";
-import { STATES, SFX, MF } from "./info.js?v=20261029013442";
-import { MSG } from "./specials.js?v=20261029013442";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261029022420";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS } from "./shaders.js?v=20261029022420";
+import { STATES, SFX, MF } from "./info.js?v=20261029022420";
+import { MSG } from "./specials.js?v=20261029022420";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
@@ -71,6 +71,7 @@ export class Engine {
       { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
       ...[2, 3, 4, 5, 6].map((b) => ({ binding: b, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } })),
       { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform" } },
+      { binding: 8, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
     ] });
     if (format) {
       const mod = device.createShaderModule({ code: PRESENT_WGSL });
@@ -144,7 +145,7 @@ export class Engine {
         throw new Error(`pipeline ${entryPoint}: ${errLines.length ? errLines.slice(0, 4).join("\n") : m.length > 600 ? "…" + m.slice(-600) : m}`);
       }
     };
-    const names = ["render", "project", "hud", "amClear", "amLines", "viewSetup", "ticSave", "ticPlayer", "ticMobjs", "ticActivate", "ticWorld"];
+    const names = ["render", "project", "hud", "amClear", "amLines", "viewSetup", ...TIC_KERNELS.map(([k]) => k)];
     const pending = new Set(names);
     onProgress?.({ done: 0, total: names.length, pending: [...pending] });
     const pipes = await Promise.all(names.map((n) => mk(n).then((p) => {
@@ -155,7 +156,7 @@ export class Engine {
     const P = Object.fromEntries(names.map((n, i) => [n, pipes[i]]));
     this.renderPipe = P.render; this.projectPipe = P.project; this.hudPipe = P.hud;
     this.amClearPipe = P.amClear; this.amLinesPipe = P.amLines; this.viewSetupPipe = P.viewSetup;
-    this.ticPipes = ["ticSave", "ticPlayer", "ticMobjs", "ticActivate", "ticWorld"].map((n) => P[n]);
+    this.ticPipes = TIC_KERNELS.map(([n]) => P[n]);
   }
 
   initLevel(map, player) {
@@ -227,14 +228,15 @@ export class Engine {
     wi[W.oldhealth] = player.health; wi[W.lastattackdown] = -1; wu[W.oldweapons] = player.weapons;
     mi[15] = player.health; // player mobj health
 
-    for (const b of [this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf]) b?.destroy();
+    for (const b of [this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf, this.queueBuf]) b?.destroy();
     this.mapBuf = this.buffer(map.words, GPUBufferUsage.STORAGE);
     this.secBuf = this.buffer(new Uint32Array(sec), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.mobjBuf = this.buffer(new Uint32Array(mobjs.buf), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.lsBuf = this.buffer(ls, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
     this.worldBuf = this.buffer(new Uint32Array(world), GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC);
+    this.queueBuf = d.createBuffer({ size: queueBytes(this.maxMobjs), usage: GPUBufferUsage.STORAGE });
     this.bind = d.createBindGroup({ layout: this.layout, entries: [
-      this.gfxBuf, this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf, this.fbBuf, this.frameBuf,
+      this.gfxBuf, this.mapBuf, this.secBuf, this.mobjBuf, this.lsBuf, this.worldBuf, this.fbBuf, this.frameBuf, this.queueBuf,
     ].map((buffer, binding) => ({ binding, resource: { buffer } })) });
     if (this.presentLayout) {
       this.presentBind = d.createBindGroup({ layout: this.presentLayout, entries: [
@@ -268,12 +270,13 @@ export class Engine {
     // ticSave runs one thread per thing (or sector); the rest are single-threaded. Each tic goes to the
     // GPU as a submission of its own, ahead of the caller's encoder: on a slow GPU one long submission
     // can hit Windows' two-second limit, and a driver that fails to recover takes the machine with it.
-    const saveGroups = Math.ceil(Math.max(this.maxMobjs, this.map.sectors.length) / 64);
+    const groups = { save: Math.ceil(Math.max(this.maxMobjs, this.map.sectors.length) / 64),
+      mobj: Math.ceil(this.maxMobjs / 64), sector: Math.ceil(this.map.sectors.length / 64) };
     for (let i = 0; i < tics; i++) {
       const te = this.device.createCommandEncoder();
       const tp = te.beginComputePass();
       tp.setBindGroup(0, this.bind);
-      this.ticPipes.forEach((p, k) => { tp.setPipeline(p); tp.dispatchWorkgroups(k === 0 ? saveGroups : 1); });
+      this.ticPipes.forEach((p, k) => { const g = TIC_KERNELS[k][1]; tp.setPipeline(p); tp.dispatchWorkgroups(groups[g] ?? g); });
       tp.end();
       this.device.queue.submit([te.finish()]);
     }
