@@ -131,14 +131,17 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261029122954";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261029122954";
+import { Music, musicLumpFor } from "./music.js?v=20261030062234";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261030062234";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
 // ?embed=E1M2: start that map straight away, for a page that frames the game (the blog's screenshots);
 // progress goes to the banner, since the menu card stays hidden
 const embedMap = new URLSearchParams(location.search).get("embed");
+// ?bot: the TRM bot plays (bot/driver.js); the keys and touch controls only open the menu
+const botMode = new URLSearchParams(location.search).has("bot");
+let botDriver = null;
 const status = (t) => { $("status").textContent = t; if (embedMap) banner(String(t).replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`)); };
 
 if (!navigator.gpu) {
@@ -240,6 +243,17 @@ async function start(mapName, carry = freshPlayer(), saved = null) {
   recentre();
   running = true;
   lastTime = performance.now(); ticAccum = 0;
+  if (botMode) {
+    try {
+      if (!botDriver) {
+        status("Loading the TRM bot…");
+        const { BotDriver } = await import("./bot/driver.js?v=20261030062234");
+        botDriver = await BotDriver.create(device, (t) => { $("fps").dataset.bot = t; });
+        status("");
+      }
+      botDriver.attach(engine, W);
+    } catch (err) { console.error(err); banner(`The TRM bot failed to load<small>${esc(err.message)}</small>`); }
+  }
 }
 
 // ---------------------------------------------------------------- layout
@@ -530,6 +544,7 @@ function frame(now) {
   let input;
   if (tics > 0) {
     input = readInput();
+    if (botDriver) input = botDriver.input(input);
     input.mouseturn = pendingTurn; input.lookturn = 0;
     pendingTurn = 0;
   } else {
@@ -558,7 +573,8 @@ requestAnimationFrame(frame);
 setInterval(() => {
   applySize(); // a once-a-second safety net for missed resize events
   const t = performance.now(), secs = Math.max((t - fpsT) / 1000, 0.001);
-  $("fps").textContent = running ? `${res[0]}x${res[1]} @ ${Math.round(frames / secs)} Hz` : "";
+  $("fps").textContent = running ? `${res[0]}x${res[1]} @ ${Math.round(frames / secs)} Hz${$("fps").dataset.bot ? " · " + $("fps").dataset.bot : ""}` : "";
+  if (botMode && inter) interAccelerate(); // the bot doesn't wait at the intermission
   frames = 0; fpsT = t;
 }, 1000);
 
