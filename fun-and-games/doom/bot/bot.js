@@ -7,7 +7,7 @@
 // walk it. When the set doesn't join start to goal, that's a TRM failure: the bot counts it and heads
 // for the reachable cell of the set nearest the goal.
 
-import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030071256";
+import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030081407";
 
 const ANGLE = 2 * Math.PI / 4294967296;
 const HEALTH = { 2011: 10, 2012: 25, 2013: 100, 2014: 1 };
@@ -108,6 +108,10 @@ export class Bot {
       if (tr === this.TR.S && !IGNORE_SWITCHES.has(sp) && hasKey(p.cards, key)) {
         out.push({ key: "l" + i, kind: "switch", x: mx, y: my, prio: 40 - d(mx, my) / 100, line: i, use: true });
       }
+      // walk-over lines that open the way (doors, floors, lifts, stairs) are worth crossing once
+      if (tr === this.TR.W && [1, 2, 3, 5].includes(ac) && !this.crossed?.has(i)) {
+        out.push({ key: "l" + i, kind: "trigger", x: mx, y: my, prio: 15 - d(mx, my) / 100, line: i, use: false, walk: true });
+      }
     });
     // the nearest unexplored places
     const fr = [];
@@ -118,7 +122,9 @@ export class Bot {
   }
 
   reject(t, why, tics = 1050) {
-    this.blacklist.set(t.key, this.tic + tics);
+    // each repeat failure on the same target doubles its time out, so the bot explores instead of retrying
+    const n = (this.rejects ||= new Map()).set(t.key, (this.rejects.get(t.key) || 0) + 1).get(t.key);
+    this.blacklist.set(t.key, this.tic + Math.min(tics * 2 ** (n - 1), 35 * 240));
     this.events.push({ tic: this.tic, ev: "reject", kind: t.kind, key: t.key, why });
     if (this.target?.key === t.key) { this.target = null; this.fine = null; this.coarse = null; }
   }
@@ -127,6 +133,7 @@ export class Bot {
     const p = this.s.p;
     if (t.thing !== undefined) return !this.s.items.some((it) => it.k === t.thing);
     if (t.line !== undefined && t.use) return !this.s.specials[t.line];
+    if (t.walk && Math.hypot(t.x - this.s.p.x, t.y - this.s.p.y) < 40) { (this.crossed ||= new Set()).add(t.line); return true; }
     return Math.hypot(t.x - p.x, t.y - p.y) < 48;
   }
 
@@ -401,14 +408,14 @@ export class Bot {
     return { pt: pts[pick], k: pick, at, end: pts.length - 1, cls: f.path.slice(at, at + 4).map((o) => g.g[o]) };
   }
 
-  gridLineClear(g, ax, ay, bx, by) {
+  gridLineClear(g, ax, ay, bx, by, strict = false) {
     const n = Math.ceil(Math.hypot(bx - ax, by - ay) / (g.cs / 3)) + 1;
     for (let k = 1; k <= n; k++) {
       const x = ax + (bx - ax) * k / n, y = ay + (by - ay) * k / n;
       const i = Math.floor((x - g.ox) / g.cs), j = Math.floor((y - g.oy) / g.cs);
       if (i < 0 || j < 0 || i >= N || j >= N) return false;
       const c = g.g[j * N + i];
-      if (c === C.WALL) return false;
+      if (c === C.WALL || (strict && c === C.HAZARD && !this.target?.hazardOK)) return false;
     }
     return true;
   }
@@ -515,6 +522,12 @@ export class Bot {
       const side = ((this.tic / 30) | 0) & 1 ? 1 : -1;
       vx = ax - ey * side * 0.8; vy = ay + ex * side * 0.8;
       const l = Math.hypot(vx, vy) || 1; vx /= l; vy /= l; speed = 1;
+      // fighting moves leave the route: never into a wall, a drop-off or nukage, which is how pits catch the bot
+      const g = this.fine?.grid;
+      if (g && !this.gridLineClear(g, p.x, p.y, p.x + vx * 40, p.y + vy * 40, true)) {
+        const r = Math.hypot(mx - p.x, my - p.y) || 1; vx = (mx - p.x) / r; vy = (my - p.y) / r;
+        if (!hurt && en.d < 700 && !dry) speed = 0;
+      }
     }
     const ca = Math.cos(p.angle), sa = Math.sin(p.angle);
     input.forward = 50 * speed * (vx * ca + vy * sa);
