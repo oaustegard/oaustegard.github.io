@@ -4,7 +4,8 @@ build_tools.py: generate the tool lists from the pages on disk and data/tool-not
 
 Site rule: drop a file in and it appears. Every tool page found in a district
 directory is listed; data/tool-notes.json only adds the curated title, blurb,
-featured flag, kind and the date the page was added ("added", YYYY-MM-DD). A page without a note falls back to its <title>, its
+featured flag, kind and the date the page was added ("added", YYYY-MM-DD).
+Each row shows the page's og:image as a thumbnail when it has one. A page without a note falls back to its <title>, its
 meta description, then the first plain paragraph of its README, and the script
 warns "no curated note for <path>".
 
@@ -12,7 +13,7 @@ Discovery, per district directory (see "dirs" in the notes file):
   *.html except index.html, plus subdirectories that contain an index.html.
   /found/generator.html belongs to the etc district (dirs: etc, found).
   A district may also list pages hosted elsewhere under "external" (href, title,
-  blurb, optional featured, kind, source); the Experiments district uses it for
+  blurb, optional featured, kind, source, image); the Lab district uses it for
   the pages of the oaustegard/experiments repo. No network access at build time.
 
 Dates: "added" in the notes is the date of the page's first commit (renames
@@ -53,6 +54,7 @@ NOTES = ROOT / "data" / "tool-notes.json"
 OUT_JSON = ROOT / "data" / "tools.json"
 REPO_BLOB = "https://github.com/oaustegard/oaustegard.github.io/blob/main/"
 SITE_SUFFIX = " | Oskar Austegard"
+SITE_ORIGIN = "https://austegard.com"
 DEFAULT_PLACES = 5
 
 
@@ -97,12 +99,13 @@ def trim_blurb(text, limit=110):
 
 
 class HeadMeta(HTMLParser):
-    """<title> and meta description of a page."""
+    """<title>, meta description and og:image of a page."""
 
     def __init__(self):
         super().__init__(convert_charrefs=True)
         self.title = ""
         self.description = ""
+        self.image = ""
         self._in_title = False
         self._done = False
 
@@ -118,6 +121,8 @@ class HeadMeta(HTMLParser):
             name = (a.get("name") or a.get("property") or "").lower()
             if name in ("description", "og:description") and a.get("content") and not self.description:
                 self.description = a["content"]
+            elif name == "og:image" and a.get("content") and not self.image:
+                self.image = a["content"]
 
     def handle_endtag(self, tag):
         if tag == "title":
@@ -137,7 +142,13 @@ def read_page_meta(file):
     title = re.sub(r"\s+", " ", p.title).strip()
     if title.endswith(SITE_SUFFIX):
         title = title[: -len(SITE_SUFFIX)].strip()
-    return title, re.sub(r"\s+", " ", p.description).strip()
+    return title, re.sub(r"\s+", " ", p.description).strip(), local_image(p.image)
+
+
+def local_image(url):
+    """An og:image on this site as a root-relative path, so the lists load it from the same origin."""
+    url = (url or "").strip()
+    return url[len(SITE_ORIGIN):] if url.startswith(SITE_ORIGIN + "/") else url
 
 
 def readme_for(root_dir, entry):
@@ -298,7 +309,7 @@ def external_tools(district, warn):
             "title": x["title"], "blurb": x.get("blurb", ""), "path": x["href"],
             "kind": x.get("kind") or "tool", "featured": bool(x.get("featured")), "district": district["key"],
             "readme": (base + src + "/") if (src and base) else None,
-            "added": x.get("added"),
+            "added": x.get("added"), "image": local_image(x.get("image")),
         })
         if not x.get("added"):
             warn("no added date for external %s" % x["href"])
@@ -315,7 +326,7 @@ def build_model(notes, warn):
         for e in discover(d):
             seen.add(e["path"])
             note = known.get(e["path"])
-            page_title, page_desc = read_page_meta(e["file"])
+            page_title, page_desc, image = read_page_meta(e["file"])
             readme = readme_for(e["root_dir"], e)
             added = tool_added(e["path"], e["file"], note, warn)
             if note is not None and "title" not in note and "blurb" not in note:
@@ -336,7 +347,7 @@ def build_model(notes, warn):
                 check_blurb(e["path"], blurb, warn)
             tools.append({
                 "slug": e["stem"], "title": title, "blurb": blurb, "path": e["path"],
-                "kind": kind, "featured": featured, "district": d["key"], "added": added,
+                "kind": kind, "featured": featured, "district": d["key"], "added": added, "image": image,
                 "readme": ("/%s/%s" % (e["dir"], readme.relative_to(e["root_dir"]).as_posix())) if readme else None,
             })
         tools += external_tools(d, warn)
@@ -360,8 +371,10 @@ def place_li(t, indent="", extra=""):
     sub = '<span class="sub">%s</span>' % esc(t["blurb"]) if t["blurb"] else ""
     if t.get("added"):
         extra += ' data-added="%s"' % esc_attr(t["added"])
-    return '%s<li%s><a href="%s"><span class="nm">%s</span>%s</a></li>' % (
-        indent, extra, esc_attr(href(t["path"])), esc(t["title"]), sub)
+    img = ('<img class="thumb" src="%s" alt="" width="1200" height="630" loading="lazy" decoding="async">' % esc_attr(t["image"])
+           if t.get("image") else "")
+    return '%s<li%s><a href="%s">%s<span class="nm">%s</span>%s</a></li>' % (
+        indent, extra, esc_attr(href(t["path"])), img, esc(t["title"]), sub)
 
 
 def home_cards(model):
@@ -507,7 +520,7 @@ def tools_json(model):
     ds = [{"slug": d["slug"], "title": d["title"], "blurb": d["blurb"], "path": d["path"], "count": len(d["tools"])}
           for d in model]
     ts = [{"slug": t["slug"], "title": t["title"], "blurb": t["blurb"], "path": t["path"],
-           "kind": t["kind"], "district": t["district"], "added": t["added"]}
+           "kind": t["kind"], "district": t["district"], "added": t["added"], "image": t.get("image") or None}
           for d in model for t in d["tools"]]
     out = ['{"total":%d,' % total, '"districts":[']
     out.append(",\n".join(dumps(x) for x in ds))
