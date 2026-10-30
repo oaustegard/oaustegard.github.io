@@ -246,7 +246,7 @@ function toast(msg) {
 // flips the viewport to landscape we counter-rotate #app back to the
 // device's natural portrait with a CSS transform — no OS orientation lock
 // needed, the app never visually leaves portrait. Technique ported from Ball
-// Maze (fun-and-games/ball-maze/game.js), including its later refinements:
+// Maze (games/ball-maze/game.js), including its later refinements:
 // prefer whichever angle source reports a rotation (window.orientation still
 // updates when standalone iOS freezes screen.orientation), gate to portrait-
 // natural devices, wait out iOS's staggered angle/resize signals before

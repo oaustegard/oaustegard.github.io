@@ -1,0 +1,1117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>gPu(doom)</title>
+<meta name="description" content="The Doom engine rewritten as WebGPU compute shaders: BSP rendering, movement, doors and lifts all run on the GPU, playing Freedoom's first episode.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="gPu(doom)">
+<meta name="apple-mobile-web-app-title" content="gPu(doom)">
+<meta property="og:description" content="The Doom engine rewritten as WebGPU compute shaders, playing Freedoom's first episode.">
+<meta property="og:url" content="https://austegard.com/games/doom/">
+<meta property="og:image" content="https://austegard.com/games/doom/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A frame from the engine on E1M2, with monsters in a hall, beside the Freedoom marine's god-mode face and the title gPu(doom)">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="gPu(doom)">
+<meta name="twitter:description" content="The Doom engine rewritten as WebGPU compute shaders, playing Freedoom's first episode.">
+<meta name="twitter:image" content="https://austegard.com/games/doom/og-image.png">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="theme-color" content="#000000">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+:root { --ink: #e8e2d0; --mute: #9a927c; --red: #b3261e; --panel: rgba(16, 12, 8, .88); }
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: #000; color: var(--ink); font: 15px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; overflow: hidden; touch-action: none; }
+#stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+canvas { display: block; image-rendering: pixelated; background: #000; }
+/* the overlay scrolls itself; margin: auto on the card centres it when it fits and lets the top scroll into view when it doesn't */
+.overlay { position: fixed; inset: 0; display: flex; padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left)); background: rgba(0, 0, 0, .72); overflow-y: auto; -webkit-overflow-scrolling: touch; touch-action: pan-y; overscroll-behavior: contain; }
+.overlay[hidden] { display: none; }
+.card { width: min(520px, 100%); margin: auto; touch-action: pan-y; background: var(--panel); border: 1px solid #4a3c28; padding: 20px 22px; }
+h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: .04em; color: #f0c060; text-shadow: 2px 2px 0 var(--red); }
+p { margin: 8px 0; }
+.mute { color: var(--mute); font-size: 13px; }
+label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 8px 0; }
+select, button, input[type=file] { font: inherit; color: var(--ink); background: #241b10; border: 1px solid #6b5636; padding: 6px 10px; }
+button.go { width: 100%; margin-top: 12px; padding: 12px; font-size: 18px; background: var(--red); border-color: #e05040; cursor: pointer; }
+button.go:disabled { opacity: .5; cursor: wait; }
+#status { min-height: 1.4em; white-space: pre-wrap; overflow-wrap: anywhere; }
+.keys { display: grid; grid-template-columns: auto 1fr; gap: 2px 12px; font-size: 13px; margin-top: 10px; }
+.keys b { color: #f0c060; font-weight: normal; }
+#touch { position: fixed; inset: 0; pointer-events: none; }
+#touch[hidden] { display: none; }
+.tbtn { position: absolute; pointer-events: auto; width: 64px; height: 64px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .5); background: rgba(40, 30, 16, .45); color: var(--ink); font: 12px ui-monospace, monospace; display: flex; align-items: center; justify-content: center; user-select: none; -webkit-user-select: none; }
+#bUse { right: max(16px, env(safe-area-inset-right)); bottom: 196px; }
+#bFire { right: max(16px, env(safe-area-inset-right)); bottom: 100px; width: 84px; height: 84px; border-color: rgba(220, 80, 60, .7); }
+#bWpn { right: max(112px, calc(env(safe-area-inset-right) + 112px)); bottom: 110px; width: 56px; height: 56px; font-size: 11px; }
+#bCentre { right: max(72px, calc(env(safe-area-inset-right) + 72px)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 18px; }
+#bMap { right: max(128px, calc(env(safe-area-inset-right) + 128px)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; font-size: 11px; }
+#bZoomIn, #bZoomOut { left: max(16px, env(safe-area-inset-left)); width: 44px; height: 44px; font-size: 22px; }
+#bZoomIn { top: max(16px, env(safe-area-inset-top)); }
+#bZoomOut { top: max(72px, calc(env(safe-area-inset-top) + 72px)); }
+.tbtn[hidden] { display: none; }
+#bMenu { right: max(16px, env(safe-area-inset-right)); top: max(16px, env(safe-area-inset-top)); width: 44px; height: 44px; }
+#stick { position: absolute; width: 140px; height: 140px; border-radius: 50%; border: 2px solid rgba(240, 192, 96, .35); display: none; pointer-events: none; }
+#nub { position: absolute; left: 50px; top: 50px; width: 40px; height: 40px; border-radius: 50%; background: rgba(240, 192, 96, .45); }
+#dmenu { position: fixed; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; touch-action: none; cursor: pointer; }
+#dmenu[hidden] { display: none; }
+#banner { position: fixed; left: 0; right: 0; top: 38%; text-align: center; font-size: 20px; color: #f0c060; text-shadow: 2px 2px 0 #000, 0 0 8px #000; pointer-events: none; }
+#banner small { display: block; font-size: 14px; color: var(--ink); margin-top: 6px; }
+#pos { position: fixed; left: 50%; transform: translateX(-50%); top: max(24px, calc(env(safe-area-inset-top) + 18px)); font-size: 12px; color: #f0c060; text-shadow: 1px 1px 0 #000; pointer-events: none; white-space: nowrap; }
+#fps { position: fixed; left: 50%; transform: translateX(-50%); top: max(6px, env(safe-area-inset-top)); font-size: 11px; color: #6c6; text-shadow: 1px 1px 0 #000; pointer-events: none; white-space: nowrap; }
+</style>
+</head>
+<body>
+<div id="stage"><canvas id="screen" width="640" height="400"></canvas></div>
+<div id="fps"></div>
+<div id="pos" hidden></div>
+<div id="banner" hidden></div>
+<div id="touch" hidden>
+  <div id="stick"><div id="nub"></div></div>
+  <div class="tbtn" id="bUse">USE</div>
+  <div class="tbtn" id="bFire">FIRE</div>
+  <div class="tbtn" id="bWpn">WPN</div>
+  <div class="tbtn" id="bMenu">II</div>
+  <div class="tbtn" id="bCentre">◎</div>
+  <div class="tbtn" id="bMap">MAP</div>
+  <div class="tbtn am" id="bZoomIn" hidden>+</div>
+  <div class="tbtn am" id="bZoomOut" hidden>−</div>
+</div>
+
+<canvas id="dmenu" hidden></canvas>
+
+<div class="overlay" id="menu">
+  <div class="card">
+    <h1>gPu(doom)</h1>
+    <p class="mute">The probability of Doom, running on a GPU near you: 1.</p>
+    <p>The Doom engine rewritten as WebGPU compute shaders. One GPU thread per screen column walks the BSP tree and draws walls, floors and sprites; the game tic (movement, collision, doors, lifts, pickups) runs in GPU kernels too. JavaScript reads the WAD, passes keys and plays sounds.</p>
+    <p class="mute">Playing Freedoom's first episode (BSD licence).</p>
+    <label>Warp to a level <span><select id="map"></select> <button id="warp" type="button">Go</button></span></label>
+    <label>Resolution <select id="res">
+      <option value="200">200 lines (original)</option>
+      <option value="400" selected>400 lines</option>
+      <option value="600">600 lines</option>
+      <option value="800">800 lines</option>
+    </select></label>
+    <label>Widescreen (fit the screen's shape) <input type="checkbox" id="wide" checked></label>
+    <label>Music volume <input type="range" id="musicVol" min="0" max="1" step="0.05" value="0.6"></label>
+    <div id="tiltOpts" hidden>
+      <label>Swivel to turn <input type="checkbox" id="tilt" checked></label>
+      <label>Tilt sideways to turn <input type="checkbox" id="tiltRoll" checked></label>
+      <label>Tilt forward and back to look up and down <input type="checkbox" id="tiltPitch" checked></label>
+      <label>Turn speed <input type="range" id="tiltSpeed" min="0.4" max="2.5" step="0.1" value="1"></label>
+      <label>Reverse turning <input type="checkbox" id="tiltRev"></label>
+    </div>
+    <label>Your own WAD <input type="file" id="wadfile" accept=".wad,.WAD"></label>
+    <div id="status" class="mute"></div>
+    <button class="go" id="play" disabled>Loading…</button>
+    <p class="mute">Esc or Back returns to the menu; New Game there picks the episode and skill.</p>
+    <div class="keys">
+      <b>W A S D / arrows</b><span>move and turn (A/D strafe)</span>
+      <b>mouse</b><span>turn and look up or down (click the screen to capture it)</span>
+      <b>shift</b><span>run</span>
+      <b>ctrl / F / click</b><span>fire</span>
+      <b>1 – 7</b><span>weapons</span>
+      <b>tab / M</b><span>automap; + and − or the mouse wheel zoom it</span>
+      <b>space / E</b><span>open doors, press switches</span>
+      <b>alt + ← →</b><span>strafe with the arrows</span>
+      <b>esc</b><span>the menu (arrows and enter, or click or tap)</span>
+      <b>phone</b><span>swivel or tilt the phone sideways to turn, tilt it forward and back to look up and down, ◎ recentres; the left thumb walks and strafes, the right thumb drags to turn</span>
+    </div>
+  </div>
+</div>
+
+
+<script type="module">
+import { Music, musicLumpFor } from "./music.js?v=20261030163353";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261030163353";
+
+const $ = (id) => document.getElementById(id);
+const canvas = $("screen");
+// ?embed=E1M2: start that map straight away, for a page that frames the game (the blog's screenshots);
+// progress goes to the banner, since the menu card stays hidden
+const embedMap = new URLSearchParams(location.search).get("embed");
+// ?bot: the TRM bot plays (bot/driver.js); the keys and touch controls only open the menu
+const botMode = new URLSearchParams(location.search).has("bot");
+let botDriver = null;
+const status = (t) => { $("status").textContent = t; if (embedMap) banner(String(t).replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`)); };
+
+if (!navigator.gpu) {
+  status("This browser has no WebGPU. Try a recent Chrome, Edge or Safari.");
+  $("play").textContent = "WebGPU unavailable";
+  throw new Error("no webgpu");
+}
+
+let device, context, format, engine, wadBuf;
+let running = false, loading = false;
+let player = freshPlayer();
+let res = [640, 400];
+
+async function initGPU() {
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) throw new Error("no GPU adapter");
+  device = await adapter.requestDevice({ requiredLimits: {
+    maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize,
+    maxBufferSize: adapter.limits.maxBufferSize,
+  } });
+  device.lost.then((i) => { status("GPU device lost: " + i.message); running = false; showMenu(); });
+  context = canvas.getContext("webgpu");
+  format = navigator.gpu.getPreferredCanvasFormat();
+  context.configure({ device, format, alphaMode: "opaque" });
+}
+
+async function fetchWad() {
+  const r = await fetch("e1.wad.gz");
+  if (!r.ok) throw new Error("WAD download failed: " + r.status);
+  const total = +r.headers.get("content-length") || 0;
+  const reader = r.body.getReader(); const parts = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    parts.push(value); got += value.length;
+    if (total) status(`Downloading Freedoom… ${Math.round(100 * got / total)}%`);
+  }
+  return unpackWad(await new Blob(parts).arrayBuffer());
+}
+
+// Doom's pixels are 1.2 times taller than wide; the width that fills the screen follows from that
+function renderSize() {
+  const h = +$("res").value;
+  const aspect = $("wide").checked ? Math.max(4 / 3, Math.min(2.4, innerWidth / innerHeight)) : 4 / 3;
+  return [Math.round(h * 1.2 * aspect / 8) * 8, h];
+}
+async function buildEngine() {
+  const [w, h] = renderSize();
+  res = [w, h];
+  canvas.width = w; canvas.height = h;
+  fit();
+  status("Packing textures…");
+  engine = await Engine.create(device, wadBuf, { width: w, height: h, format });
+  const sel = $("map"), prev = sel.value;
+  sel.innerHTML = "";
+  for (const m of engine.maps()) sel.add(new Option(m, m));
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
+function banner(html) { const b = $("banner"); b.hidden = !html; b.innerHTML = html || ""; }
+const esc = (t) => String(t).replace(/[&<>]/g, (c) => `&#${c.charCodeAt(0)};`);
+async function start(mapName, carry = freshPlayer(), saved = null) {
+  loading = true; slowNotice = false;
+  status(`Compiling shaders for ${mapName}…`);
+  $("play").disabled = true;
+  // the first compile of a level takes seconds on most GPUs and minutes on some: show which kernels remain
+  const t0 = performance.now();
+  let prog = null;
+  const show = () => {
+    const s = Math.round((performance.now() - t0) / 1000);
+    const what = prog ? `${prog.done} of ${prog.total} GPU kernels compiled, ${s} s` : `compiling the GPU code, ${s} s`;
+    const slow = s >= 20 && prog?.pending.length ? `<br>still compiling ${prog.pending.join(", ")}: on some GPUs the first load of a level takes minutes` : "";
+    if ($("menu").hidden) banner(`Loading ${mapName}…<small>${what}${slow}</small>`);
+    else status(`Compiling shaders for ${mapName}: ${what}`);
+  };
+  show();
+  const tick = setInterval(show, 1000);
+  try {
+    await engine.loadMap(mapName, carry, (p) => { prog = p; show(); });
+  } catch (err) {
+    console.error(err);
+    loading = false;
+    $("play").disabled = false;
+    // the status line sits in the hidden options card, so the banner carries the error; DOOM's menu
+    // comes back underneath it to try again
+    $("status").textContent = `${mapName} failed to load: ${err.message}`;
+    banner(`${esc(mapName)} failed to load<small>${esc(err.message)}</small>`);
+    if (!embedMap) showMenu();
+    return false;
+  } finally { clearInterval(tick); }
+  if (saved && !engine.restore(saved)) status("That save doesn't fit this WAD; the level starts fresh.");
+  playSong(musicLumpFor(mapName));
+  banner("");
+  player = carry;
+  status("");
+  loading = false;
+  $("play").disabled = false;
+  hideMenu();
+  recentre();
+  running = true;
+  lastTime = performance.now(); ticAccum = 0;
+  if (botMode) {
+    try {
+      if (!botDriver) {
+        status("Loading the TRM bot…");
+        const { BotDriver } = await import("./bot/driver.js?v=20261030163353");
+        botDriver = await BotDriver.create(device, (t) => { $("fps").dataset.bot = t; });
+        status("");
+      }
+      botDriver.attach(engine, W);
+    } catch (err) { console.error(err); banner(`The TRM bot failed to load<small>${esc(err.message)}</small>`); }
+  }
+}
+
+// ---------------------------------------------------------------- layout
+function fit() {
+  const vw = innerWidth, vh = innerHeight;
+  const ar = res[0] / (res[1] * 1.2);
+  let w = vw, h = vw / ar;
+  if (h > vh) { h = vh; w = vh * ar; }
+  canvas.style.width = Math.floor(w) + "px";
+  canvas.style.height = Math.floor(h) + "px";
+}
+// the render size follows the window: turning the phone just resizes the framebuffer in use
+function applySize() {
+  if (!engine) { fit(); return; }
+  const [w, h] = renderSize();
+  if (w !== res[0] || h !== res[1]) {
+    engine.resize(w, h);
+    res = [w, h];
+    canvas.width = w; canvas.height = h;
+  }
+  fit();
+}
+addEventListener("resize", applySize); fit();
+// iOS can fire resize and orientationchange before the window reports its new size; check again shortly after
+addEventListener("orientationchange", () => { setTimeout(applySize, 250); setTimeout(applySize, 1000); });
+visualViewport?.addEventListener("resize", applySize);
+$("res").addEventListener("change", applySize);
+$("wide").addEventListener("change", applySize);
+
+// ---------------------------------------------------------------- input
+const keys = new Set();
+let mouseDX = 0, turnHeld = 0, weaponKey = 0;
+let automap = false, amzoom = 1;
+function toggleMap() {
+  automap = !automap;
+  for (const id of ["bZoomIn", "bZoomOut"]) $(id).hidden = !(automap && isTouch);
+}
+const zoomMap = (f) => { amzoom = Math.max(0.15, Math.min(8, amzoom * f)); };
+addEventListener("wheel", (e) => { if (running && automap) zoomMap(e.deltaY < 0 ? 1.15 : 1 / 1.15); }, { passive: true });
+const isTouch = matchMedia("(pointer: coarse)").matches;
+// DOOM's cheat codes, typed while playing
+let typed = "", posUntil = 0; // idmypos shows the player's position until posUntil
+function cheatKey(e) {
+  if (!running || !engine || e.key.length !== 1) return;
+  typed = (typed + e.key.toLowerCase()).slice(-12);
+  const lev = /idclev(\d)(\d)$/.exec(typed);
+  if (lev) {
+    const m = engine.map?.commercial ? `MAP${lev[1]}${lev[2]}` : `E${lev[1]}M${lev[2]}`;
+    if (engine.maps().includes(m)) { typed = ""; start(m, freshPlayer()); }
+    return;
+  }
+  const behold = /idbehold([vsiral])$/.exec(typed);
+  if (behold) { typed = ""; engine.cheat("idbehold" + behold[1]); return; }
+  if (typed.endsWith("idbehold")) { engine.cheat("idbehold"); return; } // keep it: a letter may follow
+  if (typed.endsWith("idmypos")) { typed = ""; posUntil = performance.now() + 5000; return; }
+  for (const c of ["iddqd", "idkfa", "idfa", "idclip", "idspispopd", "iddt"]) {
+    if (typed.endsWith(c) && engine.cheat(c)) { typed = ""; return; }
+  }
+}
+addEventListener("keydown", (e) => {
+  if (menuKey(e)) return;
+  cheatKey(e);
+  if (e.code === "Escape") { if (running) showMenu(); return; }
+  if (/^Digit[1-9]$/.test(e.code)) weaponKey = +e.code.slice(5);
+  // the M of idmypos is part of the cheat, not the map key
+  if (running && (e.code === "Tab" || (e.code === "KeyM" && !typed.endsWith("idm")))) { toggleMap(); e.preventDefault(); return; }
+  if (running && automap && (e.code === "Equal" || e.code === "NumpadAdd")) zoomMap(1.25);
+  if (running && automap && (e.code === "Minus" || e.code === "NumpadSubtract")) zoomMap(0.8);
+  keys.add(e.code);
+  if (running && ["Space", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.code)) e.preventDefault();
+});
+addEventListener("keyup", (e) => keys.delete(e.code));
+addEventListener("blur", () => keys.clear());
+canvas.addEventListener("click", () => { if (running && !isTouch) canvas.requestPointerLock?.(); });
+let mouseDY = 0, mousePitch = 0, mouseFire = false;
+addEventListener("mousedown", (e) => { if (document.pointerLockElement === canvas && e.button === 0) mouseFire = true; });
+addEventListener("mouseup", (e) => { if (e.button === 0) mouseFire = false; });
+addEventListener("mousemove", (e) => { if (document.pointerLockElement === canvas) { mouseDX += e.movementX; mouseDY += e.movementY; } });
+
+// Phone motion. Gravity gives the pose: the back camera's elevation is the look pitch and the
+// screen's right edge against the horizon is the steering roll, both relative to the pose at Play
+// (or the last recentre). Swivel is the rotation rate projected on gravity. iOS reports gravity
+// with the opposite sign to the spec, so "up" flips there.
+const gyro = { on: false, turn: 0, last: 0, g: [0, 0, -1], pitch: 0, roll: 0, pitch0: null, roll0: null };
+const isIOS = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+// Screen axes in device coordinates. When the orientation API is missing (an installed home-screen
+// app can report none) or disagrees with the window's shape, gravity says which edge is up.
+function screenAxes(up) {
+  let deg = screen.orientation?.angle ?? window.orientation;
+  const landscape = innerWidth > innerHeight;
+  if (deg == null || (Math.abs(deg % 180) === 90) !== landscape) {
+    deg = landscape ? (up[0] > 0 ? 90 : 270) : (up[1] >= 0 ? 0 : 180);
+  }
+  const th = (deg * Math.PI) / 180;
+  return { right: [Math.cos(th), -Math.sin(th), 0], up: [Math.sin(th), Math.cos(th), 0] };
+}
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity, r = e.rotationRate;
+  if (a && a.x != null) {
+    const m = Math.hypot(a.x, a.y, a.z) || 1;
+    // low-pass the gravity direction so hand shake doesn't leak into it; a recentre takes the raw
+    // sample, because a half-settled average would make the level pose wrong and steer forever
+    const k = gyro.pitch0 === null ? 1 : 0.15;
+    for (const [i, v] of [a.x, a.y, a.z].entries()) gyro.g[i] = gyro.g[i] * (1 - k) + (v / m) * k;
+  }
+  const now = performance.now();
+  const dt = gyro.last ? Math.min((now - gyro.last) / 1000, 0.1) : 0;
+  gyro.last = now;
+  const gm = Math.hypot(...gyro.g) || 1;
+  const up = gyro.g.map((v) => (isIOS ? -v : v) / gm);
+  const ax = screenAxes(up);
+  gyro.pitch = Math.asin(Math.max(-1, Math.min(1, -up[2])));
+  gyro.roll = Math.asin(Math.max(-1, Math.min(1, dot3(ax.right, up))));
+  if (gyro.pitch0 === null) { gyro.pitch0 = gyro.pitch; gyro.roll0 = gyro.roll; }
+  if (!gyro.on || !running) return;
+  const speed = +$("tiltSpeed").value, rev = $("tiltRev").checked ? -1 : 1;
+  if ($("tilt").checked && r && r.alpha != null) {
+    const yaw = (r.beta * gyro.g[0] + r.gamma * gyro.g[1] + r.alpha * gyro.g[2]) / gm; // deg/s
+    if (Math.abs(yaw) > 1.5) gyro.turn += (isIOS ? -1 : 1) * rev * yaw * dt * Math.PI / 180 * speed;
+  }
+  if ($("tiltRoll").checked) {
+    const rel = gyro.roll - gyro.roll0, dz = 0.09;
+    if (Math.abs(rel) > dz) gyro.turn += rev * Math.sign(rel) * (Math.abs(rel) - dz) * 2.6 * speed * dt;
+  }
+}
+function lookPitch() {
+  let p = mousePitch;
+  if (gyro.on && $("tiltPitch").checked && gyro.pitch0 !== null) p += (gyro.pitch - gyro.pitch0) * 1.2;
+  return Math.max(-0.75, Math.min(0.75, p));
+}
+function recentre() { gyro.pitch0 = null; gyro.roll0 = null; mousePitch = 0; }
+async function enableGyro() {
+  gyro.on = false;
+  if (!isTouch || typeof DeviceMotionEvent === "undefined") return;
+  try {
+    if (typeof DeviceMotionEvent.requestPermission === "function" && (await DeviceMotionEvent.requestPermission()) !== "granted") return;
+    if (!enableGyro.added) { addEventListener("devicemotion", onMotion); enableGyro.added = true; }
+    gyro.on = true;
+    recentre();
+  } catch { /* permission refused: dragging still works */ }
+}
+
+// touch: the left half is a floating stick, the right half drags to turn
+const STICK = 70;
+const touch = { stickId: null, sx: 0, sy: 0, dx: 0, dy: 0, turnId: null, tx: 0, use: false, fire: false };
+if (isTouch) {
+  $("touch").hidden = false;
+  $("tiltOpts").hidden = false;
+  const stick = $("stick"), nub = $("nub");
+  addEventListener("touchstart", (e) => {
+    if (!running) return;
+    for (const t of e.changedTouches) {
+      if (t.target.closest?.(".tbtn")) continue;
+      if (t.clientX < innerWidth / 2 && touch.stickId === null) {
+        touch.stickId = t.identifier; touch.sx = t.clientX; touch.sy = t.clientY; touch.dx = touch.dy = 0;
+        stick.style.display = "block"; stick.style.left = t.clientX - STICK + "px"; stick.style.top = t.clientY - STICK + "px";
+        nub.style.left = STICK - 20 + "px"; nub.style.top = STICK - 20 + "px";
+      } else if (touch.turnId === null) { touch.turnId = t.identifier; touch.tx = t.clientX; }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  addEventListener("touchmove", (e) => {
+    if (!running) return; // the menu is up: let it scroll
+    for (const t of e.changedTouches) {
+      if (t.identifier === touch.stickId) {
+        let dx = t.clientX - touch.sx, dy = t.clientY - touch.sy;
+        const m = Math.hypot(dx, dy);
+        if (m > STICK) { dx *= STICK / m; dy *= STICK / m; }
+        // dead zone, then a soft curve so small thumb drifts walk instead of sprint
+        const n = Math.min(m, STICK) / STICK, dz = 0.15;
+        const k = n <= dz ? 0 : Math.pow((n - dz) / (1 - dz), 1.7) / (n || 1);
+        touch.dx = (dx / STICK) * k; touch.dy = (dy / STICK) * k;
+        nub.style.left = STICK - 20 + dx + "px"; nub.style.top = STICK - 20 + dy + "px";
+      } else if (t.identifier === touch.turnId) { mouseDX += (t.clientX - touch.tx) * 1.1; touch.tx = t.clientX; }
+    }
+    e.preventDefault();
+  }, { passive: false });
+  const end = (e) => {
+    for (const t of e.changedTouches) {
+      if (t.identifier === touch.stickId) { touch.stickId = null; touch.dx = touch.dy = 0; stick.style.display = "none"; }
+      if (t.identifier === touch.turnId) touch.turnId = null;
+    }
+  };
+  addEventListener("touchend", end); addEventListener("touchcancel", end);
+  $("bUse").addEventListener("touchstart", (e) => { touch.use = true; e.preventDefault(); e.stopPropagation(); });
+  $("bUse").addEventListener("touchend", (e) => { touch.use = false; e.preventDefault(); });
+  $("bFire").addEventListener("touchstart", (e) => { touch.fire = true; e.preventDefault(); e.stopPropagation(); });
+  $("bFire").addEventListener("touchend", (e) => { touch.fire = false; e.preventDefault(); });
+  $("bWpn").addEventListener("touchstart", (e) => { weaponKey = 10; e.preventDefault(); e.stopPropagation(); }); // the next weapon
+  $("bCentre").addEventListener("touchstart", (e) => { recentre(); e.preventDefault(); e.stopPropagation(); });
+  $("bMap").addEventListener("touchstart", (e) => { toggleMap(); e.preventDefault(); e.stopPropagation(); });
+  $("bZoomIn").addEventListener("touchstart", (e) => { zoomMap(1.4); e.preventDefault(); e.stopPropagation(); });
+  $("bZoomOut").addEventListener("touchstart", (e) => { zoomMap(1 / 1.4); e.preventDefault(); e.stopPropagation(); });
+  $("bMenu").addEventListener("touchstart", (e) => { showMenu(); e.preventDefault(); e.stopPropagation(); });
+}
+
+// Turning from the mouse, gyro and right thumb since the last frame. Applied to the view at once;
+// the next tic takes the sum so the game state catches up.
+function takeTurn() {
+  const t = -mouseDX * 0.0028 + gyro.turn;
+  mousePitch = Math.max(-0.75, Math.min(0.75, mousePitch - mouseDY * 0.0022));
+  mouseDX = 0; mouseDY = 0; gyro.turn = 0;
+  return t;
+}
+let pendingTurn = 0;
+
+const ANG = (units) => units * 65536 / 4294967296 * 2 * Math.PI; // DOOM angleturn units -> radians
+function readInput() {
+  const k = (...c) => c.some((x) => keys.has(x));
+  const run = k("ShiftLeft", "ShiftRight");
+  const strafeMod = k("AltLeft", "AltRight");
+  let forward = 0, side = 0, turn = 0;
+  const fw = run ? 50 : 25, sw = run ? 40 : 24;
+  if (k("KeyW", "ArrowUp")) forward += fw;
+  if (k("KeyS", "ArrowDown")) forward -= fw;
+  if (k("KeyD") || (strafeMod && k("ArrowRight"))) side += sw;
+  if (k("KeyA") || (strafeMod && k("ArrowLeft"))) side -= sw;
+  const turning = !strafeMod && (k("ArrowLeft") || k("ArrowRight"));
+  turnHeld = turning ? turnHeld + 1 : 0;
+  const tspeed = turnHeld < 6 ? 320 : run ? 1280 : 640;
+  if (!strafeMod && k("ArrowRight")) turn -= ANG(tspeed);
+  if (!strafeMod && k("ArrowLeft")) turn += ANG(tspeed);
+  if (touch.stickId !== null) {
+    forward += -touch.dy * 50; side += touch.dx * 40;
+  }
+  const mouseturn = 0; // turning from mouse, gyro and drag arrives through takeTurn() every frame
+  const use = k("Space", "KeyE", "Enter") || touch.use;
+  const fire = k("ControlLeft", "ControlRight", "KeyF") || mouseFire || touch.fire;
+  const w = weaponKey; weaponKey = 0;
+  return { forward: Math.max(-50, Math.min(50, forward)), side: Math.max(-40, Math.min(40, side)), turn, mouseturn, use, fire, weapon: w, pitch: lookPitch(), automap, amzoom };
+}
+
+// ---------------------------------------------------------------- sound
+let audio = null;
+const bufferCache = new Map();
+function playSound(ev, view) {
+  if (!audio || !ev.sfx) return;
+  let b = bufferCache.get(ev.sfx);
+  if (b === undefined) {
+    const s = engine.sound(ev.sfx);
+    b = null;
+    if (s) { b = audio.createBuffer(1, s.samples.length, s.rate); b.copyToChannel(s.samples, 0); }
+    bufferCache.set(ev.sfx, b);
+  }
+  if (!b) return;
+  const dx = ev.x - view.x, dy = ev.y - view.y;
+  const dist = Math.hypot(dx, dy);
+  if (dist > 1200) return;
+  const vol = dist < 160 ? 1 : (1200 - dist) / 1040;
+  const rel = Math.atan2(dy, dx) - view.angle;
+  const src = audio.createBufferSource(); src.buffer = b;
+  const g = audio.createGain(); g.gain.value = 0.5 * vol;
+  const pan = audio.createStereoPanner(); pan.pan.value = dist < 1 ? 0 : -Math.sin(rel) * 0.75;
+  src.connect(g).connect(pan).connect(audio.destination);
+  src.start();
+}
+
+// ---------------------------------------------------------------- loop
+let lastTime = 0, ticAccum = 0, frames = 0, fpsT = 0;
+// GPU back-pressure and a watchdog: no new frame while two are unfinished, so a slow GPU slows the game
+// instead of queueing work; and tics far slower than DOOM's 28 ms pause the game before they grow
+// toward the two seconds after which Windows resets the graphics driver.
+let inFlight = 0, slowFrames = 0, slowNotice = false;
+const SLOW_TIC_MS = 150;
+function gpuTooSlow(msPerTic) {
+  showMenu();
+  slowNotice = true; // kept up until the game resumes, over the readbacks still in flight
+  banner(`Paused: this GPU takes ${Math.round(msPerTic)} ms a tic<small>DOOM needs under 28 ms. Playing on could hang the graphics driver</small>`);
+}
+const NEXT = { E1M1: "E1M2", E1M2: "E1M3", E1M3: "E1M4", E1M4: "E1M5", E1M5: "E1M6", E1M6: "E1M7", E1M7: "E1M8", E1M9: "E1M4",
+  E2M1: "E2M2", E2M2: "E2M3", E2M3: "E2M4", E2M4: "E2M5", E2M5: "E2M6", E2M6: "E2M7", E2M7: "E2M8", E2M9: "E2M6",
+  E3M1: "E3M2", E3M2: "E3M3", E3M3: "E3M4", E3M4: "E3M5", E3M5: "E3M6", E3M6: "E3M7", E3M7: "E3M8", E3M9: "E3M7" };
+const SECRET = { E1M3: "E1M9", E2M5: "E2M9", E3M6: "E3M9", MAP15: "MAP31", MAP31: "MAP32" };
+let pendingExit = null;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!running || loading || !engine?.map || inFlight >= 2) { lastTime = now; return; }
+  ticAccum += (now - lastTime) * 35 / 1000;
+  lastTime = now;
+  let tics = Math.floor(ticAccum);
+  ticAccum -= tics;
+  if (tics > 4) { tics = 4; ticAccum = 0; } // a long stall: catch up a little, then drop the backlog
+  // Every display frame is drawn; the game advances only on whole tics. Between tics the view and
+  // things are blended by ticAccum, and turning shows at once through lookturn.
+  pendingTurn += takeTurn();
+  let input;
+  if (tics > 0) {
+    input = readInput();
+    if (botDriver) input = botDriver.input(input);
+    input.mouseturn = pendingTurn; input.lookturn = 0;
+    pendingTurn = 0;
+  } else {
+    input = { pitch: lookPitch(), automap, amzoom, lookturn: pendingTurn };
+  }
+  input.frac = ticAccum;
+  const enc = device.createCommandEncoder();
+  engine.encodeFrame(enc, tics, input);
+  engine.present(enc, context.getCurrentTexture().createView());
+  const rb = engine.readWorld(enc);
+  device.queue.submit([enc.finish()]);
+  const t0 = performance.now();
+  inFlight++;
+  device.queue.onSubmittedWorkDone().then(() => {
+    inFlight--;
+    if (tics === 0 || !running) return;
+    // with ?bot, frames that queue behind the bot's TRM plans are late because of the bot: don't count them
+    if (botDriver && performance.now() - (botDriver.busyAt ?? -1e9) < 1500) { slowFrames = 0; return; }
+    slowFrames = (performance.now() - t0) / tics > SLOW_TIC_MS ? slowFrames + 1 : 0;
+    if (slowFrames >= 3) { slowFrames = 0; gpuTooSlow((performance.now() - t0) / tics); }
+  });
+  if (rb) engine.finishRead(rb).then(onWorld);
+  frames++;
+}
+requestAnimationFrame(frame);
+// The meter runs on its own timer, so a stalled loop reads 0 instead of freezing. Doom simulates
+// 35 tics a second and a frame is drawn only when a tic has passed, so 35 is the ceiling.
+setInterval(() => {
+  applySize(); // a once-a-second safety net for missed resize events
+  const t = performance.now(), secs = Math.max((t - fpsT) / 1000, 0.001);
+  $("fps").textContent = running ? `${res[0]}x${res[1]} @ ${Math.round(frames / secs)} Hz${$("fps").dataset.bot ? " · " + $("fps").dataset.bot : ""}` : "";
+  if (botMode && inter) interAccelerate(); // the bot doesn't wait at the intermission
+  frames = 0; fpsT = t;
+}, 1000);
+
+function onWorld(buf) {
+  const wf = new Float32Array(buf), wi = new Int32Array(buf), wu = new Uint32Array(buf);
+  const view = { x: wf[W.viewx], y: wf[W.viewy], angle: wf[W.viewangle] };
+  const showPos = performance.now() < posUntil;
+  $("pos").hidden = !showPos;
+  if (showPos) {
+    const deg = Math.round((((view.angle * 180) / Math.PI) % 360 + 360) % 360);
+    $("pos").textContent = `x ${Math.round(view.x)}  y ${Math.round(view.y)}  angle ${deg}°`;
+  }
+  for (const ev of engine.soundEvents(buf)) playSound(ev, view);
+  const exit = wu[W.exit];
+  if (wu[W.dead] && !exit) banner(`YOU DIED<small>${isTouch ? "tap FIRE or USE" : "press fire or use"} to restart the level</small>`);
+  else if (!loading && !slowNotice) banner("");
+  if (exit && !inter && running) {
+    running = false;
+    document.exitPointerLock?.();
+    const cur = engine.mapName;
+    if (exit === 3) { pendingExit = { map: cur, carry: freshPlayer() }; start(cur, freshPlayer()).then(() => { pendingExit = null; }); return; }
+    const next = exit === 2 ? SECRET[cur] || NEXT[cur] : NEXT[cur] || (/^MAP(\d\d)$/.test(cur) ? "MAP" + String(+cur.slice(3) + 1).padStart(2, "0") : null);
+    const ok = next && engine.maps().includes(next);
+    startIntermission({
+      last: cur, next: ok ? next : null, carry: ok ? engine.playerFrom(buf) : freshPlayer(),
+      kills: wi[W.killcount], maxkills: wi[W.totalkills], items: wi[W.itemcount], maxitems: wi[W.totalitems],
+      secret: wi[W.secretcount], maxsecret: wi[W.totalsecrets], time: wu[W.leveltime],
+    });
+  }
+}
+
+// ---------------------------------------------------------------- DOOM's intermission (wi_stuff.c)
+// Stats count up on the episode map with pistol ticks and a barrel blast per line, then the
+// "entering" screen marks the next level. Fire, use, enter, a click or a tap skips ahead.
+const PARS = [[30, 75, 120, 90, 165, 180, 180, 30, 165], [90, 90, 90, 120, 90, 360, 240, 30, 170], [90, 45, 90, 150, 90, 90, 165, 30, 135]];
+const CPARS = [30, 90, 120, 120, 90, 150, 120, 120, 270, 90, 210, 150, 150, 150, 210, 150, 420, 150, 210, 150, 240, 150, 180, 150, 150, 300, 330, 420, 300, 180, 120, 30];
+const LNODES = [
+  [[185, 164], [148, 143], [69, 122], [209, 102], [116, 89], [166, 55], [71, 56], [135, 29], [71, 24]],
+  [[254, 25], [97, 50], [188, 64], [128, 78], [214, 92], [133, 130], [208, 136], [148, 140], [235, 158]],
+  [[156, 168], [48, 154], [174, 95], [265, 75], [130, 48], [279, 23], [198, 48], [140, 25], [281, 136]],
+];
+let inter = null, interTimer = 0;
+const levelOf = (name) => { const e = /^E(\d)M(\d)$/.exec(name), m = /^MAP(\d\d)$/.exec(name); return e ? { ep: +e[1] - 1, map: +e[2] - 1 } : m ? { ep: -1, map: +m[1] - 1 } : null; };
+function startIntermission(info) {
+  const L = levelOf(info.last);
+  const pct = (a, b) => Math.floor((a * 100) / Math.max(b, 1));
+  inter = { ...info, L, nextL: info.next && levelOf(info.next), state: 1, pause: 35, bcnt: 0, accel: false,
+    target: { kills: pct(info.kills, info.maxkills), items: pct(info.items, info.maxitems), secret: pct(info.secret, info.maxsecret), time: Math.floor(info.time / 35),
+      par: L && L.ep >= 0 && L.ep < 3 ? PARS[L.ep][L.map] : L && L.ep < 0 ? CPARS[L.map] ?? -1 : -1 },
+    cnt: { kills: -1, items: -1, secret: -1, time: -1, par: -1 } };
+  menu = null; // the menu's skull timer must not draw over the intermission
+  playSong(commercial() ? "D_DM2INT" : "D_INTER");
+  $("menu").hidden = true;
+  dmenu.hidden = false;
+  clearInterval(interTimer);
+  interTimer = setInterval(interTick, 1000 / 35);
+}
+function interAccelerate() { if (inter) { ensureAudio(); inter.accel = true; } }
+function interTick() {
+  const w = inter;
+  if (!w) return;
+  w.bcnt++;
+  const T = w.target, C = w.cnt;
+  if (w.state <= 10) {
+    if (w.accel && w.state !== 10) {
+      w.accel = false;
+      Object.assign(C, T);
+      uiSound("barexp");
+      w.state = 10;
+    } else if (w.state === 10) {
+      if (w.accel) { w.accel = false; uiSound("sgcock"); w.state = 11; w.loc = 140; w.pointer = true; }
+    } else if (w.state & 1) {
+      if (--w.pause <= 0) { w.state++; w.pause = 35; if (w.state === 2) C.kills = 0; if (w.state === 4) C.items = 0; if (w.state === 6) C.secret = 0; if (w.state === 8) { C.time = 0; C.par = 0; } }
+    } else {
+      const key = { 2: "kills", 4: "items", 6: "secret" }[w.state];
+      if (!(w.bcnt & 3)) uiSound("pistol");
+      if (key) {
+        C[key] += 2;
+        if (C[key] >= T[key]) { C[key] = T[key]; uiSound("barexp"); w.state++; }
+      } else {
+        C.time = Math.min(C.time + 3, T.time); C.par = Math.min(C.par + 3, T.par);
+        if (C.time >= T.time && C.par >= T.par) { uiSound("barexp"); w.state++; }
+      }
+    }
+  } else if (w.state === 11) {
+    // the next level's spot blinks for four seconds, or until skipped
+    if (!(w.loc & 31)) w.pointer = !w.pointer;
+    if (--w.loc <= 0 || w.accel || !w.next) { w.accel = false; finishIntermission(); return; }
+  }
+  drawIntermission();
+}
+async function finishIntermission() {
+  const w = inter;
+  clearInterval(interTimer);
+  inter = null;
+  dmenu.hidden = true;
+  if (w.next) { await start(w.next, w.carry); if (!isTouch) canvas.requestPointerLock?.(); }
+  else { engine.map = null; showMenu(); } // end of the episode: back to the menu
+}
+function interNum(x, y, n, digits = -1) {
+  const w = getPatch("WINUM0")?.w ?? 11;
+  if (digits < 0) digits = n === 0 ? 1 : String(n).length;
+  for (let i = 0; i < digits; i++) { x -= w; drawPatchAt("WINUM" + (n % 10), x, y); n = Math.floor(n / 10); }
+  return x;
+}
+function interTime(x, y, t) {
+  if (t < 0) return;
+  if (t > 61 * 59) { const p = getPatch("WISUCKS"); if (p) drawPatchAt("WISUCKS", x - p.w, y); return; }
+  const colon = getPatch("WICOLON")?.w ?? 6;
+  let div = 1;
+  do {
+    const n = Math.floor(t / div) % 60;
+    x = interNum(x, y, n, 2) - colon;
+    div *= 60;
+    if (div === 60 || Math.floor(t / div)) drawPatchAt("WICOLON", x, y);
+  } while (Math.floor(t / div));
+}
+function drawIntermission() {
+  const w = inter;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (dmenu.width !== W || dmenu.height !== H) { dmenu.width = W; dmenu.height = H; }
+  dctx.imageSmoothingEnabled = true; dctx.imageSmoothingQuality = "high";
+  menuView = null;
+  dctx.fillStyle = "#000"; dctx.fillRect(0, 0, W, H);
+  const ep = w.L?.ep ?? -1;
+  drawPatchAt(ep >= 0 && ep < 3 && getPatch(`WIMAP${ep}`) ? `WIMAP${ep}` : "INTERPIC", 0, 0);
+  const levelName = (L) => L ? (L.ep >= 0 ? `WILV${L.ep}${L.map}` : `CWILV${String(L.map).padStart(2, "0")}`) : null;
+  const centred = (name, y) => { const p = getPatch(name); if (p) drawPatchAt(name, (320 - p.w) / 2, y); return p?.h ?? 0; };
+  if (w.state <= 10) {
+    // "E1M1 finished": the level's name patch, then FINISHED, or plain text when the WAD lacks them
+    const h = centred(levelName(w.L), 2) || (drawText(w.last, 160 - drawText(w.last, 0, 0, true) / 2, 2), 10);
+    if (!centred("WIF", 2 + (5 * h) / 4)) drawText("FINISHED", 130, 2 + (5 * h) / 4);
+    const lh = ((getPatch("WINUM0")?.h ?? 12) * 3) / 2;
+    const C = w.cnt;
+    const row = (name, label, y, v) => {
+      if (!drawPatchAt(name, 50, y)) drawText(label, 50, y);
+      if (v >= 0) { drawPatchAt("WIPCNT", 270, y); interNum(270, y, v); }
+    };
+    row("WIOSTK", "KILLS", 50, C.kills);
+    row("WIOSTI", "ITEMS", 50 + lh, C.items);
+    row("WISCRT2", "SECRET", 50 + 2 * lh, C.secret);
+    if (!drawPatchAt("WITIME", 16, 168)) drawText("TIME", 16, 168);
+    interTime(160 - 16, 168, C.time);
+    if (w.target.par >= 0) { if (!drawPatchAt("WIPAR", 160 + 16, 168)) drawText("PAR", 176, 168); interTime(320 - 16, 168, C.par); }
+  } else {
+    // "Entering" the next level, with splats on the levels done and a blinking pointer on the next
+    const h = centred("WIENTER", 2) || (drawText("ENTERING", 130, 2), 10);
+    if (!centred(levelName(w.nextL), 2 + (5 * h) / 4)) drawText(w.next || "", 140, 2 + (5 * h) / 4);
+    if (ep >= 0 && ep < 3 && w.nextL?.ep === ep) {
+      for (let i = 0; i <= w.L.map && i < 9; i++) drawPatchAt("WISPLAT", LNODES[ep][i][0], LNODES[ep][i][1]);
+      if (w.pointer) {
+        const [nx, ny] = LNODES[ep][w.nextL.map];
+        // WIURH0 points one way, WIURH1 the other; use the one that fits on the screen
+        const fits = (name) => { const p = getPatch(name); return p && nx - p.left >= 0 && nx - p.left + p.w < 320 && ny - p.top >= 0 && ny - p.top + p.h < 200; };
+        drawPatchAt(fits("WIURH0") ? "WIURH0" : "WIURH1", nx, ny);
+      }
+    }
+  }
+}
+
+// ---------------------------------------------------------------- DOOM's menu
+// Drawn on a 2D canvas from the WAD's own M_ graphics, laid out at DOOM's 320x200 coordinates
+// (m_menu.c) inside a 4:3 box. The options screen is the HTML card.
+const dmenu = $("dmenu"), dctx = dmenu.getContext("2d");
+let menu = null; // { screen, item, epi }
+const patchCache = new Map();
+// Scale2x (AdvMAME2x): doubles a pixel-art image, filling a corner from its neighbours where two
+// edges meet, so diagonals stay sharp instead of turning into blocks or blur
+function scale2x(src, w, h) {
+  const dst = new Uint32Array(4 * w * h), w2 = 2 * w;
+  const at = (x, y) => src[Math.min(h - 1, Math.max(0, y)) * w + Math.min(w - 1, Math.max(0, x))];
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const P = at(x, y), A = at(x, y - 1), B = at(x + 1, y), C = at(x - 1, y), D = at(x, y + 1);
+    const o = 2 * y * w2 + 2 * x;
+    dst[o] = C === A && C !== D && A !== B ? A : P;
+    dst[o + 1] = A === B && A !== C && B !== D ? B : P;
+    dst[o + w2] = D === C && D !== B && C !== A ? C : P;
+    dst[o + w2 + 1] = B === D && B !== A && D !== C ? D : P;
+  }
+  return dst;
+}
+function getPatch(name) {
+  if (patchCache.has(name)) return patchCache.get(name);
+  const p = engine && decodePatch(engine.wad, name);
+  let out = null;
+  if (p && p.w > 0 && p.h > 0) {
+    const pal = engine.gfx.words, po = engine.gfx.layout.PAL;
+    const img = new ImageData(p.w, p.h);
+    for (let x = 0; x < p.w; x++) for (let y = 0; y < p.h; y++) {
+      const t = p.pix[x * p.h + y];
+      if (!(t & 0x100)) continue;
+      const c = pal[po + (t & 255)], i = 4 * (y * p.w + x);
+      img.data[i] = c & 255; img.data[i + 1] = (c >> 8) & 255; img.data[i + 2] = (c >> 16) & 255; img.data[i + 3] = 255;
+    }
+    // Scale2x twice: 4x the pixels with staircase edges rounded, so a fractional on-screen scale
+    // can be drawn smoothed without blurring the pixel art; plus a black silhouette for the shadow
+    let px32 = new Uint32Array(img.data.buffer), w = p.w, h = p.h;
+    for (let k = 0; k < 2; k++) { px32 = scale2x(px32, w, h); w *= 2; h *= 2; }
+    const big = new ImageData(new Uint8ClampedArray(px32.buffer), w, h);
+    const cv = document.createElement("canvas");
+    cv.width = w; cv.height = h;
+    cv.getContext("2d").putImageData(big, 0, 0);
+    const sh = document.createElement("canvas");
+    sh.width = w; sh.height = h;
+    const sc = sh.getContext("2d");
+    sc.drawImage(cv, 0, 0); sc.globalCompositeOperation = "source-in"; sc.fillStyle = "#000"; sc.fillRect(0, 0, w, h);
+    out = { cv, sh, w: p.w, h: p.h, left: p.left, top: p.top };
+  }
+  patchCache.set(name, out);
+  return out;
+}
+const episodes = () => engine ? [1, 2, 3, 4].filter((e) => engine.maps().includes(`E${e}M1`)) : [];
+const commercial = () => engine?.maps().includes("MAP01");
+const MENUS = {
+  main: { x: 97, y: 64, pics: [["M_DOOM", 94, 2]],
+    items: () => [{ patch: "M_NGAME", act: () => go(!commercial() && episodes().length > 1 ? "episode" : "skill", 2) },
+                  { patch: "M_OPTION", act: openOptions },
+                  { patch: "M_LOADG", act: () => openSlots("load") },
+                  ...(engine?.map ? [{ patch: "M_SAVEG", act: () => openSlots("save") }, { text: "RESUME", act: resume }] : [])],
+    back: () => { if (engine?.map) resume(); } },
+  episode: { x: 48, y: 63, pics: [["M_EPISOD", 54, 38]],
+    items: () => episodes().map((e) => ({ patch: `M_EPI${e}`, act: () => { menu.epi = e; go("skill", 2); } })),
+    back: () => go("main") },
+  skill: { x: 48, y: 63, pics: [["M_NEWG", 96, 14], ["M_SKILL", 54, 38]],
+    items: () => ["M_JKILL", "M_ROUGH", "M_HURT", "M_ULTRA", "M_NMARE"].map((p, i) => ({ patch: p, act: () => (i === 4 ? go("nightmare") : newGame(i)) })),
+    back: () => go(!commercial() && episodes().length > 1 ? "episode" : "main") },
+  load: { x: 80, y: 54, pics: [["M_LOADG", 72, 28]],
+    items: () => slots.map((sl, i) => ({ slot: true, text: sl ? sl.name : "EMPTY SLOT", act: () => loadGame(i) })),
+    back: () => go("main", 2) },
+  save: { x: 80, y: 54, pics: [["M_SAVEG", 72, 28]],
+    items: () => slots.map((sl, i) => ({ slot: true, text: sl ? sl.name : "EMPTY SLOT", act: () => saveGame(i) })),
+    back: () => go("main", 3) },
+  nightmare: { message: "ARE YOU SURE? THIS SKILL LEVEL\nISN'T EVEN REMOTELY FAIR.\n\nPRESS Y OR N.", x: 120, y: 130,
+    items: () => [{ text: "YES", act: () => newGame(4) }, { text: "NO", act: () => go("skill", 4) }],
+    back: () => go("skill", 4) },
+};
+function go(screen, item = 0) {
+  const epi = menu?.epi ?? episodes()[0] ?? 1;
+  menu = { screen, item, epi };
+  if (!engine?.map) playSong(commercial() ? "D_DM2TTL" : "D_INTRO");
+  drawMenu();
+}
+function showMenu() {
+  running = false;
+  document.exitPointerLock?.();
+  $("menu").hidden = true;
+  dmenu.hidden = false;
+  go("main");
+}
+function hideMenu() { menu = null; dmenu.hidden = true; $("menu").hidden = true; }
+function openOptions() { dmenu.hidden = true; $("menu").hidden = false; }
+function resume() { hideMenu(); slowNotice = false; banner(""); running = true; lastTime = performance.now(); if (!isTouch) canvas.requestPointerLock?.(); }
+function ensureAudio() {
+  if (!audio) { try { audio = new AudioContext(); } catch { audio = null; } }
+  audio?.resume?.();
+  ensureMusic();
+}
+// DOOM's music through the OPL-style synth; it needs the AudioContext, so it starts on the first click or key
+let music = null, musicLoading = false, wantSong = null;
+async function ensureMusic() {
+  if (music || musicLoading || !audio || !engine) return;
+  musicLoading = true;
+  try { music = await Music.create(audio, engine.wad); } catch (err) { console.warn("music", err); }
+  musicLoading = false;
+  if (music) { music.setVolume(+$("musicVol").value); if (wantSong) music.play(wantSong); }
+}
+function playSong(lump) { wantSong = lump; music?.play(lump); }
+$("musicVol").addEventListener("input", () => music?.setVolume(+$("musicVol").value));
+function uiSound(name) { if (engine) playSound({ sfx: name, x: 0, y: 0 }, { x: 0, y: 0, angle: 0 }); }
+
+// Save games: DOOM's six slots, kept in IndexedDB with the level's GPU state
+let slots = new Array(6).fill(null);
+function saveDB() {
+  return new Promise((ok, no) => {
+    const r = indexedDB.open("gpu-doom", 1);
+    r.onupgradeneeded = () => r.result.createObjectStore("saves");
+    r.onsuccess = () => ok(r.result); r.onerror = () => no(r.error);
+  });
+}
+async function dbDo(mode, fn) {
+  const db = await saveDB();
+  return new Promise((ok, no) => {
+    const tx = db.transaction("saves", mode), req = fn(tx.objectStore("saves"));
+    tx.oncomplete = () => ok(req?.result); tx.onerror = () => no(tx.error);
+  });
+}
+const wadKey = () => engine.maps().join(",");
+async function openSlots(screen) {
+  try {
+    const all = await dbDo("readonly", (st) => st.getAll(), null);
+    const keys = await dbDo("readonly", (st) => st.getAllKeys(), null);
+    slots = new Array(6).fill(null);
+    keys.forEach((k, i) => { if (k >= 0 && k < 6 && all[i]?.wad === wadKey()) slots[k] = all[i]; });
+  } catch (err) { console.warn("saves", err); }
+  go(screen, 0);
+}
+async function saveGame(i) {
+  const st = await engine.saveState();
+  const t = new Date();
+  const name = `${engine.mapName} ${["ITYTD", "HNTR", "HMP", "UV", "NM"][engine.skill - 1]} ${String(t.getHours()).padStart(2, "0")}:${String(t.getMinutes()).padStart(2, "0")}`;
+  try { await dbDo("readwrite", (s) => s.put({ name, wad: wadKey(), state: st }, i)); engine.say("GAME SAVED."); }
+  catch (err) { status("Could not save: " + err.message); }
+  resume();
+}
+async function loadGame(i) {
+  const sl = slots[i];
+  if (!sl) return;
+  ensureAudio();
+  await enableGyro();
+  hideMenu();
+  engine.skill = sl.state.skill;
+  applySize();
+  await start(sl.state.map, freshPlayer(), sl.state);
+  if (!isTouch) canvas.requestPointerLock?.();
+}
+
+async function newGame(skillIndex) {
+  ensureAudio();
+  await enableGyro();
+  const map = commercial() ? "MAP01" : `E${menu?.epi ?? 1}M1`;
+  hideMenu();
+  engine.skill = skillIndex + 1;
+  applySize();
+  if ((await start(map, freshPlayer())) !== false && !isTouch) canvas.requestPointerLock?.();
+}
+
+// 320x200 virtual coordinates in a 4:3 box centred in the window: the title and intermission art
+function screenBox() {
+  const W = dmenu.width, H = dmenu.height;
+  const bw = Math.min(W, H * 4 / 3), bh = bw * 3 / 4;
+  return { x0: (W - bw) / 2, y0: (H - bh) / 2, sx: bw / 320, sy: bh / 200 };
+}
+// The menu's own transform: its items, zoomed to fill the window (see drawMenu); null means screenBox
+let menuView = null;
+function menuBox() { return menuView || screenBox(); }
+// measuring pass: drawPatchAt and drawText only grow these bounds
+let measuring = null;
+let shadowed = false;
+function blit(p, x, y) {
+  const b = menuBox(), X = b.x0 + x * b.sx, Y = b.y0 + y * b.sy, w = p.w * b.sx, h = p.h * b.sy;
+  if (shadowed) { dctx.globalAlpha = 0.85; dctx.drawImage(p.sh, X + b.sx, Y + b.sy, w, h); dctx.globalAlpha = 1; }
+  dctx.drawImage(p.cv, X, Y, w, h);
+}
+function grow(x, y, w, h) {
+  const m = measuring;
+  m.x0 = Math.min(m.x0, x); m.y0 = Math.min(m.y0, y); m.x1 = Math.max(m.x1, x + w); m.y1 = Math.max(m.y1, y + h);
+}
+function drawPatchAt(name, x, y) {
+  const p = getPatch(name);
+  if (!p) return null;
+  const px = x - p.left, py = y - p.top;
+  if (measuring) grow(px, py, p.w, p.h); else blit(p, px, py);
+  return { x: px, y: py, w: p.w, h: p.h };
+}
+// STCFN font, upper case like DOOM's M_WriteText; returns the width in virtual pixels
+function drawText(str, x, y, measureOnly = false) {
+  let cx = x, cy = y;
+  for (const ch0 of str) {
+    if (ch0 === "\n") { cx = x; cy += 11; continue; }
+    const c = ch0.toUpperCase().charCodeAt(0);
+    const name = "STCFN" + String(c).padStart(3, "0");
+    const p = c > 32 && c < 96 ? getPatch(name) : null;
+    if (!p) { cx += 4; continue; }
+    if (!measureOnly) { if (measuring) grow(cx, cy, p.w, p.h); else blit(p, cx, cy); }
+    cx += p.w;
+  }
+  return cx - x;
+}
+let skullFrame = 0;
+setInterval(() => { if (menu) { skullFrame ^= 1; drawMenu(); } }, 229); // DOOM flips the skull every 8 tics
+const itemRects = [];
+function drawMenu() {
+  if (!menu) return;
+  const dpr = Math.min(devicePixelRatio || 1, 2);
+  const W = Math.round(innerWidth * dpr), H = Math.round(innerHeight * dpr);
+  if (dmenu.width !== W || dmenu.height !== H) { dmenu.width = W; dmenu.height = H; }
+  dctx.imageSmoothingEnabled = true; dctx.imageSmoothingQuality = "high";
+  dctx.clearRect(0, 0, W, H);
+  menuView = null;
+  if (engine?.map) { dctx.fillStyle = "rgba(0,0,0,0.65)"; dctx.fillRect(0, 0, W, H); }
+  else {
+    dctx.fillStyle = "#000"; dctx.fillRect(0, 0, W, H);
+    drawPatchAt("TITLEPIC", 0, 0);
+    // the title art is busy behind the menu text; dim it, the bare main screen's logo area least
+    dctx.fillStyle = menu.screen === "main" ? "rgba(0,0,0,0.5)" : "rgba(0,0,0,0.78)";
+    dctx.fillRect(0, 0, W, H);
+  }
+  // the menu at DOOM's size fills only part of the 320x200 screen: measure it, then zoom it to fill
+  // the window (never smaller than DOOM's own layout), keeping DOOM's tall pixels
+  measuring = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+  layoutMenu();
+  const bx = measuring, base = screenBox();
+  measuring = null;
+  // on the title screen the items go below the title picture's logo
+  let top = 0;
+  const logo = MENUS[menu.screen].pics?.some(([n]) => n === "M_DOOM") && !engine?.map ? getPatch("M_DOOM") : null;
+  if (logo) top = base.y0 + (2 - logo.top + logo.h + 4) * base.sy;
+  const pad = 12, cw = bx.x1 - bx.x0 + 2 * pad, ch = (bx.y1 - bx.y0 + 2 * pad) * base.sy / base.sx;
+  const z = Math.max(base.sx, Math.min(0.96 * W / cw, 0.92 * (H - top) / ch, base.sx * 1.6));
+  menuView = { sx: z, sy: z * base.sy / base.sx, x0: 0, y0: 0 };
+  menuView.x0 = W / 2 - ((bx.x0 + bx.x1) / 2) * menuView.sx;
+  menuView.y0 = logo ? Math.max(top, (top + H) / 2 - ((bx.y1 - bx.y0) / 2) * menuView.sy) - bx.y0 * menuView.sy
+                     : H / 2 - ((bx.y0 + bx.y1) / 2) * menuView.sy;
+  shadowed = true;
+  layoutMenu();
+  shadowed = false;
+}
+function layoutMenu() {
+  const m = MENUS[menu.screen];
+  for (const [n, x, y] of m.pics || []) {
+    // over the title picture the logo must sit on the picture's own logo, so it keeps the picture's frame
+    if (n === "M_DOOM" && !engine?.map) {
+      if (measuring) continue;
+      const v = menuView, sh = shadowed;
+      menuView = null; shadowed = false;
+      drawPatchAt(n, x, y);
+      menuView = v; shadowed = sh;
+    } else drawPatchAt(n, x, y);
+  }
+  if (m.message) drawText(m.message, 160 - drawText(m.message.split("\n")[0], 0, 0, true) / 2, 80);
+  itemRects.length = 0;
+  m.items().forEach((it, i) => {
+    const y = m.message ? m.y : m.y + 16 * i;
+    const x = m.message ? m.x + 60 * i : m.x;
+    let r = null;
+    if (it.slot) {
+      drawPatchAt("M_LSLEFT", x - 8, y + 7);
+      for (let k = 0; k < 24; k++) drawPatchAt("M_LSCNTR", x + 8 * k, y + 7);
+      drawPatchAt("M_LSRGHT", x + 8 * 24, y + 7);
+      drawText(it.text, x, y);
+      r = { x, y, w: 8 * 24, h: 16 };
+    }
+    if (it.patch) r = drawPatchAt(it.patch, x, y);
+    if (!r) { const w = drawText(it.text || it.patch.replace(/^M_/, ""), x, y + 4); r = { x, y, w, h: 16 }; }
+    itemRects.push({ x: x - 8, y: y - 2, w: Math.max(r.w, 40) + 16, h: 16 });
+  });
+  // measured at the first item, so moving the selection never changes the zoom
+  const sel = measuring ? 0 : menu.item;
+  const it = itemRects[sel];
+  if (it) {
+    const sx = m.message ? it.x - 16 : m.x - 32;
+    drawPatchAt(skullFrame ? "M_SKULL2" : "M_SKULL1", sx, (m.message ? m.y : m.y + 16 * sel) - 5);
+  }
+}
+addEventListener("resize", () => (inter ? drawIntermission() : drawMenu()));
+
+function menuActivate(i) {
+  const items = MENUS[menu.screen].items();
+  if (!items[i]) return;
+  ensureAudio();
+  uiSound("pistol");
+  items[i].act();
+}
+function menuBack() { uiSound("swtchx"); MENUS[menu.screen].back(); }
+// keys while the menu is up; true when the key was the menu's
+function menuKey(e) {
+  if (inter) { if (["Space", "Enter", "KeyE", "ControlLeft", "ControlRight", "KeyF", "Escape"].includes(e.code)) { interAccelerate(); e.preventDefault(); } return true; }
+  if (!$("menu").hidden && e.code === "Escape") { openMenuFromOptions(); return true; }
+  if (!menu || !$("menu").hidden) return false;
+  const n = MENUS[menu.screen].items().length;
+  if (e.code === "ArrowDown") { menu.item = (menu.item + 1) % n; uiSound("pstop"); drawMenu(); }
+  else if (e.code === "ArrowUp") { menu.item = (menu.item + n - 1) % n; uiSound("pstop"); drawMenu(); }
+  else if (e.code === "Enter" || e.code === "Space") menuActivate(menu.item);
+  else if (e.code === "Escape" || e.code === "Backspace") menuBack();
+  else if (menu.screen === "nightmare" && e.code === "KeyY") menuActivate(0);
+  else if (menu.screen === "nightmare" && e.code === "KeyN") menuActivate(1);
+  else return true;
+  e.preventDefault();
+  return true;
+}
+function openMenuFromOptions() { $("menu").hidden = true; dmenu.hidden = false; go("main", 1); }
+function hitItem(ev) {
+  const dpr = dmenu.width / innerWidth, b = menuBox();
+  const vx = (ev.clientX * dpr - b.x0) / b.sx, vy = (ev.clientY * dpr - b.y0) / b.sy;
+  return itemRects.findIndex((r) => vx >= r.x && vx < r.x + r.w && vy >= r.y && vy < r.y + r.h);
+}
+dmenu.addEventListener("pointermove", (ev) => {
+  if (!menu || ev.pointerType === "touch") return;
+  const i = hitItem(ev);
+  if (i >= 0 && i !== menu.item) { menu.item = i; drawMenu(); }
+});
+dmenu.addEventListener("click", (ev) => {
+  if (inter) { interAccelerate(); return; }
+  if (!menu) return;
+  const i = hitItem(ev);
+  if (i >= 0) { menu.item = i; menuActivate(i); }
+  else menuBack(); // a tap outside the items goes back, the touch version of Esc
+});
+
+$("play").addEventListener("click", () => openMenuFromOptions());
+$("warp").addEventListener("click", async () => {
+  ensureAudio();
+  await enableGyro();
+  applySize();
+  await start($("map").value, freshPlayer());
+  if (!isTouch) canvas.requestPointerLock?.();
+});
+$("wadfile").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try {
+    status("Reading " + f.name + "…");
+    wadBuf = await unpackWad(await f.arrayBuffer());
+    await buildEngine();
+    engine.map = null;
+    patchCache.clear();
+    if (music) { music.wad = engine.wad; music.current = null; }
+    status(f.name + " loaded. Back to the menu and New Game to play it.");
+  } catch (err) { status("Could not load that WAD: " + err.message); }
+});
+
+// ?debug exposes the intermission to headless tests
+if (location.search.includes("debug")) window.gpuDoomDebug = { startIntermission, interAccelerate, getPatch, state: () => inter && { state: inter.state, pointer: inter.pointer, ep: inter.L, next: inter.nextL } };
+
+(async () => {
+  try {
+    if (embedMap) {
+      $("menu").hidden = true;
+      // sound needs a gesture inside this frame
+      for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, ensureAudio, { once: true });
+    }
+    await initGPU();
+    wadBuf = await fetchWad();
+    await buildEngine();
+    status("");
+    $("play").disabled = false;
+    $("play").textContent = "Back to the menu";
+    if (embedMap && engine.maps().includes(embedMap)) await start(embedMap);
+    else showMenu();
+  } catch (err) {
+    status(err.message);
+    console.error(err);
+  }
+})();
+</script>
+</body>
+</html>

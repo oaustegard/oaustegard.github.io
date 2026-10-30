@@ -1,0 +1,1213 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Lantern Eel</title>
+<meta name="description" content="Snake in the deep sea: hunt glowing prey as the light fades with depth, dodge jellyfish, chain bites and boost. Steer by tilting your phone, swiping or the on-screen arrows.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Lantern Eel">
+<meta property="og:description" content="Snake in the deep sea: hunt glowing prey as the light fades with depth, dodge jellyfish, chain bites and boost. Steer by tilting your phone, swiping or the on-screen arrows.">
+<meta property="og:url" content="https://austegard.com/games/lantern-eel/">
+<meta property="og:image" content="https://austegard.com/games/lantern-eel/og-image.png">
+<meta property="og:image:width" content="512">
+<meta property="og:image:height" content="512">
+<meta property="og:image:alt" content="Lantern Eel app icon">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="Lantern Eel">
+<meta name="twitter:description" content="Snake in the deep sea: hunt glowing prey as the light fades with depth, dodge jellyfish, chain bites and boost. Steer by tilting your phone, swiping or the on-screen arrows.">
+<meta name="twitter:image" content="https://austegard.com/games/lantern-eel/og-image.png">
+<meta name="theme-color" content="#03101a">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Lantern Eel">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=JetBrains+Mono:wght@500;700&display=swap">
+<style>
+/* Layout: one-screen console. HUD strip on top, the water column in the middle, a control deck below
+   (in short landscape the deck splits to either side of the tank). Single deep-sea look by choice. */
+:root {
+  --abyss: #03101a;
+  --panel: rgba(9, 34, 46, .78);
+  --line: rgba(120, 225, 210, .16);
+  --ink: #dff6f1;
+  --mute: #86aeb0;
+  --lume: #63ffd1;
+  --amber: #ffb34d;
+  --jelly: #ff5fa8;
+  --pearl: #d9d2ff;
+  --display: 'Bricolage Grotesque', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  color-scheme: dark;
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+  box-sizing: border-box;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; }
+body {
+  margin: 0; background: var(--abyss); color: var(--ink);
+  font-family: var(--display); font-size: 14px;
+  overflow: hidden; touch-action: none; overscroll-behavior: none;
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent;
+}
+button { font: inherit; color: inherit; cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--lume); outline-offset: 2px; }
+
+#app { height: 100%; }
+
+/* HUD */
+.hud { grid-area: hud; display: flex; align-items: center; gap: 18px; min-width: 0; }
+.brand { display: flex; align-items: center; gap: 9px; font-weight: 800; font-size: 18px; letter-spacing: -.01em; margin-right: auto; white-space: nowrap; }
+.brand .mark { width: 11px; height: 11px; border-radius: 50%; background: var(--lume); box-shadow: 0 0 12px 3px rgba(99,255,209,.55); }
+.stat { display: flex; flex-direction: column; align-items: flex-end; line-height: 1.1; }
+.stat .k { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); }
+.stat .v { font-family: var(--mono); font-weight: 700; font-size: 17px; font-variant-numeric: tabular-nums; }
+.icons { display: flex; gap: 6px; }
+.icon { width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center; padding: 0; }
+.icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+@media (max-width: 430px) { .hide-sm, .brand .name { display: none; } .hud { gap: 12px; } .icon { width: 34px; height: 34px; } }
+
+/* Stage */
+.stage { grid-area: stage; position: relative; min-height: 0; min-width: 0; border-radius: 18px; overflow: hidden; border: 1px solid var(--line); background: #06202c; touch-action: none; }
+canvas { position: absolute; inset: 0; display: block; }
+.combo { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 8px; pointer-events: none; transition: opacity .2s; }
+.combo b { font-family: var(--mono); font-size: 15px; color: var(--amber); text-shadow: 0 0 10px rgba(255,179,77,.6); }
+.combo i { display: block; width: 90px; height: 4px; border-radius: 2px; background: rgba(255,255,255,.12); overflow: hidden; }
+.combo i span { display: block; height: 100%; width: 0; background: var(--amber); }
+.zone-banner { position: absolute; inset: 0; display: grid; place-items: center; pointer-events: none; text-align: center; opacity: 0; transition: opacity .6s; }
+.zone-banner.show { opacity: 1; }
+.zone-banner div { font-weight: 800; font-size: clamp(26px, 6vw, 44px); letter-spacing: -.02em; text-shadow: 0 0 24px rgba(99,255,209,.45); }
+.zone-banner small { display: block; font-family: var(--mono); font-weight: 500; font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--mute); margin-top: 6px; text-shadow: none; }
+
+.overlay { position: absolute; inset: 0; display: grid; padding: 14px; touch-action: pan-y; background: rgba(2, 12, 20, .55); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px); overflow-y: auto; }
+.card { margin: auto; width: min(440px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 22px 20px 20px; display: flex; flex-direction: column; gap: 14px; }
+.card h1 { margin: 0; font-size: clamp(30px, 8vw, 42px); font-weight: 800; letter-spacing: -.03em; line-height: 1; text-wrap: balance; }
+.card h1 em { font-style: normal; color: var(--lume); text-shadow: 0 0 18px rgba(99,255,209,.5); }
+.card p { margin: 0; color: var(--mute); line-height: 1.45; max-width: 60ch; }
+.legend { display: grid; grid-template-columns: 1fr 1fr; gap: 9px 14px; margin: 0; padding: 0; list-style: none; }
+.legend li { display: grid; grid-template-columns: 14px 1fr; gap: 8px; align-items: start; font-size: 13px; line-height: 1.3; min-width: 0; }
+.legend li span { color: var(--mute); display: block; font-size: 12px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; margin-top: 3px; }
+.dot.p { background: var(--lume); box-shadow: 0 0 8px var(--lume); }
+.dot.f { background: var(--amber); box-shadow: 0 0 8px var(--amber); }
+.dot.o { background: var(--pearl); box-shadow: 0 0 8px var(--pearl); }
+.dot.j { background: var(--jelly); box-shadow: 0 0 8px var(--jelly); }
+.dot.c { background: transparent; border: 2px solid var(--amber); }
+.dot.b { background: transparent; border: 2px solid var(--lume); }
+.keys { font-family: var(--mono); font-size: 11px; color: var(--mute); letter-spacing: .02em; line-height: 1.6; }
+.cta { align-self: stretch; border: 0; border-radius: 12px; padding: 13px 18px; font-weight: 800; font-size: 17px; background: var(--lume); color: #03221c; box-shadow: 0 0 22px rgba(99,255,209,.35); }
+.cta:active { transform: translateY(1px); }
+.results { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.results > div { min-width: 0; background: rgba(255,255,255,.04); border-radius: 10px; padding: 9px 10px; }
+.results .k { font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); }
+.results .v { font-family: var(--mono); font-weight: 700; font-size: 16px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.newbest { color: var(--amber); font-weight: 600; }
+
+/* Control deck */
+.dpad { grid-area: dpad; display: grid; grid-template-columns: repeat(3, 50px); grid-template-rows: repeat(3, 50px); gap: 4px; align-self: center; }
+.dpad button { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; display: grid; place-items: center; padding: 0; touch-action: none; transition: background .08s, box-shadow .08s; }
+.dpad button svg { width: 20px; height: 20px; fill: var(--ink); }
+.dpad button.hit { background: rgba(99,255,209,.22); box-shadow: 0 0 14px rgba(99,255,209,.35); }
+.dpad .u { grid-area: 1 / 2; } .dpad .l { grid-area: 2 / 1; } .dpad .r { grid-area: 2 / 3; } .dpad .d { grid-area: 3 / 2; }
+.dpad .hub { grid-area: 2 / 2; border-radius: 50%; margin: 12px; background: radial-gradient(circle, rgba(99,255,209,.35), transparent 70%); }
+
+.meters { grid-area: meters; display: flex; flex-direction: column; justify-content: center; gap: 10px; min-width: 0; padding-inline: 4px; }
+.meter .k { display: flex; justify-content: space-between; font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); margin-bottom: 5px; }
+.meter .k b { font-family: var(--mono); font-weight: 500; letter-spacing: 0; }
+.bar { height: 6px; border-radius: 3px; background: rgba(255,255,255,.08); overflow: hidden; }
+.bar span { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #1fa58a, var(--lume)); box-shadow: 0 0 10px rgba(99,255,209,.6); }
+.bar.phase span { background: linear-gradient(90deg, #8f7cff, var(--pearl)); width: 0; }
+.hint { font-size: 11.5px; color: var(--mute); line-height: 1.35; min-height: 2.7em; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
+
+.actions { grid-area: actions; display: flex; flex-direction: column; gap: 8px; align-self: center; }
+.actions button { width: 88px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); font-weight: 600; font-size: 13px; letter-spacing: .02em; touch-action: none; }
+.boost { height: 74px; display: grid; place-items: center; align-content: center; gap: 2px; }
+.boost svg { width: 22px; height: 22px; fill: var(--lume); }
+.boost.on { background: rgba(99,255,209,.2); box-shadow: 0 0 18px rgba(99,255,209,.35) inset; }
+.well { position: relative; width: 20px; height: 20px; border-radius: 50%; border: 1.5px solid var(--lume); }
+.bubble { position: absolute; left: 50%; top: 50%; width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%; background: var(--lume); box-shadow: 0 0 8px var(--lume); }
+
+.settings { display: grid; gap: 10px; }
+.setting { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.setting .k { font-size: 11px; text-transform: uppercase; letter-spacing: .12em; color: var(--mute); }
+.seg { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 8px 15px; font-weight: 600; font-size: 13px; color: var(--mute); }
+.seg button + button { border-left: 1px solid var(--line); }
+.seg button[aria-pressed="true"] { background: rgba(99,255,209,.18); color: var(--lume); }
+
+.toast { position: fixed; left: 50%; top: calc(64px + env(safe-area-inset-top, 0px)); transform: translate(-50%, -12px); max-width: min(420px, calc(100% - 32px)); background: #0d3140; border: 1px solid var(--line); border-radius: 12px; padding: 10px 14px; font-size: 13px; line-height: 1.4; opacity: 0; pointer-events: none; transition: opacity .25s, transform .25s; z-index: 5; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+/* Both control modes run edge to edge: the water fills the visible viewport (dvh leaves Safari's
+   toolbar clear; installed on iOS the script sizes it from the screen) under the status bar, notch and
+   home indicator. The HUD floats on top and the arrows and Boost float over the water at the bottom,
+   or at the sides in short landscape; the script fits the play grid between them. */
+html, body { background: #07283a; }
+/* Installed on iOS with a translucent status bar, WebKit makes the viewport a status bar's height short
+   of the screen and stops drawing fixed content at that edge (WebKit bug 301108), so no element can be
+   made taller to cover it. A page at least as tall as the screen gets the full viewport back. min()
+   keeps an opaque-status-bar install, where the top inset is 0, from scrolling. */
+@media (display-mode: standalone), (display-mode: fullscreen) {
+  html { min-height: min(100lvh, calc(100% + env(safe-area-inset-top, 0px))); }
+}
+.stage { position: fixed; left: 0; right: 0; top: 0; height: 100vh; height: 100dvh; border: 0; border-radius: 0; }
+.hud {
+  position: fixed; top: 0; left: 0; right: 0; z-index: 2; pointer-events: none;
+  padding: calc(env(safe-area-inset-top, 0px) + 6px) max(14px, env(safe-area-inset-right, 0px)) 10px max(14px, env(safe-area-inset-left, 0px));
+  background: linear-gradient(rgba(3, 16, 26, .6), rgba(3, 16, 26, 0));
+}
+.hud button { pointer-events: auto; }
+.overlay { padding-top: calc(env(safe-area-inset-top, 0px) + 60px); padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); }
+.combo { top: calc(env(safe-area-inset-top, 0px) + 58px); }
+.meters { display: none; }
+.dpad, .actions { position: fixed; z-index: 2; bottom: calc(env(safe-area-inset-bottom, 0px) + 14px); }
+.dpad { left: max(14px, env(safe-area-inset-left, 0px)); }
+.actions { right: max(14px, env(safe-area-inset-right, 0px)); }
+body.pad-right .dpad { left: auto; right: max(14px, env(safe-area-inset-right, 0px)); }
+body.pad-right .actions { right: auto; left: max(14px, env(safe-area-inset-left, 0px)); }
+@media (orientation: landscape) and (max-height: 560px) {
+  .dpad, .actions { bottom: auto; top: 50%; transform: translateY(-40%); }
+}
+.dpad button, .actions button { background: rgba(9, 34, 46, .5); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+/* the controls keep their place (the grid is fitted around them) but show only during a dive */
+body:not(.diving) .dpad, body:not(.diving) .actions { visibility: hidden; }
+body.mode-tilt .dpad, body.mode-tilt .actions, body.mode-tilt .side-setting { display: none; }
+#safe { position: fixed; visibility: hidden; pointer-events: none; padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px); }
+
+@media (prefers-reduced-motion: reduce) { .toast, .zone-banner, .combo { transition: none; } }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <header class="hud">
+    <div class="brand"><span class="mark"></span><span class="name">Lantern Eel</span></div>
+    <div class="stat"><span class="k">Score</span><span class="v" id="score">0</span></div>
+    <div class="stat"><span class="k" id="zoneName">Sunlight</span><span class="v" id="depth">0 m</span></div>
+    <div class="stat hide-sm"><span class="k">Best</span><span class="v" id="best">0</span></div>
+    <div class="icons">
+      <button class="icon" id="levelBtn" aria-label="Set level to how you hold the phone now" hidden><span class="well"><span class="bubble" id="bubble"></span></span></button>
+      <button class="icon" id="soundBtn" aria-label="Mute sound" aria-pressed="false"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9z"/><path id="soundWave" d="M16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+      <button class="icon" id="pauseBtn" aria-label="Pause"><svg viewBox="0 0 24 24"><path d="M9 6v12M15 6v12"/></svg></button>
+    </div>
+  </header>
+
+  <div class="stage" id="stage">
+    <canvas id="c" aria-label="Game board"></canvas>
+    <div class="combo" id="combo" style="opacity:0"><b id="comboX">×1</b><i><span id="comboBar"></span></i></div>
+    <div class="zone-banner" id="zoneBanner"><div><span id="zoneTitle">Twilight Zone</span><small id="zoneSub">200 m</small></div></div>
+
+    <div class="overlay" id="titleView">
+      <div class="card">
+        <h1>Lantern <em>Eel</em></h1>
+        <p>Hunt glowing prey down through the water column. Every bite takes you deeper, and the deeper you go, the less you can see beyond your own lure.</p>
+        <ul class="legend">
+          <li><i class="dot p"></i><div>Plankton<span>+10, grow 1</span></div></li>
+          <li><i class="dot f"></i><div>Lanternfish<span>+40, flees you, grow 3</span></div></li>
+          <li><i class="dot o"></i><div>Pearl<span>6 s of phasing through anything</span></div></li>
+          <li><i class="dot j"></i><div>Jellyfish<span>drifts below 200 m, deadly</span></div></li>
+          <li><i class="dot c"></i><div>Chain bites<span>within 3 s for up to ×8</span></div></li>
+          <li><i class="dot b"></i><div>Boost<span>double speed, double points, burns glow</span></div></li>
+        </ul>
+<div class="settings">
+          <div class="setting"><span class="k">Steer with</span><div class="seg"><button type="button" data-ctl="tilt" aria-pressed="false">Tilt</button><button type="button" data-ctl="arrows" aria-pressed="false">Arrows</button></div></div>
+          <div class="setting side-setting"><span class="k">Arrows on</span><div class="seg"><button type="button" data-side="left" aria-pressed="false">Left</button><button type="button" data-side="right" aria-pressed="false">Right</button></div></div>
+        </div>
+        <div class="keys">Tilt: the angle you hold the phone at when you dive is level; tap the vial up top to reset it. Swipe the water to steer in either mode, and press and hold the water to boost.<br>Keys: arrows or WASD steer · hold Space to boost · P pauses</div>
+        <button class="cta" id="startBtn">Dive</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="pauseView" hidden>
+      <div class="card">
+        <h1>Holding <em>still</em></h1>
+        <p>The water waits. Tilt resets level to however you hold the phone when you resume.</p>
+        <div class="settings">
+          <div class="setting"><span class="k">Steer with</span><div class="seg"><button type="button" data-ctl="tilt" aria-pressed="false">Tilt</button><button type="button" data-ctl="arrows" aria-pressed="false">Arrows</button></div></div>
+          <div class="setting side-setting"><span class="k">Arrows on</span><div class="seg"><button type="button" data-side="left" aria-pressed="false">Left</button><button type="button" data-side="right" aria-pressed="false">Right</button></div></div>
+        </div>
+        <button class="cta" id="resumeBtn">Resume</button>
+      </div>
+    </div>
+
+    <div class="overlay" id="overView" hidden>
+      <div class="card">
+        <h1 id="overTitle">Lights <em>out</em></h1>
+        <p id="overCause">You bit your own tail.</p>
+        <div class="results">
+          <div><div class="k">Score</div><div class="v" id="rScore">0</div></div>
+          <div><div class="k">Depth</div><div class="v" id="rDepth">0 m</div></div>
+          <div><div class="k">Length</div><div class="v" id="rLen">4</div></div>
+        </div>
+        <p id="rBest"></p>
+        <button class="cta" id="againBtn">Dive again</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="dpad" aria-label="Direction pad">
+    <button class="u" data-dir="up" aria-label="Up"><svg viewBox="0 0 24 24"><path d="M12 5l7 10H5z"/></svg></button>
+    <button class="l" data-dir="left" aria-label="Left"><svg viewBox="0 0 24 24"><path d="M5 12l10-7v14z"/></svg></button>
+    <span class="hub"></span>
+    <button class="r" data-dir="right" aria-label="Right"><svg viewBox="0 0 24 24"><path d="M19 12L9 19V5z"/></svg></button>
+    <button class="d" data-dir="down" aria-label="Down"><svg viewBox="0 0 24 24"><path d="M12 19L5 9h14z"/></svg></button>
+  </div>
+
+  <div class="meters">
+    <div class="meter"><div class="k">Glow <b id="glowVal">100</b></div><div class="bar"><span id="glowBar"></span></div></div>
+    <div class="meter"><div class="k">Phase <b id="phaseVal">–</b></div><div class="bar phase"><span id="phaseBar"></span></div></div>
+    <div class="hint" id="hint">Eat plankton to grow. Lanternfish are worth four times as much.</div>
+  </div>
+
+  <div class="actions">
+    <button class="boost" id="boostBtn" aria-label="Boost (hold)"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg>Boost</button>
+  </div>
+</div>
+<div class="toast" id="toast" role="status"></div>
+<div id="safe" aria-hidden="true"></div>
+
+<script>
+(() => {
+'use strict';
+const $ = s => document.querySelector(s);
+const TAU = Math.PI * 2;
+const rand = (a, b) => a + Math.random() * (b - a);
+const ri = n => Math.floor(Math.random() * n);
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const hex = h => { const n = parseInt(h.slice(1), 16); return [n >> 16, (n >> 8) & 255, n & 255]; };
+const mix = (a, b, t) => { const A = hex(a), B = hex(b); return `rgb(${A.map((v, i) => Math.round(lerp(v, B[i], t))).join(',')})`; };
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const LUME = [99, 255, 209], AMBER = [255, 179, 77], JELLY = [255, 95, 168], PEARL = [225, 215, 255], BUBBLE = [190, 240, 255];
+const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+const load = (k, d) => { try { const v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch { return d; } };
+const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+/* ---------- board geometry ---------- */
+const stage = $('#stage'), cv = $('#c'), ctx = cv.getContext('2d');
+let COLS = 20, ROWS = 26, W = 0, H = 0, dpr = 1, cell = 20, ox = 0, oy = 0;
+const DIRS = { up: [0, -1], down: [0, 1], left: [-1, 0], right: [1, 0] };
+const OPP = { up: 'down', down: 'up', left: 'right', right: 'left' };
+const ANG = { right: 0, down: Math.PI / 2, left: Math.PI, up: -Math.PI / 2 };
+
+// In tilt mode the stage is the whole screen, so the grid keeps clear of the floating HUD and the
+// safe-area insets (status bar, notch, home indicator); the water itself still runs to every edge.
+let inset = { t: 0, r: 0, b: 0, l: 0 };
+function measureInsets() {
+  const cs = getComputedStyle(document.getElementById('safe'));
+  const safe = k => parseFloat(cs['padding' + k]) || 0;
+  const hud = document.querySelector('.hud').getBoundingClientRect(), st = stage.getBoundingClientRect();
+  inset = { t: Math.max(hud.bottom - st.top - 4, safe('Top')), r: safe('Right') + 4, b: safe('Bottom') + 4, l: safe('Left') + 4 };
+  // in arrows mode the grid also stops short of the floating D-pad and Boost button
+  if (typeof ctl !== 'undefined' && ctl === 'arrows') {
+    const landscape = st.width > st.height;
+    for (const el of document.querySelectorAll('.dpad, .actions')) {
+      const r = el.getBoundingClientRect(); if (!r.width) continue;
+      if (!landscape) inset.b = Math.max(inset.b, st.bottom - r.top + 6);
+      else if (r.left + r.width / 2 < st.left + st.width / 2) inset.l = Math.max(inset.l, r.right - st.left + 6);
+      else inset.r = Math.max(inset.r, st.right - r.left + 6);
+    }
+  }
+}
+const area = () => [Math.max(1, W - inset.l - inset.r), Math.max(1, H - inset.t - inset.b)];
+function pickRows() {
+  measureInsets();
+  const [aw, ah] = area();
+  // 16 cells across the short side on a phone (20 on bigger screens), and as many as fit along the
+  // long side at that size, so the grid fills a portrait or a widescreen without letterboxing
+  const short = Math.min(aw, ah), c = short / (short < 520 ? 16 : 20);
+  COLS = clamp(Math.floor(aw / c), 13, 48);
+  ROWS = clamp(Math.floor(ah / c), 13, 48);
+}
+function layoutBoard() {
+  measureInsets();
+  const [aw, ah] = area();
+  cell = Math.min(aw / COLS, ah / ROWS);
+  ox = inset.l + (aw - cell * COLS) / 2; oy = inset.t + (ah - cell * ROWS) / 2;
+}
+function resize() {
+  const r = stage.getBoundingClientRect();
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  W = r.width; H = r.height;
+  cv.width = Math.max(1, Math.round(W * dpr)); cv.height = Math.max(1, Math.round(H * dpr));
+  cv.style.width = W + 'px'; cv.style.height = H + 'px';
+  layoutBoard();
+}
+const gx = x => ox + (x + 0.5) * cell, gy = y => oy + (y + 0.5) * cell;
+function tdist(ax, ay, bx, by) {
+  const dx = Math.abs(ax - bx), dy = Math.abs(ay - by);
+  return Math.min(dx, COLS - dx) + Math.min(dy, ROWS - dy);
+}
+
+/* ---------- zones ---------- */
+const ZONES = [
+  { from: 0, name: 'Sunlight' }, { from: 200, name: 'Twilight' },
+  { from: 1000, name: 'Midnight' }, { from: 2500, name: 'Abyssal' }, { from: 4000, name: 'Hadal' },
+];
+const meters = () => S.eaten * 25;
+const zoneOf = m => { let z = ZONES[0]; for (const q of ZONES) if (m >= q.from) z = q; return z; };
+
+/* ---------- state ---------- */
+let S = null, state = 'title', best = load('lantern-eel-best', 0), muted = load('lantern-eel-muted', false);
+let boostHeld = false;
+
+function newGame() {
+  resize(); // measure the stage as laid out now, not as the last resize saw it
+  pickRows(); layoutBoard();
+  const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS * 0.62);
+  const snake = [];
+  for (let i = 0; i < 4; i++) snake.push({ x: cx, y: cy + i });
+  S = {
+    snake, prev: snake.map(p => ({ ...p })), dir: 'up', queue: [], grow: 0, alpha: 1,
+    food: null, fish: null, pearl: null, jellies: [], parts: [], pops: [],
+    score: 0, eaten: 0, combo: 0, comboT: 0, glow: 100, boosting: false, phase: 0,
+    t: 0, acc: 0, tick: 0, shake: 0, warnTick: -99, lastPing: 0, pearlTimer: rand(16, 24), deathT: 0, cause: '', lure: [0, 0], maxLen: 4,
+  };
+  spawnFood();
+}
+
+function occupied(x, y) {
+  return S.snake.some(p => p.x === x && p.y === y) || S.jellies.some(j => j.x === x && j.y === y) ||
+    [S.food, S.fish, S.pearl].some(e => e && e.x === x && e.y === y);
+}
+function freeCell(minDist = 0) {
+  const h = S.snake[0];
+  for (let k = 0; k < 600; k++) {
+    const x = ri(COLS), y = ri(ROWS);
+    if (occupied(x, y)) continue;
+    if (minDist && tdist(x, y, h.x, h.y) < minDist) continue;
+    return { x, y, rx: x, ry: y, s: 0 };
+  }
+  return null;
+}
+// Re-fit the grid when the layout changes mid-dive (rotation, switching modes). The eel is unwrapped
+// into one continuous path, centred, and wrapped into the new grid, which keeps every segment next to
+// its neighbours; prey, pearls and jellyfish are dealt again.
+function regrid() {
+  if (!S || state === 'title') return;
+  const oc = COLS, orr = ROWS;
+  resize(); pickRows();
+  if (COLS === oc && ROWS === orr) { layoutBoard(); return; }
+  const path = [{ x: S.snake[0].x, y: S.snake[0].y }];
+  for (let i = 1; i < S.snake.length; i++) {
+    const a = S.snake[i - 1], b = S.snake[i], q = path[i - 1];
+    let dx = b.x - a.x, dy = b.y - a.y;
+    if (dx > 1) dx -= oc; else if (dx < -1) dx += oc;
+    if (dy > 1) dy -= orr; else if (dy < -1) dy += orr;
+    path.push({ x: q.x + dx, y: q.y + dy });
+  }
+  const xs = path.map(q => q.x), ys = path.map(q => q.y);
+  const offX = Math.floor((COLS - (Math.max(...xs) - Math.min(...xs) + 1)) / 2) - Math.min(...xs);
+  const offY = Math.floor((ROWS - (Math.max(...ys) - Math.min(...ys) + 1)) / 2) - Math.min(...ys);
+  const md = (v, n) => ((v % n) + n) % n;
+  S.snake = path.map(q => ({ x: md(q.x + offX, COLS), y: md(q.y + offY, ROWS) }));
+  S.prev = S.snake.map(q => ({ ...q }));
+  S.food = null; S.fish = null; S.pearl = null; S.jellies = [];
+  spawnFood(); ensureJellies();
+  layoutBoard();
+}
+function spawnFood() { S.food = freeCell(2); }
+function spawnFish() { const c = freeCell(6); if (c) { S.fish = { ...c, life: 11, ang: rand(0, TAU), ph: rand(0, TAU) }; sfx.fishSpawn(); } }
+function spawnPearl() { const c = freeCell(4); if (c) S.pearl = { ...c, life: 8 }; }
+function jellyTarget() { const m = meters(); return m < 200 ? 0 : Math.min(8, 1 + Math.floor((m - 200) / 220)); }
+function ensureJellies() {
+  while (S.jellies.length < jellyTarget()) {
+    const c = freeCell(5); if (!c) break;
+    S.jellies.push({ ...c, ph: rand(0, TAU), off: ri(6) });
+  }
+}
+
+/* ---------- input ---------- */
+function turn(d) {
+  if (state !== 'play') return;
+  const lastD = S.queue.length ? S.queue[S.queue.length - 1] : S.dir;
+  if (d === lastD || d === OPP[lastD]) return;
+  if (S.queue.length < 2) S.queue.push(d);
+}
+
+/* ---------- simulation ---------- */
+const tickLen = () => Math.max(0.062, 0.15 - S.eaten * 0.0021) / (S.boosting ? 1.9 : 1);
+
+function step() {
+  S.tick++;
+  S.prev = S.snake.map(p => ({ x: p.x, y: p.y }));
+  if (S.queue.length) { const nd = S.queue.shift(); if (nd !== S.dir) sfx.turn(); S.dir = nd; }
+  const [dx, dy] = DIRS[S.dir], h = S.snake[0];
+  const nx = (h.x + dx + COLS) % COLS, ny = (h.y + dy + ROWS) % ROWS;
+  const phased = S.phase > 0;
+  const body = S.grow > 0 ? S.snake : S.snake.slice(0, -1);
+  if (!phased && body.some(p => p.x === nx && p.y === ny)) return die('You bit your own tail.');
+  if (!phased && S.jellies.some(j => j.x === nx && j.y === ny)) return die('A jellyfish got you.');
+  S.snake.unshift({ x: nx, y: ny });
+  if (S.grow > 0) S.grow--; else S.snake.pop();
+  S.maxLen = Math.max(S.maxLen, S.snake.length + S.grow);
+
+  const at = e => e && e.x === nx && e.y === ny;
+  if (at(S.food)) { eat('plankton', S.food); spawnFood(); }
+  if (at(S.fish)) { eat('fish', S.fish); S.fish = null; }
+  if (at(S.pearl)) { eat('pearl', S.pearl); S.pearl = null; }
+
+  if (S.fish && S.tick % 2 === 0) moveFish();
+  for (const j of S.jellies) if ((S.tick + j.off) % 6 === 0) moveJelly(j);
+  if (S.boosting && S.tick % 2 === 0) {
+    const t = S.snake[S.snake.length - 1];
+    puff(gx(t.x), gy(t.y), BUBBLE, 2, 0.4, 0.7);
+    if (S.tick % 4 === 0) sfx.bubble();
+  }
+  // a low double thud when a jellyfish is within two cells
+  if (S.phase === 0 && S.tick - S.warnTick >= 5 && S.jellies.some(j => tdist(j.x, j.y, nx, ny) <= 2)) { S.warnTick = S.tick; sfx.warn(); }
+}
+
+function neighbors(x, y) {
+  return Object.values(DIRS).map(([dx, dy]) => ({ x: (x + dx + COLS) % COLS, y: (y + dy + ROWS) % ROWS, dx, dy }));
+}
+function moveFish() {
+  const f = S.fish, h = S.snake[0];
+  const opts = neighbors(f.x, f.y).filter(c => !occupied(c.x, c.y));
+  if (!opts.length) return;
+  let pick;
+  if (Math.random() < 0.22) pick = opts[ri(opts.length)];
+  else pick = opts.reduce((a, b) => (tdist(b.x, b.y, h.x, h.y) > tdist(a.x, a.y, h.x, h.y) ? b : a));
+  f.x = pick.x; f.y = pick.y; f.ang = Math.atan2(pick.dy, pick.dx);
+}
+function moveJelly(j) {
+  const h = S.snake[0], [dx, dy] = DIRS[S.dir];
+  const ahead = { x: (h.x + dx + COLS) % COLS, y: (h.y + dy + ROWS) % ROWS };
+  const opts = neighbors(j.x, j.y).filter(c => !occupied(c.x, c.y) && !(c.x === ahead.x && c.y === ahead.y));
+  if (opts.length && Math.random() < 0.8) { const c = opts[ri(opts.length)]; j.x = c.x; j.y = c.y; }
+}
+
+function eat(kind, e) {
+  const before = zoneOf(meters());
+  S.combo = S.comboT > 0 ? Math.min(S.combo + 1, 8) : 1;
+  S.comboT = 3.2;
+  const base = { plankton: 10, fish: 40, pearl: 25 }[kind];
+  const mult = S.combo * (S.boosting ? 2 : 1);
+  const pts = base * mult;
+  S.score += pts;
+  S.glow = Math.min(100, S.glow + (kind === 'fish' ? 35 : 16));
+  const x = gx(e.x), y = gy(e.y);
+  if (kind === 'plankton') { S.grow += 1; S.eaten += 1; puff(x, y, LUME, 16, 1, 1); sfx.eat(S.combo); }
+  if (kind === 'fish') { S.grow += 3; S.eaten += 2; puff(x, y, AMBER, 30, 1.4, 1.2); sfx.fish(); buzz(25); }
+  if (kind === 'pearl') { S.phase = 6; puff(x, y, PEARL, 34, 1.3, 1.3); sfx.pearl(); buzz([15, 30, 15]); }
+  if (kind !== 'pearl') buzz(12);
+  S.pops.push({ x, y, text: '+' + pts, sub: mult > 1 ? '×' + mult : '', c: kind === 'fish' ? AMBER : kind === 'pearl' ? PEARL : LUME, life: 1 });
+  if (kind === 'plankton' && !S.fish && S.eaten >= 3 && Math.random() < 0.3) spawnFish();
+  const after = zoneOf(meters());
+  if (after !== before) { showZone(after); sfx.zone(); }
+  ensureJellies();
+  if (kind === 'pearl') hint('Phasing: swim through your tail and the jellyfish while the violet bar lasts.');
+  else if (S.combo >= 3) hint(`Chain ×${S.combo}. Keep biting within 3 seconds to climb toward ×8.`);
+}
+
+function die(cause) {
+  state = 'dying'; S.deathT = 0; S.cause = cause; S.alpha = 1; S.shake = reduced ? 0 : 1;
+  for (const p of S.snake) puff(gx(p.x), gy(p.y), LUME, 4, 1.2, 1.3);
+  sfx.die(); buzz([60, 40, 140]);
+  boostHeld = false; $('#boostBtn').classList.remove('on');
+}
+
+function puff(x, y, c, n, speed, life) {
+  for (let i = 0; i < n && S.parts.length < 500; i++) {
+    const a = rand(0, TAU), v = rand(0.3, 1) * speed * cell * 3;
+    S.parts.push({ x, y, vx: Math.cos(a) * v, vy: Math.sin(a) * v - cell * 0.4, life: rand(0.5, 1) * life, max: life, c, r: rand(0.04, 0.1) * cell });
+  }
+}
+
+function update(dt) {
+  S.t += dt;
+  const wasBoosting = S.boosting;
+  S.boosting = boostHeld && S.glow > 1;
+  if (S.boosting && !wasBoosting) sfx.boost();
+  S.glow = S.boosting ? Math.max(0, S.glow - 30 * dt) : Math.min(100, S.glow + 4 * dt);
+  S.comboT = Math.max(0, S.comboT - dt); if (S.comboT === 0) S.combo = 0;
+  const ph0 = S.phase;
+  S.phase = Math.max(0, S.phase - dt);
+  if (ph0 > 1.5 && S.phase <= 1.5) sfx.phaseLow();
+  if (ph0 > 0 && S.phase === 0) sfx.phaseEnd();
+  // sonar from the Midnight Zone down
+  if (meters() >= 1000 && S.t - S.lastPing > 5.5) { S.lastPing = S.t; sfx.ping(); }
+  if (S.fish && (S.fish.life -= dt) <= 0) { puff(gx(S.fish.x), gy(S.fish.y), AMBER, 8, 0.5, 0.8); S.fish = null; }
+  if (S.pearl && (S.pearl.life -= dt) <= 0) S.pearl = null;
+  if (!S.pearl && (S.pearlTimer -= dt) <= 0) { spawnPearl(); S.pearlTimer = rand(20, 30); }
+  S.acc += dt;
+  let L = tickLen();
+  while (S.acc >= L && state === 'play') { S.acc -= L; step(); L = tickLen(); }
+  S.alpha = state === 'play' ? clamp(S.acc / L, 0, 1) : 1;
+}
+
+function glide(e, dt, k) {
+  if (Math.abs(e.x - e.rx) > COLS / 2) e.rx += Math.sign(e.x - e.rx) * COLS;
+  if (Math.abs(e.y - e.ry) > ROWS / 2) e.ry += Math.sign(e.y - e.ry) * ROWS;
+  const f = Math.min(1, dt * k);
+  e.rx += (e.x - e.rx) * f; e.ry += (e.y - e.ry) * f; e.s = Math.min(1, e.s + dt * 3);
+}
+function updateFx(dt) {
+  for (const p of S.parts) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.vx *= 1 - 2.6 * dt; p.vy = p.vy * (1 - 2.6 * dt) - cell * 0.6 * dt; }
+  S.parts = S.parts.filter(p => p.life > 0);
+  for (const p of S.pops) { p.life -= dt * 0.9; p.y -= cell * 1.1 * dt; }
+  S.pops = S.pops.filter(p => p.life > 0);
+  for (const e of [S.food, S.fish, S.pearl, ...S.jellies]) if (e) glide(e, dt, e === S.fish ? 9 : 4);
+  S.shake = Math.max(0, S.shake - dt * 2.2);
+}
+
+/* ---------- ambient ---------- */
+const snow = Array.from({ length: 70 }, () => ({ x: Math.random(), y: Math.random(), s: rand(0.4, 1.4), v: rand(0.006, 0.02), ph: rand(0, TAU) }));
+function updateSnow(dt) { for (const f of snow) { f.y += f.v * dt; if (f.y > 1.02) { f.y = -0.02; f.x = Math.random(); } } }
+
+/* ---------- rendering ---------- */
+function glowDot(x, y, r, c, a) {
+  if (a <= 0.003 || r <= 0) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+  g.addColorStop(0, rgba(c, a)); g.addColorStop(0.35, rgba(c, a * 0.45)); g.addColorStop(1, rgba(c, 0));
+  ctx.fillStyle = g; ctx.fillRect(x - r, y - r, r * 2, r * 2);
+}
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, Math.max(0, r), 0, TAU); ctx.fill(); }
+
+function snakePoints() {
+  const n = S.snake.length, a = S.alpha, pts = [];
+  for (let i = 0; i < n; i++) {
+    const c = S.snake[i], p = S.prev[Math.min(i, S.prev.length - 1)];
+    let px = p.x, py = p.y;
+    if (px - c.x > 1) px -= COLS; else if (c.x - px > 1) px += COLS;
+    if (py - c.y > 1) py -= ROWS; else if (c.y - py > 1) py += ROWS;
+    pts.push([ox + (lerp(px, c.x, a) + 0.5) * cell, oy + (lerp(py, c.y, a) + 0.5) * cell]);
+  }
+  return pts;
+}
+const linked = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) < cell * 1.6;
+
+function drawSnake(t) {
+  const pts = snakePoints(), n = pts.length;
+  const dying = state === 'dying' || state === 'over';
+  const fade = dying ? Math.max(0, 1 - S.deathT * 1.4) : 1;
+  if (fade <= 0) { S.lure = pts[0]; return; }
+  const phased = S.phase > 0;
+  const flick = phased ? 0.55 + 0.2 * Math.sin(t * 18) : 1;
+  ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+
+  // aura
+  ctx.globalCompositeOperation = 'lighter';
+  const auraC = phased ? [160, 130, 255] : LUME;
+  for (const [w, al] of [[2.6, 0.05], [1.5, 0.09]]) {
+    ctx.strokeStyle = rgba(auraC, al * fade * (S.boosting ? 1.6 : 1)); ctx.lineWidth = cell * w;
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) { if (i === 0 || !linked(pts[i], pts[i - 1])) ctx.moveTo(...pts[i]); else ctx.lineTo(...pts[i]); }
+    ctx.stroke();
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // body, tail to head
+  ctx.globalAlpha = fade * flick;
+  for (let i = n - 1; i > 0; i--) {
+    if (!linked(pts[i], pts[i - 1])) continue;
+    const f = i / Math.max(1, n - 1);
+    const w = cell * 0.74 * (1 - Math.pow(f, 2.4) * 0.62);
+    const hue = phased ? lerp(255, 285, f) : lerp(164, 198, f);
+    ctx.strokeStyle = `hsl(${hue} ${phased ? 70 : 72}% ${lerp(44, 22, f)}%)`;
+    ctx.lineWidth = w;
+    ctx.beginPath(); ctx.moveTo(...pts[i]); ctx.lineTo(...pts[i - 1]); ctx.stroke();
+  }
+  // dorsal highlight
+  ctx.strokeStyle = 'rgba(210,255,240,.22)'; ctx.lineWidth = cell * 0.14;
+  ctx.beginPath();
+  for (let i = 0; i < n; i++) { if (i === 0 || !linked(pts[i], pts[i - 1])) ctx.moveTo(pts[i][0], pts[i][1] - cell * 0.1); else ctx.lineTo(pts[i][0], pts[i][1] - cell * 0.1); }
+  ctx.stroke();
+
+  // photophores: a pulse that travels down the body
+  ctx.globalCompositeOperation = 'lighter';
+  for (let i = 1; i < n - 1; i++) {
+    const a = pts[i - 1], b = pts[i + 1];
+    if (!linked(a, pts[i]) || !linked(pts[i], b)) continue;
+    let tx = a[0] - b[0], ty = a[1] - b[1]; const len = Math.hypot(tx, ty) || 1; tx /= len; ty /= len;
+    const f = i / (n - 1), off = cell * 0.27 * (1 - f * 0.5);
+    const pulse = 0.35 + 0.65 * Math.max(0, Math.sin(t * 7 - i * 0.55));
+    const c = phased ? PEARL : LUME;
+    for (const s of [-1, 1]) {
+      const x = pts[i][0] - ty * off * s, y = pts[i][1] + tx * off * s;
+      glowDot(x, y, cell * 0.22, c, 0.5 * pulse * fade);
+      ctx.fillStyle = rgba(c, 0.9 * pulse * fade); circle(x, y, cell * 0.045);
+    }
+  }
+  ctx.globalCompositeOperation = 'source-over';
+
+  // head
+  const [hx, hy] = pts[0];
+  let ang = ANG[S.dir];
+  if (n > 1 && linked(pts[0], pts[1]) && Math.hypot(pts[0][0] - pts[1][0], pts[0][1] - pts[1][1]) > cell * 0.2)
+    ang = Math.atan2(pts[0][1] - pts[1][1], pts[0][0] - pts[1][0]);
+  const r = cell * 0.44;
+  ctx.save(); ctx.translate(hx, hy); ctx.rotate(ang);
+  const lx = r * 1.85, ly = Math.sin(t * 4) * r * 0.28;
+  ctx.strokeStyle = 'rgba(150,235,215,.75)'; ctx.lineWidth = Math.max(1, cell * 0.05);
+  ctx.beginPath(); ctx.moveTo(r * 0.7, 0); ctx.quadraticCurveTo(r * 1.4, -r * 0.5 + ly * 0.5, lx, ly); ctx.stroke();
+  const hg = ctx.createRadialGradient(r * 0.3, -r * 0.25, r * 0.1, 0, 0, r * 1.2);
+  hg.addColorStop(0, phased ? '#c9b8ff' : '#56f0c8'); hg.addColorStop(1, phased ? '#4b3a9a' : '#0b6e63');
+  ctx.fillStyle = hg; ctx.beginPath(); ctx.ellipse(r * 0.12, 0, r * 1.05, r * 0.84, 0, 0, TAU); ctx.fill();
+  for (const s of [-1, 1]) {
+    ctx.fillStyle = '#eafff8'; circle(r * 0.42, s * r * 0.44, r * 0.22);
+    ctx.fillStyle = '#04121c'; circle(r * 0.5, s * r * 0.44, r * 0.12);
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  const ca = Math.cos(ang), sa = Math.sin(ang);
+  S.lure = [hx + ca * lx - sa * ly, hy + sa * lx + ca * ly];
+  const lp = 0.75 + 0.25 * Math.sin(t * 5);
+  ctx.globalCompositeOperation = 'lighter';
+  glowDot(S.lure[0], S.lure[1], cell * (S.boosting ? 1.6 : 1.1) * lp, phased ? PEARL : LUME, 0.55 * fade);
+  ctx.fillStyle = rgba([235, 255, 248], fade); circle(S.lure[0], S.lure[1], cell * 0.08);
+  ctx.globalCompositeOperation = 'source-over';
+}
+
+function drawPlankton(e, t, glowOnly, k = 1) {
+  const x = gx(e.rx), y = gy(e.ry), pul = 1 + 0.15 * Math.sin(t * 5), s = e.s;
+  glowDot(x, y, cell * 1.0 * pul * s, LUME, 0.36 * k);
+  if (glowOnly) return;
+  const g = ctx.createRadialGradient(x, y, 0, x, y, cell * 0.17 * s);
+  g.addColorStop(0, '#f2fffb'); g.addColorStop(1, rgba(LUME, 0.6));
+  ctx.fillStyle = g; circle(x, y, cell * 0.17 * s);
+  ctx.fillStyle = rgba(LUME, 0.85);
+  for (let k2 = 0; k2 < 3; k2++) { const a = t * 2.2 + k2 * TAU / 3; circle(x + Math.cos(a) * cell * 0.3 * s, y + Math.sin(a) * cell * 0.3 * s, cell * 0.04); }
+}
+function drawFish(f, t, glowOnly, k = 1) {
+  const x = gx(f.rx), y = gy(f.ry), blink = f.life < 3 ? (Math.sin(t * 22) > 0 ? 1 : 0.3) : 1;
+  glowDot(x, y, cell * 1.3 * f.s, AMBER, 0.3 * blink * k);
+  if (glowOnly) return;
+  const r = cell * 0.42 * f.s, wag = Math.sin(t * 14 + f.ph) * 0.35;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(f.ang); ctx.globalAlpha = blink;
+  ctx.fillStyle = '#9a5a1e';
+  ctx.beginPath(); ctx.moveTo(-r * 0.7, 0); ctx.lineTo(-r * 1.35, -r * (0.55 + wag)); ctx.lineTo(-r * 1.15, 0); ctx.lineTo(-r * 1.35, r * (0.55 - wag)); ctx.closePath(); ctx.fill();
+  const g = ctx.createLinearGradient(0, -r * 0.6, 0, r * 0.6); g.addColorStop(0, '#6b3b12'); g.addColorStop(0.55, '#e39a45'); g.addColorStop(1, '#ffd79a');
+  ctx.fillStyle = g; ctx.beginPath(); ctx.ellipse(0, 0, r, r * 0.56, 0, 0, TAU); ctx.fill();
+  ctx.fillStyle = rgba(AMBER, 1); for (let i = 0; i < 4; i++) circle(-r * 0.5 + i * r * 0.32, r * 0.32, cell * 0.03);
+  ctx.fillStyle = '#fff3e0'; circle(r * 0.48, -r * 0.1, r * 0.22); ctx.fillStyle = '#1a0d02'; circle(r * 0.53, -r * 0.1, r * 0.13);
+  ctx.restore(); ctx.globalAlpha = 1;
+}
+function drawPearl(p, t, glowOnly, k = 1) {
+  const x = gx(p.rx), y = gy(p.ry), blink = p.life < 2.5 ? (Math.sin(t * 20) > 0 ? 1 : 0.35) : 1, s = p.s;
+  glowDot(x, y, cell * 1.4 * s, PEARL, (0.35 + 0.12 * Math.sin(t * 3)) * blink * k);
+  if (glowOnly) return;
+  const r = cell * 0.28 * s, a = t * 1.5;
+  const g = ctx.createLinearGradient(x + Math.cos(a) * r, y + Math.sin(a) * r, x - Math.cos(a) * r, y - Math.sin(a) * r);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.4, '#d9d2ff'); g.addColorStop(0.7, '#ffc6e6'); g.addColorStop(1, '#bff6ff');
+  ctx.globalAlpha = blink; ctx.fillStyle = g; circle(x, y, r);
+  ctx.fillStyle = 'rgba(255,255,255,.85)'; circle(x - r * 0.35, y - r * 0.35, r * 0.25);
+  ctx.globalCompositeOperation = 'lighter'; ctx.strokeStyle = 'rgba(255,255,255,.7)'; ctx.lineWidth = Math.max(1, cell * 0.03);
+  const sx = x + r * 0.9, sy = y - r * 0.9, sl = cell * 0.18 * (0.6 + 0.4 * Math.sin(t * 6));
+  ctx.beginPath(); ctx.moveTo(sx - sl, sy); ctx.lineTo(sx + sl, sy); ctx.moveTo(sx, sy - sl); ctx.lineTo(sx, sy + sl); ctx.stroke();
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+}
+function drawJelly(j, t, glowOnly, k = 1) {
+  const x = gx(j.rx), y0 = gy(j.ry), r = cell * 0.44 * j.s, p = 1 + 0.1 * Math.sin(t * 3 + j.ph), y = y0 - r * 0.25;
+  glowDot(x, y0, cell * 1.2 * j.s, JELLY, 0.24 * k);
+  if (glowOnly) return;
+  ctx.strokeStyle = rgba(JELLY, 0.6); ctx.lineWidth = Math.max(1, cell * 0.04); ctx.lineCap = 'round';
+  for (let i = 0; i < 4; i++) {
+    const tx = x + (i - 1.5) * r * 0.42;
+    ctx.beginPath(); ctx.moveTo(tx, y + r * 0.05);
+    ctx.quadraticCurveTo(tx + Math.sin(t * 2.4 + i + j.ph) * r * 0.45, y + r * 0.7, tx + Math.sin(t * 2 + i * 1.7 + j.ph) * r * 0.25, y + r * 1.25);
+    ctx.stroke();
+  }
+  const g = ctx.createRadialGradient(x, y - r * 0.4, r * 0.05, x, y, r * 1.1);
+  g.addColorStop(0, '#ffd6ea'); g.addColorStop(0.5, 'rgba(255,95,168,.78)'); g.addColorStop(1, 'rgba(120,20,80,.65)');
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.ellipse(x, y + r * 0.1, r * p, r * 0.9 / p, 0, Math.PI, 0);
+  for (let i = 0; i <= 5; i++) { const sx = x + r * p - (i / 5) * 2 * r * p; ctx.lineTo(sx, y + r * 0.1 + (i % 2 ? r * 0.12 : 0)); }
+  ctx.closePath(); ctx.fill();
+  ctx.fillStyle = 'rgba(255,230,242,.5)'; circle(x - r * 0.3, y - r * 0.25, r * 0.12); circle(x + r * 0.15, y - r * 0.4, r * 0.08);
+}
+
+function render(now) {
+  const t = now / 1000;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const m = meters(), d = clamp(m / 3000, 0, 1);
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, mix('#1a6a80', '#060d1e', d)); bg.addColorStop(1, mix('#07283a', '#010308', d));
+  ctx.fillStyle = bg; ctx.fillRect(0, 0, W, H);
+
+  // the water's extent: the whole screen in tilt mode, the board otherwise
+  const wx = 0, wy = 0, ww = W, wh = H;
+
+  ctx.save();
+  if (S.shake > 0) ctx.translate(rand(-1, 1) * S.shake * cell * 0.4, rand(-1, 1) * S.shake * cell * 0.4);
+  ctx.save();
+
+  // water: faint grid of sediment points
+  ctx.fillStyle = `rgba(160,230,230,${0.07 * (1 - d * 0.6)})`;
+  for (let x = 1; x < COLS; x++) for (let y = 1; y < ROWS; y++) ctx.fillRect(ox + x * cell - 0.75, oy + y * cell - 0.75, 1.5, 1.5);
+
+  // light shafts from the surface, fading with depth
+  const shaftA = 0.075 * (1 - clamp(m / 900, 0, 1));
+  if (shaftA > 0.002) {
+    ctx.globalCompositeOperation = 'lighter';
+    for (let i = 0; i < 4; i++) {
+      const sway = reduced ? 0 : Math.sin(t * 0.25 + i * 1.7) * W * 0.05;
+      const x0 = W * (0.15 + i * 0.24) + sway, w0 = W * 0.05, w1 = W * 0.16;
+      const g = ctx.createLinearGradient(0, wy, 0, wy + wh);
+      g.addColorStop(0, `rgba(200,255,250,${shaftA})`); g.addColorStop(1, 'rgba(200,255,250,0)');
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.moveTo(x0 - w0, wy); ctx.lineTo(x0 + w0, wy); ctx.lineTo(x0 + w1 + W * 0.12, wy + wh); ctx.lineTo(x0 - w1 + W * 0.12, wy + wh); ctx.fill();
+    }
+    ctx.globalCompositeOperation = 'source-over';
+  }
+
+  // marine snow
+  for (const f of snow) {
+    const x = wx + (f.x + Math.sin(t * 0.6 + f.ph) * 0.006) * ww, y = wy + f.y * wh;
+    ctx.fillStyle = `rgba(210,240,240,${0.22 * f.s * (1 - d * 0.5)})`;
+    ctx.fillRect(x, y, f.s * 1.4, f.s * 1.4);
+  }
+
+  // creatures, clipped to the grid so a wrap across an edge does not show in the margin
+  ctx.save(); ctx.beginPath(); ctx.rect(ox, oy, cell * COLS, cell * ROWS); ctx.clip();
+  for (const j of S.jellies) drawJelly(j, t);
+  if (S.food) drawPlankton(S.food, t);
+  if (S.pearl) drawPearl(S.pearl, t);
+  if (S.fish) drawFish(S.fish, t);
+  drawSnake(t);
+
+  // particles
+  ctx.globalCompositeOperation = 'lighter';
+  for (const p of S.parts) { const a = clamp(p.life / p.max, 0, 1); ctx.fillStyle = rgba(p.c, a * 0.9); circle(p.x, p.y, p.r * (0.5 + a)); }
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.restore();
+
+  // the dark: only your lure and living light cut through it
+  const dark = clamp((m - 120) / 1300, 0, 0.93);
+  if (dark > 0.01) {
+    const [hx, hy] = S.lure, R = cell * (lerp(9, 2.8, dark / 0.93) + (S.boosting ? 1.5 : 0) + 0.3 * Math.sin(t * 5));
+    const g = ctx.createRadialGradient(hx, hy, R * 0.2, hx, hy, R * 1.5);
+    g.addColorStop(0, 'rgba(1,4,12,0)'); g.addColorStop(1, `rgba(1,4,12,${dark})`);
+    ctx.fillStyle = g; ctx.fillRect(wx, wy, ww, wh);
+    ctx.globalCompositeOperation = 'lighter';
+    const k = dark * 1.1;
+    if (S.food) drawPlankton(S.food, t, true, k);
+    if (S.pearl) drawPearl(S.pearl, t, true, k);
+    if (S.fish) drawFish(S.fish, t, true, k);
+    for (const j of S.jellies) drawJelly(j, t, true, k * 0.75);
+    ctx.globalCompositeOperation = 'source-over';
+  }
+  ctx.restore(); // clip
+
+  // the grid's edge: hairline corners, since the water runs past it to the screen's edges
+  {
+    ctx.strokeStyle = rgba(LUME, 0.22); ctx.lineWidth = 1.5;
+    const L = cell * 0.7, x1 = ox, y1 = oy, x2 = ox + cell * COLS, y2 = oy + cell * ROWS;
+    ctx.beginPath();
+    for (const [cx, cy, sx, sy] of [[x1, y1, 1, 1], [x2, y1, -1, 1], [x1, y2, 1, -1], [x2, y2, -1, -1]]) {
+      ctx.moveTo(cx + sx * L, cy); ctx.lineTo(cx, cy); ctx.lineTo(cx, cy + sy * L);
+    }
+    ctx.stroke();
+  }
+
+  if (state !== 'title') {
+    const bw = Math.min(cell * COLS * 0.32, 130), bx = ox + 12, by = oy + cell * ROWS - 12;
+    const bar = (y, f, c) => { ctx.fillStyle = 'rgba(255,255,255,.12)'; ctx.fillRect(bx, y, bw, 3); ctx.fillStyle = rgba(c, 0.9); ctx.fillRect(bx, y, bw * clamp(f, 0, 1), 3); };
+    bar(by, S.glow / 100, LUME);
+    if (S.phase > 0) bar(by - 7, S.phase / 6, PEARL);
+  }
+
+  // score pops
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (const p of S.pops) {
+    const a = clamp(p.life * 1.4, 0, 1);
+    ctx.font = `700 ${Math.round(cell * 0.55)}px 'JetBrains Mono', ui-monospace, monospace`;
+    ctx.fillStyle = rgba(p.c, a); ctx.fillText(p.text, p.x, p.y);
+    if (p.sub) { ctx.font = `700 ${Math.round(cell * 0.4)}px 'JetBrains Mono', ui-monospace, monospace`; ctx.fillStyle = rgba(AMBER, a); ctx.fillText(p.sub, p.x, p.y + cell * 0.5); }
+  }
+  ctx.restore(); // shake
+}
+
+/* ---------- HUD ---------- */
+const hudCache = {};
+function setText(id, v) { if (hudCache[id] !== v) { hudCache[id] = v; document.getElementById(id).textContent = v; } }
+function setStyle(el, k, v) { const key = el + k; if (hudCache[key] !== v) { hudCache[key] = v; document.getElementById(el).style[k] = v; } }
+function hud() {
+  const m = meters();
+  document.body.classList.toggle('diving', state === 'play' || state === 'paused' || state === 'dying');
+  setText('score', S.score.toLocaleString());
+  setText('depth', m.toLocaleString() + ' m');
+  setText('zoneName', zoneOf(m).name);
+  setText('best', Math.max(best, S.score).toLocaleString());
+  setText('glowVal', String(Math.round(S.glow)));
+  setStyle('glowBar', 'width', S.glow.toFixed(1) + '%');
+  setText('phaseVal', S.phase > 0 ? S.phase.toFixed(1) + ' s' : '–');
+  setStyle('phaseBar', 'width', (S.phase / 6 * 100).toFixed(1) + '%');
+  setStyle('combo', 'opacity', S.combo > 0 && state === 'play' ? '1' : '0');
+  setText('comboX', '×' + S.combo);
+  setStyle('comboBar', 'width', (S.comboT / 3.2 * 100).toFixed(1) + '%');
+}
+let hintTimer = 0;
+function hint(msg) { setText('hint', msg); hintTimer = 5; }
+let toastTimer;
+function toast(msg) {
+  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => el.classList.remove('show'), 4200);
+}
+let zoneTimer;
+function showZone(z) {
+  $('#zoneTitle').textContent = z.name + ' Zone';
+  $('#zoneSub').textContent = z.from.toLocaleString() + ' m · ' + ({ Twilight: 'jellyfish rise to meet you', Midnight: 'your lure is the only light', Abyssal: 'cold, slow, and very dark', Hadal: 'the trench floor' }[z.name] || '');
+  const el = $('#zoneBanner'); el.classList.add('show');
+  clearTimeout(zoneTimer); zoneTimer = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+/* ---------- sound ----------
+   iOS mutes Web Audio on the ring/silent switch unless the page asks for playback (Audio Session API,
+   as Plumb and Scoop do), and a context only starts inside a tap's pointerup, touchend or click,
+   so every such event retries until the context runs. Everything is synthesized: a sea bed of
+   filtered surf and a two-note drone that darken with depth, plus event sounds on top. */
+let ac = null, master = null, amb = null, noiseBuf = null, ambT = 0;
+function unlockAudio() {
+  if (muted) return;
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  try {
+    if (!ac) {
+      ac = new (window.AudioContext || window.webkitAudioContext)();
+      master = ac.createGain(); master.gain.value = 0.9;
+      const comp = ac.createDynamicsCompressor();
+      master.connect(comp).connect(ac.destination);
+      noiseBuf = ac.createBuffer(1, ac.sampleRate * 2, ac.sampleRate);
+      const d = noiseBuf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (ac.state !== 'running') ac.resume();
+    const src = ac.createBufferSource();
+    src.buffer = ac.createBuffer(1, 1, 22050); src.connect(ac.destination); src.start(0);
+    startAmbience();
+  } catch {}
+}
+for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) {
+  addEventListener(ev, () => { if (!muted && (!ac || ac.state !== 'running')) unlockAudio(); }, true);
+}
+const live = () => !!(ac && master && !muted && ac.state === 'running');
+function tone(f0, f1, dur, type = 'sine', vol = 0.12, delay = 0) {
+  if (!live()) return;
+  const t0 = ac.currentTime + delay, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t0); o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  o.connect(g).connect(master); o.start(t0); o.stop(t0 + dur + 0.02);
+}
+function hiss(dur, f0, f1, vol, q = 1.2, delay = 0) {
+  if (!live()) return;
+  const t0 = ac.currentTime + delay, src = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  src.buffer = noiseBuf; f.type = 'bandpass'; f.Q.value = q;
+  f.frequency.setValueAtTime(f0, t0); f.frequency.exponentialRampToValueAtTime(f1, t0 + dur);
+  g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(vol, t0 + dur * 0.2); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(f).connect(g).connect(master); src.start(t0, Math.random()); src.stop(t0 + dur + 0.05);
+}
+function startAmbience() {
+  if (amb || !ac) return;
+  const out = ac.createGain(); out.gain.value = 0.0001; out.connect(master);
+  const surf = ac.createBufferSource(); surf.buffer = noiseBuf; surf.loop = true;
+  const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 600; lp.Q.value = 0.7;
+  const swell = ac.createOscillator(), depthOfSwell = ac.createGain();
+  swell.frequency.value = 0.09; depthOfSwell.gain.value = 200; swell.connect(depthOfSwell).connect(lp.frequency);
+  const surfGain = ac.createGain(); surfGain.gain.value = 0.2;
+  surf.connect(lp).connect(surfGain).connect(out);
+  const drone = [55, 82.4].map((f, i) => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.frequency.value = f; o.detune.value = i ? 6 : -4; g.gain.value = i ? 0.05 : 0.08;
+    o.connect(g).connect(out); o.start(); return o;
+  });
+  surf.start(); swell.start();
+  amb = { out, lp, drone };
+}
+function updateAmbience() {
+  if (!amb || !ac) return;
+  const d = clamp(meters() / 3000, 0, 1), now = ac.currentTime;
+  amb.out.gain.setTargetAtTime(muted ? 0.0001 : state === 'play' ? 0.6 : 0.3, now, 0.4);
+  amb.lp.frequency.setTargetAtTime(lerp(650, 160, d), now, 1);
+  amb.drone.forEach((o, i) => o.frequency.setTargetAtTime((i ? 82.4 : 55) * lerp(1, 0.84, d), now, 1.5));
+}
+const sfx = {
+  start: () => { hiss(1.3, 2600, 180, 0.22, 0.6); tone(220, 110, 1, 'sine', 0.14); },
+  eat: c => { const f = 392 * Math.pow(2, Math.min(c - 1, 7) * 2 / 12); tone(f, f * 1.5, 0.14, 'sine', 0.24); tone(f * 2, f * 3, 0.08, 'triangle', 0.06); hiss(0.12, 900, 2400, 0.06, 3); },
+  fish: () => { tone(330, 660, 0.14, 'triangle', 0.2); tone(495, 990, 0.16, 'triangle', 0.16, 0.08); tone(660, 1320, 0.2, 'sine', 0.12, 0.16); },
+  fishSpawn: () => { tone(1500, 2100, 0.07, 'sine', 0.07); tone(1800, 2500, 0.07, 'sine', 0.06, 0.09); },
+  pearl: () => [0, 4, 7, 12, 16].forEach((st, i) => { const f = 660 * Math.pow(2, st / 12); tone(f, f, 0.5, 'sine', 0.1, i * 0.06); }),
+  phaseLow: () => [0, 1, 2].forEach(i => tone(1200, 1150, 0.06, 'sine', 0.07, i * 0.18)),
+  phaseEnd: () => tone(900, 300, 0.3, 'sine', 0.09),
+  zone: () => { tone(110, 82, 2.2, 'sine', 0.26); tone(165, 123, 2.2, 'sine', 0.1); hiss(2, 300, 80, 0.14, 0.8); },
+  die: () => { tone(300, 40, 0.8, 'sawtooth', 0.12); tone(150, 30, 1, 'sine', 0.28); hiss(0.9, 1800, 120, 0.28, 0.7); },
+  turn: () => tone(1700, 1300, 0.035, 'triangle', 0.045),
+  boost: () => hiss(0.45, 300, 2200, 0.18, 1.5),
+  bubble: () => { const f = rand(380, 700); tone(f, f * 2.2, 0.07, 'sine', 0.07); },
+  ping: () => { tone(1320, 1300, 1.4, 'sine', 0.1); tone(1320, 1300, 1.1, 'sine', 0.035, 0.42); },
+  warn: () => { tone(98, 70, 0.22, 'sine', 0.3); tone(98, 70, 0.18, 'sine', 0.2, 0.26); },
+};
+function buzz(p) { try { if (navigator.vibrate) navigator.vibrate(p); } catch {} }
+
+/* ---------- flow ---------- */
+let wakeLock = null;
+function start() {
+  if (ctl === 'tilt') enableTilt(); // first, while the tap still counts as a gesture for iOS's prompt
+  newGame(); state = 'play'; boostHeld = false;
+  tilt.neutral = null;
+  $('#titleView').hidden = true; $('#overView').hidden = true; $('#pauseView').hidden = true;
+  hint('Eat plankton to grow. Lanternfish are worth four times as much.');
+  unlockAudio(); sfx.start();
+  try { navigator.wakeLock?.request('screen').then(l => { wakeLock = l; }).catch(() => {}); } catch {}
+}
+function pause() {
+  if (state !== 'play') return;
+  state = 'paused'; boostHeld = false; $('#boostBtn').classList.remove('on');
+  $('#pauseView').hidden = false;
+}
+function resume() {
+  if (state !== 'paused') return;
+  if (ctl === 'tilt') enableTilt();
+  state = 'play'; tilt.neutral = null; $('#pauseView').hidden = true;
+}
+function showOver() {
+  state = 'over';
+  const m = meters(), isBest = S.score > best;
+  if (isBest) { best = S.score; save('lantern-eel-best', best); }
+  $('#overTitle').innerHTML = m >= 1000 ? 'Lost to the <em>deep</em>' : 'Lights <em>out</em>';
+  $('#overCause').textContent = S.cause;
+  $('#rScore').textContent = S.score.toLocaleString();
+  $('#rDepth').textContent = m.toLocaleString() + ' m';
+  $('#rLen').textContent = String(S.maxLen);
+  const rb = $('#rBest');
+  rb.className = isBest && S.score > 0 ? 'newbest' : '';
+  rb.textContent = isBest && S.score > 0 ? 'New personal best.' : `Best: ${best.toLocaleString()}`;
+  $('#overView').hidden = false;
+  applyUpdate();
+  try { wakeLock?.release(); } catch {}
+  setTimeout(() => $('#againBtn').focus({ preventScroll: true }), 50);
+}
+
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (state === 'play') { update(dt); updateFx(dt); }
+  else if (state === 'dying') { S.deathT += dt; updateFx(dt); if (S.deathT > 1.1) showOver(); }
+  else updateFx(dt);
+  updateSnow(dt);
+  if ((ambT -= dt) <= 0) { ambT = 0.25; updateAmbience(); }
+  if (hintTimer > 0 && (hintTimer -= dt) <= 0) setText('hint', S.phase > 0 ? 'Phasing.' : 'Hold Boost, or hold the water, for double points while your glow lasts.');
+  render(now);
+  hud();
+  requestAnimationFrame(frame);
+}
+
+/* ---------- controls: keys ---------- */
+const KEYMAP = { ArrowUp: 'up', KeyW: 'up', ArrowDown: 'down', KeyS: 'down', ArrowLeft: 'left', KeyA: 'left', ArrowRight: 'right', KeyD: 'right' };
+addEventListener('keydown', e => {
+  if (KEYMAP[e.code]) {
+    e.preventDefault();
+    if (state === 'title' || state === 'over') return;
+    turn(KEYMAP[e.code]); return;
+  }
+  if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+    if (state === 'play') { e.preventDefault(); boostHeld = true; $('#boostBtn').classList.add('on'); }
+    else if (e.code === 'Space' && (state === 'title' || state === 'over') && document.activeElement?.tagName !== 'BUTTON') { e.preventDefault(); start(); }
+    return;
+  }
+  if (e.code === 'KeyP' || e.code === 'Escape') { state === 'play' ? pause() : resume(); }
+  if (e.code === 'Enter' && (state === 'title' || state === 'over') && document.activeElement?.tagName !== 'BUTTON') start();
+});
+addEventListener('keyup', e => {
+  if (e.code === 'Space' || e.code === 'ShiftLeft' || e.code === 'ShiftRight') { boostHeld = false; $('#boostBtn').classList.remove('on'); }
+});
+
+/* ---------- controls: on-screen ---------- */
+document.querySelectorAll('.dpad button').forEach(b => {
+  b.addEventListener('pointerdown', e => {
+    e.preventDefault(); turn(b.dataset.dir);
+    b.classList.add('hit'); setTimeout(() => b.classList.remove('hit'), 120);
+  });
+  b.addEventListener('click', e => { if (e.detail === 0) turn(b.dataset.dir); }); // keyboard activation
+  b.addEventListener('contextmenu', e => e.preventDefault());
+});
+const boostBtn = $('#boostBtn');
+const boostOn = e => { e.preventDefault(); if (state !== 'play') return; boostHeld = true; boostBtn.classList.add('on'); try { boostBtn.setPointerCapture(e.pointerId); } catch {} };
+const boostOff = () => { boostHeld = false; boostBtn.classList.remove('on'); };
+boostBtn.addEventListener('pointerdown', boostOn);
+['pointerup', 'pointercancel', 'lostpointercapture'].forEach(ev => boostBtn.addEventListener(ev, boostOff));
+boostBtn.addEventListener('contextmenu', e => e.preventDefault());
+
+// Swipe anywhere on the water, in either control mode; the origin resets after each turn so one
+// drag can steer twice. Pressing and holding the water without swiping boosts, which is the only
+// boost control in tilt mode.
+let sw = null, holdTimer = 0;
+stage.addEventListener('pointerdown', e => {
+  if (state !== 'play' || e.target !== cv) return;
+  sw = { x: e.clientX, y: e.clientY, id: e.pointerId, boost: false };
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => { if (sw && state === 'play') { sw.boost = true; boostHeld = true; boostBtn.classList.add('on'); } }, 170);
+});
+stage.addEventListener('pointermove', e => {
+  if (!sw || e.pointerId !== sw.id) return;
+  const dx = e.clientX - sw.x, dy = e.clientY - sw.y;
+  if (Math.max(Math.abs(dx), Math.abs(dy)) < 22) return;
+  clearTimeout(holdTimer);
+  tilt.swiping = true;
+  turn(Math.abs(dx) > Math.abs(dy) ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up'));
+  sw.x = e.clientX; sw.y = e.clientY;
+});
+['pointerup', 'pointercancel'].forEach(ev => stage.addEventListener(ev, () => {
+  clearTimeout(holdTimer);
+  if (sw && sw.boost) boostOff();
+  if (tilt.swiping) { tilt.swiping = false; tilt.stale = tilt.last; }
+  sw = null;
+}));
+
+$('#startBtn').addEventListener('click', start);
+$('#againBtn').addEventListener('click', start);
+$('#resumeBtn').addEventListener('click', resume);
+$('#pauseBtn').addEventListener('click', () => (state === 'play' ? pause() : resume()));
+function syncSound() {
+  $('#soundBtn').setAttribute('aria-pressed', String(muted));
+  $('#soundBtn').setAttribute('aria-label', muted ? 'Unmute sound' : 'Mute sound');
+  $('#soundWave').style.display = muted ? 'none' : '';
+}
+$('#soundBtn').addEventListener('click', () => {
+  muted = !muted; save('lantern-eel-muted', muted); syncSound();
+  if (!muted) unlockAudio();
+  if (master) master.gain.setTargetAtTime(muted ? 0 : 0.9, ac.currentTime, 0.05);
+  updateAmbience();
+});
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { pause(); try { ac?.suspend(); } catch {} }
+});
+addEventListener('blur', () => { boostOff(); });
+
+/* ---------- controls: tilt ---------- */
+// The angle you hold the device at when a dive starts, play resumes or the screen rotates is level;
+// the vial in the HUD resets it on the spot. Tipping 6° past level along one axis steers that way,
+// like rolling a marble. The axis already steering keeps priority until the other leads it by 3°,
+// so a diagonal hold does not flicker between two turns.
+// While a swipe is steering, tilt is ignored; after the finger lifts, the tilt held at that moment is
+// ignored too until it changes, so it cannot undo the swipe.
+const tilt = { on: false, got: false, neutral: null, x: 0, y: 0, axis: null, swiping: false, stale: null, last: null };
+const TILT_DEG = 6, TILT_SWITCH = 3;
+const wrap180 = a => ((a + 540) % 360) - 180;
+function screenAngle() {
+  const a = (screen.orientation && typeof screen.orientation.angle === 'number') ? screen.orientation.angle : (window.orientation || 0);
+  return ((a % 360) + 360) % 360;
+}
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  tilt.got = true;
+  const b = e.beta, g = e.gamma, a = screenAngle();
+  let x, y;
+  if (a === 90) { x = b; y = -g; } else if (a === 270) { x = -b; y = g; } else if (a === 180) { x = -g; y = -b; } else { x = g; y = b; }
+  if (!tilt.neutral) tilt.neutral = { x, y };
+  const dx = wrap180(x - tilt.neutral.x), dy = wrap180(y - tilt.neutral.y);
+  tilt.x = dx; tilt.y = dy;
+  $('#bubble').style.transform = `translate(${clamp(dx / 3, -6, 6)}px, ${clamp(dy / 3, -6, 6)}px)`;
+  const ax = Math.abs(dx), ay = Math.abs(dy);
+  if (Math.max(ax, ay) < TILT_DEG) { tilt.axis = null; tilt.last = null; tilt.stale = null; return; }
+  const useX = tilt.axis === 'x' ? !(ay > ax + TILT_SWITCH) : tilt.axis === 'y' ? ax > ay + TILT_SWITCH : ax >= ay;
+  tilt.axis = useX ? 'x' : 'y';
+  const d = useX ? (dx > 0 ? 'right' : 'left') : (dy > 0 ? 'down' : 'up');
+  tilt.last = d;
+  if (tilt.swiping) return;
+  if (tilt.stale) { if (d === tilt.stale) return; tilt.stale = null; }
+  turn(d);
+}
+function setTilt(on) {
+  tilt.on = on;
+  if (on) addEventListener('deviceorientation', onOrient);
+  else { removeEventListener('deviceorientation', onOrient); $('#bubble').style.transform = ''; }
+}
+// Tilt falls back to arrows for this visit only, so a phone that refused once is asked again next time.
+function fallback(msg) { ctl = 'arrows'; setTilt(false); applyControls(); toast(msg); return false; }
+async function enableTilt() {
+  if (tilt.on) { tilt.neutral = null; return true; }
+  if (typeof DeviceOrientationEvent === 'undefined') return fallback('This browser has no motion sensors, so you steer with the arrows.');
+  try {
+    if (typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') return fallback('Motion access was refused, so you steer with the arrows. Allow motion sensors for this site in the browser settings to use tilt.');
+    }
+  } catch { return fallback('Motion access is blocked in this view, so you steer with the arrows. Open the game in its own browser tab to use tilt.'); }
+  tilt.neutral = null; tilt.got = false; tilt.axis = null; setTilt(true);
+  setTimeout(() => {
+    if (tilt.on && !tilt.got) fallback('No motion data arrived, so you steer with the arrows. Tilt needs a phone or tablet with the game in its own browser tab.');
+  }, 1600);
+  return true;
+}
+$('#levelBtn').addEventListener('click', () => { tilt.neutral = null; tilt.axis = null; buzz(10); toast('Level is now however you hold the phone.'); });
+
+/* ---------- control mode ----------
+   Phones default to tilt; anything without a coarse pointer and motion sensors defaults to arrows.
+   Arrows can sit on either side. Swipes and the keyboard steer in both modes. */
+const isPhone = matchMedia('(pointer: coarse)').matches && typeof DeviceOrientationEvent !== 'undefined';
+let ctl = load('lantern-eel-controls', isPhone ? 'tilt' : 'arrows');
+let side = load('lantern-eel-arrows-side', 'left');
+function applyControls() {
+  document.body.classList.toggle('mode-tilt', ctl === 'tilt');
+  document.body.classList.toggle('pad-right', side === 'right');
+  $('#levelBtn').hidden = ctl !== 'tilt';
+  document.querySelectorAll('[data-ctl]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.ctl === ctl)));
+  document.querySelectorAll('[data-side]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.side === side)));
+  // the board's shape follows the stage, so a title screen redraws for the new layout
+  requestAnimationFrame(() => { if (state === 'title') newGame(); else regrid(); });
+}
+document.querySelectorAll('[data-ctl]').forEach(b => b.addEventListener('click', () => {
+  ctl = b.dataset.ctl; save('lantern-eel-controls', ctl);
+  if (ctl === 'arrows') setTilt(false);
+  else if (state === 'paused') enableTilt();
+  applyControls();
+}));
+document.querySelectorAll('[data-side]').forEach(b => b.addEventListener('click', () => {
+  side = b.dataset.side; save('lantern-eel-arrows-side', side); applyControls();
+}));
+
+addEventListener('orientationchange', () => { tilt.neutral = null; });
+
+/* ---------- boot ---------- */
+// resizing clears the canvas, so redraw at once rather than show a blank frame until the next tick
+let wasLandscape = null;
+const ro = new ResizeObserver(() => {
+  resize();
+  const landscape = W > H;
+  if (wasLandscape !== null && landscape !== wasLandscape) { if (state === 'title') newGame(); else regrid(); }
+  wasLandscape = landscape;
+  if (S) render(performance.now());
+});
+ro.observe(stage);
+resize();
+newGame();
+syncSound();
+applyControls();
+setText('best', best.toLocaleString());
+requestAnimationFrame(t => { last = t; frame(t); });
+
+/* ---------- offline + updates ----------
+   The service worker keeps a copy for offline play. Updates are checked on every return to the
+   foreground and every 30 minutes, and a new version loads only while no dive is in progress. */
+let updateReady = false, swReg = null;
+function applyUpdate() { if (updateReady && state !== 'play' && state !== 'paused' && state !== 'dying') location.reload(); }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && swReg) swReg.update().catch(() => {}); });
+if ('serviceWorker' in navigator && isSecureContext && location.hostname !== 'localhost') {
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) { hadController = true; return; }
+    updateReady = true; applyUpdate();
+  });
+  addEventListener('load', () => {
+    navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' })
+      .then(r => { swReg = r; setInterval(() => r.update().catch(() => {}), 30 * 60 * 1000); })
+      .catch(() => {});
+  });
+}
+
+// test hook
+window.__grid = () => ({ x: ox, y: oy, w: cell * COLS, h: cell * ROWS });
+window.__eel = { get state() { return state; }, get S() { return S; }, get tilt() { return tilt; }, get ctl() { return ctl; }, get audio() { return ac ? ac.state : null; }, get dims() { return [COLS, ROWS]; }, start, step: () => step(), turn };
+})();
+</script>
+</body>
+</html>

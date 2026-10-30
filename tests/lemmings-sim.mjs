@@ -44,7 +44,7 @@ function png(w, h, rgba) {
 const browser = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-angle=swiftshader", "--use-webgpu-adapter=swiftshader", "--disable-vulkan-surface"] });
 const page = await browser.newPage();
 page.on("console", (m) => { if (m.type() === "error") console.log("page:", m.text()); });
-await page.goto(base + "/fun-and-games/lemmings/sprites.js");
+await page.goto(base + "/games/lemmings/sprites.js");
 
 // Each plan is a list of steps run in the page: { skill, pick, after, id, needs } assigns `skill` to
 // the first lemming for which `pick` (a function source over a lemming record) is true, once `after`

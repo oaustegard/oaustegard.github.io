@@ -4,7 +4,7 @@ const { test, expect } = require('@playwright/test');
 const names = (page, list) => page.$$eval(list + ' > li .nm', l => l.map(x => x.textContent));
 const dates = (page, list) => page.$$eval(list + ' > li', l => l.map(x => x.getAttribute('data-added') || '9999'));
 
-for (const district of ['fun-and-games', 'bsky']) {
+for (const district of ['games', 'fun-and-games', 'bsky']) {
   test(`${district}: Newest by default, A-Z reorders the rows and the choice persists`, async ({ page }) => {
     await page.goto(`/${district}/`);
     await page.evaluate(() => localStorage.clear());

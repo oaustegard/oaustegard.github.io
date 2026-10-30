@@ -121,7 +121,7 @@ screen angle, re-baselining on `orientationchange`), the app **counter-
 rotates its own UI back to device-natural portrait** with a CSS transform on
 a single `#app` wrapper — the OS may flip the viewport, but the picture the
 user sees never leaves portrait. Ported from Ball Maze
-(`fun-and-games/ball-maze/game.js`), including its later on-device refinements
+(`games/ball-maze/game.js`), including its later on-device refinements
 (see "Rotation-signal handling" below).
 
 **`#app` wrapper.** All top-level UI (landing screen, player screen, toast)
