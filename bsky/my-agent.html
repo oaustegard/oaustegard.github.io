@@ -171,6 +171,7 @@
         <div>
           <h2>Latest posts</h2>
           <div class="live"><i class="dot off" id="live-dot"></i><span id="live-txt">connecting…</span></div>
+          <div class="live model-state"></div>
         </div>
         <div class="seg" role="group" aria-label="Filter posts" id="filt">
           <button type="button" data-f="all" aria-pressed="true">All</button>
@@ -185,12 +186,13 @@
     <div>
       <section class="card">
         <h2>What the classifier keys on</h2>
-        <p class="sub">Words and word pairs with the largest weight toward each class.</p>
+        <p class="sub">Words and word pairs with the largest weight toward each class. The sentence embedding adds meaning beyond these.</p>
         <div class="terms" id="terms"></div>
       </section>
       <section class="card try">
         <h2>Try it</h2>
         <p class="sub">Type a post; it is classified in your browser as you type.</p>
+        <p class="sub model-state"></p>
         <textarea id="try-in" aria-label="Text to classify">my agent finally fixed the flaky test while I slept</textarea>
         <div class="out" id="try-out"></div>
       </section>
@@ -201,10 +203,14 @@
           collected window by window, halving any window with more hits than one page holds. The search also returns posts where the two words are apart
           or the phrase sits only in a quoted post, about one in eight; those are dropped. Identical text posted more than once on the same day counts once,
           which removes a bot that posted one x402 promotion 185 times in September 2026.</p>
-        <p class="note">About 2,400 posts, sampled evenly across the weeks, were labeled by Claude. A multinomial logistic
-          regression over single words and word pairs learned from them; when its top probability is under
-          <span id="unsure">40%</span>, the post counts as unknown. The weights ship with this page, so the live feed
-          and anything you type are classified here, in your browser.</p>
+        <p class="note">Claude labeled 4,375 posts: 2,375 sampled evenly across the weeks, then 2,000 more, half of them
+          the posts the first model was least sure of and half from 2026. A multinomial logistic regression learned from
+          two kinds of evidence: single words and word pairs, and a sentence embedding from
+          <a href="https://huggingface.co/Xenova/all-MiniLM-L6-v2">all-MiniLM-L6-v2</a>, which captures what a post means
+          when its words do not give it away (“built by my agent”). When the top probability is under
+          <span id="unsure">40%</span>, the post counts as unknown. Everything runs here, in your browser: the weights ship
+          with the page, and transformers.js runs the same quantized MiniLM file that produced the training embeddings.
+          Until it has loaded, a words-only model fills in, and the feed is re-scored once it arrives.</p>
         <details><summary>Cross-validated accuracy</summary><div id="eval"></div></details>
         <p class="note" id="fill-note"></p>
       </section>
@@ -246,19 +252,55 @@ function tokens(text) {
   return out;
 }
 let MODEL = null;
-function classify(text) {
-  const s = MODEL.bias.slice();
+// With an embedding `e`, the full model (words + MiniLM); without one, the
+// words-only model that stands in until MiniLM has loaded.
+function classify(text, e) {
+  const s = (e ? MODEL.bias : MODEL.wordsBias).slice();
+  const o = e ? 0 : 3;
   for (const f of new Set(tokens(text))) {
     const w = MODEL.weights[f];
-    if (w) for (let c = 0; c < 3; c++) s[c] += w[c];
+    if (w) for (let c = 0; c < 3; c++) s[c] += w[o + c];
   }
+  if (e) for (let c = 0; c < 3; c++) { const r = MODEL.emb[c]; for (let j = 0; j < r.length; j++) s[c] += r[j] * e[j]; }
   const m = Math.max(...s);
-  const e = s.map((v) => Math.exp(v - m));
-  const z = e.reduce((a, b) => a + b, 0);
-  const p = e.map((v) => v / z);
+  const x = s.map((v) => Math.exp(v - m));
+  const z = x.reduce((a, b) => a + b, 0);
+  const p = x.map((v) => v / z);
   let k = p.indexOf(Math.max(...p));
   if (p[k] < MODEL.unsure) k = 2;
-  return { cls: CLASSES[k], p };
+  return { cls: CLASSES[k], p, full: !!e };
+}
+
+/* MiniLM sentence embeddings through transformers.js: the same quantized ONNX
+   file scripts/my-agent/embed.py used for training, run on WebAssembly. */
+let EMBED = null;
+let embedReady = null;
+function loadEmbedder() {
+  embedReady = (async () => {
+    modelState('Classifier: words only while the MiniLM sentence model (23 MB) loads…');
+    try {
+      const { pipeline } = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.7.6');
+      const ext = await pipeline('feature-extraction', MODEL.embedModel, { dtype: 'q8', device: 'wasm' });
+      EMBED = async (texts) => (await ext(texts, { pooling: 'mean', normalize: true })).tolist();
+      modelState('Classifier: words + MiniLM sentence embedding, running in this browser.');
+      return true;
+    } catch (err) {
+      modelState('Classifier: words only (the MiniLM sentence model failed to load).');
+      return false;
+    }
+  })();
+  return embedReady;
+}
+function modelState(t) { document.querySelectorAll('.model-state').forEach((n) => { n.textContent = t; }); }
+async function classifyMany(texts) {
+  if (!texts.length) return [];
+  if (EMBED) {
+    try {
+      const E = await EMBED(texts);
+      return texts.map((t, i) => classify(t, E[i]));
+    } catch (err) { /* fall through to words only */ }
+  }
+  return texts.map((t) => classify(t));
 }
 
 /* ---------- data ---------- */
@@ -293,6 +335,7 @@ async function fillLive() {
   for (let d = start; d <= today; d += DAY) days.push(d);
   if (!days.length) { $('fill-note').textContent = ''; return; }
   $('fill-note').textContent = `Fetching ${days.length} day${days.length > 1 ? 's' : ''} after the snapshot…`;
+  await embedReady; // count with the same model as the snapshot
   let done = 0;
   const work = days.slice();
   async function worker() {
@@ -301,14 +344,15 @@ async function fillLive() {
       try {
         const posts = await searchWindow(d, Math.min(d + DAY, Date.now()));
         const c = [0, 0, 0];
-        const seen = new Set();
+        const seen = new Set(), keep = [];
         for (const p of posts) {
           // same rule as train.py: identical text counts once a day
           const key = (p.record.text || '').toLowerCase().split(/\s+/).filter(Boolean).join(' ').slice(0, 200);
           if (seen.has(p.uri) || seen.has(key) || !hasPhrase(p)) continue;
           seen.add(p.uri); seen.add(key);
-          c[CLASSES.indexOf(classify(p.record.text || '').cls)]++;
+          keep.push(p.record.text || '');
         }
+        for (const r of await classifyMany(keep)) c[CLASSES.indexOf(r.cls)]++;
         dayMap.set(iso(d), c);
         liveDays.add(iso(d));
       } catch (e) { /* leave the day out; the chart shows the gap */ }
@@ -531,6 +575,7 @@ function highlight(node, text) {
 function postItem(p, c, fresh) {
   const li = document.createElement('li');
   li.dataset.cls = c.cls;
+  li.dataset.uri = p.uri;
   if (fresh) li.className = 'fresh';
   const img = document.createElement('img');
   img.className = 'av'; img.alt = ''; img.loading = 'lazy';
@@ -572,8 +617,10 @@ async function poll(first) {
     const feed = $('feed');
     // oldest first so the newest ends on top
     fresh.sort((a, b) => Date.parse(a.record.createdAt) - Date.parse(b.record.createdAt));
-    for (const p of fresh) {
-      const c = classify(p.record.text || '');
+    const cs = await classifyMany(fresh.map((p) => p.record.text || ''));
+    for (const [n, p] of fresh.entries()) {
+      if (feedPosts.has(p.uri)) continue; // a slower overlapping poll got here first
+      const c = cs[n];
       feedPosts.set(p.uri, { p, c });
       feed.insertBefore(postItem(p, c, !first), feed.firstChild);
       if (!first) SWARM.burst(CLASSES.indexOf(c.cls));
@@ -625,6 +672,21 @@ setInterval(liveStatus, 1000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - LIVE.checked > 10000) poll(false); });
 setInterval(() => document.querySelectorAll('#feed a.t').forEach((a) => { a.textContent = ago(+a.dataset.t); }), 30000);
 
+// When MiniLM arrives, re-classify what is already on screen with the full model.
+async function upgradeFeed() {
+  if (!(await embedReady)) return;
+  const items = [...feedPosts.values()].filter((x) => !x.c.full);
+  const cs = await classifyMany(items.map((x) => x.p.record.text || ''));
+  items.forEach((x, i) => {
+    x.c = cs[i];
+    const old = document.querySelector(`#feed li[data-uri="${CSS.escape(x.p.uri)}"]`);
+    if (old) old.replaceWith(postItem(x.p, x.c, false));
+  });
+  const cnt = [0, 0, 0];
+  for (const { c } of feedPosts.values()) cnt[CLASSES.indexOf(c.cls)]++;
+  SWARM.setMix(cnt);
+}
+
 /* ---------- classifier panels ---------- */
 function renderModel() {
   const box = $('terms');
@@ -651,20 +713,35 @@ function renderModel() {
   });
   $('unsure').textContent = Math.round(MODEL.unsure * 100) + '%';
   const ev = MODEL.eval;
-  $('eval').innerHTML = `<p class="note">${ev.folds}-fold cross-validation on ${fmt.format(ev.n)} Claude-labeled posts
-    (${CLASSES.map((k) => `${fmt.format(MODEL.labelCounts[k] || 0)} ${k}`).join(', ')}): accuracy ${pct(ev.accuracy)}.</p>
-    <table class="eval"><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Posts</th></tr>` +
-    CLASSES.map((k) => `<tr><td><i class="sw ${k}"></i> ${LABEL[k]}</td><td>${pct(ev[k].precision)}</td><td>${pct(ev[k].recall)}</td><td>${pct(ev[k]['f1-score'])}</td><td>${fmt.format(ev[k].support)}</td></tr>`).join('') +
+  const table = (e) => `<table class="eval"><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Posts</th></tr>` +
+    CLASSES.map((k) => `<tr><td><i class="sw ${k}"></i> ${LABEL[k]}</td><td>${pct(e[k].precision)}</td><td>${pct(e[k].recall)}</td><td>${pct(e[k]['f1-score'])}</td><td>${fmt.format(e[k].support)}</td></tr>`).join('') +
     '</table>';
+  $('eval').innerHTML = `<p class="note">${ev.folds}-fold cross-validation on ${fmt.format(ev.n)} Claude-labeled posts
+    (${CLASSES.map((k) => `${fmt.format(MODEL.labelCounts[k] || 0)} ${k}`).join(', ')}). Half of the second labeling round
+    was picked from posts the first model found hardest, so these scores understate accuracy on typical posts.</p>
+    <p class="note">Words + MiniLM: accuracy ${pct(ev.accuracy)}.</p>${table(ev)}
+    <p class="note">Words only (used until MiniLM loads): accuracy ${pct(ev.words.accuracy)}.</p>${table(ev.words)}`;
+  let seq = 0;
+  const show = (c) => {
+    $('try-out').innerHTML = `<span class="badge"><span class="pill ${c.cls}">${LABEL[c.cls]}</span> ` +
+      CLASSES.map((k, i) => `${LABEL[k]} ${pct(c.p[i])}`).join(' · ') + (c.full ? '' : ' · words only') + '</span>';
+  };
+  let timer;
   const tryIt = () => {
     const txt = $('try-in').value;
     if (!txt.trim()) { $('try-out').textContent = ''; return; }
-    const c = classify(txt);
-    $('try-out').innerHTML = `<span class="badge"><span class="pill ${c.cls}">${LABEL[c.cls]}</span> ` +
-      CLASSES.map((k, i) => `${LABEL[k]} ${pct(c.p[i])}`).join(' · ') + '</span>';
+    show(classify(txt));
+    const my = ++seq;
+    clearTimeout(timer);
+    timer = setTimeout(async () => {
+      if (!EMBED) return;
+      const [c] = await classifyMany([txt]);
+      if (my === seq) show(c);
+    }, 200);
   };
   $('try-in').addEventListener('input', tryIt);
   tryIt();
+  embedReady.then(tryIt);
 }
 
 /* ---------- WebGPU swarm ---------- */
@@ -907,6 +984,7 @@ addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => DATA 
     fetch('my-agent-model.json').then((r) => r.json()),
   ]);
   DATA = data; MODEL = model;
+  loadEmbedder();
   data.days.forEach((d, i) => dayMap.set(d, [data.ai[i], data.human[i], data.unknown[i]]));
   $('snap').textContent = data.generated;
   renderModel();
@@ -914,6 +992,7 @@ addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => DATA 
   renderCharts();
   await poll(true);
   setInterval(() => { if (!document.hidden) poll(false); }, POLL_MS);
+  upgradeFeed();
   await fillLive();
   renderTiles();
   renderCharts();

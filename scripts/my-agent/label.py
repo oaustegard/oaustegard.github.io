@@ -13,7 +13,8 @@ For each post decide what "agent" the author means:
 
 ai      - software: an AI agent, LLM/coding agent (Claude Code, Codex, Cursor,
           OpenClaw, etc.), a bot, an automated assistant or agentic workflow
-          the author runs or builds.
+          the author runs or builds. An agent that built, coded, shipped,
+          ran or automated something points to ai.
 human   - a person acting for the author: literary, talent, acting, modeling,
           sports, booking, real-estate, estate, insurance, travel, tax or
           other professional agent; a human customer-service rep.

@@ -1,11 +1,13 @@
 """Train the ai/human/unknown classifier and write the page's two data files.
 
-usage: train.py RAW_DIR LABELS_JSONL SITE_BSKY_DIR
+usage: train.py RAW_DIR LABELS_JSONL SITE_BSKY_DIR EMB_NPZ   (EMB_NPZ from embed.py)
 
-Model: multinomial logistic regression over binary unigram+bigram features.
+Model: multinomial logistic regression over binary unigram+bigram features
+plus a MiniLM sentence embedding of the post. A second, words-only model
+ships alongside it for the page to use until the embedding model loads.
 The tokenizer lives in features.py and is mirrored by `tokens()` in
 bsky/my-agent.html. Writes my-agent-model.json (weights) and
-my-agent-data.json (daily counts per class for every backfilled post).
+my-agent-data.json (daily counts per class for every post with the phrase).
 """
 import json, sys
 from collections import Counter, defaultdict
@@ -13,6 +15,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import scipy.sparse as sp
 from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
@@ -22,6 +25,8 @@ from features import dedupe_key, has_phrase, tokens
 
 CLASSES = ["ai", "human", "unknown"]
 UNSURE = 0.40  # below this top probability the page says "unknown"
+EMB_MODEL = "Xenova/all-MiniLM-L6-v2"  # quantized ONNX; embed.py and the page run the same file
+EMB_SCALE = 2.0  # embedding columns scaled against the binary word features (CV-picked)
 
 
 def load(raw):
@@ -33,47 +38,64 @@ def load(raw):
     return posts
 
 
-def main(raw, labels, site):
+def report_of(y, proba):
+    pred = np.where(proba.max(1) < UNSURE, 2, proba.argmax(1))
+    r = classification_report(y, pred, target_names=CLASSES, output_dict=True)
+    print(classification_report(y, pred, target_names=CLASSES))
+    print(confusion_matrix(y, pred))
+    return {"accuracy": round(r["accuracy"], 3),
+            **{c: {k: round(r[c][k], 3) for k in ("precision", "recall", "f1-score", "support")}
+               for c in CLASSES}}
+
+
+def main(raw, labels, site, emb_npz):
     posts = load(raw)
     lab = {}
     for line in open(labels):
         r = json.loads(line)
         lab[r["id"]] = r["label"]
-    ids = [i for i in lab if i in posts]
-    X_txt = [posts[i]["text"] for i in ids]
+    z = np.load(emb_npz)
+    eidx = {i: k for k, i in enumerate(z["ids"])}
+    # embed.py only keeps posts that contain the phrase, which is what gets counted
+    ids = [i for i in lab if i in posts and i in eidx]
     y = np.array([CLASSES.index(lab[i]) for i in ids])
     print("labels", Counter(lab[i] for i in ids))
 
     vec = CountVectorizer(analyzer=tokens, binary=True, min_df=3)
-    X = vec.fit_transform(X_txt)
-    clf = LogisticRegression(C=0.5, max_iter=3000, class_weight="balanced")
+    Xw = vec.fit_transform([posts[i]["text"] for i in ids])
+    E = z["E"][[eidx[i] for i in ids]]
+    Xf = sp.hstack([Xw, sp.csr_matrix(E * EMB_SCALE)]).tocsr()
     cv = StratifiedKFold(5, shuffle=True, random_state=0)
-    proba = cross_val_predict(clf, X, y, cv=cv, method="predict_proba")
-    pred = np.where(proba.max(1) < UNSURE, 2, proba.argmax(1))
-    report = classification_report(y, pred, target_names=CLASSES, output_dict=True)
-    print(classification_report(y, pred, target_names=CLASSES))
-    print(confusion_matrix(y, pred))
+    lr = lambda: LogisticRegression(C=0.5, max_iter=5000, class_weight="balanced")
+    print("== words + embedding")
+    ev_full = report_of(y, cross_val_predict(lr(), Xf, y, cv=cv, method="predict_proba"))
+    print("== words only (the page's fallback until MiniLM loads)")
+    ev_words = report_of(y, cross_val_predict(lr(), Xw, y, cv=cv, method="predict_proba"))
 
-    clf.fit(X, y)
+    full, words = lr().fit(Xf, y), lr().fit(Xw, y)
     names = vec.get_feature_names_out()
-    W = clf.coef_.T  # features x classes
-    keep = np.argsort(-np.abs(W).max(1))[:6000]
-    weights = {names[k]: [round(float(v), 3) for v in W[k]] for k in keep
-               if np.abs(W[k]).max() >= 0.02}
-    top = {c: [names[k] for k in np.argsort(-(W[:, j] - W.mean(1)))[:25]]
+    nw = len(names)
+    Wf, Ww = full.coef_[:, :nw].T, words.coef_.T  # features x classes
+    We = full.coef_[:, nw:] * EMB_SCALE              # classes x 384, applied to the raw embedding
+    score = np.maximum(np.abs(Wf).max(1), np.abs(Ww).max(1))
+    keep = [k for k in np.argsort(-score)[:7000] if score[k] >= 0.02]
+    weights = {names[k]: [round(float(v), 3) for v in np.concatenate([Wf[k], Ww[k]])] for k in keep}
+    top = {c: [names[k] for k in np.argsort(-(Wf[:, j] - Wf.mean(1)))[:25]]
            for j, c in enumerate(CLASSES)}
-    model = {"classes": CLASSES, "bias": [round(float(b), 3) for b in clf.intercept_],
-             "unsure": UNSURE, "weights": weights, "top": top,
-             "eval": {"n": len(ids), "folds": 5,
-                      "accuracy": round(report["accuracy"], 3),
-                      **{c: {k: round(report[c][k], 3) for k in ("precision", "recall", "f1-score", "support")}
-                         for c in CLASSES}},
+    model = {"classes": CLASSES, "unsure": UNSURE, "embedModel": EMB_MODEL,
+             "bias": [round(float(b), 3) for b in full.intercept_],
+             "wordsBias": [round(float(b), 3) for b in words.intercept_],
+             "emb": [[round(float(v), 4) for v in row] for row in We],
+             "weights": weights, "top": top,
+             "eval": {"n": len(ids), "folds": 5, **ev_full, "words": ev_words},
              "labelCounts": dict(Counter(lab[i] for i in ids))}
     Path(site, "my-agent-model.json").write_text(json.dumps(model, separators=(",", ":")))
 
-    # classify every backfilled post; hand labels win where they exist
-    all_ids = list(posts)
-    P = clf.predict_proba(vec.transform([posts[i]["text"] for i in all_ids]))
+    # classify every post that contains the phrase; hand labels win where they exist
+    all_ids = [i for i in posts if i in eidx]
+    Xa = sp.hstack([vec.transform([posts[i]["text"] for i in all_ids]),
+                    sp.csr_matrix(z["E"][[eidx[i] for i in all_ids]] * EMB_SCALE)]).tocsr()
+    P = full.predict_proba(Xa)
     cls = np.where(P.max(1) < UNSURE, 2, P.argmax(1))
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     days = defaultdict(lambda: [0, 0, 0])
@@ -104,4 +126,4 @@ def main(raw, labels, site):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:4])
+    main(*sys.argv[1:5])

@@ -1,6 +1,7 @@
 # Weekly refresh of bsky/my-agent-data.json: fetches the days since the
 # snapshot (plus a week of overlap for late-indexed posts) from Bluesky's
-# public search and classifies them with the committed model. No retraining;
+# public search and classifies them with the committed model (words plus a
+# MiniLM embedding, the same model the page runs). No retraining;
 # see bsky/my-agent_README.md for that.
 name: Refresh My Agent data
 
@@ -24,8 +25,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
+      - name: Install the embedding runtime
+        run: |
+          pip install --quiet numpy onnxruntime tokenizers
+          mkdir -p /tmp/minilm
+          for f in onnx/model_quantized.onnx tokenizer.json; do
+            curl -sSfL -o /tmp/minilm/$(basename $f) https://huggingface.co/Xenova/all-MiniLM-L6-v2/resolve/main/$f
+          done
+
       - name: Fetch and classify new days
-        run: python3 scripts/my-agent/refresh.py bsky
+        run: python3 scripts/my-agent/refresh.py bsky /tmp/minilm
 
       - name: Commit and deploy
         env:

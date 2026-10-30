@@ -53,14 +53,27 @@ each part fits in one page.
 
 ## Classifier
 
-Multinomial logistic regression over binary single-word and word-pair
-features, trained on posts sampled evenly across the weeks and labeled by
-Claude. A post whose top probability is under 40% counts as unknown. The
-weights are in `bsky/my-agent-model.json` with the cross-validated scores,
-which the page shows under "How it works".
+Multinomial logistic regression over two kinds of evidence: binary single-word
+and word-pair features, and a 384-dimensional sentence embedding from
+[all-MiniLM-L6-v2](https://huggingface.co/Xenova/all-MiniLM-L6-v2) (quantized
+ONNX, mean pooled, normalized). The embedding catches meaning that no single
+word gives away, such as "built by my agent". A post whose top probability is
+under 40% counts as unknown.
 
-The tokenizer in the page (`tokens()`) mirrors the one in
-`scripts/my-agent/train.py` exactly. Change both or neither.
+Claude labeled 4,375 posts in two rounds. The first 2,375 were sampled evenly
+across the weeks. Of the next 2,000, half were the posts the first,
+words-only model was least sure of and half came from 2026. In five-fold
+cross-validation on that harder mix, the combined model reaches 80% accuracy
+(AI F1 0.84) against 73% for words alone.
+
+The page loads transformers.js 3.7.6 and runs the same quantized MiniLM file
+on WebAssembly. Until the model (23 MB) has loaded, a words-only model, which
+ships in the same JSON, classifies the feed, and the feed is re-scored once
+MiniLM arrives. On 300 sampled posts, browser and Python embeddings had a
+cosine similarity of 0.991 on average and gave the same class for 299.
+
+The tokenizer in the page (`tokens()`) mirrors `scripts/my-agent/features.py`
+exactly. Change both or neither.
 
 ## Rebuilding
 
@@ -68,16 +81,18 @@ The tokenizer in the page (`tokens()`) mirrors the one in
 RAW=/some/scratch/raw
 python3 scripts/my-agent/backfill.py $RAW                  # resumable, one file per week
 python3 scripts/my-agent/label.py $RAW labels.jsonl 2400   # claude -p children
-python3 scripts/my-agent/train.py $RAW labels.jsonl bsky   # writes both JSON files
+python3 scripts/my-agent/label_more.py $RAW labels.jsonl bsky/my-agent-model.json 2000
+python3 scripts/my-agent/embed.py $RAW minilm emb.npz      # minilm/: model_quantized.onnx + tokenizer.json
+python3 scripts/my-agent/train.py $RAW labels.jsonl bsky emb.npz   # writes both JSON files
 ```
 
 `.github/workflows/refresh-my-agent.yml` runs `scripts/my-agent/refresh.py`
 every Monday: it fetches the days since the snapshot plus a week of overlap,
-classifies them with the committed model and commits the new counts, then
+classifies them with the committed model and MiniLM, commits the new counts, then
 dispatches the deploy. Only retraining needs the steps above.
 
 ```bash
-python3 scripts/my-agent/refresh.py bsky                     # what the Action runs
+python3 scripts/my-agent/refresh.py bsky minilm              # what the Action runs
 ```
 
 The repository never stores post text, only the counts and the model.

@@ -2,41 +2,44 @@
 
 Fetches every day from a week before the snapshot date through yesterday
 (UTC), classifies the posts with the shipped weights in my-agent-model.json
-(the same rule as the page), and replaces those days' counts. The week of
-overlap picks up posts Bluesky indexed late. Standard library only, so the
-GitHub Action needs no installs.
+and the MiniLM embedding (the same rule as the page), and replaces those
+days' counts. The week of overlap picks up posts Bluesky indexed late.
+Needs numpy, onnxruntime and tokenizers for embed.py.
 
-usage: refresh.py [SITE_BSKY_DIR=bsky]
+usage: refresh.py [SITE_BSKY_DIR=bsky] [MINILM_DIR=minilm]
 """
 import json, math, sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backfill import Q, fetch, get
+from embed import embedder
 from features import dedupe_key, has_phrase, tokens
 
 OVERLAP = 7
 
 
 def classifier(model):
-    W, bias, unsure = model["weights"], model["bias"], model["unsure"]
+    """Words + MiniLM embedding, the same scoring as classify() in the page."""
+    W, bias, emb, unsure = model["weights"], model["bias"], model["emb"], model["unsure"]
 
-    def classify(text):
-        s = list(bias)
+    def classify(text, e):
+        s = [b + sum(w * x for w, x in zip(row, e)) for b, row in zip(bias, emb)]
         for f in set(tokens(text)):
             w = W.get(f)
             if w:
-                s = [a + b for a, b in zip(s, w)]
+                s = [a + b for a, b in zip(s, w[:3])]
         m = max(s)
-        e = [math.exp(v - m) for v in s]
-        p = [v / sum(e) for v in e]
+        x = [math.exp(v - m) for v in s]
+        p = [v / sum(x) for v in x]
         k = p.index(max(p))
         return 2 if p[k] < unsure else k
     return classify
 
 
-def main(site="bsky"):
+def main(site="bsky", minilm="minilm"):
     site = Path(site)
+    embed = embedder(minilm)
     model = json.loads((site / "my-agent-model.json").read_text())
     data = json.loads((site / "my-agent-data.json").read_text())
     classify = classifier(model)
@@ -53,13 +56,16 @@ def main(site="bsky"):
             print("fetch failed for", day.date(), file=sys.stderr)
             break
         key = day.strftime("%Y-%m-%d")
-        c, seen = [0, 0, 0], set()
+        keep, seen = [], set()
         for p in posts:
             k = dedupe_key(key, p["text"])
             if p["uri"] in seen or k in seen or not has_phrase(p["text"]):
                 continue
             seen.update((p["uri"], k))
-            c[classify(p["text"])] += 1
+            keep.append(p["text"])
+        c = [0, 0, 0]
+        for t, e in zip(keep, embed(keep) if keep else []):
+            c[classify(t, e.tolist())] += 1
         days[key] = c
         last_ok = key
         print(key, c, flush=True)
