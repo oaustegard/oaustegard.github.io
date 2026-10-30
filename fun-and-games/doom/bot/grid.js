@@ -179,6 +179,65 @@ export function makeGridder(map, verts) {
       }
       g[j * n + i] = free + hurt >= need ? (hurt > free ? C.HAZARD : C.FREE) : free + hurt + door >= need ? C.DOOR : C.WALL;
     }
+    // Pooling joins two rooms when a wall straddles a coarse boundary: each side keeps an open fine cell and the
+    // coarse cells touch (E1M3's switch room and the corridor behind it). Two open coarse neighbours with no open
+    // fine pair across their shared edge are cut by walling one of them, the one with fewer open fine cells first,
+    // but only when the cells it really joins stay connected around it; a cell that is a passage's only way is kept.
+    const open = (i, j) => { let k = 0; for (let b = 0; b < f; b++) for (let a = 0; a < f; a++) k += passable(fg[(j * f + b) * nf + i * f + a]); return k; };
+    // The fine raster closes some real doorways too, so a pair with no open fine pair across the edge still counts
+    // as joined when a segment between open fine cells on either side crosses no blocking line.
+    // Only lines that block both ways count: a drop of 24 to 64 units is a wall on the grid, being one-way, and
+    // pooling used to carry routes over it (E1M2's ledge off the window strip).
+    const walls = [];
+    for (let k = 0; k < map.lines.length; k++) {
+      if (lineClass(k, st) !== C.WALL) continue;
+      const l = map.lines[k];
+      if (l.fsec >= 0 && l.bsec >= 0 && !(l.flags & ML_BLOCKING) && !dangerousDrop(k, st) &&
+        Math.min(st.ceil[l.fsec], st.ceil[l.bsec]) - Math.max(st.floor[l.fsec], st.floor[l.bsec]) >= 56) continue;
+      walls.push(k);
+    }
+    const crosses = (ax, ay, bx, by) => walls.some((k) => {
+      const cx = lx1[k], cy = ly1[k], dx = lx2[k], dy = ly2[k];
+      if (Math.max(cx, dx) < Math.min(ax, bx) || Math.min(cx, dx) > Math.max(ax, bx) || Math.max(cy, dy) < Math.min(ay, by) || Math.min(cy, dy) > Math.max(ay, by)) return false;
+      const o = (px, py, qx, qy, rx, ry) => Math.sign((qx - px) * (ry - py) - (qy - py) * (rx - px));
+      return o(ax, ay, bx, by, cx, cy) * o(ax, ay, bx, by, dx, dy) <= 0 && o(cx, cy, dx, dy, ax, ay) * o(cx, cy, dx, dy, bx, by) <= 0;
+    });
+    const cells = (i, j) => { const out = [];
+      for (let b = 0; b < f; b++) for (let a = 0; a < f; a++) if (passable(fg[(j * f + b) * nf + i * f + a])) out.push([ox + (i * f + a + 0.5) * FINE, oy + (j * f + b + 0.5) * FINE]);
+      return out; };
+    const joined = (i, j, i2, j2) => { // i2 = i + 1 or j2 = j + 1
+      for (let t = 0; t < f; t++) {
+        const a = i2 > i ? fg[(j * f + t) * nf + i * f + f - 1] : fg[(j * f + f - 1) * nf + i * f + t];
+        const b = i2 > i ? fg[(j * f + t) * nf + i2 * f] : fg[(j2 * f) * nf + i * f + t];
+        if (passable(a) && passable(b)) return true;
+      }
+      const B = cells(i2, j2);
+      return cells(i, j).some(([ax, ay]) => B.some(([bx, by]) => !crosses(ax, ay, bx, by)));
+    };
+    const real = (i, j, i2, j2) => i2 >= 0 && j2 >= 0 && i2 < n && j2 < n && passable(g[j2 * n + i2]) &&
+      (i2 < i || j2 < j ? joined(i2, j2, i, j) : joined(i, j, i2, j2));
+    const R = 3;
+    const tryCut = (i, j) => {
+      const nb = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]].filter(([a, b]) => real(i, j, a, b));
+      const was = g[j * n + i]; g[j * n + i] = C.WALL;
+      if (nb.length > 1) { // the real neighbours must still meet inside a (2R+1)² window without this cell
+        const seen = new Set([nb[0][1] * n + nb[0][0]]), q = [nb[0]];
+        for (let h = 0; h < q.length; h++) { const [a, b] = q[h];
+          for (const [c, d] of [[a - 1, b], [a + 1, b], [a, b - 1], [a, b + 1]]) {
+            if (Math.abs(c - i) > R || Math.abs(d - j) > R || seen.has(d * n + c) || !real(a, b, c, d)) continue;
+            seen.add(d * n + c); q.push([c, d]);
+          } }
+        if (!nb.every(([a, b]) => seen.has(b * n + a))) { g[j * n + i] = was; return false; }
+      }
+      return true;
+    };
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) {
+      for (const [i2, j2] of [[i + 1, j], [i, j + 1]]) {
+        if (i2 >= n || j2 >= n || !passable(g[j * n + i]) || !passable(g[j2 * n + i2]) || joined(i, j, i2, j2)) continue;
+        const [x, y] = open(i, j) <= open(i2, j2) ? [[i, j], [i2, j2]] : [[i2, j2], [i, j]];
+        if (!tryCut(...x)) tryCut(...y);
+      }
+    }
     return { g, ox, oy, cs, n };
   }
 
