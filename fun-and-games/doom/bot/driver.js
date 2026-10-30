@@ -2,10 +2,10 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261030151358";
-import { TRMPlanner } from "./trm.js?v=20261030151358";
-import { MOBJINFO, MF } from "../info.js?v=20261030151358";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261030151358";
+import { Bot } from "./bot.js?v=20261030163353";
+import { TRMPlanner } from "./trm.js?v=20261030163353";
+import { MOBJINFO, MF } from "../info.js?v=20261030163353";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261030163353";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {
@@ -41,7 +41,7 @@ export class BotDriver {
       try { const r = await pl.plan(g, { sup: 4, minSup: 2, yieldFn: self.fast ? null : nextFrame }); self.plans++; self.planMs += r.ms; return r; }
       finally { self.busyAt = performance.now(); }
     } };
-    this.bot = new Bot({ wad: engine.wad, map: engine.map, MOBJINFO, MF, LINE_SPECIALS, TR, W }, planner);
+    this.bot = new Bot({ wad: engine.wad, map: engine.map, MOBJINFO, MF, LINE_SPECIALS, TR, W }, planner, { seed: (Math.random() * 2 ** 32) >>> 0 });
     if (this.fast) this.bot.globalPlanner = async (n) => {
       if (!this.globals.has(n)) this.globals.set(n, await TRMPlanner.create(this.device, this.weights, this.man, { w: n, h: n }));
       return this.globals.get(n);

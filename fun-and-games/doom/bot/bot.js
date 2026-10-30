@@ -7,7 +7,7 @@
 // walk it. When the set doesn't join start to goal, that's a TRM failure: the bot counts it and heads
 // for the reachable cell of the set nearest the goal.
 
-import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable, HURT, shortestUnion } from "./grid.js?v=20261030151358";
+import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable, HURT, shortestUnion } from "./grid.js?v=20261030163353";
 
 const ANGLE = 2 * Math.PI / 4294967296;
 const HEALTH = { 2011: 10, 2012: 25, 2013: 100, 2014: 1 };
@@ -19,8 +19,12 @@ const IGNORE_SWITCHES = new Set([11, 51, 42, 50, 41, 43, 44, 49, 113, 116]); // 
 
 export class Bot {
   // ctx: {wad, map, MOBJINFO, MF, LINE_SPECIALS, TR, W}
-  constructor(ctx, planner, { log = () => {} } = {}) {
+  constructor(ctx, planner, { log = () => {}, seed = 0 } = {}) {
     Object.assign(this, ctx);
+    // the bot's own tie-breaks draw on the game seed, so tries of a level where nothing wakes still differ (E1M8: three
+    // seeds gave one byte-identical run, #107)
+    let r = (seed * 2654435761 + 1) >>> 0;
+    this.rand = () => { r ^= r << 13; r >>>= 0; r ^= r >>> 17; r ^= r << 5; r >>>= 0; return r / 4294967296; };
     this.planner = planner; this.log = log;
     this.verts = mapVerts(this.wad, this.map.name);
     this.gr = makeGridder(this.map, this.verts);
@@ -133,7 +137,10 @@ export class Bot {
     if (/M8$/.test(this.map.name)) for (const m of s.monsters) out.push({ key: "m" + m.k, kind: "hunt", x: m.x, y: m.y, prio: 75 - d(m.x, m.y) / 200, mobj: m.k });
     // the nearest unexplored places
     const fr = [];
-    for (const c of this.standCells) if (!this.visited[c.j * this.bw + c.i]) fr.push({ key: `f${c.i},${c.j}`, kind: "explore", x: c.x, y: c.y, prio: 10 - d(c.x, c.y) / 100 });
+    // right after a target proved unreachable (no local route, no progress, back and forth, a hunt with no route), the
+    // frontier outranks everything but keys and health: E1M8's way to the bosses was found by exploring, not by retrying
+    const explore = this.tic < (this.exploreUntil ?? 0) ? 72 : 10;
+    for (const c of this.standCells) if (!this.visited[c.j * this.bw + c.i]) fr.push({ key: `f${c.i},${c.j}`, kind: "explore", x: c.x, y: c.y, prio: explore - d(c.x, c.y) / 100 + this.rand() * 0.5 });
     fr.sort((a, b) => b.prio - a.prio);
     out.push(...fr.slice(0, 12));
     // A target down in a damaging pit is a trap unless the bot is already in it: E1M3's lift switches sit in a
@@ -165,6 +172,8 @@ export class Bot {
       this.blacklist.set(k, this.tic + Math.min(tics * 2 ** (m - 1), 35 * 240));
     }
     this.events.push({ tic: this.tic, ev: "reject", kind: t.kind, key: t.key, why });
+    if (t.kind !== "explore" && /no fine route|no progress|back and forth|timeout/.test(why) || (t.kind === "hunt" && /global/.test(why)))
+      this.exploreUntil = this.tic + 35 * 30;
     if (this.target?.key === t.key) { this.target = null; this.fine = null; this.coarse = null; }
   }
 
@@ -595,6 +604,12 @@ export class Bot {
       const t = this.target, left = t.routeLeft ?? Math.hypot(t.x - p.x, t.y - p.y) / COARSE;
       if (!(left > (t.best ?? 1e9) - 1.5)) { t.best = Math.min(left, t.best ?? 1e9); t.bestTic = this.tic; }
       else if (this.tic - t.bestTic > 700) this.reject(t, "no progress");
+      // back and forth between two sectors with no gain for 10 s (E1M8: 1400 tics between sectors 79 and 70)
+      if (this.target === t && this.tic % 35 === 0) {
+        (t.secs ||= []).push(this.map.spawnSector(p.x, p.y)); if (t.secs.length > 12) t.secs.shift();
+        const u = new Set(t.secs);
+        if (t.secs.length === 12 && u.size === 2 && this.tic - t.bestTic > 350 && [...u].every((k) => t.secs.filter((x) => x === k).length >= 3)) this.reject(t, "back and forth");
+      }
     }
     if (this.debugGrids && this.fine && this.tic - (this.lastDump ?? -999) > 300) {
       this.lastDump = this.tic;
