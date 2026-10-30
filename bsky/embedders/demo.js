@@ -17,7 +17,7 @@ const P = {
   params: "../image-search/params.json", corpus: "data/corpus.json.gz",
   ettinModel: "models/ettin/", ettinIndex: "index/ettin/",
   leafModel: "models/leaf/", leafIndex: "index/leaf/",
-  eg2Model: "../image-search/model/", eg2Index: "index/eg2/", codes: "codes.u8.bin", aux: "aux.f32.bin",
+  eg2Model: "../image-search/model/ort/", eg2Manifest: "models/eg2/manifest.json", eg2Index: "index/eg2/", codes: "codes.u8.bin", aux: "aux.f32.bin",
 };
 // --- end paths ---
 const TOKENIZERS = "https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs";
@@ -38,7 +38,7 @@ const MODELS = [
 ];
 const modelFiles = (m) => m.kind === "small"
   ? ["manifest.json", "meta.json", "tokenizer.json", "model.onnx"].map((f) => m.dir + f)
-  : ["manifest.json", "tokenizer.json", "model_t3w.onnx", "model_t3w.onnx_data"].map((f) => m.dir + f);
+  : [P.eg2Manifest, ...["tokenizer.json", "model_t3w.onnx", "model_t3w.onnx_data"].map((f) => m.dir + f)];
 const indexFiles = (m) => ["index.json", P.codes, P.aux].map((f) => m.index + f);
 const ASSETS = [
   "./", "index.html", "demo.js", P.smallEngine, P.eg2Engine, P.tail, P.params, P.corpus, TOKENIZERS,
