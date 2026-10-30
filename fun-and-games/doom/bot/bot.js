@@ -7,7 +7,7 @@
 // walk it. When the set doesn't join start to goal, that's a TRM failure: the bot counts it and heads
 // for the reachable cell of the set nearest the goal.
 
-import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030081839";
+import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030093347";
 
 const ANGLE = 2 * Math.PI / 4294967296;
 const HEALTH = { 2011: 10, 2012: 25, 2013: 100, 2014: 1 };

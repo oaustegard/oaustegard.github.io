@@ -2,10 +2,10 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261030081839";
-import { TRMPlanner } from "./trm.js?v=20261030081839";
-import { MOBJINFO, MF } from "../info.js?v=20261030081839";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261030081839";
+import { Bot } from "./bot.js?v=20261030093347";
+import { TRMPlanner } from "./trm.js?v=20261030093347";
+import { MOBJINFO, MF } from "../info.js?v=20261030093347";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261030093347";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {
@@ -32,7 +32,15 @@ export class BotDriver {
   attach(engine, W) {
     this.engine = engine; this.W = W;
     const pl = this.planner, self = this;
-    const planner = { async plan(g) { const r = await pl.plan(g, { sup: 4, minSup: 2 }); self.plans++; self.planMs += r.ms; return r; } };
+    // A plan goes to the GPU a network call at a time with a display frame between calls, so a slow GPU keeps
+    // drawing the game while the bot thinks. busyAt tells the page's slow-GPU watchdog that late frames are the
+    // bot's doing, not the game's.
+    const nextFrame = async () => { await this.device.queue.onSubmittedWorkDone(); await new Promise((r) => requestAnimationFrame(() => r())); };
+    const planner = { async plan(g) {
+      self.busyAt = performance.now();
+      try { const r = await pl.plan(g, { sup: 4, minSup: 2, yieldFn: self.fast ? null : nextFrame }); self.plans++; self.planMs += r.ms; return r; }
+      finally { self.busyAt = performance.now(); }
+    } };
     this.bot = new Bot({ wad: engine.wad, map: engine.map, MOBJINFO, MF, LINE_SPECIALS, TR, W }, planner);
     if (this.fast) this.bot.globalPlanner = async (n) => {
       if (!this.globals.has(n)) this.globals.set(n, await TRMPlanner.create(this.device, this.weights, this.man, { w: n, h: n }));
