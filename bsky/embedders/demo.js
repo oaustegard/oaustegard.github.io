@@ -77,7 +77,10 @@ function cleanEg2(tj, text) {
   return text;
 }
 
-async function loadModel(m, net) {
+// A model loads in two steps, so a first search can download every model at once and still set up
+// and run them one at a time: fetchModel (the model's files, timed from its own start to its own last
+// byte) and initModel (tokenizer and engine, timed alone).
+async function fetchModel(m, net) {
   const t0 = now();
   const files = modelFiles(m);
   const small = m.kind === "small";
@@ -87,6 +90,14 @@ async function loadModel(m, net) {
   Tok ??= (await import(TOKENIZERS)).Tokenizer;
   const fetchMs = now() - t0;
   const bytes = bins.reduce((s, b) => s + b.byteLength, 0) + JSON.stringify(tj).length;
+  return { m, manifest, meta, tj, bins, fetchMs, bytes };
+}
+
+async function loadModel(m, net) {
+  return initModel(await fetchModel(m, net));
+}
+
+async function initModel({ m, manifest, meta, tj, bins, fetchMs, bytes }) {
   const tok = new Tok(tj, {});
   let encode;
   if (m.kind === "small") {
@@ -149,14 +160,18 @@ async function loadIndex(m) {
 
 // ---------------------------------------------------------------- search
 
-async function runModel(m, text, cold = null) {
+// prefetch: this model's fetchModel promise, started alongside the others' (a first search). Its
+// download then overlapped theirs, and everything after it runs alone, so totalMs is the sum of this
+// model's own steps: the time it would take loaded by itself, given the bandwidth it got in the race.
+async function runModel(m, text, cold = null, prefetch = null) {
   const s = state.models[m.id];
   const t = {};
   if (!s.model || cold) {
     if (s.model) { s.model.destroy(); s.model = null; }
     const t0 = now();
-    s.model = await loadModel(m, cold === "net");
-    t.cold = { from: cold === "net" ? "network" : "offline cache", fetchMs: s.model.fetchMs, initMs: s.model.initMs, mb: s.model.bytes / 1e6 };
+    s.model = prefetch ? await initModel(await prefetch) : await loadModel(m, cold === "net");
+    t.cold = { from: prefetch ? "parallel" : cold === "net" ? "network" : "offline cache",
+               fetchMs: s.model.fetchMs, initMs: s.model.initMs, mb: s.model.bytes / 1e6 };
     t.coldStart = t0;
   }
   const ids = s.model.encode(text);
@@ -167,7 +182,9 @@ async function runModel(m, text, cold = null) {
   t1 = now();
   const [top] = await s.index.tail.topk(s.index.qbuf, 1, s.index.corpus, s.index.n, K);
   t.scanMs = now() - t1;
-  if (t.cold) t.cold.totalMs = now() - t.coldStart;
+  if (t.cold) t.cold.totalMs = t.cold.from === "parallel"
+    ? t.cold.fetchMs + t.cold.initMs + t.embedMs + t.scanMs
+    : now() - t.coldStart;
   s.last = { idx: Array.from(top.idx), score: Array.from(top.score), t, backend: s.model.backend, tokens: ids.length };
   return s.last;
 }
@@ -180,15 +197,29 @@ async function search(text, cold = null, only = null, fromBox = false) {
   setParam("q", text);
   setBusy(true);
   try {
-    for (const m of MODELS) {
-      if (only && m.id !== only) continue;
-      status(`${state.models[m.id].model && !cold ? "embedding" : "loading"} with ${m.name}…`);
-      await runModel(m, text, cold);
+    const t0 = now();
+    const models = MODELS.filter((m) => !only || m.id === only);
+    // A search that needs a model it has not loaded (the first one) downloads all of them at once.
+    // Cold launch stays serial, so its timings are each model's alone.
+    const prefetch = {};
+    if (!cold) {
+      for (const m of models) {
+        if (state.models[m.id].model) continue;
+        prefetch[m.id] = fetchModel(m, false);
+        prefetch[m.id].catch(() => {});   // awaited below, in order; this only keeps an early failure from reporting as unhandled
+      }
+    }
+    const n = Object.keys(prefetch).length;
+    for (const m of models) {
+      status(n > 1 && prefetch[m.id] ? `downloading ${n} models at once, then setting up ${m.name}…`
+        : `${state.models[m.id].model && !cold ? "embedding" : "loading"} with ${m.name}…`);
+      await runModel(m, text, cold, prefetch[m.id]);
       renderCol(m);
     }
     renderShared();
-    status(`"${text}": done.`);
-    state.runs.push({ q: text, cold, results: Object.fromEntries(MODELS.map((m) => [m.id, state.models[m.id].last])) });
+    const wallMs = now() - t0;
+    status(`"${text}": done` + (n ? ` in ${(wallMs / 1000).toFixed(1)} s, downloads in parallel.` : "."));
+    state.runs.push({ q: text, cold, wallMs, parallel: n, results: Object.fromEntries(MODELS.map((m) => [m.id, state.models[m.id].last])) });
     shown = text;
   } catch (e) {
     console.error(e);
@@ -232,10 +263,12 @@ function tidDate(rkey) { // Bluesky record keys are TIDs: microseconds since the
 
 function fmt(t, m) {
   const lines = [];
-  if (t.cold) lines.push(`cold launch (${t.cold.from}): ${t.cold.totalMs.toFixed(0)} ms to results`,
+  if (t.cold?.from === "parallel") lines.push(`first search: ${t.cold.totalMs.toFixed(0)} ms to results, its own steps summed`,
+    `  download ${t.cold.mb.toFixed(1)} MB ${t.cold.fetchMs.toFixed(0)} ms (alongside the others) · engine ${t.cold.initMs.toFixed(0)} ms`);
+  else if (t.cold) lines.push(`cold launch (${t.cold.from}): ${t.cold.totalMs.toFixed(0)} ms to results`,
     `  read ${t.cold.mb.toFixed(1)} MB ${t.cold.fetchMs.toFixed(0)} ms · engine ${t.cold.initMs.toFixed(0)} ms`);
   // a real first visit also downloads the model: its brotli size over a typical connection
-  if (t.cold) lines.push(`  first visit adds the ${m.mb} MB download: ~${(m.mb * 8 / 50).toFixed(1)} s at 50 Mbps, ~${(m.mb * 8 / 10).toFixed(0)} s at 10`);
+  if (t.cold && t.cold.from !== "parallel") lines.push(`  first visit adds the ${m.mb} MB download: ~${(m.mb * 8 / 50).toFixed(1)} s at 50 Mbps, ~${(m.mb * 8 / 10).toFixed(0)} s at 10`);
   lines.push(`query: embed ${t.embedMs.toFixed(1)} ms · scan ${t.scanMs.toFixed(1)} ms`);
   return lines.join("\n");
 }
