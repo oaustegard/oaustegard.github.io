@@ -7,7 +7,7 @@
 // walk it. When the set doesn't join start to goal, that's a TRM failure: the bot counts it and heads
 // for the reachable cell of the set nearest the goal.
 
-import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030093347";
+import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030111137";
 
 const ANGLE = 2 * Math.PI / 4294967296;
 const HEALTH = { 2011: 10, 2012: 25, 2013: 100, 2014: 1 };
@@ -39,7 +39,7 @@ export class Bot {
     const L = this.map.lines;
     this.lineMid = L.map((l) => { const a = this.verts[l.v1], c = this.verts[l.v2]; return [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2]; });
     this.blacklist = new Map(); // target key -> tic it may be tried again
-    this.blocked = []; // world points of coarse waypoints found unreachable
+    this.blocked = []; // [x, y, until]: coarse waypoints found unreachable, walled off for a while (a wrong one can seal a corridor)
     this.tic = 0; this.target = null; this.fine = null; this.coarse = null;
     this.stats = { finePlans: 0, coarsePlans: 0, fineBroken: 0, coarseBroken: 0, coarseEmpty: 0, planMs: 0, stuck: 0, targets: {} };
     this.lastPos = null; this.lastProgressTic = 0; this.unstick = 0; this.useToggle = false;
@@ -227,6 +227,7 @@ export class Bot {
     const grid = this.gr.coarse(cx, cy, this.gridState(), cs, n);
     const g = grid.g;
     if (!t.hazardOK) for (let k = 0; k < g.length; k++) if (g[k] === C.HAZARD) g[k] = C.WALL;
+    this.blocked = this.blocked.filter((b) => b[2] > this.tic);
     for (const [bx, by] of this.blocked) {
       const i = Math.floor((bx - grid.ox) / cs), j = Math.floor((by - grid.oy) / cs);
       if (i >= 0 && j >= 0 && i < n && j < n) g[j * n + i] = C.WALL;
@@ -266,6 +267,7 @@ export class Bot {
     const grid = this.anchored(this.gr.coarse, COARSE);
     const c0 = (N / 2) * N + N / 2;
     // waypoints the fine planner couldn't reach: the coarse grid's pooling joined them across a wall
+    this.blocked = this.blocked.filter((b) => b[2] > this.tic);
     for (const [bx, by] of this.blocked) {
       const i = Math.floor((bx - grid.ox) / COARSE), j = Math.floor((by - grid.oy) / COARSE);
       if (i >= 0 && j >= 0 && i < N && j < N) grid.g[j * N + i] = C.WALL;
@@ -328,8 +330,22 @@ export class Bot {
       if (cand.gain > 3 * FINE && (!best || cand.gain > best.gain)) best = cand;
     }
     if (best) { this.fine = best; this.repairs = 0; return true; }
+    // the whole-level route exists but the window can't join it: walk the route's own cells for a while
+    if (this.coarse?.n && this.coarse.path.length > 2 && !this.target.viaGlobal) {
+      const cg = this.coarse.grid, cn = this.coarse.n, path = [(N / 2) * N + N / 2];
+      for (const o of this.coarse.path) {
+        const x = cg.ox + (o % cn + 0.5) * cg.cs, y = cg.oy + (((o / cn) | 0) + 0.5) * cg.cs;
+        const i = Math.floor((x - base.ox) / FINE), j = Math.floor((y - base.oy) / FINE);
+        if (i >= 0 && j >= 0 && i < N && j < N && Math.hypot(x - p.x, y - p.y) > FINE) path.push(j * N + i);
+      }
+      if (path.length > 2) {
+        this.stats.globalWalks = (this.stats.globalWalks || 0) + 1;
+        this.fine = { grid: base, path, reached: false, tic: this.tic, goal: null, viaGlobal: true };
+        return true;
+      }
+    }
     if (failed.length && (this.repairs = (this.repairs || 0) + 1) <= 4) { // repair the coarse map and try again
-      this.blocked.push(...failed);
+      this.blocked.push(...failed.map(([x, y]) => [x, y, this.tic + 35 * 40]));
       this.events.push({ tic: this.tic, ev: "coarse-repair", kind: t.kind, n: failed.length });
       if (await this.planCoarse()) return this.planFine(retry);
       return false;
@@ -420,6 +436,64 @@ export class Bot {
     return true;
   }
 
+  // Lifts: the grid lets a route cross a lift's edge when the lift can stand level with the other side. Here the
+  // bot makes that true: it calls the lift (its switch, or a walk over its trigger line), waits beside it until
+  // it arrives, and stands still on it while it travels. Returns steering overrides, or null.
+  liftAssist(la) {
+    const p = this.s.p, lifts = this.gr.lifts;
+    if (!lifts.size || !this.fine) return null;
+    const sec = (x, y) => this.map.spawnSector(x, y);
+    const floor = (k) => this.s.floor[k];
+    const g = this.fine.grid, ahead = this.fine.path.slice(la.at, la.at + 7)
+      .map((o) => [g.ox + (o % N + 0.5) * g.cs, g.oy + (((o / N) | 0) + 0.5) * g.cs]);
+    const here = sec(p.x, p.y);
+    // remember how each lift moves, to tell a lift on its way from one at rest
+    const now = this.tic, mv = (this.liftMoves ||= new Map());
+    const moving = (k) => { const m = mv.get(k); if (!m || m.f !== floor(k)) { mv.set(k, { f: floor(k), t: now }); return !!m; } return now - m.t < 20; };
+    const done = (why) => { if (this.liftTask) this.events.push({ tic: now, ev: "lift", why, sector: this.liftTask.L }); this.liftTask = null; return null; };
+    if (this.liftTask && now - this.liftTask.since > 35 * 15) { this.reject(this.target, "lift never came", 700); return done("timeout"); }
+
+    if (lifts.has(here)) {
+      // riding: hold still while the lift is out of step with where the route goes next
+      const next = ahead.find(([x, y]) => sec(x, y) !== here);
+      if (next && Math.abs(floor(sec(next[0], next[1])) - floor(here)) > 24) {
+        this.liftTask ||= { L: here, since: now };
+        if (moving(here)) return { hold: true };
+        const trig = this.nearTrigger(here, "S", 96);
+        return trig ? { hold: true, face: trig, use: true } : { hold: true };
+      }
+      return done("off");
+    }
+    // approaching: the route steps onto a lift that isn't at our floor
+    const onto = ahead.map(([x, y]) => sec(x, y)).find((k) => lifts.has(k));
+    if (onto === undefined || Math.abs(floor(onto) - floor(here)) <= 24) return done("level");
+    this.liftTask ||= { L: onto, since: now, phase: "call" };
+    const task = this.liftTask;
+    moving(onto);
+    if (task.phase === "call") {
+      const sw = this.nearTrigger(onto, "S", 1e9), wk = this.nearTrigger(onto, "W", 1e9);
+      const pick = sw && (!wk || Math.hypot(sw[0] - p.x, sw[1] - p.y) <= Math.hypot(wk[0] - p.x, wk[1] - p.y)) ? ["S", sw] : wk ? ["W", wk] : null;
+      if (!pick) return done("no trigger");
+      const [how, [tx, ty]] = pick, d = Math.hypot(tx - p.x, ty - p.y);
+      if (how === "S") { if (d < 64) { task.phase = "wait"; return { hold: true, face: [tx, ty], use: true }; } return { goto: [tx, ty] }; }
+      if (d < 20) { task.phase = "wait"; return { hold: true }; }
+      return { goto: [tx, ty] }; // walking over the line triggers it
+    }
+    // wait at the edge until the lift is level with us, then the normal route walks onto it
+    return { hold: true };
+  }
+
+  // midpoint of the nearest trigger line of lift sector L of kind "S" or "W" within maxD, or null
+  nearTrigger(L, how, maxD) {
+    const p = this.s.p; let best = null, bd = maxD;
+    for (const t of this.gr.lifts.get(L)?.triggers || []) {
+      if (t.how !== how || !this.s.specials[t.line]) continue;
+      const [x, y] = this.lineMid[t.line], d = Math.hypot(x - p.x, y - p.y);
+      if (d < bd) { bd = d; best = [x, y]; }
+    }
+    return best;
+  }
+
   // One tic: the input for the engine (forward/side in DOOM's units, turn in radians).
   async step() {
     // the game's own clock, so a bot that runs slower than the game (a live page on a slow GPU) times things right
@@ -485,8 +559,13 @@ export class Bot {
     let [mx, my] = la.pt;
     const finalLeg = near && la.k === la.end;
     if (finalLeg) { mx = t.x; my = t.y; }
+    const lift = this.liftAssist(la);
+    if (lift?.goto) [mx, my] = lift.goto;
     const input = { forward: 0, side: 0, turn: 0, use: false, fire: false, weapon: 0 };
-    const en = this.enemy();
+    let en = this.enemy();
+    // with no ammo, only something in punching range is worth facing; everything else is walked past
+    const noAmmo = p.ammo[0] <= 0 && p.ammo[1] <= 0 && p.ammo[2] <= 0 && p.ammo[3] <= 0;
+    if (en && noAmmo && en.d > 120) en = null;
     let face = Math.atan2(my - p.y, mx - p.x);
     if (en) {
       face = Math.atan2(en.m.y - p.y, en.m.x - p.x);
@@ -513,7 +592,9 @@ export class Bot {
       // hurt, and sidestep every second so fireballs miss
       const ex = (p.x - en.m.x) / en.d, ey = (p.y - en.m.y) / en.d;
       // hurt: fall back along the breadcrumbs, and keep falling back until nothing has been seen for two seconds
-      if (p.health < 50 && this.trail?.length > 3) this.retreatUntil = this.tic + 70;
+      // two seconds at most, then three of fighting on: a retreat that never ends is how the bot paced one room
+      // of E1M4 for four minutes
+      if (p.health < 40 && !en.unseen && en.d < 500 && this.trail?.length > 3 && this.tic > (this.retreatUntil ?? 0) + 105) this.retreatUntil = this.tic + 70;
       const hurt = this.tic < (this.retreatUntil ?? 0) && this.trail?.length > 3;
       let ax = vx, ay = vy;
       if (hurt) { const [bx, by] = this.trail[Math.max(0, this.trail.length - 4)]; ax = bx - p.x; ay = by - p.y; const l = Math.hypot(ax, ay) || 1; ax /= l; ay /= l; }
@@ -530,8 +611,11 @@ export class Bot {
       }
     }
     const ca = Math.cos(p.angle), sa = Math.sin(p.angle);
+    if (lift?.hold) speed = 0;
     input.forward = 50 * speed * (vx * ca + vy * sa);
     input.side = 40 * speed * (vx * sa - vy * ca);
+    if (lift?.face && !en) input.turn = Math.max(-0.3, Math.min(0.3, wrap(Math.atan2(lift.face[1] - p.y, lift.face[0] - p.x) - p.angle)));
+    if (lift?.use && this.tic - (this.lastUse ?? -99) > 45) { input.use = true; this.lastUse = this.tic; }
     // doors and switches: press use once when one is just ahead, then leave it a second, since using a
     // moving DR door sends it back the way it came
     const doorAhead = la.cls.includes(C.DOOR);
