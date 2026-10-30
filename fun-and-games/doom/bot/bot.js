@@ -7,7 +7,7 @@
 // walk it. When the set doesn't join start to goal, that's a TRM failure: the bot counts it and heads
 // for the reachable cell of the set nearest the goal.
 
-import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030113108";
+import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable, HURT, shortestUnion } from "./grid.js?v=20261030151358";
 
 const ANGLE = 2 * Math.PI / 4294967296;
 const HEALTH = { 2011: 10, 2012: 25, 2013: 100, 2014: 1 };
@@ -89,8 +89,8 @@ export class Bot {
     for (const it of s.items) {
       let want = 0;
       if (KEY_THINGS[it.ed] && !hasKey(p.cards, KEY_THINGS[it.ed])) want = 90;
-      else if (HEALTH[it.ed] && p.health < (it.ed === 2014 ? 100 : 100 - HEALTH[it.ed] / 2)) want = p.health < 40 ? 95 : 30;
-      else if (ARMOR[it.ed] && p.armor < 100) want = 25;
+      else if (HEALTH[it.ed] && p.health < (it.ed === 2014 ? 100 : 100 - HEALTH[it.ed] / 2)) want = p.health < 40 ? 95 : p.health < 70 ? 80 : 30; // below 70, health is worth a long walk
+      else if (ARMOR[it.ed] && p.armor < 100) want = p.armor < 50 ? 65 : 25;
       else if (WEAPON[it.ed] !== undefined && !(p.weapons & (1 << WEAPON[it.ed]))) want = 60;
       else if (AMMO[it.ed] !== undefined && (AMMO[it.ed] < 0 || p.ammo[AMMO[it.ed]] < p.maxammo[AMMO[it.ed]] / 2)) want = p.ammo[0] + p.ammo[1] + p.ammo[2] + p.ammo[3] < 10 ? 85 : 20;
       if (!want) continue;
@@ -104,7 +104,7 @@ export class Bot {
       if (!def) return;
       const [tr, , ac, , key = 0] = def;
       const [mx, my] = this.lineMid[i];
-      if (EXITS.has(sp)) { out.push({ key: "l" + i, kind: "exit", x: mx, y: my, prio: 70 - d(mx, my) / 200, line: i, use: tr === this.TR.S }); return; }
+      if (EXITS.has(sp)) { (this.exitKeys ||= new Set()).add("l" + i); out.push({ key: "l" + i, kind: "exit", x: mx, y: my, prio: 70 - d(mx, my) / 200, line: i, use: tr === this.TR.S }); return; }
       if (tr === this.TR.S && !IGNORE_SWITCHES.has(sp) && hasKey(p.cards, key)) {
         out.push({ key: "l" + i, kind: "switch", x: mx, y: my, prio: 40 - d(mx, my) / 100, line: i, use: true });
       }
@@ -113,18 +113,57 @@ export class Bot {
         out.push({ key: "l" + i, kind: "trigger", x: mx, y: my, prio: 15 - d(mx, my) / 100, line: i, use: false, walk: true });
       }
     });
+    // Standing on a damaging floor, getting off it comes first: an edge with a step the player can take, or a
+    // lift out (E1M3's nukage pit: the bot pressed the pit's lift switch, then went for an item and died there).
+    const here = this.map.spawnSector(p.x, p.y);
+    if (HURT.has(this.map.sectors[here].special)) {
+      const L = this.gr.lines;
+      for (const i of this.gr.secLines[here]) {
+        const l = this.map.lines[i], o = l.fsec === here ? l.bsec : l.fsec;
+        if (o < 0 || o === here || HURT.has(this.map.sectors[o].special)) continue;
+        const lift = this.gr.lifts.has(o);
+        if (Math.min(s.ceil[o], s.ceil[here]) - Math.max(s.floor[o], s.floor[here]) < 56 && !lift) continue;
+        if (s.floor[o] - s.floor[here] > 24 && !lift) continue;
+        const dx = L.lx2[i] - L.lx1[i], dy = L.ly2[i] - L.ly1[i], len = Math.hypot(dx, dy) || 1, side = o === l.bsec ? -1 : 1;
+        const x = (L.lx1[i] + L.lx2[i]) / 2 + side * 32 * dy / len, y = (L.ly1[i] + L.ly2[i]) / 2 - side * 32 * dx / len;
+        out.push({ key: "e" + i, kind: "escape", x, y, prio: 100 - d(x, y) / 100, hazardOK: true, fromSector: here });
+      }
+    }
+    // ExM8: the way to the exit opens when the bosses die (tag 666), so the bot goes looking for them
+    if (/M8$/.test(this.map.name)) for (const m of s.monsters) out.push({ key: "m" + m.k, kind: "hunt", x: m.x, y: m.y, prio: 75 - d(m.x, m.y) / 200, mobj: m.k });
     // the nearest unexplored places
     const fr = [];
     for (const c of this.standCells) if (!this.visited[c.j * this.bw + c.i]) fr.push({ key: `f${c.i},${c.j}`, kind: "explore", x: c.x, y: c.y, prio: 10 - d(c.x, c.y) / 100 });
     fr.sort((a, b) => b.prio - a.prio);
     out.push(...fr.slice(0, 12));
-    return out.filter((c) => !(this.blacklist.get(c.key) > this.tic)).sort((a, b) => b.prio - a.prio);
+    // A target down in a damaging pit is a trap unless the bot is already in it: E1M3's lift switches sit in a
+    // nukage pit 80 units below the lift out, and three runs out of three died there after pressing one.
+    const pit = (c) => {
+      if (c.kind === "exit" || c.kind === "escape") return false;
+      const cs = c.line !== undefined && !c.walk ? this.map.lines[c.line].fsec : this.map.spawnSector(c.x, c.y); // a switch is pressed from its front
+      return cs !== here && HURT.has(this.map.sectors[cs].special) && s.floor[cs] < s.floor[here] - 24;
+    };
+    return out.filter((c) => !(this.blacklist.get(c.key) > this.tic) && !(this.blacklist.get("kind:" + c.kind) > this.tic) && !pit(c) && !this.parked?.has(c.key)).sort((a, b) => b.prio - a.prio);
+  }
+
+  // the level changed: targets parked as unreachable get another look
+  unpark(why) {
+    if (!this.parked?.size) return;
+    for (const k of this.parked) { this.blacklist.delete(k); this.rejects?.delete(k); }
+    this.events.push({ tic: this.tic, ev: "unpark", n: this.parked.size, why });
+    this.parked.clear();
   }
 
   reject(t, why, tics = 1050) {
     // each repeat failure on the same target doubles its time out, so the bot explores instead of retrying
     const n = (this.rejects ||= new Map()).set(t.key, (this.rejects.get(t.key) || 0) + 1).get(t.key);
     this.blacklist.set(t.key, this.tic + Math.min(tics * 2 ** (n - 1), 35 * 240));
+    // an exit or a hunt that can't be reached says the same of its siblings: E1M8 has eight exit lines on one
+    // platform and spent its time retrying them one by one instead of crossing the triggers that lower it
+    if (t.kind === "exit" || t.kind === "hunt") {
+      const k = "kind:" + t.kind, m = (this.rejects.get(k) || 0) + 1; this.rejects.set(k, m);
+      this.blacklist.set(k, this.tic + Math.min(tics * 2 ** (m - 1), 35 * 240));
+    }
     this.events.push({ tic: this.tic, ev: "reject", kind: t.kind, key: t.key, why });
     if (this.target?.key === t.key) { this.target = null; this.fine = null; this.coarse = null; }
   }
@@ -132,6 +171,8 @@ export class Bot {
   targetDone(t) {
     const p = this.s.p;
     if (t.thing !== undefined) return !this.s.items.some((it) => it.k === t.thing);
+    if (t.mobj !== undefined) return !this.s.monsters.some((m) => m.k === t.mobj);
+    if (t.kind === "escape") return !HURT.has(this.map.sectors[this.map.spawnSector(p.x, p.y)].special);
     if (t.line !== undefined && t.use) return !this.s.specials[t.line];
     if (t.walk && Math.hypot(t.x - this.s.p.x, t.y - this.s.p.y) < 40) { (this.crossed ||= new Set()).add(t.line); return true; }
     return Math.hypot(t.x - p.x, t.y - p.y) < 48;
@@ -252,7 +293,15 @@ export class Bot {
     this.stats.globalMs = (this.stats.globalMs || 0) + r.ms;
     let k = 0; for (const v of r.path) k += v;
     if (!k && !t.hazardOK) { t.hazardOK = true; return this.planGlobal(); }
-    if (!k) { this.stats.coarseEmpty++; this.reject(t, "TRM: no global route"); return false; }
+    if (!k) {
+      // was there a route to find? BFS on the same grid tells a TRM miss from a level that is really shut here
+      const bfs = shortestUnion(g, n).some((v) => v);
+      this.stats.trmMiss = (this.stats.trmMiss || 0) + bfs; this.stats.trmShut = (this.stats.trmShut || 0) + !bfs;
+      // no route on the grid at all: the target waits until something changes the level (a switch, a trigger, a
+      // lift, a death), instead of coming back on a timer to fail again (E1M2: 93% of empty plans were this)
+      if (!bfs && t.kind !== "escape") (this.parked ||= new Set()).add(t.key);
+      this.stats.coarseEmpty++; this.reject(t, bfs ? "TRM: no global route (BFS has one)" : "TRM: no global route (none)"); return false;
+    }
     const w = this.walkSet(g, r.path, gc, n, s0);
     if (!w.reached) this.stats.coarseBroken++;
     t.routeLeft = w.reached ? w.path.length : undefined;
@@ -450,7 +499,7 @@ export class Bot {
     // remember how each lift moves, to tell a lift on its way from one at rest
     const now = this.tic, mv = (this.liftMoves ||= new Map());
     const moving = (k) => { const m = mv.get(k); if (!m || m.f !== floor(k)) { mv.set(k, { f: floor(k), t: now }); return !!m; } return now - m.t < 20; };
-    const done = (why) => { if (this.liftTask) this.events.push({ tic: now, ev: "lift", why, sector: this.liftTask.L }); this.liftTask = null; return null; };
+    const done = (why) => { if (this.liftTask) { this.events.push({ tic: now, ev: "lift", why, sector: this.liftTask.L }); if (why === "off") this.unpark("lift " + this.liftTask.L); } this.liftTask = null; return null; };
     if (this.liftTask && now - this.liftTask.since > 35 * 15) { this.reject(this.target, "lift never came", 700); return done("timeout"); }
 
     if (lifts.has(here)) {
@@ -512,9 +561,33 @@ export class Bot {
     if (this.target && this.targetDone(this.target)) {
       this.events.push({ tic: this.tic, ev: "done", kind: this.target.kind, key: this.target.key });
       this.stats.targets[this.target.kind] = (this.stats.targets[this.target.kind] || 0) + 1;
+      // a boss down, a switch pressed or a trigger crossed can open the way out, so the exits get a fresh chance
+      // (E1M8: both Barons died at 278 s, but the exits were still backed off and the bot wandered by the platform)
+      if (["hunt", "switch", "trigger"].includes(this.target.kind)) this.unpark("done " + this.target.key);
+      if (["hunt", "switch", "trigger"].includes(this.target.kind)) for (const k of [...this.blacklist.keys()]) {
+        if (k === "kind:exit" || this.exitKeys?.has(k)) { this.blacklist.delete(k); this.rejects?.delete(k); }
+      }
       if (this.target.kind === "explore") this.blacklist.set(this.target.key, 1e9);
       this.target = null; this.fine = null; this.coarse = null;
     }
+    // three seconds on a damaging floor with a target elsewhere: that target is dropped for a way off it
+    if (HURT.has(this.map.sectors[this.map.spawnSector(p.x, p.y)].special)) {
+      this.hurtSince ??= this.tic;
+      if (this.target && this.target.kind !== "escape" && this.tic - this.hurtSince > 105) {
+        const c = this.candidates()[0];
+        if (c?.kind === "escape") { this.events.push({ tic: this.tic, ev: "escape", from: this.target.key }); this.target = null; this.fine = null; this.coarse = null; }
+      }
+    } else this.hurtSince = null;
+    // a backstop for changes the bot doesn't see (a door opened by a monster, a crusher, a timed floor)
+    if (this.parked?.size && this.tic - (this.parkedAt ?? 0) > 35 * 90) { this.unpark("timer"); this.parkedAt = this.tic; }
+    if (!this.parked?.size) this.parkedAt = this.tic;
+    // on ExM8 a monster death (a boss, maybe not the one targeted) can open the way out
+    if (/M8$/.test(this.map.name)) {
+      if (this.liveCount !== undefined && s.monsters.length < this.liveCount)
+        for (const k of [...this.blacklist.keys()]) if (k === "kind:exit" || this.exitKeys?.has(k)) { this.blacklist.delete(k); this.rejects?.delete(k); }
+      this.liveCount = s.monsters.length;
+    }
+    if (this.target?.mobj !== undefined) { const m = s.monsters.find((mm) => mm.k === this.target.mobj); if (m) { this.target.x = m.x; this.target.y = m.y; } }
     if (this.target && this.tic - this.target.since > 35 * 40) this.reject(this.target, "timeout");
     // progress: the target must get closer within 20 seconds, or it's given up for now. Closer means a
     // shorter global route when there is one (routes often start away from the goal), else straight-line.
@@ -546,7 +619,15 @@ export class Bot {
       if (!near && !(await this.planCoarse())) continue;
       if (!(await this.planFine())) continue;
     }
-    if (!this.target) return { turn: 0.05 };
+    // Nothing plans from here (E1M2: a corner where every route came back empty for 40 s): drop the temporary
+    // blocks, then wander a second at a time in a new direction until a target plans again.
+    if (!this.target) {
+      this.idleSince ??= this.tic;
+      if (this.tic - this.idleSince < 70) return { turn: 0.05 };
+      if (!this.wander || this.tic > this.wander.until) { this.blocked = []; this.wander = { until: this.tic + 35, turn: (Math.random() - 0.5) * 0.3 }; this.events.push({ tic: this.tic, ev: "wander", x: Math.round(p.x), y: Math.round(p.y) }); }
+      return { forward: 25, turn: this.wander.turn, use: (this.tic & 15) === 0 };
+    }
+    this.idleSince = null;
     const t = this.target;
     const near = Math.hypot(t.x - p.x, t.y - p.y) < (N / 2 - 2) * FINE;
     if (!near && (!this.coarse || this.tic - this.coarse.tic > (this.globalPlanner ? 350 : 140))) { if (!(await this.planCoarse())) return {}; }
@@ -597,24 +678,31 @@ export class Bot {
       if (p.health < 40 && !en.unseen && en.d < 500 && this.trail?.length > 3 && this.tic > (this.retreatUntil ?? 0) + 105) this.retreatUntil = this.tic + 70;
       const hurt = this.tic < (this.retreatUntil ?? 0) && this.trail?.length > 3;
       let ax = vx, ay = vy;
-      if (hurt) { const [bx, by] = this.trail[Math.max(0, this.trail.length - 4)]; ax = bx - p.x; ay = by - p.y; const l = Math.hypot(ax, ay) || 1; ax /= l; ay /= l; }
+      // on a damaging floor every second costs health, so the bot keeps to its route at full speed and shoots on
+      // the move (E1M3: it stood to fight in the nukage on the way to the blue key and died there)
+      const acid = HURT.has(this.map.sectors[this.map.spawnSector(p.x, p.y)].special);
+      if (acid) { /* keep the route */ }
+      else if (hurt) { const [bx, by] = this.trail[Math.max(0, this.trail.length - 4)]; ax = bx - p.x; ay = by - p.y; const l = Math.hypot(ax, ay) || 1; ax /= l; ay /= l; }
       else if (en.d < 192) { ax = ex; ay = ey; }
       else if (en.d < 700 && !en.unseen && !dry) { ax = 0; ay = 0; } // stand and fight rather than walk into the room
       const side = ((this.tic / 30) | 0) & 1 ? 1 : -1;
-      vx = ax - ey * side * 0.8; vy = ay + ex * side * 0.8;
+      const dodge = acid ? 0 : 0.8;
+      vx = ax - ey * side * dodge; vy = ay + ex * side * dodge;
       const l = Math.hypot(vx, vy) || 1; vx /= l; vy /= l; speed = 1;
       // fighting moves leave the route: never into a wall, a drop-off or nukage, which is how pits catch the bot
       const g = this.fine?.grid;
       if (g && !this.gridLineClear(g, p.x, p.y, p.x + vx * 40, p.y + vy * 40, true)) {
         const r = Math.hypot(mx - p.x, my - p.y) || 1; vx = (mx - p.x) / r; vy = (my - p.y) / r;
-        if (!hurt && en.d < 700 && !dry) speed = 0;
+        if (!hurt && !acid && en.d < 700 && !dry) speed = 0;
       }
     }
     const ca = Math.cos(p.angle), sa = Math.sin(p.angle);
     if (lift?.hold) speed = 0;
     input.forward = 50 * speed * (vx * ca + vy * sa);
     input.side = 40 * speed * (vx * sa - vy * ca);
-    if (lift?.face && !en) input.turn = Math.max(-0.3, Math.min(0.3, wrap(Math.atan2(lift.face[1] - p.y, lift.face[0] - p.x) - p.angle)));
+    // a lift switch only works faced, so pressing it beats aiming at a monster (E1M7: an unreachable shooter kept
+    // the bot turned away from the call switch 16 units off, and the lift "never came")
+    if (lift?.face && (!en || lift.use)) input.turn = Math.max(-0.3, Math.min(0.3, wrap(Math.atan2(lift.face[1] - p.y, lift.face[0] - p.x) - p.angle)));
     if (lift?.use && this.tic - (this.lastUse ?? -99) > 45) { input.use = true; this.lastUse = this.tic; }
     // doors and switches: press use once when one is just ahead, then leave it a second, since using a
     // moving DR door sends it back the way it came
@@ -624,7 +712,7 @@ export class Bot {
     if ((doorAhead || atSwitch || this.unstick > 0) && this.tic - (this.lastUse ?? -99) > 45) {
       input.use = true; this.lastUse = this.tic;
       // a repeatable switch keeps its special, and one we can't reach never clears: three presses is enough
-      if (atSwitch && ++t.presses >= 3) { this.blacklist.set(t.key, 1e9); this.events.push({ tic: this.tic, ev: "pressed", kind: t.kind, key: t.key }); this.target = null; this.fine = null; this.coarse = null; }
+      if (atSwitch && ++t.presses >= 3) { this.blacklist.set(t.key, 1e9); this.events.push({ tic: this.tic, ev: "pressed", kind: t.kind, key: t.key }); this.unpark("pressed " + t.key); this.target = null; this.fine = null; this.coarse = null; }
     }
     if (this.unstick > 0) { this.unstick--; input.side = (this.tic >> 4) & 1 ? 40 : -40; input.forward = -20; }
     return input;

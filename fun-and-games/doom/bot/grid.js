@@ -18,7 +18,7 @@ export const MANUAL_DOORS = { 1: 0, 26: 1, 27: 2, 28: 3, 31: 0, 32: 1, 33: 3, 34
 const USE_LIFTS = new Set([21, 62, 122, 123]);
 // lifts that lower, wait and rise (DOOM's downWaitUpStay and its blazing twin), by how they're triggered
 export const LIFT_SPECIALS = { 10: "W", 88: "W", 120: "W", 121: "W", 21: "S", 62: "S", 122: "S", 123: "S" };
-const HURT = new Set([4, 5, 7, 11, 16]);
+export const HURT = new Set([4, 5, 7, 11, 16]);
 const ML_BLOCKING = 1;
 export const KEY_THINGS = { 5: 1, 40: 1, 6: 2, 39: 2, 13: 3, 38: 3 }; // doomednum -> key colour
 // cards word: bit 0..2 cards blue/yellow/red, 3..5 skulls
