@@ -132,28 +132,28 @@ fn rmsRow(r: u32) {
   rmsRow(r);
 }
 // A = A + B (+ C when u.w)
-@compute @workgroup_size(64) fn add(@builtin(global_invocation_id) g: vec3u) {
-  let i = g.x; if (i >= u.x * D) { return; }
+@compute @workgroup_size(64) fn add(@builtin(global_invocation_id) g: vec3u, @builtin(num_workgroups) nw: vec3u) {
+  let i = g.x + g.y * nw.x * 64u; if (i >= u.x * D) { return; }
   var v = A[i] + B[i];
   if (u.w == 1u) { v += C[i]; }
   A[i] = v;
 }
 // A[L, HID] = silu(B[:, :HID]) * B[:, HID:]
-@compute @workgroup_size(64) fn swiglu(@builtin(global_invocation_id) g: vec3u) {
-  let i = g.x; if (i >= u.x * HID) { return; }
+@compute @workgroup_size(64) fn swiglu(@builtin(global_invocation_id) g: vec3u, @builtin(num_workgroups) nw: vec3u) {
+  let i = g.x + g.y * nw.x * 64u; if (i >= u.x * HID) { return; }
   let r = i / HID; let c = i % HID;
   let gt = B[r * 2u * HID + c]; let up = B[r * 2u * HID + HID + c];
   A[i] = gt / (1.0 + exp(-gt)) * up;
 }
 // A = emb[TOK] + pos
-@compute @workgroup_size(64) fn embed(@builtin(global_invocation_id) g: vec3u) {
-  let i = g.x; if (i >= u.x * D) { return; }
+@compute @workgroup_size(64) fn embed(@builtin(global_invocation_id) g: vec3u, @builtin(num_workgroups) nw: vec3u) {
+  let i = g.x + g.y * nw.x * 64u; if (i >= u.x * D) { return; }
   let r = i / D; let d = i % D;
   A[i] = P[u.y + TOK[r] * D + d] + P[u.z + r * D + d];
 }
 // A = broadcast P[u.y .. u.y + D]
-@compute @workgroup_size(64) fn fill(@builtin(global_invocation_id) g: vec3u) {
-  let i = g.x; if (i >= u.x * D) { return; }
+@compute @workgroup_size(64) fn fill(@builtin(global_invocation_id) g: vec3u, @builtin(num_workgroups) nw: vec3u) {
+  let i = g.x + g.y * nw.x * 64u; if (i >= u.x * D) { return; }
   A[i] = P[u.y + i % D];
 }
 `;
@@ -234,7 +234,8 @@ export class TRMPlanner {
 
     const steps = []; // {pl, bg, wg: [x, y]}
     const mm = (A, wname, Oo, K, M) => { const pl = mmPipe(K, M); steps.push({ pl, bg: bg(pl, [A, p.P, Oo, uni([off(wname), 0, 0, 0])]), wg: [Math.ceil(M / 64), L / 64] }); };
-    const rows64 = Math.ceil(L / 64), elems = (w) => Math.ceil(L * w / 64);
+    // elementwise dispatches go 2-D: a whole-level grid's L·HID/64 passes the 65535-per-dimension limit
+    const rows64 = Math.ceil(L / 64), elems = (w) => { const n = Math.ceil(L * w / 64), x = Math.min(n, 16384); return [x, Math.ceil(n / x)]; };
     const uRows = uni([L, 0, 0, 0]), uAdd3 = uni([L, 0, 0, 1]);
     const net = (Hb) => {
       for (let b = 0; b < layers; b++) {
@@ -247,28 +248,28 @@ export class TRMPlanner {
         }
         steps.push({ pl: rowPipes.addNorm, bg: rowBG("addNorm", Hb, TMP, dummy, uRows), wg: [rows64, 1] });
         mm(Hb, `blocks.${b}.gu.weight`, GU, D, 2 * HID);
-        steps.push({ pl: rowPipes.swiglu, bg: rowBG("swiglu", ACT, GU, dummy, uRows), wg: [elems(HID), 1] });
+        steps.push({ pl: rowPipes.swiglu, bg: rowBG("swiglu", ACT, GU, dummy, uRows), wg: elems(HID) });
         mm(ACT, `blocks.${b}.down.weight`, TMP, HID, D);
         steps.push({ pl: rowPipes.addNorm, bg: rowBG("addNorm", Hb, TMP, dummy, uRows), wg: [rows64, 1] });
       }
     };
     // init: X = embed, Y = y0, Z = z0
     p.init = [
-      { pl: rowPipes.embed, bg: rowBG("embed", X, dummy, dummy, uni([L, off("emb.weight"), off("pos"), 0])), wg: [elems(D), 1] },
-      { pl: rowPipes.fill, bg: rowBG("fill", Y, dummy, dummy, uni([L, off("y0"), 0, 0])), wg: [elems(D), 1] },
-      { pl: rowPipes.fill, bg: rowBG("fill", Z, dummy, dummy, uni([L, off("z0"), 0, 0])), wg: [elems(D), 1] },
+      { pl: rowPipes.embed, bg: rowBG("embed", X, dummy, dummy, uni([L, off("emb.weight"), off("pos"), 0])), wg: elems(D) },
+      { pl: rowPipes.fill, bg: rowBG("fill", Y, dummy, dummy, uni([L, off("y0"), 0, 0])), wg: elems(D) },
+      { pl: rowPipes.fill, bg: rowBG("fill", Z, dummy, dummy, uni([L, off("z0"), 0, 0])), wg: elems(D) },
     ];
     // one supervision step, cut into net-call chunks
     p.chunks = [];
     for (let t = 0; t < T; t++) {
       for (let i = 0; i < n; i++) {
         steps.length = 0;
-        steps.push({ pl: rowPipes.add, bg: rowBG("add", Z, X, Y, uAdd3), wg: [elems(D), 1] });
+        steps.push({ pl: rowPipes.add, bg: rowBG("add", Z, X, Y, uAdd3), wg: elems(D) });
         net(Z);
         p.chunks.push(steps.slice());
       }
       steps.length = 0;
-      steps.push({ pl: rowPipes.add, bg: rowBG("add", Y, Z, dummy, uRows), wg: [elems(D), 1] });
+      steps.push({ pl: rowPipes.add, bg: rowBG("add", Y, Z, dummy, uRows), wg: elems(D) });
       net(Y);
       p.chunks.push(steps.slice());
     }
@@ -287,7 +288,7 @@ export class TRMPlanner {
 
   // Plan on a grid (Uint8Array of L cells). Runs `sup` supervision steps, stopping early once the halting
   // head says so; `yieldEvery` net calls it awaits a frame (pass a function returning a promise).
-  async plan(grid, { sup = 3, yieldFn = null } = {}) {
+  async plan(grid, { sup = 3, minSup = 1, yieldFn = null } = {}) {
     const q = this.device.queue, t0 = performance.now();
     q.writeBuffer(this.tok, 0, Uint32Array.from(grid));
     q.submit([this.encode(this.init).finish()]);
@@ -301,7 +302,7 @@ export class TRMPlanner {
       const r = new Float32Array(this.read.getMappedRange().slice(0));
       this.read.unmap();
       logits = r.subarray(0, this.L); halt = r[this.L]; steps = s + 1;
-      if (halt > 0) break;
+      if (halt > 0 && steps >= minSup) break; // the halting head was trained on 32×32: don't trust it early
     }
     const path = new Uint8Array(this.L);
     for (let k = 0; k < this.L; k++) path[k] = logits[k] > 0 ? 1 : 0;

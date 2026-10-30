@@ -2,10 +2,10 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261030062845";
-import { TRMPlanner } from "./trm.js?v=20261030062845";
-import { MOBJINFO, MF } from "../info.js?v=20261030062845";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261030062845";
+import { Bot } from "./bot.js?v=20261030071256";
+import { TRMPlanner } from "./trm.js?v=20261030071256";
+import { MOBJINFO, MF } from "../info.js?v=20261030071256";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261030071256";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {

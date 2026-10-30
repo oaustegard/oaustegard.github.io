@@ -7,7 +7,7 @@
 // walk it. When the set doesn't join start to goal, that's a TRM failure: the bot counts it and heads
 // for the reachable cell of the set nearest the goal.
 
-import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030062845";
+import { makeGridder, mapVerts, C, N, FINE, COARSE, KEY_THINGS, hasKey, passable } from "./grid.js?v=20261030071256";
 
 const ANGLE = 2 * Math.PI / 4294967296;
 const HEALTH = { 2011: 10, 2012: 25, 2013: 100, 2014: 1 };
@@ -92,7 +92,7 @@ export class Bot {
       else if (HEALTH[it.ed] && p.health < (it.ed === 2014 ? 100 : 100 - HEALTH[it.ed] / 2)) want = p.health < 40 ? 95 : 30;
       else if (ARMOR[it.ed] && p.armor < 100) want = 25;
       else if (WEAPON[it.ed] !== undefined && !(p.weapons & (1 << WEAPON[it.ed]))) want = 60;
-      else if (AMMO[it.ed] !== undefined && (AMMO[it.ed] < 0 || p.ammo[AMMO[it.ed]] < p.maxammo[AMMO[it.ed]] / 2)) want = 20;
+      else if (AMMO[it.ed] !== undefined && (AMMO[it.ed] < 0 || p.ammo[AMMO[it.ed]] < p.maxammo[AMMO[it.ed]] / 2)) want = p.ammo[0] + p.ammo[1] + p.ammo[2] + p.ammo[3] < 10 ? 85 : 20;
       if (!want) continue;
       const dist = d(it.x, it.y);
       if (want < 90 && dist > (want >= 60 ? 1200 : 600)) continue;
@@ -214,6 +214,7 @@ export class Bot {
   // grid size). Used instead of the 1536-unit coarse window when the bot has a global planner.
   async planGlobal() {
     const t = this.target, p = this.s.p, b = this.map.bmap, cs = COARSE;
+    if (!t) return false;
     const n = this.globalN ||= Math.ceil(Math.max(b.w, b.h) * 128 / cs / 8) * 8 + 8;
     const cx = b.x + b.w * 64, cy = b.y + b.h * 64;
     const grid = this.gr.coarse(cx, cy, this.gridState(), cs, n);
@@ -236,7 +237,9 @@ export class Bot {
     g[s0] = C.START; g[gc] = C.GOAL;
     const pl = await this.globalPlanner(n);
     const t0 = performance.now();
-    const r = await pl.plan(g, { sup: this.globalSup || 10 });
+    // a supervision step carries a route ~30 cells (15 net calls of two 3×3 convs): enough steps to cross the grid
+    const steps = this.globalSup || Math.ceil(n / 16) + 2;
+    const r = await pl.plan(g, { sup: steps, minSup: steps });
     this.stats.planMs += performance.now() - t0; this.stats.globalPlans = (this.stats.globalPlans || 0) + 1;
     this.stats.globalMs = (this.stats.globalMs || 0) + r.ms;
     let k = 0; for (const v of r.path) k += v;
@@ -244,11 +247,13 @@ export class Bot {
     if (!k) { this.stats.coarseEmpty++; this.reject(t, "TRM: no global route"); return false; }
     const w = this.walkSet(g, r.path, gc, n, s0);
     if (!w.reached) this.stats.coarseBroken++;
+    t.routeLeft = w.reached ? w.path.length : undefined;
     this.coarse = { grid: { ...grid, cs }, path: w.path, tic: this.tic, n };
     return true;
   }
 
   async planCoarse() {
+    if (!this.target) return false;
     if (this.globalPlanner && !this.noGlobal) return this.planGlobal();
     const t = this.target, p = this.s.p;
     const grid = this.anchored(this.gr.coarse, COARSE);
@@ -293,6 +298,7 @@ export class Bot {
 
   async planFine(retry = true) {
     const t = this.target, p = this.s.p;
+    if (!t) return false; // rejected while replanning
     const base = this.anchored(this.gr.fine, FINE);
     const c0 = (N / 2) * N + N / 2;
     base.g[c0] = C.START;
@@ -358,12 +364,13 @@ export class Bot {
     for (const m of this.s.monsters) {
       const d = Math.hypot(m.x - p.x, m.y - p.y);
       if (d > 1400 || d > bd) continue;
+      if (this.ignore?.get(m.k) > this.tic) continue; // shot at for seconds without a scratch: out of reach
       if (!this.sightClear(p.x, p.y, m.x, m.y)) continue;
       best = m; bd = d;
     }
     if (!best && p.damage > 0 && p.attacker > 0) { // whoever is hurting us, even if our sight test can't see it
       const m = this.s.monsters.find((mm) => mm.k === p.attacker);
-      if (m) { const d = Math.hypot(m.x - p.x, m.y - p.y); if (d < 2000) return { m, d, unseen: true }; }
+      if (m && !(this.ignore?.get(m.k) > this.tic)) { const d = Math.hypot(m.x - p.x, m.y - p.y); if (d < 2000) return { m, d, unseen: true }; }
     }
     return best ? { m: best, d: bd } : null;
   }
@@ -428,11 +435,12 @@ export class Bot {
       this.target = null; this.fine = null; this.coarse = null;
     }
     if (this.target && this.tic - this.target.since > 35 * 40) this.reject(this.target, "timeout");
-    // progress: the target must get closer every 12 seconds, or it's given up for now
+    // progress: the target must get closer within 20 seconds, or it's given up for now. Closer means a
+    // shorter global route when there is one (routes often start away from the goal), else straight-line.
     if (this.target) {
-      const dt = Math.hypot(this.target.x - p.x, this.target.y - p.y);
-      if (!(dt > (this.target.best ?? 1e9) - 64)) { this.target.best = Math.min(dt, this.target.best ?? 1e9); this.target.bestTic = this.tic; }
-      else if (this.tic - this.target.bestTic > 420) this.reject(this.target, "no progress");
+      const t = this.target, left = t.routeLeft ?? Math.hypot(t.x - p.x, t.y - p.y) / COARSE;
+      if (!(left > (t.best ?? 1e9) - 1.5)) { t.best = Math.min(left, t.best ?? 1e9); t.bestTic = this.tic; }
+      else if (this.tic - t.bestTic > 700) this.reject(t, "no progress");
     }
     if (this.debugGrids && this.fine && this.tic - (this.lastDump ?? -999) > 300) {
       this.lastDump = this.tic;
@@ -479,8 +487,14 @@ export class Bot {
       if (w !== p.ready + 1 && !(w === 7 && p.ready === 7)) input.weapon = w;
       const err = Math.abs(wrap(face - p.angle));
       // hitscan spreads: past ~900 units a pistol or shotgun mostly wastes ammo
-      input.fire = err < Math.max(0.05, Math.atan2(en.m.r * 0.8, en.d)) && (en.d < 900 || w >= 5) && !(en.unseen && !this.sightClear(p.x, p.y, en.m.x, en.m.y));
+      const melee = w === 1;
+      input.fire = err < Math.max(0.05, Math.atan2(en.m.r * 0.8, en.d)) && (en.d < (melee ? 80 : 900) || w >= 5) && !en.unseen;
+      // a target that takes three seconds of fire without losing health is out of reach (a ledge, a window): leave it
+      const f = this.fight;
+      if (!f || f.k !== en.m.k || en.m.health < f.health) this.fight = { k: en.m.k, health: en.m.health, tic: this.tic };
+      else if (input.fire && this.tic - f.tic > 105) { (this.ignore ||= new Map()).set(en.m.k, this.tic + 700); this.fight = null; }
     }
+    const dry = !(p.weapons & 0b110) || (p.ammo[0] <= 0 && p.ammo[1] <= 0 && p.ammo[2] <= 0 && p.ammo[3] <= 0);
     const err = wrap(face - p.angle);
     input.turn = Math.max(-0.3, Math.min(0.3, err));
     let vx = mx - p.x, vy = my - p.y; const vl = Math.hypot(vx, vy) || 1; vx /= vl; vy /= vl;
@@ -491,11 +505,13 @@ export class Bot {
       // fight: keep the route's direction only from afar, back off from anything close, retreat when
       // hurt, and sidestep every second so fireballs miss
       const ex = (p.x - en.m.x) / en.d, ey = (p.y - en.m.y) / en.d;
-      const hurt = p.health < 35 && this.trail?.length > 3;
+      // hurt: fall back along the breadcrumbs, and keep falling back until nothing has been seen for two seconds
+      if (p.health < 50 && this.trail?.length > 3) this.retreatUntil = this.tic + 70;
+      const hurt = this.tic < (this.retreatUntil ?? 0) && this.trail?.length > 3;
       let ax = vx, ay = vy;
       if (hurt) { const [bx, by] = this.trail[Math.max(0, this.trail.length - 4)]; ax = bx - p.x; ay = by - p.y; const l = Math.hypot(ax, ay) || 1; ax /= l; ay /= l; }
       else if (en.d < 192) { ax = ex; ay = ey; }
-      else if (en.d < 700 && !en.unseen) { ax = 0; ay = 0; } // stand and fight rather than walk into the room
+      else if (en.d < 700 && !en.unseen && !dry) { ax = 0; ay = 0; } // stand and fight rather than walk into the room
       const side = ((this.tic / 30) | 0) & 1 ? 1 : -1;
       vx = ax - ey * side * 0.8; vy = ay + ex * side * 0.8;
       const l = Math.hypot(vx, vy) || 1; vx /= l; vy /= l; speed = 1;
