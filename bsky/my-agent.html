@@ -1,0 +1,892 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>My Agent</title>
+<meta name="description" content="Tracks the phrase “my agent” on Bluesky since January 2025: live posts, counts per day, week or month, and a small classifier that sorts each post into an AI agent, a human agent or unknown.">
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #07090d; --panel: rgba(16, 20, 27, 0.78); --panel-solid: #10141b;
+    --ink: #eef1f4; --muted: #9aa6b2; --faint: #5d6874; --line: rgba(160, 180, 200, 0.16);
+    --grid: rgba(160, 180, 200, 0.10);
+    --ai: #3987e5; --human: #d95926; --unknown: #7d8590;
+    --accent: #6fb0ff;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      color-scheme: light;
+      --bg: #f3f5f8; --panel: rgba(255, 255, 255, 0.82); --panel-solid: #ffffff;
+      --ink: #12161b; --muted: #55606c; --faint: #8b95a0; --line: rgba(20, 30, 45, 0.14);
+      --grid: rgba(20, 30, 45, 0.08);
+      --ai: #2a78d6; --human: #eb6834; --unknown: #8f969d;
+      --accent: #1a6fd4;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body { background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; min-height: 100vh; }
+  #swarm { position: fixed; inset: 0; width: 100vw; height: 100vh; z-index: 0; display: block; }
+  main { position: relative; z-index: 1; max-width: 1080px; margin: 0 auto; padding: 32px 16px 64px; }
+  a { color: var(--accent); }
+  header.top { margin: 8px 0 16px; padding: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .crumb { font-size: 0.85rem; color: var(--muted); }
+  .crumb a { color: var(--muted); }
+  h1 { font-size: clamp(1.9rem, 5vw, 3rem); line-height: 1.05; margin: 10px 0 8px; letter-spacing: -0.02em; }
+  h1 q { quotes: "“" "”"; }
+  h2 { font-size: 1.05rem; margin: 0 0 4px; }
+  .lede { color: var(--muted); max-width: 64ch; margin: 0; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px;
+    margin-bottom: 16px; backdrop-filter: blur(10px) saturate(1.2); -webkit-backdrop-filter: blur(10px) saturate(1.2); }
+  .sub { color: var(--muted); font-size: 0.85rem; margin: 0 0 12px; }
+
+  .tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 14px 16px;
+    backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); min-width: 0; }
+  .tile .k { font-size: 0.78rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .tile .v { font-size: 1.7rem; font-weight: 650; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .tile .d { font-size: 0.8rem; color: var(--muted); }
+  @media (max-width: 760px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+  .controls { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; margin-bottom: 14px; }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 9px; overflow: hidden; }
+  .seg button { font: inherit; font-size: 0.85rem; padding: 6px 12px; background: transparent; color: var(--muted);
+    border: 0; cursor: pointer; }
+  .seg button + button { border-left: 1px solid var(--line); }
+  .seg button[aria-pressed="true"] { background: var(--accent); color: #fff; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 0.85rem; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .sw { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+  .sw.ai { background: var(--ai); } .sw.human { background: var(--human); } .sw.unknown { background: var(--unknown); }
+
+  .chart { position: relative; width: 100%; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart text { fill: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .tip { position: absolute; pointer-events: none; background: var(--panel-solid); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 10px; font-size: 0.8rem; min-width: 150px; box-shadow: 0 6px 24px rgba(0,0,0,.25);
+    opacity: 0; transition: opacity .12s; z-index: 3; }
+  .tip b { display: block; margin-bottom: 4px; }
+  .tip .row { display: flex; justify-content: space-between; gap: 12px; font-variant-numeric: tabular-nums; }
+  .tip .row span:first-child { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); }
+
+  .grid2 { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+
+  .feed-head { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+  .live { display: inline-flex; align-items: center; gap: 6px; font-size: 0.8rem; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #2ea043; box-shadow: 0 0 0 0 rgba(46,160,67,.6); animation: ping 2s infinite; }
+  .dot.off { background: var(--faint); animation: none; }
+  @keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(46,160,67,.55); } 70% { box-shadow: 0 0 0 8px rgba(46,160,67,0); } 100% { box-shadow: 0 0 0 0 rgba(46,160,67,0); } }
+  #feed { list-style: none; margin: 0; padding: 0; max-height: 1100px; overflow-y: auto; }
+  #feed li { display: grid; grid-template-columns: 36px minmax(0, 1fr); gap: 10px; padding: 12px 2px;
+    border-top: 1px solid var(--line); }
+  #feed li.fresh { animation: arrive .9s ease-out; }
+  @keyframes arrive { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
+  #feed img.av { width: 36px; height: 36px; border-radius: 50%; background: var(--line); object-fit: cover; }
+  .who { font-size: 0.85rem; display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+  .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 45%; }
+  .who .h { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  .who a.t { color: var(--faint); margin-left: auto; white-space: nowrap; text-decoration: none; }
+  .txt { margin: 3px 0 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .txt mark { background: color-mix(in srgb, var(--accent) 25%, transparent); color: inherit; border-radius: 3px; padding: 0 2px; }
+  .badge { display: inline-flex; align-items: center; gap: 6px; font-size: 0.75rem; color: var(--muted); }
+  .badge .pill { border-radius: 99px; padding: 1px 8px; font-weight: 600; color: #fff; }
+  .pill.ai { background: var(--ai); } .pill.human { background: var(--human); } .pill.unknown { background: var(--unknown); }
+  .probs { display: inline-flex; width: 70px; height: 6px; border-radius: 3px; overflow: hidden; gap: 1px; }
+  .probs i { display: block; height: 100%; }
+
+  .terms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+  @media (max-width: 560px) { .terms { grid-template-columns: minmax(0, 1fr); } }
+  .terms h3 { font-size: 0.85rem; margin: 0 0 6px; display: flex; align-items: center; gap: 6px; }
+  .terms ol { margin: 0; padding: 0; list-style: none; font-size: 0.82rem; }
+  .terms li { display: grid; grid-template-columns: minmax(0, 1fr) 54px; gap: 6px; align-items: center; padding: 1px 0; }
+  .terms li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; }
+  .terms li i { display: block; height: 6px; border-radius: 3px; justify-self: start; }
+
+  .try textarea { width: 100%; min-height: 70px; resize: vertical; border-radius: 9px; border: 1px solid var(--line);
+    background: transparent; color: var(--ink); font: inherit; padding: 8px 10px; }
+  .try .out { margin-top: 8px; font-size: 0.9rem; min-height: 1.5em; }
+  table.eval { border-collapse: collapse; font-size: 0.85rem; font-variant-numeric: tabular-nums; margin-top: 6px; }
+  table.eval th, table.eval td { text-align: right; padding: 3px 10px; border-bottom: 1px solid var(--line); }
+  table.eval th:first-child, table.eval td:first-child { text-align: left; padding-left: 0; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 0.85rem; }
+  .note { color: var(--muted); font-size: 0.85rem; }
+  .fx { position: fixed; right: 12px; bottom: 10px; z-index: 2; font-size: 0.72rem; color: var(--faint); }
+  .fx button { font: inherit; background: none; border: 0; color: var(--faint); cursor: pointer; text-decoration: underline; padding: 0; }
+  footer { color: var(--muted); font-size: 0.85rem; margin-top: 24px; }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } #feed li.fresh { animation: none; } }
+</style>
+</head>
+<body>
+<canvas id="swarm" aria-hidden="true"></canvas>
+<main>
+  <header class="top">
+    <div class="crumb"><a href="/">austegard.com</a> / <a href="/bsky/">Bluesky</a></div>
+    <h1><q>my agent</q> on Bluesky</h1>
+    <p class="lede">Every Bluesky post containing the phrase since January 2025, sorted by a small classifier into
+      <span style="color:var(--ai);font-weight:600">AI agents</span>,
+      <span style="color:var(--human);font-weight:600">human agents</span> and
+      <span style="color:var(--unknown);font-weight:600">unknown</span>.
+      For years “my agent” meant a literary or talent agent; the charts show how fast that is changing.</p>
+  </header>
+
+  <div class="tiles" id="tiles">
+    <div class="tile"><div class="k">Posts since Jan 2025</div><div class="v" id="t-total">…</div><div class="d" id="t-total-d">&nbsp;</div></div>
+    <div class="tile"><div class="k">AI share, last 4 weeks</div><div class="v" id="t-ai">…</div><div class="d" id="t-ai-d">&nbsp;</div></div>
+    <div class="tile"><div class="k">Busiest week</div><div class="v" id="t-peak">…</div><div class="d" id="t-peak-d">&nbsp;</div></div>
+    <div class="tile"><div class="k">Latest post</div><div class="v" id="t-last">…</div><div class="d" id="t-last-d">&nbsp;</div></div>
+  </div>
+
+  <section class="card">
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Time window" id="gran">
+        <button type="button" data-g="day" aria-pressed="false">Day</button>
+        <button type="button" data-g="week" aria-pressed="true">Week</button>
+        <button type="button" data-g="month" aria-pressed="false">Month</button>
+      </div>
+      <div class="legend">
+        <span><i class="sw ai"></i>AI agent</span>
+        <span><i class="sw human"></i>Human agent</span>
+        <span><i class="sw unknown"></i>Unknown</span>
+      </div>
+    </div>
+    <h2 id="c1-title">Posts per week</h2>
+    <p class="sub" id="c1-sub">Stacked by class. The last window is partial.</p>
+    <div class="chart" id="c1"></div>
+  </section>
+
+  <section class="card">
+    <h2 id="c2-title">Share of posts per week</h2>
+    <p class="sub">Percent of each window’s posts in each class, so the shift shows apart from volume.</p>
+    <div class="chart" id="c2"></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <div class="feed-head">
+        <div>
+          <h2>Latest posts</h2>
+          <div class="live"><i class="dot off" id="live-dot"></i><span id="live-txt">connecting…</span></div>
+        </div>
+        <div class="seg" role="group" aria-label="Filter posts" id="filt">
+          <button type="button" data-f="all" aria-pressed="true">All</button>
+          <button type="button" data-f="ai" aria-pressed="false">AI</button>
+          <button type="button" data-f="human" aria-pressed="false">Human</button>
+          <button type="button" data-f="unknown" aria-pressed="false">Unknown</button>
+        </div>
+      </div>
+      <ul id="feed"></ul>
+    </section>
+
+    <div>
+      <section class="card">
+        <h2>What the classifier keys on</h2>
+        <p class="sub">Words and word pairs with the largest weight toward each class.</p>
+        <div class="terms" id="terms"></div>
+      </section>
+      <section class="card try">
+        <h2>Try it</h2>
+        <p class="sub">Type a post; it is classified in your browser as you type.</p>
+        <textarea id="try-in" aria-label="Text to classify">my agent finally fixed the flaky test while I slept</textarea>
+        <div class="out" id="try-out"></div>
+      </section>
+      <section class="card">
+        <h2>How it works</h2>
+        <p class="note">Posts come from Bluesky’s public search (<code>app.bsky.feed.searchPosts</code>, query
+          <code>"my agent"</code>). Unauthenticated search returns at most 100 posts and no next page, so the history was
+          collected window by window, halving any window with more hits than one page holds. Identical text posted more than once on the same day counts once,
+          which removes a bot that posted one x402 promotion 185 times in September 2026.</p>
+        <p class="note">About 2,400 posts, sampled evenly across the weeks, were labeled by Claude. A multinomial logistic
+          regression over single words and word pairs learned from them; when its top probability is under
+          <span id="unsure">40%</span>, the post counts as unknown. The weights ship with this page, so the live feed
+          and anything you type are classified here, in your browser.</p>
+        <details><summary>Cross-validated accuracy</summary><div id="eval"></div></details>
+        <p class="note" id="fill-note"></p>
+      </section>
+    </div>
+  </div>
+
+  <footer>
+    Data: Bluesky public AppView. Snapshot <span id="snap">…</span>; days after it are fetched live when the page loads.
+    Pipeline: <a href="https://github.com/oaustegard/oaustegard.github.io/tree/main/scripts/my-agent">scripts/my-agent</a>.
+  </footer>
+</main>
+<div class="fx" id="fx"></div>
+<div class="tip" id="tip"></div>
+
+<script>
+'use strict';
+const API = 'https://api.bsky.app/xrpc/app.bsky.feed.searchPosts';
+const Q = '"my agent"';
+const CLASSES = ['ai', 'human', 'unknown'];
+const LABEL = { ai: 'AI agent', human: 'Human agent', unknown: 'Unknown' };
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const $ = (id) => document.getElementById(id);
+const fmt = new Intl.NumberFormat('en-US');
+const pct = (x) => (x * 100).toFixed(x < 0.1 ? 1 : 0) + '%';
+
+/* ---------- classifier (mirror of scripts/my-agent/train.py tokens()) ---------- */
+const URL_RE = /https?:\/\/\S+|\b[\w-]+(\.[\w-]+)*\.(com|org|net|io|ai|app|dev|social|co|uk)\b\S*/g;
+const TOK_RE = /[a-z0-9_]+/g;
+function tokens(text) {
+  const t = text.toLowerCase().replace(URL_RE, ' zzurl ');
+  const w = t.match(TOK_RE) || [];
+  const out = w.slice();
+  for (let i = 0; i + 1 < w.length; i++) out.push(w[i] + ' ' + w[i + 1]);
+  return out;
+}
+let MODEL = null;
+function classify(text) {
+  const s = MODEL.bias.slice();
+  for (const f of new Set(tokens(text))) {
+    const w = MODEL.weights[f];
+    if (w) for (let c = 0; c < 3; c++) s[c] += w[c];
+  }
+  const m = Math.max(...s);
+  const e = s.map((v) => Math.exp(v - m));
+  const z = e.reduce((a, b) => a + b, 0);
+  const p = e.map((v) => v / z);
+  let k = p.indexOf(Math.max(...p));
+  if (p[k] < MODEL.unsure) k = 2;
+  return { cls: CLASSES[k], p };
+}
+
+/* ---------- data ---------- */
+const DAY = 86400000;
+const iso = (d) => new Date(d).toISOString().slice(0, 10);
+let DATA = null;             // {days:[], ai:[], human:[], unknown:[]}
+const dayMap = new Map();    // 'YYYY-MM-DD' -> [ai, human, unknown]
+const liveDays = new Set();
+
+async function searchWindow(since, until, depth = 0) {
+  const u = new URL(API);
+  u.search = new URLSearchParams({ q: Q, limit: 100, sort: 'latest',
+    since: new Date(since).toISOString(), until: new Date(until).toISOString() });
+  const r = await fetch(u);
+  if (!r.ok) throw new Error('search ' + r.status);
+  const j = await r.json();
+  if ((j.hitsTotal || 0) > 90 && until - since > 30 * 60000 && depth < 8) {
+    const mid = since + (until - since) / 2;
+    const [a, b] = await Promise.all([searchWindow(since, mid, depth + 1), searchWindow(mid, until, depth + 1)]);
+    return a.concat(b);
+  }
+  return j.posts || [];
+}
+
+async function fillLive() {
+  // Days after the snapshot: fetch them now so the charts reach today.
+  const last = Date.parse(DATA.generated + 'T00:00:00Z');
+  const today = Date.parse(iso(Date.now()) + 'T00:00:00Z');
+  let start = last + DAY;
+  if (today - start > 60 * DAY) start = today - 60 * DAY;
+  const days = [];
+  for (let d = start; d <= today; d += DAY) days.push(d);
+  if (!days.length) { $('fill-note').textContent = ''; return; }
+  $('fill-note').textContent = `Fetching ${days.length} day${days.length > 1 ? 's' : ''} after the snapshot…`;
+  let done = 0;
+  const work = days.slice();
+  async function worker() {
+    while (work.length) {
+      const d = work.shift();
+      try {
+        const posts = await searchWindow(d, Math.min(d + DAY, Date.now()));
+        const c = [0, 0, 0];
+        const seen = new Set();
+        for (const p of posts) {
+          // same rule as train.py: identical text counts once a day
+          const key = (p.record.text || '').toLowerCase().split(/\s+/).filter(Boolean).join(' ').slice(0, 200);
+          if (seen.has(p.uri) || seen.has(key)) continue;
+          seen.add(p.uri); seen.add(key);
+          c[CLASSES.indexOf(classify(p.record.text || '').cls)]++;
+        }
+        dayMap.set(iso(d), c);
+        liveDays.add(iso(d));
+      } catch (e) { /* leave the day out; the chart shows the gap */ }
+      done++;
+    }
+  }
+  await Promise.all([worker(), worker(), worker()]);
+  $('fill-note').textContent = done === 1 ? `The day after ${DATA.generated} was fetched and classified live in this browser.` : `${done} days after ${DATA.generated} were fetched and classified live in this browser.`;
+}
+
+/* ---------- aggregation ---------- */
+let GRAN = 'week';
+function keyOf(dayStr, g) {
+  if (g === 'day') return dayStr;
+  if (g === 'month') return dayStr.slice(0, 7) + '-01';
+  const t = Date.parse(dayStr + 'T00:00:00Z');
+  const dow = (new Date(t).getUTCDay() + 6) % 7; // Monday = 0
+  return iso(t - dow * DAY);
+}
+function series(g) {
+  const agg = new Map();
+  const keys = [...dayMap.keys()].sort();
+  // include every key in range, even empty ones
+  const first = Date.parse(keys[0] + 'T00:00:00Z'), lastT = Date.parse(keys[keys.length - 1] + 'T00:00:00Z');
+  for (let t = first; t <= lastT; t += DAY) {
+    const k = keyOf(iso(t), g);
+    if (!agg.has(k)) agg.set(k, [0, 0, 0]);
+    const v = dayMap.get(iso(t));
+    if (v) { const a = agg.get(k); a[0] += v[0]; a[1] += v[1]; a[2] += v[2]; }
+  }
+  const out = [...agg.entries()].sort((a, b) => a[0] < b[0] ? -1 : 1).map(([k, v]) => ({ k, v, n: v[0] + v[1] + v[2] }));
+  if (out.length) out[out.length - 1].partial = true;
+  return out;
+}
+function labelOf(k, g, long) {
+  const d = new Date(k + 'T00:00:00Z');
+  const o = { timeZone: 'UTC' };
+  if (g === 'month') return d.toLocaleDateString('en-US', { ...o, month: long ? 'long' : 'short', year: 'numeric' });
+  if (g === 'week') return (long ? 'Week of ' : '') + d.toLocaleDateString('en-US', { ...o, month: 'short', day: 'numeric', year: 'numeric' });
+  return d.toLocaleDateString('en-US', { ...o, weekday: long ? 'short' : undefined, month: 'short', day: 'numeric', year: 'numeric' });
+}
+
+/* ---------- charts (hand-drawn SVG) ---------- */
+const NS = 'http://www.w3.org/2000/svg';
+function el(tag, attrs, parent) {
+  const e = document.createElementNS(NS, tag);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+}
+function niceMax(v) {
+  if (v <= 0) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  for (const m of [1, 2, 2.5, 5, 10]) if (m * p >= v) return m * p;
+  return 10 * p;
+}
+function xTicks(rows, g) {
+  // first window of each quarter (month/week) or month (day)
+  const ticks = [];
+  let prev = '';
+  rows.forEach((r, i) => {
+    const m = r.k.slice(0, 7);
+    const q = g === 'day' ? m : r.k.slice(0, 4) + 'Q' + Math.floor((+r.k.slice(5, 7) - 1) / 3);
+    if (q !== prev) { ticks.push(i); prev = q; }
+  });
+  return ticks;
+}
+function tickLabel(k) {
+  const d = new Date(k + 'T00:00:00Z');
+  const m = d.toLocaleDateString('en-US', { timeZone: 'UTC', month: 'short' });
+  return d.getUTCMonth() === 0 ? m + ' ’' + String(d.getUTCFullYear()).slice(2) : m;
+}
+
+function drawChart(host, rows, mode) {
+  host.innerHTML = '';
+  const W = Math.max(320, host.clientWidth), H = mode === 'share' ? 220 : 280;
+  const m = { l: 40, r: 8, t: 10, b: 24 };
+  const iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const svg = el('svg', { viewBox: `0 0 ${W} ${H}`, role: 'img',
+    'aria-label': mode === 'share' ? 'Share of posts per class over time' : 'Posts per class over time' }, host);
+  const n = rows.length;
+  const step = iw / n;
+  const vals = rows.map((r) => mode === 'share' ? (r.n ? r.v.map((x) => x / r.n) : [0, 0, 0]) : r.v);
+  const ymax = mode === 'share' ? 1 : niceMax(Math.max(...rows.map((r) => r.n)));
+  const y = (v) => m.t + ih - (v / ymax) * ih;
+  // grid + y labels
+  const g0 = el('g', {}, svg);
+  for (let i = 0; i <= 4; i++) {
+    const v = (ymax * i) / 4, yy = y(v);
+    el('line', { x1: m.l, x2: W - m.r, y1: yy, y2: yy, stroke: css('--grid'), 'stroke-width': 1 }, g0);
+    const t = el('text', { x: m.l - 6, y: yy + 3.5, 'text-anchor': 'end' }, g0);
+    t.textContent = mode === 'share' ? Math.round(v * 100) + '%' : fmt.format(v);
+  }
+  const ticks = xTicks(rows, GRAN);
+  for (const i of ticks) {
+    const t = el('text', { x: m.l + i * step + step / 2, y: H - 6, 'text-anchor': 'middle' }, g0);
+    t.textContent = tickLabel(rows[i].k);
+  }
+  const colors = [css('--ai'), css('--human'), css('--unknown')];
+  const bg = css('--panel-solid');
+  const marks = el('g', {}, svg);
+  if (step >= 4) {
+    // stacked bars, 2px surface gap between segments and neighbors
+    const gap = step > 10 ? 2 : 1;
+    const bw = Math.max(1, step - gap);
+    rows.forEach((r, i) => {
+      let acc = 0;
+      const x = m.l + i * step + gap / 2;
+      [0, 1, 2].forEach((c) => {
+        const v = vals[i][c];
+        if (v <= 0) return;
+        const y1 = y(acc), y2 = y(acc + v);
+        const h = Math.max(0, y1 - y2 - (acc > 0 ? 1.5 : 0));
+        el('rect', { x, y: y2, width: bw, height: h, rx: Math.min(2, bw / 3), fill: colors[c],
+          opacity: r.partial ? 0.45 : 1 }, marks);
+        acc += v;
+      });
+    });
+  } else {
+    // daily: stacked areas
+    let base = new Array(n).fill(0);
+    [0, 1, 2].forEach((c) => {
+      const top = base.map((b, i) => b + vals[i][c]);
+      let d = '';
+      for (let i = 0; i < n; i++) d += (i ? 'L' : 'M') + (m.l + i * step + step / 2).toFixed(1) + ',' + y(top[i]).toFixed(1);
+      for (let i = n - 1; i >= 0; i--) d += 'L' + (m.l + i * step + step / 2).toFixed(1) + ',' + y(base[i]).toFixed(1);
+      el('path', { d: d + 'Z', fill: colors[c], stroke: bg, 'stroke-width': 0.75, 'stroke-linejoin': 'round' }, marks);
+      base = top;
+    });
+  }
+  // direct labels on the last complete window for the share chart
+  if (mode === 'share' && n > 2) {
+    const i = n - 2; let acc = 0;
+    [0, 1, 2].forEach((c) => {
+      const v = vals[i][c];
+      if (v > 0.07) {
+        const t = el('text', { x: W - m.r - 4, y: y(acc + v / 2) + 4, 'text-anchor': 'end',
+          style: 'fill:#fff;font-weight:600' }, svg);
+        t.textContent = LABEL[CLASSES[c]].split(' ')[0] + ' ' + Math.round(v * 100) + '%';
+      }
+      acc += v;
+    });
+  }
+  // hover layer
+  const cross = el('line', { y1: m.t, y2: m.t + ih, stroke: css('--muted'), 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: 0 }, svg);
+  const hit = el('rect', { x: m.l, y: m.t, width: iw, height: ih, fill: 'transparent' }, svg);
+  const tip = $('tip');
+  const show = (ev) => {
+    const box = svg.getBoundingClientRect();
+    const sx = (ev.clientX - box.left) * (W / box.width);
+    const i = Math.max(0, Math.min(n - 1, Math.floor((sx - m.l) / step)));
+    const r = rows[i];
+    const cx = m.l + i * step + step / 2;
+    cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('opacity', 0.8);
+    tip.innerHTML = `<b>${labelOf(r.k, GRAN, true)}${r.partial ? ' (so far)' : ''}</b>` +
+      [0, 1, 2].map((c) => `<div class="row"><span><i class="sw ${CLASSES[c]}"></i>${LABEL[CLASSES[c]]}</span><span>${
+        mode === 'share' ? (r.n ? pct(r.v[c] / r.n) : '–') : fmt.format(r.v[c])}</span></div>`).join('') +
+      `<div class="row" style="margin-top:4px"><span>Total</span><span>${fmt.format(r.n)}</span></div>` +
+      (GRAN === 'day' && liveDays.has(r.k) ? '<div class="row"><span>fetched live</span><span></span></div>' : '');
+    tip.style.opacity = 1;
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    let left = ev.clientX + 14, top = ev.clientY - th - 10;
+    if (left + tw > window.innerWidth - 8) left = ev.clientX - tw - 14;
+    if (top < 8) top = ev.clientY + 16;
+    tip.style.left = left + window.scrollX + 'px'; tip.style.top = top + window.scrollY + 'px';
+  };
+  hit.addEventListener('pointermove', show);
+  hit.addEventListener('pointerdown', show);
+  hit.addEventListener('pointerleave', () => { tip.style.opacity = 0; cross.setAttribute('opacity', 0); });
+}
+
+function renderCharts() {
+  const rows = series(GRAN);
+  const word = { day: 'day', week: 'week', month: 'month' }[GRAN];
+  $('c1-title').textContent = `Posts per ${word}`;
+  $('c2-title').textContent = `Share of posts per ${word}`;
+  $('c1-sub').textContent = `Stacked by class; ${rows.length} ${word}s. The last ${word} is partial and drawn faint.`;
+  drawChart($('c1'), rows, 'count');
+  drawChart($('c2'), rows, 'share');
+}
+
+function renderTiles() {
+  const keys = [...dayMap.keys()].sort();
+  let tot = 0;
+  for (const v of dayMap.values()) tot += v[0] + v[1] + v[2];
+  $('t-total').textContent = fmt.format(tot);
+  $('t-total-d').textContent = `${keys.length} days counted`;
+  const wk = series('week');
+  const full = wk.filter((r) => !r.partial);
+  const last4 = full.slice(-4), first4 = full.slice(0, 4);
+  const share = (rs) => { const a = rs.reduce((s, r) => s + r.v[0], 0), n = rs.reduce((s, r) => s + r.n, 0); return n ? a / n : 0; };
+  $('t-ai').textContent = pct(share(last4));
+  $('t-ai-d').textContent = `vs ${pct(share(first4))} in Jan 2025`;
+  const peak = full.reduce((a, b) => (b.n > a.n ? b : a), full[0]);
+  $('t-peak').textContent = fmt.format(peak.n);
+  $('t-peak-d').textContent = labelOf(peak.k, 'week', true);
+}
+
+/* ---------- live feed ---------- */
+let FILTER = 'all';
+const feedPosts = new Map(); // uri -> {post, c}
+function rkey(uri) { return uri.split('/').pop(); }
+function ago(t) {
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return Math.floor(s) + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  if (s < 86400) return Math.floor(s / 3600) + 'h';
+  return Math.floor(s / 86400) + 'd';
+}
+function highlight(node, text) {
+  const re = /my\s+agent/gi;
+  let last = 0, m;
+  while ((m = re.exec(text))) {
+    node.appendChild(document.createTextNode(text.slice(last, m.index)));
+    const mk = document.createElement('mark'); mk.textContent = m[0]; node.appendChild(mk);
+    last = m.index + m[0].length;
+  }
+  node.appendChild(document.createTextNode(text.slice(last)));
+}
+function postItem(p, c, fresh) {
+  const li = document.createElement('li');
+  li.dataset.cls = c.cls;
+  if (fresh) li.className = 'fresh';
+  const img = document.createElement('img');
+  img.className = 'av'; img.alt = ''; img.loading = 'lazy';
+  if (p.author.avatar) img.src = p.author.avatar.replace('/avatar/', '/avatar_thumbnail/');
+  li.appendChild(img);
+  const body = document.createElement('div');
+  const who = document.createElement('div'); who.className = 'who';
+  const b = document.createElement('b'); b.textContent = p.author.displayName || p.author.handle;
+  const h = document.createElement('span'); h.className = 'h'; h.textContent = '@' + p.author.handle;
+  const a = document.createElement('a'); a.className = 't'; a.target = '_blank'; a.rel = 'noopener';
+  a.href = `https://bsky.app/profile/${p.author.did}/post/${rkey(p.uri)}`;
+  const t = Date.parse(p.record.createdAt || p.indexedAt);
+  a.dataset.t = t; a.textContent = ago(t); a.title = new Date(t).toLocaleString();
+  who.append(b, h, a);
+  const txt = document.createElement('div'); txt.className = 'txt';
+  highlight(txt, p.record.text || '');
+  const badge = document.createElement('div'); badge.className = 'badge';
+  const pill = document.createElement('span'); pill.className = 'pill ' + c.cls; pill.textContent = LABEL[c.cls];
+  const probs = document.createElement('span'); probs.className = 'probs';
+  probs.title = CLASSES.map((k, i) => `${LABEL[k]} ${pct(c.p[i])}`).join(' · ');
+  c.p.forEach((v, i) => { const s = document.createElement('i'); s.style.width = (v * 100) + '%'; s.style.background = `var(--${CLASSES[i]})`; probs.appendChild(s); });
+  const conf = document.createElement('span'); conf.textContent = pct(Math.max(...c.p));
+  badge.append(pill, probs, conf);
+  body.append(who, txt, badge);
+  li.appendChild(body);
+  li.hidden = FILTER !== 'all' && FILTER !== c.cls;
+  return li;
+}
+async function poll(first) {
+  try {
+    const u = new URL(API);
+    u.search = new URLSearchParams({ q: Q, limit: first ? 60 : 30, sort: 'latest' });
+    const r = await fetch(u);
+    if (!r.ok) throw new Error(r.status);
+    const j = await r.json();
+    const fresh = j.posts.filter((p) => !feedPosts.has(p.uri));
+    const feed = $('feed');
+    // oldest first so the newest ends on top
+    fresh.sort((a, b) => Date.parse(a.record.createdAt) - Date.parse(b.record.createdAt));
+    for (const p of fresh) {
+      const c = classify(p.record.text || '');
+      feedPosts.set(p.uri, { p, c });
+      feed.insertBefore(postItem(p, c, !first), feed.firstChild);
+      if (!first) SWARM.burst(CLASSES.indexOf(c.cls));
+    }
+    while (feed.children.length > 150) feed.lastChild.remove();
+    if (first && j.posts[0]) {
+      const t = Date.parse(j.posts[0].record.createdAt);
+      $('t-last').textContent = ago(t) + ' ago';
+      $('t-last-d').textContent = '@' + j.posts[0].author.handle;
+      // tilt the swarm toward what people are saying right now
+      const cnt = [0, 0, 0];
+      for (const { c } of feedPosts.values()) cnt[CLASSES.indexOf(c.cls)]++;
+      SWARM.setMix(cnt);
+    } else if (fresh.length) {
+      const p = fresh[fresh.length - 1];
+      $('t-last').textContent = ago(Date.parse(p.record.createdAt)) + ' ago';
+      $('t-last-d').textContent = '@' + p.author.handle;
+    }
+    $('live-dot').classList.remove('off');
+    $('live-txt').textContent = `live · updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
+      (fresh.length && !first ? ` · ${fresh.length} new` : '');
+  } catch (e) {
+    $('live-dot').classList.add('off');
+    $('live-txt').textContent = 'search unavailable, retrying';
+  }
+}
+setInterval(() => document.querySelectorAll('#feed a.t').forEach((a) => { a.textContent = ago(+a.dataset.t); }), 30000);
+
+/* ---------- classifier panels ---------- */
+function renderModel() {
+  const box = $('terms');
+  box.innerHTML = '';
+  CLASSES.forEach((k, ci) => {
+    const col = document.createElement('div');
+    const h = document.createElement('h3');
+    h.innerHTML = `<i class="sw ${k}"></i>${LABEL[k]}`;
+    const ol = document.createElement('ol');
+    const items = MODEL.top[k].slice(0, 14).map((f) => {
+      const w = MODEL.weights[f] || [0, 0, 0];
+      const mean = (w[0] + w[1] + w[2]) / 3;
+      return { f, s: w[ci] - mean };
+    });
+    const mx = Math.max(...items.map((x) => x.s), 1e-6);
+    for (const { f, s } of items) {
+      const li = document.createElement('li');
+      const sp = document.createElement('span'); sp.textContent = f.replace('zzurl', '‹link›'); sp.title = f;
+      const bar = document.createElement('i'); bar.style.width = Math.max(4, (s / mx) * 54) + 'px'; bar.style.background = `var(--${k})`;
+      li.append(sp, bar); ol.appendChild(li);
+    }
+    col.append(h, ol);
+    box.appendChild(col);
+  });
+  $('unsure').textContent = Math.round(MODEL.unsure * 100) + '%';
+  const ev = MODEL.eval;
+  $('eval').innerHTML = `<p class="note">${ev.folds}-fold cross-validation on ${fmt.format(ev.n)} Claude-labeled posts
+    (${CLASSES.map((k) => `${fmt.format(MODEL.labelCounts[k] || 0)} ${k}`).join(', ')}): accuracy ${pct(ev.accuracy)}.</p>
+    <table class="eval"><tr><th>Class</th><th>Precision</th><th>Recall</th><th>F1</th><th>Posts</th></tr>` +
+    CLASSES.map((k) => `<tr><td><i class="sw ${k}"></i> ${LABEL[k]}</td><td>${pct(ev[k].precision)}</td><td>${pct(ev[k].recall)}</td><td>${pct(ev[k]['f1-score'])}</td><td>${fmt.format(ev[k].support)}</td></tr>`).join('') +
+    '</table>';
+  const tryIt = () => {
+    const txt = $('try-in').value;
+    if (!txt.trim()) { $('try-out').textContent = ''; return; }
+    const c = classify(txt);
+    $('try-out').innerHTML = `<span class="badge"><span class="pill ${c.cls}">${LABEL[c.cls]}</span> ` +
+      CLASSES.map((k, i) => `${LABEL[k]} ${pct(c.p[i])}`).join(' · ') + '</span>';
+  };
+  $('try-in').addEventListener('input', tryIt);
+  tryIt();
+}
+
+/* ---------- WebGPU swarm ---------- */
+const SWARM = (() => {
+  const N = 9000;
+  const canvas = $('swarm');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let device, ctx, simPipe, drawPipe, simBind, drawBind, uni, parts, format;
+  let mix = [0.34, 0.5, 0.16];
+  let ok = false, running = true;
+  const mouse = { x: -9, y: -9 };
+  const pending = [];
+  let cursor = 0;
+
+  const WGSL = /* wgsl */`
+struct P { pos: vec2f, vel: vec2f, cls: f32, seed: f32, age: f32, glow: f32 };
+struct U { time: f32, dt: f32, aspect: f32, light: f32, mouse: vec2f, res: vec2f,
+           cA: vec4f, cH: vec4f, cU: vec4f };
+@group(0) @binding(0) var<storage, read_write> ps: array<P>;
+@group(0) @binding(1) var<uniform> u: U;
+
+fn hash(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn noise(p: vec2f) -> f32 {
+  let i = floor(p); let f = fract(p);
+  let w = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2f(1, 0)), w.x), mix(hash(i + vec2f(0, 1)), hash(i + vec2f(1, 1)), w.x), w.y);
+}
+fn fbm(p: vec2f) -> f32 { return noise(p) * 0.6 + noise(p * 2.03 + 7.1) * 0.3 + noise(p * 4.1 + 3.3) * 0.1; }
+fn curl(p: vec2f) -> vec2f {
+  let e = 0.01;
+  let dx = fbm(p + vec2f(e, 0)) - fbm(p - vec2f(e, 0));
+  let dy = fbm(p + vec2f(0, e)) - fbm(p - vec2f(0, e));
+  return vec2f(dy, -dx) / (2.0 * e);
+}
+
+@compute @workgroup_size(64)
+fn sim(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= arrayLength(&ps)) { return; }
+  var p = ps[i];
+  let q = vec2f(p.pos.x * u.aspect, p.pos.y);
+  let t = u.time;
+  var tv: vec2f;
+  if (p.cls < 0.5) {
+    // AI: the same flow, snapped to right angles, like traces on a board
+    let f = curl(q * 1.4 + vec2f(t * 0.03, 0.0));
+    let snap = select(vec2f(0.0, sign(f.y)), vec2f(sign(f.x), 0.0), abs(f.x) > abs(f.y));
+    tv = snap * 0.30;
+  } else if (p.cls < 1.5) {
+    // human: a slow smooth drift
+    tv = curl(q * 0.9 + vec2f(0.0, t * 0.02)) * 0.10;
+  } else {
+    // unknown: wandering
+    let a = (noise(vec2f(p.seed * 91.0, t * 0.4)) - 0.5) * 12.0;
+    tv = vec2f(cos(a), sin(a)) * 0.05;
+  }
+  let k = select(0.06, 0.18, p.cls < 0.5);
+  p.vel = mix(p.vel, tv, k);
+  // the pointer pushes particles away
+  var d = q - vec2f(u.mouse.x * u.aspect, u.mouse.y);
+  let r2 = dot(d, d);
+  if (r2 < 0.04) { p.vel += normalize(d + 1e-5) * (0.04 - r2) * 6.0; }
+  p.pos += p.vel * u.dt * vec2f(1.0 / u.aspect, 1.0);
+  p.pos = (fract((p.pos + 1.0) * 0.5) * 2.0) - 1.0;
+  p.age += u.dt;
+  p.glow = max(0.0, p.glow - u.dt * 0.6);
+  ps[i] = p;
+}
+
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) col: vec4f };
+@vertex
+fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VO {
+  let p = ps[ii];
+  let corners = array<vec2f, 6>(vec2f(-1,-1), vec2f(1,-1), vec2f(-1,1), vec2f(-1,1), vec2f(1,-1), vec2f(1,1));
+  let c = corners[vi];
+  let sp = length(p.vel) + 1e-4;
+  let dir = p.vel / sp;
+  let nrm = vec2f(-dir.y, dir.x);
+  var size = select(select(1.6, 2.2, p.cls > 0.5 && p.cls < 1.5), 1.8, p.cls < 0.5) / u.res.y * 2.0;
+  size *= 1.0 + p.glow * 2.5;
+  let stretch = 1.0 + sp * 18.0;
+  let off = dir * c.x * size * stretch + nrm * c.y * size;
+  var o: VO;
+  o.pos = vec4f(p.pos + off * vec2f(u.res.y / u.res.x, 1.0), 0.0, 1.0);
+  o.uv = c;
+  var col = u.cU;
+  if (p.cls < 0.5) { col = u.cA; } else if (p.cls < 1.5) { col = u.cH; }
+  let a = select(0.42, 0.26, p.cls > 1.5) * (1.0 + p.glow * 1.5);
+  o.col = vec4f(col.rgb, min(a, 1.0));
+  return o;
+}
+@fragment
+fn fs(i: VO) -> @location(0) vec4f {
+  let d = length(i.uv);
+  if (d > 1.0) { discard; }
+  let a = i.col.a * (1.0 - smoothstep(0.2, 1.0, d));
+  return vec4f(i.col.rgb * a, a);
+}`;
+
+  function hex(c) {
+    const m = c.replace('#', '');
+    return [0, 2, 4].map((i) => parseInt(m.slice(i, i + 2), 16) / 255).concat(1);
+  }
+  function pickClass(r) { return r < mix[0] ? 0 : r < mix[0] + mix[1] ? 1 : 2; }
+  function seedParticles() {
+    const a = new Float32Array(N * 8);
+    for (let i = 0; i < N; i++) {
+      a[i * 8] = Math.random() * 2 - 1; a[i * 8 + 1] = Math.random() * 2 - 1;
+      a[i * 8 + 4] = pickClass(Math.random()); a[i * 8 + 5] = Math.random();
+    }
+    return a;
+  }
+  function resize() {
+    const dpr = Math.min(2, devicePixelRatio || 1);
+    canvas.width = Math.round(innerWidth * dpr); canvas.height = Math.round(innerHeight * dpr);
+  }
+  async function init() {
+    if (!navigator.gpu) return fallback('WebGPU not available in this browser');
+    try {
+      const adapter = await navigator.gpu.requestAdapter();
+      if (!adapter) return fallback('no WebGPU adapter');
+      device = await adapter.requestDevice();
+      device.lost.then(() => { ok = false; });
+      ctx = canvas.getContext('webgpu');
+      format = navigator.gpu.getPreferredCanvasFormat();
+      ctx.configure({ device, format, alphaMode: 'premultiplied' });
+      const simMod = device.createShaderModule({ code: WGSL.replace('@vertex', '/*').replace(/}\s*$/, '}*/') });
+      const drawMod = device.createShaderModule({ code: WGSL.replace('var<storage, read_write>', 'var<storage, read>').replace('@compute', '/*').replace('struct VO', '*/ struct VO') });
+      parts = device.createBuffer({ size: N * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+      device.queue.writeBuffer(parts, 0, seedParticles());
+      uni = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+      const simLayout = device.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' } },
+        { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' } }] });
+      const drawLayout = device.createBindGroupLayout({ entries: [
+        { binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: 'read-only-storage' } },
+        { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }] });
+      simPipe = device.createComputePipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [simLayout] }),
+        compute: { module: simMod, entryPoint: 'sim' } });
+      const blend = { color: { srcFactor: 'one', dstFactor: 'one', operation: 'add' },
+                      alpha: { srcFactor: 'one', dstFactor: 'one', operation: 'add' } };
+      const blendLight = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' },
+                           alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha', operation: 'add' } };
+      const light = matchMedia('(prefers-color-scheme: light)').matches;
+      drawPipe = device.createRenderPipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [drawLayout] }),
+        vertex: { module: drawMod, entryPoint: 'vs' },
+        fragment: { module: drawMod, entryPoint: 'fs', targets: [{ format, blend: light ? blendLight : blend }] },
+        primitive: { topology: 'triangle-list' } });
+      simBind = device.createBindGroup({ layout: simLayout, entries: [{ binding: 0, resource: { buffer: parts } }, { binding: 1, resource: { buffer: uni } }] });
+      drawBind = device.createBindGroup({ layout: drawLayout, entries: [{ binding: 0, resource: { buffer: parts } }, { binding: 1, resource: { buffer: uni } }] });
+      ok = true;
+      resize();
+      addEventListener('resize', resize);
+      addEventListener('pointermove', (e) => { mouse.x = (e.clientX / innerWidth) * 2 - 1; mouse.y = -((e.clientY / innerHeight) * 2 - 1); });
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && running) requestAnimationFrame(frame); });
+      setFx(true);
+      requestAnimationFrame(frame);
+    } catch (e) {
+      fallback('WebGPU failed to start');
+    }
+  }
+  function setFx(on) {
+    const fx = $('fx');
+    fx.innerHTML = '';
+    const b = document.createElement('button');
+    b.textContent = on ? 'pause WebGPU swarm' : 'resume WebGPU swarm';
+    b.onclick = () => { running = !running; setFx(running); if (running) requestAnimationFrame(frame); };
+    fx.appendChild(b);
+  }
+  function fallback(why) {
+    canvas.style.background = 'radial-gradient(1200px 700px at 15% 0%, color-mix(in srgb, var(--ai) 22%, transparent), transparent 60%), radial-gradient(900px 600px at 95% 30%, color-mix(in srgb, var(--human) 16%, transparent), transparent 60%)';
+    $('fx').textContent = why + ': showing a static background';
+  }
+  let t0 = performance.now(), last = t0;
+  function frame(now) {
+    if (!ok || !running || document.hidden) return;
+    const dt = Math.min(0.05, (now - last) / 1000) * (reduce ? 0.15 : 1);
+    last = now;
+    const light = matchMedia('(prefers-color-scheme: light)').matches ? 1 : 0;
+    const u = new Float32Array(24);
+    u.set([(now - t0) / 1000, dt, canvas.width / canvas.height, light, mouse.x, mouse.y, canvas.width, canvas.height]);
+    u.set(hex(css('--ai')), 8); u.set(hex(css('--human')), 12); u.set(hex(css('--unknown')), 16);
+    device.queue.writeBuffer(uni, 0, u);
+    while (pending.length) {
+      const { off, data } = pending.shift();
+      device.queue.writeBuffer(parts, off, data);
+    }
+    const enc = device.createCommandEncoder();
+    const cp = enc.beginComputePass();
+    cp.setPipeline(simPipe); cp.setBindGroup(0, simBind); cp.dispatchWorkgroups(Math.ceil(N / 64)); cp.end();
+    const rp = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(),
+      clearValue: { r: 0, g: 0, b: 0, a: 0 }, loadOp: 'clear', storeOp: 'store' }] });
+    rp.setPipeline(drawPipe); rp.setBindGroup(0, drawBind); rp.draw(6, N); rp.end();
+    device.queue.submit([enc.finish()]);
+    requestAnimationFrame(frame);
+  }
+  return {
+    init,
+    // re-deal particle classes to match the latest posts' mix
+    setMix(cnt) {
+      const n = cnt[0] + cnt[1] + cnt[2];
+      if (!n) return;
+      mix = cnt.map((c) => Math.max(0.04, c / n));
+      const z = mix.reduce((a, b) => a + b, 0); mix = mix.map((m) => m / z);
+      if (ok) pending.push({ off: 0, data: seedParticles() });
+    },
+    // a new post arrives: a ring of its class blooms somewhere on screen
+    burst(c) {
+      if (!ok) return;
+      const K = 160, a = new Float32Array(K * 8);
+      const cx = Math.random() * 1.4 - 0.7, cy = Math.random() * 1.4 - 0.7;
+      for (let i = 0; i < K; i++) {
+        const th = (i / K) * Math.PI * 2, s = 0.25 + Math.random() * 0.25;
+        a.set([cx, cy, Math.cos(th) * s, Math.sin(th) * s, c, Math.random(), 0, 1], i * 8);
+      }
+      const start = cursor; cursor = (cursor + K) % (N - K);
+      pending.push({ off: start * 32, data: a });
+    },
+  };
+})();
+
+/* ---------- boot ---------- */
+document.querySelectorAll('#gran button').forEach((b) => b.addEventListener('click', () => {
+  GRAN = b.dataset.g;
+  document.querySelectorAll('#gran button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  renderCharts();
+}));
+document.querySelectorAll('#filt button').forEach((b) => b.addEventListener('click', () => {
+  FILTER = b.dataset.f;
+  document.querySelectorAll('#filt button').forEach((x) => x.setAttribute('aria-pressed', x === b));
+  document.querySelectorAll('#feed li').forEach((li) => { li.hidden = FILTER !== 'all' && li.dataset.cls !== FILTER; });
+}));
+let rz;
+addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => DATA && renderCharts(), 150); });
+
+(async () => {
+  SWARM.init();
+  const [data, model] = await Promise.all([
+    fetch('my-agent-data.json').then((r) => r.json()),
+    fetch('my-agent-model.json').then((r) => r.json()),
+  ]);
+  DATA = data; MODEL = model;
+  data.days.forEach((d, i) => dayMap.set(d, [data.ai[i], data.human[i], data.unknown[i]]));
+  $('snap').textContent = data.generated;
+  renderModel();
+  renderTiles();
+  renderCharts();
+  await poll(true);
+  setInterval(() => poll(false), 45000);
+  await fillLive();
+  renderTiles();
+  renderCharts();
+})();
+</script>
+</body>
+</html>
