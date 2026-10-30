@@ -16,9 +16,13 @@ Live: <https://austegard.com/bsky/my-agent.html>
   shows the counts.
 - **Share per window**: the same data as percentages, so the change in mix
   shows apart from changes in volume.
-- **Latest posts**: Bluesky search sorted by latest, polled every 45
-  seconds. Each post shows its class, the three probabilities as a bar, and a
-  link to the post. Filter buttons narrow the list to one class.
+- **Latest posts**: Bluesky search sorted by latest, checked every 30
+  seconds (and whenever the tab comes back into view). The status line shows
+  when it last checked, a countdown to the next check, and how often a post
+  usually arrives: the phrase averages a few dozen posts a day, so an hour
+  without one is normal. Each post shows its class, the three probabilities
+  as a bar, and a link to the post. Filter buttons narrow the list to one
+  class.
 - **What the classifier keys on**: the words and word pairs that push hardest
   toward each class.
 - **Try it**: type any text and it is classified as you type.
@@ -30,6 +34,12 @@ Live: <https://austegard.com/bsky/my-agent.html>
   gradient instead. The link at the bottom right pauses the swarm.
 
 ## Data
+
+Bluesky's search for `"my agent"` also returns posts where the two words are
+apart, or where the phrase is only in a quoted post or a link card: about one
+result in eight. Only posts whose own text contains "my agent" are shown or
+counted, in the page and in the scripts alike (`has_phrase()` in
+`scripts/my-agent/features.py`).
 
 `bsky/my-agent-data.json` holds daily counts per class for every post the
 backfill found (`days`, `ai`, `human`, `unknown`) plus Bluesky's `hitsTotal`

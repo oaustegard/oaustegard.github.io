@@ -198,7 +198,8 @@
         <h2>How it works</h2>
         <p class="note">Posts come from Bluesky’s public search (<code>app.bsky.feed.searchPosts</code>, query
           <code>"my agent"</code>). Unauthenticated search returns at most 100 posts and no next page, so the history was
-          collected window by window, halving any window with more hits than one page holds. Identical text posted more than once on the same day counts once,
+          collected window by window, halving any window with more hits than one page holds. The search also returns posts where the two words are apart
+          or the phrase sits only in a quoted post, about one in eight; those are dropped. Identical text posted more than once on the same day counts once,
           which removes a bot that posted one x402 promotion 185 times in September 2026.</p>
         <p class="note">About 2,400 posts, sampled evenly across the weeks, were labeled by Claude. A multinomial logistic
           regression over single words and word pairs learned from them; when its top probability is under
@@ -222,6 +223,11 @@
 'use strict';
 const API = 'https://api.bsky.app/xrpc/app.bsky.feed.searchPosts';
 const Q = '"my agent"';
+// Search also returns posts where the words are apart or the phrase is only in a
+// quoted post; only the post's own text counts (same rule as features.py).
+const PHRASE = /\bmy\s+agent/i;
+const hasPhrase = (p) => PHRASE.test(p.record.text || '');
+const POLL_MS = 30000;
 const CLASSES = ['ai', 'human', 'unknown'];
 const LABEL = { ai: 'AI agent', human: 'Human agent', unknown: 'Unknown' };
 const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
@@ -266,7 +272,7 @@ async function searchWindow(since, until, depth = 0) {
   const u = new URL(API);
   u.search = new URLSearchParams({ q: Q, limit: 100, sort: 'latest',
     since: new Date(since).toISOString(), until: new Date(until).toISOString() });
-  const r = await fetch(u);
+  const r = await fetch(u, { cache: 'no-store' });
   if (!r.ok) throw new Error('search ' + r.status);
   const j = await r.json();
   if ((j.hitsTotal || 0) > 90 && until - since > 30 * 60000 && depth < 8) {
@@ -299,7 +305,7 @@ async function fillLive() {
         for (const p of posts) {
           // same rule as train.py: identical text counts once a day
           const key = (p.record.text || '').toLowerCase().split(/\s+/).filter(Boolean).join(' ').slice(0, 200);
-          if (seen.has(p.uri) || seen.has(key)) continue;
+          if (seen.has(p.uri) || seen.has(key) || !hasPhrase(p)) continue;
           seen.add(p.uri); seen.add(key);
           c[CLASSES.indexOf(classify(p.record.text || '').cls)]++;
         }
@@ -554,12 +560,14 @@ function postItem(p, c, fresh) {
   return li;
 }
 async function poll(first) {
+  LIVE.news = '';
   try {
     const u = new URL(API);
-    u.search = new URLSearchParams({ q: Q, limit: first ? 60 : 30, sort: 'latest' });
-    const r = await fetch(u);
+    u.search = new URLSearchParams({ q: Q, limit: first ? 100 : 40, sort: 'latest' });
+    const r = await fetch(u, { cache: 'no-store' });
     if (!r.ok) throw new Error(r.status);
     const j = await r.json();
+    j.posts = j.posts.filter(hasPhrase);
     const fresh = j.posts.filter((p) => !feedPosts.has(p.uri));
     const feed = $('feed');
     // oldest first so the newest ends on top
@@ -585,13 +593,36 @@ async function poll(first) {
       $('t-last-d').textContent = '@' + p.author.handle;
     }
     $('live-dot').classList.remove('off');
-    $('live-txt').textContent = `live · updated ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` +
-      (fresh.length && !first ? ` · ${fresh.length} new` : '');
+    LIVE.ok = true;
+    if (fresh.length && !first) LIVE.news = `${fresh.length} new`;
   } catch (e) {
     $('live-dot').classList.add('off');
-    $('live-txt').textContent = 'search unavailable, retrying';
+    LIVE.ok = false;
   }
+  LIVE.checked = Date.now();
+  LIVE.next = Date.now() + POLL_MS;
+  liveStatus();
 }
+// The phrase is rare, so the feed is honest about its pace: when it last
+// looked, when it looks next, and how often a post usually arrives.
+const LIVE = { ok: false, checked: 0, next: 0, news: '' };
+function cadence() {
+  const keys = [...dayMap.keys()].sort().filter((k) => !liveDays.has(k)).slice(-7);
+  const n = keys.reduce((s, k) => { const v = dayMap.get(k); return s + v[0] + v[1] + v[2]; }, 0);
+  if (!n) return '';
+  const mins = Math.round((keys.length * 1440) / n);
+  return ` · usually one post every ${mins < 90 ? mins + ' min' : Math.round(mins / 60) + ' h'}`;
+}
+function liveStatus() {
+  if (!LIVE.checked) return;
+  const s = Math.max(0, Math.round((LIVE.next - Date.now()) / 1000));
+  $('live-txt').textContent = LIVE.ok
+    ? `live · checked ${new Date(LIVE.checked).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}, next in ${s}s` +
+      (LIVE.news ? ` · ${LIVE.news}` : '') + cadence()
+    : `search unavailable, retrying in ${s}s`;
+}
+setInterval(liveStatus, 1000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - LIVE.checked > 10000) poll(false); });
 setInterval(() => document.querySelectorAll('#feed a.t').forEach((a) => { a.textContent = ago(+a.dataset.t); }), 30000);
 
 /* ---------- classifier panels ---------- */
@@ -882,7 +913,7 @@ addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(() => DATA 
   renderTiles();
   renderCharts();
   await poll(true);
-  setInterval(() => poll(false), 45000);
+  setInterval(() => { if (!document.hidden) poll(false); }, POLL_MS);
   await fillLive();
   renderTiles();
   renderCharts();

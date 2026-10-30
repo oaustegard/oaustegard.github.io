@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from backfill import Q, fetch, get
-from features import dedupe_key, tokens
+from features import dedupe_key, has_phrase, tokens
 
 OVERLAP = 7
 
@@ -56,7 +56,7 @@ def main(site="bsky"):
         c, seen = [0, 0, 0], set()
         for p in posts:
             k = dedupe_key(key, p["text"])
-            if p["uri"] in seen or k in seen:
+            if p["uri"] in seen or k in seen or not has_phrase(p["text"]):
                 continue
             seen.update((p["uri"], k))
             c[classify(p["text"])] += 1

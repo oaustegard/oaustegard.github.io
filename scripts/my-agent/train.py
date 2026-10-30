@@ -18,7 +18,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import classification_report, confusion_matrix
 
-from features import dedupe_key, tokens
+from features import dedupe_key, has_phrase, tokens
 
 CLASSES = ["ai", "human", "unknown"]
 UNSURE = 0.40  # below this top probability the page says "unknown"
@@ -82,6 +82,8 @@ def main(raw, labels, site):
         if i in lab:
             c = CLASSES.index(lab[i])
         d = (posts[i].get("createdAt") or "")[:10]
+        if not has_phrase(posts[i]["text"]):
+            continue
         key = dedupe_key(d, posts[i]["text"])
         if key in seen:
             continue
