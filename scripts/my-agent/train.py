@@ -3,11 +3,11 @@
 usage: train.py RAW_DIR LABELS_JSONL SITE_BSKY_DIR
 
 Model: multinomial logistic regression over binary unigram+bigram features.
-The tokenizer is mirrored line for line by `tokens()` in bsky/my-agent.html;
-change both or neither. Writes my-agent-model.json (weights) and
+The tokenizer lives in features.py and is mirrored by `tokens()` in
+bsky/my-agent.html. Writes my-agent-model.json (weights) and
 my-agent-data.json (daily counts per class for every backfilled post).
 """
-import json, re, sys
+import json, sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,16 +18,10 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.metrics import classification_report, confusion_matrix
 
+from features import dedupe_key, tokens
+
 CLASSES = ["ai", "human", "unknown"]
-URL = re.compile(r"https?://\S+|\b[\w-]+(\.[\w-]+)*\.(com|org|net|io|ai|app|dev|social|co|uk)\b\S*", re.A)
-TOK = re.compile(r"[a-z0-9_]+")
 UNSURE = 0.40  # below this top probability the page says "unknown"
-
-
-def tokens(text):
-    t = URL.sub(" zzurl ", text.lower())
-    w = TOK.findall(t)
-    return w + [a + " " + b for a, b in zip(w, w[1:])]
 
 
 def load(raw):
@@ -88,7 +82,7 @@ def main(raw, labels, site):
         if i in lab:
             c = CLASSES.index(lab[i])
         d = (posts[i].get("createdAt") or "")[:10]
-        key = (d, " ".join(posts[i]["text"].lower().split())[:200])
+        key = dedupe_key(d, posts[i]["text"])
         if key in seen:
             continue
         seen.add(key)

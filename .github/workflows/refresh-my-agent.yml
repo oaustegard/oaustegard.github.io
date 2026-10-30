@@ -1,0 +1,45 @@
+# Weekly refresh of bsky/my-agent-data.json: fetches the days since the
+# snapshot (plus a week of overlap for late-indexed posts) from Bluesky's
+# public search and classifies them with the committed model. No retraining;
+# see bsky/my-agent_README.md for that.
+name: Refresh My Agent data
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"   # Mondays 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  actions: write   # to dispatch the deploy below
+
+concurrency:
+  group: refresh-my-agent
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Fetch and classify new days
+        run: python3 scripts/my-agent/refresh.py bsky
+
+      - name: Commit and deploy
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git diff --quiet bsky/my-agent-data.json; then
+            echo "No change."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add bsky/my-agent-data.json
+          git commit -m "Refresh My Agent data through $(python3 -c 'import json;print(json.load(open("bsky/my-agent-data.json"))["generated"])')"
+          git pull --rebase origin main
+          git push
+          # a push made with GITHUB_TOKEN does not start other workflows; dispatch does
+          gh workflow run deploy.yml --ref main

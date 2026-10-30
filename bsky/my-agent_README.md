@@ -61,4 +61,13 @@ python3 scripts/my-agent/label.py $RAW labels.jsonl 2400   # claude -p children
 python3 scripts/my-agent/train.py $RAW labels.jsonl bsky   # writes both JSON files
 ```
 
+`.github/workflows/refresh-my-agent.yml` runs `scripts/my-agent/refresh.py`
+every Monday: it fetches the days since the snapshot plus a week of overlap,
+classifies them with the committed model and commits the new counts, then
+dispatches the deploy. Only retraining needs the steps above.
+
+```bash
+python3 scripts/my-agent/refresh.py bsky                     # what the Action runs
+```
+
 The repository never stores post text, only the counts and the model.
