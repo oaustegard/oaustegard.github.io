@@ -200,7 +200,7 @@ export class TRMPlanner {
     }
     const { d: D, heads: H, layers, n, T } = p.cfg;
     const L = p.cfg.L, HID = 4 * D;
-    if ((p.cfg.mixer || "attn") === "attn" && D / H !== 32 || L !== 1024) throw new Error("WGSL attention is written for head size 32 on a 32×32 grid");
+    if ((p.cfg.mixer || "attn") === "attn" && (D / H !== 32 || L !== 1024)) throw new Error("WGSL attention is written for head size 32 on a 32×32 grid");
     const S = GPUBufferUsage.STORAGE, CP = GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
     const buf = (floats, usage = S | CP) => device.createBuffer({ size: Math.max(16, floats * 4), usage });
     p.P = buf(weights.length); device.queue.writeBuffer(p.P, 0, weights);
