@@ -62,9 +62,24 @@ under 40% counts as unknown.
 
 Claude labeled 4,375 posts in two rounds. The first 2,375 were sampled evenly
 across the weeks. Of the next 2,000, half were the posts the first,
-words-only model was least sure of and half came from 2026. In five-fold
-cross-validation on that harder mix, the combined model reaches 80% accuracy
-(AI F1 0.84) against 73% for words alone.
+words-only model was least sure of and half came from 2026.
+
+Oskar then labeled 100 random first-round posts by hand
+(`scripts/my-agent/labels/oskar.jsonl`; 99 kept: four Splatoon answers were
+corrected to unknown, and one post described a human agent but was marked
+AI, so it was dropped). Claude agreed with him on 85%, and most of its misses
+were posts he read as human that it called unknown, among them every post
+about the series *Call My Agent!*. The labeling prompt now says that a plain
+"my agent" with nothing pointing to software is a person, and `relabel.py`
+labeled the 863 posts Claude had called unknown again: 435 became human, 29
+AI, and 399 stayed unknown. Claude's labels now agree with Oskar's on 86%.
+Oskar's labels override Claude's and carry three times the weight in
+training.
+
+Scored out of fold against Oskar's 99, the model scores 80–82% depending on
+the fold split, up from 76% before the relabeling. Against Claude's labels,
+five-fold cross-validation gives 85%. The final labels are in
+`scripts/my-agent/labels/claude.jsonl` (post IDs and labels, no text).
 
 The page loads transformers.js 3.7.6 and runs the same quantized MiniLM file
 on WebAssembly. Until the model (23 MB) has loaded, a words-only model, which
@@ -83,7 +98,8 @@ python3 scripts/my-agent/backfill.py $RAW                  # resumable, one file
 python3 scripts/my-agent/label.py $RAW labels.jsonl 2400   # claude -p children
 python3 scripts/my-agent/label_more.py $RAW labels.jsonl bsky/my-agent-model.json 2000
 python3 scripts/my-agent/embed.py $RAW minilm emb.npz      # minilm/: model_quantized.onnx + tokenizer.json
-python3 scripts/my-agent/train.py $RAW labels.jsonl bsky emb.npz   # writes both JSON files
+python3 scripts/my-agent/relabel.py $RAW labels.jsonl relabel.jsonl unknown   # after a prompt change
+python3 scripts/my-agent/train.py $RAW scripts/my-agent/labels/claude.jsonl bsky emb.npz scripts/my-agent/labels/oskar.jsonl
 ```
 
 `.github/workflows/refresh-my-agent.yml` runs `scripts/my-agent/refresh.py`

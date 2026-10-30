@@ -1,6 +1,10 @@
 """Train the ai/human/unknown classifier and write the page's two data files.
 
-usage: train.py RAW_DIR LABELS_JSONL SITE_BSKY_DIR EMB_NPZ   (EMB_NPZ from embed.py)
+usage: train.py RAW_DIR LABELS_JSONL[,RELABELS...] SITE_BSKY_DIR EMB_NPZ [GROUND_TRUTH_JSONL]
+
+EMB_NPZ comes from embed.py. GROUND_TRUTH_JSONL holds hand labels (Oskar's,
+scripts/my-agent/ground-truth.jsonl); they override Claude's and are
+weighted GT_WEIGHT.
 
 Model: multinomial logistic regression over binary unigram+bigram features
 plus a MiniLM sentence embedding of the post. A second, words-only model
@@ -26,6 +30,7 @@ from features import dedupe_key, has_phrase, tokens
 CLASSES = ["ai", "human", "unknown"]
 UNSURE = 0.40  # below this top probability the page says "unknown"
 EMB_MODEL = "Xenova/all-MiniLM-L6-v2"  # quantized ONNX; embed.py and the page run the same file
+GT_WEIGHT = 3.0  # a hand label counts as three Claude labels
 EMB_SCALE = 2.0  # embedding columns scaled against the binary word features (CV-picked)
 
 
@@ -48,18 +53,28 @@ def report_of(y, proba):
                for c in CLASSES}}
 
 
-def main(raw, labels, site, emb_npz):
+def main(raw, labels, site, emb_npz, gt_path=None):
     posts = load(raw)
     lab = {}
-    for line in open(labels):
-        r = json.loads(line)
-        lab[r["id"]] = r["label"]
+    for path in labels.split(","):  # later files (relabel rounds) override earlier ones
+        for line in open(path):
+            r = json.loads(line)
+            lab[r["id"]] = r["label"]
+    claude = dict(lab)
+    gt = {}
+    if gt_path:
+        for line in open(gt_path):
+            r = json.loads(line)
+            gt[r["id"]] = r["label"]
+    lab.update(gt)
     z = np.load(emb_npz)
     eidx = {i: k for k, i in enumerate(z["ids"])}
     # embed.py only keeps posts that contain the phrase, which is what gets counted
     ids = [i for i in lab if i in posts and i in eidx]
     y = np.array([CLASSES.index(lab[i]) for i in ids])
-    print("labels", Counter(lab[i] for i in ids))
+    w = np.array([GT_WEIGHT if i in gt else 1.0 for i in ids])
+    fw = {"sample_weight": w}
+    print("labels", Counter(lab[i] for i in ids), "ground truth", len(gt))
 
     vec = CountVectorizer(analyzer=tokens, binary=True, min_df=3)
     Xw = vec.fit_transform([posts[i]["text"] for i in ids])
@@ -68,11 +83,24 @@ def main(raw, labels, site, emb_npz):
     cv = StratifiedKFold(5, shuffle=True, random_state=0)
     lr = lambda: LogisticRegression(C=0.5, max_iter=5000, class_weight="balanced")
     print("== words + embedding")
-    ev_full = report_of(y, cross_val_predict(lr(), Xf, y, cv=cv, method="predict_proba"))
+    Pf = cross_val_predict(lr(), Xf, y, cv=cv, method="predict_proba", params=fw)
+    ev_full = report_of(y, Pf)
     print("== words only (the page's fallback until MiniLM loads)")
-    ev_words = report_of(y, cross_val_predict(lr(), Xw, y, cv=cv, method="predict_proba"))
+    Pw = cross_val_predict(lr(), Xw, y, cv=cv, method="predict_proba", params=fw)
+    ev_words = report_of(y, Pw)
+    # Oskar's hand labels: out-of-fold predictions, so no post is scored by a
+    # model that trained on it
+    ev_gt = None
+    if gt:
+        g = np.array([i in gt for i in ids])
+        pred = lambda P: np.where(P.max(1) < UNSURE, 2, P.argmax(1))
+        ev_gt = {"n": int(g.sum()),
+                 "model": round(float((pred(Pf)[g] == y[g]).mean()), 3),
+                 "words": round(float((pred(Pw)[g] == y[g]).mean()), 3),
+                 "claude": round(float(np.mean([claude.get(i) == gt[i] for i in ids if i in gt])), 3)}
+        print("ground truth", ev_gt)
 
-    full, words = lr().fit(Xf, y), lr().fit(Xw, y)
+    full, words = lr().fit(Xf, y, sample_weight=w), lr().fit(Xw, y, sample_weight=w)
     names = vec.get_feature_names_out()
     nw = len(names)
     Wf, Ww = full.coef_[:, :nw].T, words.coef_.T  # features x classes
@@ -87,7 +115,7 @@ def main(raw, labels, site, emb_npz):
              "wordsBias": [round(float(b), 3) for b in words.intercept_],
              "emb": [[round(float(v), 4) for v in row] for row in We],
              "weights": weights, "top": top,
-             "eval": {"n": len(ids), "folds": 5, **ev_full, "words": ev_words},
+             "eval": {"n": len(ids), "folds": 5, **ev_full, "words": ev_words, "groundTruth": ev_gt},
              "labelCounts": dict(Counter(lab[i] for i in ids))}
     Path(site, "my-agent-model.json").write_text(json.dumps(model, separators=(",", ":")))
 
@@ -126,4 +154,4 @@ def main(raw, labels, site, emb_npz):
 
 
 if __name__ == "__main__":
-    main(*sys.argv[1:5])
+    main(*sys.argv[1:6])

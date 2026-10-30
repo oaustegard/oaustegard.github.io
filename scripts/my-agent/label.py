@@ -18,9 +18,17 @@ ai      - software: an AI agent, LLM/coding agent (Claude Code, Codex, Cursor,
 human   - a person acting for the author: literary, talent, acting, modeling,
           sports, booking, real-estate, estate, insurance, travel, tax or
           other professional agent; a human customer-service rep.
-unknown - cannot tell from the text, or neither: video-game characters
-          (Valorant, Hitman), fiction/roleplay, spy jokes, non-English text
-          too unclear to judge, or a post too short to decide.
+          The TV series "Call My Agent!" (Dix pour cent) and its remakes are
+          about talent agents: human.
+unknown - neither, or no reading is more likely: video-game characters
+          (Splatoon's Agent 3/4/8, Valorant, Hitman), fiction/roleplay, spy
+          jokes, posts about the phrase itself, or non-English text too
+          unclear to judge.
+
+When nothing points to software, a person acting for the author is the
+likely reading: "I told my agent to sell", "be my agent", "my agent says I
+eat out too much" are human. Use unknown only when neither reading is more
+likely, not merely because the post is short.
 
 Judge from the post text alone. Respond with ONLY a JSON object mapping each
 id to "ai", "human" or "unknown", nothing else.
