@@ -2,10 +2,10 @@
 // The game state lives in GPU buffers; JS writes input, encodes tics and a
 // render, and reads back one small World block for sound and level exits.
 
-import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261030081407";
-import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS, levelHeader, LEVEL_HEADER } from "./shaders.js?v=20261030081407";
-import { STATES, SFX, MF } from "./info.js?v=20261030081407";
-import { MSG } from "./specials.js?v=20261030081407";
+import { readWad, buildGfx, buildMap, spawnMobjs, tableRandom, decodePatch } from "./wad.js?v=20261030081839";
+import { makeWGSL, PRESENT_WGSL, MOBJ_WORDS, SECTOR_WORDS, WORLD_WORDS, MAXVIS, queueBytes, TIC_KERNELS, levelHeader, LEVEL_HEADER } from "./shaders.js?v=20261030081839";
+import { STATES, SFX, MF } from "./info.js?v=20261030081839";
+import { MSG } from "./specials.js?v=20261030081839";
 
 export const W = { // World word offsets (see struct World)
   viewx: 0, viewy: 1, viewz: 2, viewangle: 3, viewheight: 4, deltaviewheight: 5, bob: 6, extralight: 7,
