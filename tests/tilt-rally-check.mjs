@@ -3,6 +3,7 @@
 //   node tests/tilt-rally-check.mjs demo    autopilot race: no WebGPU errors, every car moving and on the road
 //   node tests/tilt-rally-check.mjs tilt    synthetic deviceorientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 //   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
+//   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
 const { chromium } = createRequire(import.meta.url)("playwright");
@@ -127,6 +128,22 @@ if (what === "rotated") {
   check("speedometer lands top right of the portrait screen", g.speed[0] > 195 && g.speed[1] < 200, g.speed.map(Math.round).join(","));
   await page.screenshot({ path: path.join(OUT, "rotated.png") });
   check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+if (what === "intro") {
+  // iPhone sizes with the browser's bars taken off: the start screen must fit without scrolling, buttons on screen
+  for (const [w, h] of [[393, 660], [375, 560], [430, 800]]) {
+    const page = await b.newPage({ viewport: { width: w, height: h }, isMobile: true, hasTouch: true });
+    await page.goto(base + "index.html");
+    await waitFor(page, () => document.getElementById("status").textContent === "Ready.");
+    const r = await page.evaluate(() => { const o = document.getElementById("intro"), box = (id) => { const q = document.getElementById(id).getBoundingClientRect(); return [q.left, q.top, q.right, q.bottom]; };
+      return { overflow: o.scrollHeight - o.clientHeight, motion: box("motion"), start: box("start"), h1: box("intro").length && document.querySelector("#intro h1").getBoundingClientRect().toJSON() }; });
+    const inside = (q) => q[0] >= 0 && q[1] >= 0 && q[2] <= w && q[3] <= h;
+    check(`${w}x${h}: start screen fits without scrolling`, r.overflow <= 0, "overflow " + r.overflow + " px");
+    check(`${w}x${h}: Allow motion and Start engine are on screen`, inside(r.motion) && inside(r.start), JSON.stringify([r.motion, r.start].map((q) => q.map(Math.round))));
+    await page.screenshot({ path: path.join(OUT, `intro-${w}x${h}.png`) });
+    await page.close();
+  }
 }
 
 await b.close(); srv.close();

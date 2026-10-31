@@ -2,13 +2,13 @@
 
 A racing game for a phone held sideways like a steering wheel. Turning the phone steers. Tilting its top edge away from you is the throttle, and tilting it toward you is the brake. You race three laps of a generated mountain valley against three computer cars. It's an installable PWA drawn with WebGPU.
 
-Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lock in portrait. The page then draws itself turned a quarter turn counter-clockwise, so turn the phone a quarter turn clockwise to drive. With rotation unlocked, or on a computer, it lays out landscape as usual. Press Start engine to begin. On iPhone, Safari asks for motion access at that point; if you refuse, only a keyboard can drive. `?seed=N` picks another valley.
+Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lock in portrait. The page then draws itself turned a quarter turn counter-clockwise, so turn the phone a quarter turn clockwise to drive. With rotation unlocked, or on a computer, it lays out landscape as usual. The start screen fits on one screen: lock rotation and turn the phone, tap Allow motion (iOS asks for motion access here, before the race), then tap Start engine. On iPhone, Safari asks for motion access at that point; if you refuse, only a keyboard can drive. `?seed=N` picks another valley.
 
 ## Controls
 
 | input | does |
 |---|---|
-| turn the phone like a wheel | steer; rotations under 2° are ignored, and full lock is at about 57° |
+| turn the phone like a wheel | steer; rotations under 1.5° are ignored, and full lock is at about 32° |
 | tilt the top away 2° to 12° | throttle, full at 12° |
 | tilt it toward you 3° to 12° | brake, then reverse from a standstill |
 | double-tap the screen, or Center wheel | make the current pose straight ahead |
@@ -41,6 +41,7 @@ node tests/tilt-rally-check.mjs math   # orientation -> wheel and pedal on known
 node tests/tilt-rally-check.mjs demo   # autopilot race on SwiftShader: no WebGPU errors, all cars moving and on the road
 node tests/tilt-rally-check.mjs tilt   # synthetic orientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 node tests/tilt-rally-check.mjs cars   # close-up stills of the cars
+node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```
 
