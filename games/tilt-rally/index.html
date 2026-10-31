@@ -114,7 +114,13 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
   #speed { font-size: 48px; } #minimap { width: 92px; height: 92px; } #msg { font-size: 44px; }
 }
 @media (max-width: 560px) { html:not(.rot) .card { grid-template-columns: 1fr; } }
-@media (prefers-reduced-motion: reduce) { #wheel { transition: none; } }
+#yell { position: absolute; left: 12%; right: 12%; top: 19%; text-align: center; font-family: var(--display); font-size: 50px; line-height: 1;
+  color: var(--ink); -webkit-text-stroke: 7px #11161c; paint-order: stroke fill; transform: rotate(-4deg); text-wrap: balance; }
+#yell.hot { color: var(--brake); } #yell.go { color: var(--gas); } #yell.cool { color: var(--signal); }
+#yell.pop { animation: pop 0.28s cubic-bezier(.2, 1.6, .4, 1); }
+@keyframes pop { from { transform: rotate(-4deg) scale(0.4); opacity: 0; } to { transform: rotate(-4deg) scale(1); opacity: 1; } }
+@media (max-height: 460px) { #yell { font-size: 38px; -webkit-text-stroke-width: 6px; } }
+@media (prefers-reduced-motion: reduce) { #wheel { transition: none; } #yell.pop { animation: none; } }
 </style>
 </head>
 <body>
@@ -141,6 +147,7 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
     <div class="label" id="mode" style="margin-bottom:2px">tilt</div>
   </div>
   <div id="br"><div class="num" id="speed">0</div><div class="label">km/h</div></div>
+  <div id="yell" hidden></div>
   <div id="msg"></div>
   <div id="sub"></div>
 </div>
@@ -165,6 +172,7 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
       <div class="row">
         <label class="opt"><input type="checkbox" id="level" checked> Keep horizon level</label>
         <label class="opt"><input type="checkbox" id="sound" checked> Sound</label>
+        <label class="opt"><input type="checkbox" id="backseat" checked> Back-seat driver</label>
       </div>
       <p class="small" id="status">Checking for WebGPU…</p>
     </div>
@@ -228,8 +236,8 @@ const fmt = (t) => { t = Math.max(0, t); const m = Math.floor(t / 60), s = t - m
 let flashT = 0; function flash(a, b = "") { $("msg").textContent = a; $("sub").textContent = b; flashT = 2.2; }
 function onEvent(type, d) {
   if (type === "go") flash("Go");
-  else if (type === "lap") flash(d.lap === LAPS ? "Final lap" : "Lap " + d.lap, fmt(d.time));
-  else if (type === "bump") { try { navigator.vibrate?.(30); } catch (e) {} }
+  else if (type === "lap") { flash(d.lap === LAPS ? "Final lap" : "Lap " + d.lap, fmt(d.time)); if (d.time <= G.player.best && d.lap > 2) yell("best"); }
+  else if (type === "bump") { try { navigator.vibrate?.(30); } catch (e) {} yell("bump"); }
   else if (type === "finish") {
     const P = G.player; $("rtitle").textContent = ["Winner", "Second", "Third", "Fourth"][d.order.indexOf(P)];
     $("rtable").innerHTML = "";
@@ -284,6 +292,7 @@ function frame(now) {
   // Counter-rotate the picture by the wheel angle: the phone turns, the horizon stays level with the real one.
   G.render(ctx.getCurrentTexture().createView(), w, h, dtR, { roll: sensor.mode === "tilt" && $("level").checked ? inp.wheel : 0 });
   engineSound(G.player.speed, G.state === "race" ? G.player.thr : 0);
+  backseat(dtR);
   if ((hudT += dtR) > 1 / 15) { hudT = 0; hud(); }
   if (flashT > 0 && (flashT -= dtR) <= 0) { $("msg").textContent = ""; $("sub").textContent = ""; }
   if (G.state === "race" && flashT <= 0) { const P = G.player;
@@ -338,6 +347,56 @@ $("again").addEventListener("click", newRace);
 $("newtrack").addEventListener("click", async () => { $("results").hidden = true; await G.buildWorld(Math.floor(Math.random() * 1e6)); drawMinimapBase(); newRace(); });
 document.addEventListener("visibilitychange", () => { if (audio.ctx) document.hidden ? audio.ctx.suspend() : audio.ctx.resume(); last = 0; });
 if ("serviceWorker" in navigator && location.hostname !== "127.0.0.1" && location.hostname !== "localhost") navigator.serviceWorker.register("sw.js").catch(() => {});
+
+// ---------------------------------------------------------------- the back-seat driver
+// Part warning, part heckling. Ahead: the braking the next few seconds of road will demand, against the speed plan the
+// computer cars drive to (T.vlim, already braking-aware). Behind: leaving the road, wrong way, bumps, places won and lost.
+const LINES = {
+  brake: ["BRAKE!", "BRAKE BRAKE BRAKE!", "Corner! BRAKE!", "Way too fast!"],
+  slow: ["Slow down!", "Easy… easy…", "Too hot for this one!", "Lift! Lift!"],
+  go: ["Go go go!", "Floor it!", "My nan drives faster!", "Are we parking?", "Pedal. Right one."],
+  off: ["That’s grass!", "The road is over THERE!", "Off the road?!", "We’re mowing the lawn!"],
+  wrong: ["Wrong way!!", "Turn around!", "Other way!"],
+  bump: ["Watch it!", "Mind the paint!", "Hey!"],
+  pass: ["Nice pass!", "Got ’em!", "Yes!"],
+  passed: ["They’re getting by!", "Don’t let them through!", "Block!"],
+  best: ["Best lap! Again!", "Now THAT was a lap!"],
+};
+const STYLE = { brake: "hot", slow: "hot", wrong: "hot", off: "hot", go: "go", pass: "go", best: "cool", bump: "", passed: "" };
+const bs = { t: 0, until: 0, last: {}, pos: 0, wasOff: false, slowFor: 0, log: [] };
+function yell(kind, urgent = false) {
+  if (!G || G.state !== "race" || !$("backseat").checked) return;
+  if (!urgent && bs.t < bs.until + 0.8) return;                          // let the last one land
+  if (bs.t - (bs.last[kind] ?? -99) < (urgent ? 2.5 : 6)) return;       // and don't nag about the same thing
+  const lines = LINES[kind], text = lines[Math.floor(Math.random() * lines.length)], el = $("yell");
+  bs.last[kind] = bs.t; bs.until = bs.t + 1.7;
+  el.textContent = text; el.className = STYLE[kind] || ""; void el.offsetWidth; el.classList.add("pop"); el.hidden = false;
+  bs.log.push({ t: +bs.t.toFixed(2), kind, idx: G.player.idx, kmh: Math.round(G.player.speed * 3.6) });
+  if ($("sound").checked && window.speechSynthesis) { try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text.replace(/[!?…]+/g, "!")); u.rate = 1.25; u.pitch = 1.15; speechSynthesis.speak(u); } catch (e) {} }
+}
+function backseat(dt) {
+  bs.t += dt;
+  if (bs.t > bs.until && !$("yell").hidden) $("yell").hidden = true;
+  if (G.state !== "race") { bs.pos = 0; return; }
+  const P = G.player, T = G.T, v = P.speed;
+  // ahead: the hardest braking any point in the next 2.5 s of road asks for
+  if (v > 12 && P.surf !== 2) {
+    let need = 0; const n = Math.round(v * 2.5 / T.ds);
+    for (let k = 3; k < n; k += 2) { const lim = T.vlim[(P.idx + k) % M]; if (v > lim) need = Math.max(need, (v * v - lim * lim) / (2 * k * T.ds)); }
+    if (need > 11) yell("brake", true); else if (need > 4) yell("slow");
+  }
+  // dawdling: well under what the road allows for a while, and not braking for anything
+  let room = Infinity; for (let k = 0; k < 60; k += 4) room = Math.min(room, T.vlim[(P.idx + k) % M]);
+  bs.slowFor = v < room * 0.62 && v < 40 && P.thr < 0.6 && P.surf === 0 && P.wrong === 0 ? bs.slowFor + dt : 0;
+  if (bs.slowFor > 2.5) { yell("go"); bs.slowFor = 0; }
+  // behind
+  const off = P.surf === 2; if (off && !bs.wasOff) yell("off", true); bs.wasOff = off;
+  if (P.wrong > 1) yell("wrong", true);
+  const pos = G.rank().indexOf(P) + 1;
+  if (bs.pos && pos !== bs.pos && G.raceT > 4) yell(pos < bs.pos ? "pass" : "passed");
+  bs.pos = pos;
+}
+window.__backseat = { step: backseat, log: bs.log };
 
 window.__game = () => G && { frames: G.frames, state: G.state, raceT: G.raceT, stats: G.stats, scale,
   input: { steer: inp.steer, thr: inp.thr, mode: sensor.mode, events: sensor.events },

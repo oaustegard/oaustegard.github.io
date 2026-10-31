@@ -4,6 +4,7 @@
 //   node tests/tilt-rally-check.mjs tilt    synthetic deviceorientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 //   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
 //   node tests/tilt-rally-check.mjs grip    a full-gas driver with perfect aim stays on the road (pass a JSON list of tunings to compare)
+//   node tests/tilt-rally-check.mjs backseat the back-seat driver shouts before the corner a full-gas driver leaves, and urges a crawler on
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -172,6 +173,37 @@ if (what === "grip") {
       check("full gas: under 5 s off the road in 70 s (the 30 m hairpin wants the brake)", r.off < 5, r.off.toFixed(1) + " s");
       check("full gas keeps within 15% of the fastest computer car", r.km > r.ai * 0.85, r.km.toFixed(2) + " vs " + r.ai.toFixed(2) + " km"); }
   }
+}
+
+if (what === "backseat") {
+  // The full-gas driver from "grip" with the back-seat driver listening: it should shout before the hairpin, not after,
+  // and a driver crawling on a quarter throttle should be told to get going.
+  const { page, errors } = await open("index.html?demo");
+  await waitFor(page, () => window.__game?.()?.state === "race");
+  const run = (thr) => page.evaluate((thr) => { window.__hold = true; const E = window.__engine, B = window.__backseat; B.log.length = 0;
+    E.newRace(); for (let i = 0; i < 120 * 4; i++) { E.tick(1 / 120); B.step(1 / 120); }
+    const P = E.player, T = E.T, offs = [];
+    for (let i = 0; i < 120 * 70; i++) {
+      const sp = Math.max(0, P.speed), look = Math.round((9 + sp * 0.55) / T.ds), k = (P.idx + look) % T.x.length;
+      const fx = Math.sin(P.h), fz = Math.cos(P.h), dx = T.x[k] - P.x, dz = T.z[k] - P.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
+      E.input.steer = Math.max(-1, Math.min(1, err * 2.6)); E.input.thr = thr; const was = P.surf;
+      E.tick(1 / 120); B.step(1 / 120);
+      if (P.surf === 2 && was !== 2) offs.push({ t: +(i / 120 + 4).toFixed(2), idx: P.idx });
+    }
+    return { log: B.log.map((x) => ({ ...x })), offs }; }, thr);
+  const fast = await run(1);
+  console.log("full gas:", fast.log.map((x) => `${x.t}s ${x.kind} @${x.idx} ${x.kmh}km/h`).join(" | "));
+  console.log("  went off at", JSON.stringify(fast.offs));
+  // both on the back-seat driver's own clock: its "off" shouts mark the exits
+  const exits = fast.log.filter((y) => y.kind === "off");
+  check("the back-seat driver noticed every exit", exits.length === fast.offs.length, exits.length + "/" + fast.offs.length);
+  const warned = exits.filter((o) => fast.log.some((y) => (y.kind === "brake" || y.kind === "slow") && y.t < o.t && y.t > o.t - 6));
+  check("every exit at full gas was preceded by a slow-down or brake shout within 6 s", exits.length > 0 && warned.length === exits.length, warned.length + "/" + exits.length);
+  check("the shouts do not run on: under 20 in 70 s", fast.log.length < 20, String(fast.log.length));
+  const crawl = await run(0.25);
+  console.log("quarter throttle:", crawl.log.map((x) => `${x.t}s ${x.kind}`).join(" | "));
+  check("a crawling driver hears 'go'", crawl.log.some((y) => y.kind === "go"));
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
 await b.close(); srv.close();

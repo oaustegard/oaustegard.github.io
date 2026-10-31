@@ -16,6 +16,10 @@ Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lo
 
 Hold the phone the way you want to drive when you press Start engine. That pose becomes straight ahead with no gas, and both the wheel and the pedal are measured from it, so there is no calibration step. **Keep horizon level** (on by default) tilts the 3D picture opposite to the phone, so the road's horizon stays level with the real one while you steer.
 
+## The back-seat driver
+
+An option on the start screen, on by default. It shouts in big text, and out loud when Sound is on. Ahead of you, it works out the hardest braking the next 2.5 seconds of road will need, using the same speed plan the computer cars drive to. Moderate braking gets "Slow down!", and anything harder than about 1.1 g gets "BRAKE!". Behind you, it reacts to leaving the road, going the wrong way, bumps, and places won or lost. If you crawl along well under what the road allows, it tells you to go. It leaves gaps between shouts and won't repeat the same complaint within six seconds, though "BRAKE!" can still interrupt.
+
 ## How the phone becomes a wheel
 
 The browser reports the phone's orientation as three angles: alpha (the compass heading), beta and gamma. The page converts beta and gamma into the direction of gravity in the phone's own coordinates, `(-cos β sin γ, sin β, cos β cos γ)`, and ignores alpha, so compass drift cannot move the wheel. Steering is the angle that gravity direction has turned within the screen's plane since the start, and it means the same thing whichever way round the phone is held. The pedal is the change in `asin(up.z)`, the component of gravity that points out of the screen. Held sideways, the phone sits exactly where the raw beta value jumps by 180° as the screen tilts past vertical. The gravity vector stays smooth through that jump, so the controls do not glitch there.
@@ -42,6 +46,7 @@ node tests/tilt-rally-check.mjs demo   # autopilot race on SwiftShader: no WebGP
 node tests/tilt-rally-check.mjs tilt   # synthetic orientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 node tests/tilt-rally-check.mjs cars   # close-up stills of the cars
 node tests/tilt-rally-check.mjs grip      # a full-gas driver with perfect aim stays on every bend wider than 40 m
+node tests/tilt-rally-check.mjs backseat  # it shouts before the corner a full-gas driver leaves, notices the exit, and urges a crawler on
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```
