@@ -312,7 +312,7 @@ export function layoutTable(view, W, H, safe, ui = {}) {
       const px = x + (sc * f) / 2;
       x += sc * f;
       const [sx, sy] = rotAbout(cx, cy, cx + (px - cx), cy + dist, ROT[r]);
-      sprites.push({ key: it.key, k: it.k, x: sx, y: sy, w: sc * f * 0.96, h: sc * f * 0.96 * TILE_ASPECT, rot: ROT[r], flags: it.flags, lift: 0 });
+      sprites.push({ key: it.key, k: it.k, x: sx, y: sy, w: sc * f * 0.96, h: sc * f * 0.96 * TILE_ASPECT, rot: ROT[r], flags: it.flags, lift: 0, owner: r });
     }
     const [ax, ay] = rotAbout(cx, cy, cx, cy + dist, ROT[r]);
     handAnchor[r] = { x: ax, y: ay };
@@ -378,7 +378,9 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   const tableTop = Math.max(safe.top + 4, cy - Sy / 2 - strip - 14);
   const table = { x0: Math.max(4, cx - Sx / 2 - strip - 14), y0: tableTop, x1: Math.min(W - 4, cx + Sx / 2 + strip + 14), y1: Math.min(H - 4, H - safe.bottom - 4) };
   const stackTop = portrait && !sideMelds ? handTop - 8 - meldW * TILE_ASPECT : handTop;
-  return { sprites, hitboxes, cx, cy, B, S, Bx, By, Sx, Sy, strip, dw, tw, th, handY, handTop, stackTop, handLeft, handRight: handLeft + handWidth, table, handAnchor, portrait, badgeRowY, topReserve, rows };
+  // While zoomed, the table shows above this line, leaving the hint line and my badge on the tray.
+  const zoomBottom = stackTop - 34;
+  return { sprites, hitboxes, cx, cy, B, S, Bx, By, Sx, Sy, strip, dw, tw, th, handY, handTop, stackTop, zoomBottom, handLeft, handRight: handLeft + handWidth, table, handAnchor, portrait, badgeRowY, topReserve, rows };
 }
 
 // ---------- table camera ----------
@@ -441,7 +443,7 @@ struct U {
   table: vec4f,
   sq: vec4f,
   grid: vec4f,
-  px: vec4f,   // x: device pixel ratio, y: clip line (CSS px) under which table tiles are hidden
+  px: vec4f,   // x: device pixel ratio; y, z: while zoomed, table tiles show only between z (top) and y (bottom), CSS px
 };
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -618,8 +620,9 @@ fn t_light(px: vec2f) -> f32 { return u.time * 0.4 + px.x * 0.004; }
   var col = scene(px);
   col = tableCol(px, col);
   // While zoomed in, a darker tray holds the hand, so the table reads as sliding under it.
-  if (px.y > u.px.y) {
+  if (px.y > u.px.y || px.y < u.px.z) {
     col = col * 0.55;
+    col = mix(col, vec3f(0.62, 0.5, 0.25), smoothstep(1.5, 0.0, abs(px.y - u.px.z + 1.0)) * 0.8);
     col = mix(col, vec3f(0.62, 0.5, 0.25), smoothstep(1.5, 0.0, abs(px.y - u.px.y - 1.0)) * 0.8);
   }
   // Vignette.
@@ -683,7 +686,7 @@ struct VOut {
 @fragment fn fs(in: VOut) -> @location(0) vec4f {
   let k = i32(in.misc.x);
   let flags = u32(in.misc.y);
-  if ((flags & 512u) == 0u && in.pos.y / u.px.x > u.px.y) { discard; }
+  if ((flags & 512u) == 0u && (in.pos.y / u.px.x > u.px.y || in.pos.y / u.px.x < u.px.z)) { discard; }
   let lift = in.misc.z;
   let seed = in.misc.w;
   let alpha = in.misc2.x;
@@ -866,7 +869,7 @@ export async function initGPU(canvas, atlasCanvas) {
     get lost() { return lost; },
     uploadAtlas,
     resize(w, h, d) { W = w; H = h; dpr = d; canvas.width = Math.round(w * d); canvas.height = Math.round(h * d); makeBgTex(); },
-    frame(layout, dt, time, turnDir, cam, clipY = 1e5) {
+    frame(layout, dt, time, turnDir, cam, clipY = 1e5, clipTop = -1e5) {
       if (!bgTex) makeBgTex();
       if (lost) return;
       const list = viewSprites(anim.update(layout.sprites, layout.handAnchor, dt), cam);
@@ -877,7 +880,7 @@ export async function initGPU(canvas, atlasCanvas) {
         vt.table.x0, vt.table.y0, vt.table.x1, vt.table.y1,
         vt.cx, vt.cy, vt.Bx / 2, vt.By / 2,
         ATLAS_COLS, ATLAS_ROWS, CELL_W / atlasCanvas.width, CELL_H / atlasCanvas.height,
-        dpr, clipY, 0, 0]);
+        dpr, clipY, clipTop, 0]);
       device.queue.writeBuffer(ubuf, 0, u);
       if (list.length * 48 > ibuf.size) { ibuf.destroy(); ibuf = device.createBuffer({ size: 48 * (list.length + 64), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }); }
       const inst = new Float32Array(list.length * 12);
@@ -903,7 +906,7 @@ export function init2D(canvas, atlasIn) {
   const anim = new Anim();
   let W = 1, H = 1, dpr = 1;
   let bg = null;
-  function paintBg(layout, cam, clipY) {
+  function paintBg(layout, cam, clipY, clipTop) {
     const vt = viewTable(layout, cam);
     bg = document.createElement('canvas');
     bg.width = canvas.width; bg.height = canvas.height;
@@ -933,6 +936,10 @@ export function init2D(canvas, atlasIn) {
       b.fillStyle = 'rgba(0,0,0,0.45)'; b.fillRect(0, clipY, W, H - clipY);
       b.fillStyle = 'rgba(160,128,64,0.8)'; b.fillRect(0, clipY, W, 1.5);
     }
+    if (clipTop > 0) {
+      b.fillStyle = 'rgba(0,0,0,0.45)'; b.fillRect(0, 0, W, clipTop);
+      b.fillStyle = 'rgba(160,128,64,0.8)'; b.fillRect(0, clipTop - 1.5, W, 1.5);
+    }
   }
   let lastKey = '';
   return {
@@ -940,16 +947,16 @@ export function init2D(canvas, atlasIn) {
     lost: false,
     uploadAtlas(cv) { atlasCanvas = cv; },
     resize(w, h, d) { W = w; H = h; dpr = d; canvas.width = Math.round(w * d); canvas.height = Math.round(h * d); lastKey = ''; },
-    frame(layout, dt, time, turnDir, cam, clipY = 1e5) {
-      const key = [layout.table.x0, layout.table.y0, layout.table.x1, layout.table.y1, W, H, cam ? cam.z * 1000 : 1, cam ? cam.x : 0, cam ? cam.y : 0, Math.min(clipY, 1e4)].map(Math.round).join(',');
-      if (key !== lastKey) { paintBg(layout, cam, clipY); lastKey = key; }
+    frame(layout, dt, time, turnDir, cam, clipY = 1e5, clipTop = -1e5) {
+      const key = [layout.table.x0, layout.table.y0, layout.table.x1, layout.table.y1, W, H, cam ? cam.z * 1000 : 1, cam ? cam.x : 0, cam ? cam.y : 0, Math.min(clipY, 1e4), Math.max(clipTop, -1)].map(Math.round).join(',');
+      if (key !== lastKey) { paintBg(layout, cam, clipY, clipTop); lastKey = key; }
       g.setTransform(1, 0, 0, 1, 0, 0);
       g.drawImage(bg, 0, 0);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       const list = viewSprites(anim.update(layout.sprites, layout.handAnchor, dt), cam);
       for (const s of list) {
         g.save();
-        if (!(s.flags & F.FIXED) && clipY < H) { g.beginPath(); g.rect(0, 0, W, clipY); g.clip(); }
+        if (!(s.flags & F.FIXED) && (clipY < H || clipTop > 0)) { const t0 = Math.max(0, clipTop); g.beginPath(); g.rect(0, t0, W, Math.min(clipY, H) - t0); g.clip(); }
         g.globalAlpha = s.alpha;
         g.translate(s.x, s.y - s.lift * s.h * 0.22);
         g.rotate(s.rot);

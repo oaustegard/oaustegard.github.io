@@ -310,15 +310,31 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
     </div>
     <div id="rules-tw" hidden>
     <h2>Taiwanese mahjong <span class="zh" style="color:var(--gold);font-size:20px">台灣十六張</span></h2>
-    <p>The same 144 tiles, flowers and seasons included, with five sets and a pair to a hand.</p>
-    <h3>How it differs from Hong Kong</h3>
+    <p>144 tiles: three suits (characters <span class="zh">萬</span>, dots <span class="zh">筒</span>, bamboo <span class="zh">索</span>) numbered 1 to 9, four winds <span class="zh">東南西北</span>, three dragons <span class="zh">中 發 白</span>, four of each; plus eight bonus tiles, flowers <span class="zh">梅蘭菊竹</span> and seasons <span class="zh">春夏秋冬</span>, numbered 1 to 4.</p>
+    <h3>Seats and the deal</h3>
     <ul>
-      <li>Each player holds 16 tiles; the dealer starts with 17. A complete hand is five sets and a pair, or seven pairs and a pung (<span class="zh">嚦咕嚦咕</span>).</li>
-      <li>The last 16 tiles of the wall are never drawn. The hand is a draw when the wall reaches them.</li>
-      <li>There is no minimum: any complete hand may win, even one worth no tai.</li>
-      <li>Claims work as in Hong Kong: pung or kong from anyone, chow from the player on your left, a win beats both, and the nearest player after the discarder takes a contested win.</li>
-      <li>Holding all eight flowers and seasons wins at once (<span class="zh">八仙過海</span>). A player with seven takes the eighth from whoever draws it and wins (<span class="zh">七搶一</span>); that player pays as a discarder.</li>
-      <li>The dealer keeps the deal after winning or a drawn hand, and the count of consecutive deals (<span class="zh">連莊</span>) shows in the top bar.</li>
+      <li>Four players sit at the winds East, South, West and North. East is the dealer. Play goes to the right (counter-clockwise round the table).</li>
+      <li>Each player is dealt 16 tiles; the dealer takes a 17th and starts by discarding.</li>
+      <li>A bonus tile is set aside face up as soon as it is dealt or drawn, and replaced from the back of the wall. Bonus tiles score but are not part of the hand.</li>
+      <li>The last 16 tiles of the wall are never drawn. When the wall reaches them, the hand is a draw.</li>
+    </ul>
+    <h3>Play</h3>
+    <ul>
+      <li>On your turn draw a tile, then discard one.</li>
+      <li>Any player may take the discard for a <b>pung</b> <span class="zh">碰</span> (three alike) or <b>kong</b> <span class="zh">槓</span> (four alike). Only the next player may take it for a <b>chow</b> <span class="zh">吃</span> (a run of three in one suit). A claimed set is laid face up and the claimer discards; play continues from them.</li>
+      <li>Four alike in your hand can be declared as a concealed kong, and a drawn tile can be added to your own melded pung. After any kong you draw a replacement from the back of the wall. Another player may rob an added kong if that tile completes their hand.</li>
+      <li>A win beats a pung or kong, which beats a chow. If two players could win on one discard, the next in turn after the discarder takes it.</li>
+    </ul>
+    <h3>Winning</h3>
+    <ul>
+      <li>A complete hand is 17 tiles: five sets (pungs, kongs or chows) and a pair, or seven pairs and a pung (<span class="zh">嚦咕嚦咕</span>).</li>
+      <li>Win on any player's discard <span class="zh">胡</span>, or on your own draw <span class="zh">自摸</span>. There is no minimum: a hand worth no tai (<span class="zh">屁胡</span>) still wins.</li>
+      <li>Holding all eight flowers and seasons wins at once (<span class="zh">八仙過海</span>). A player holding seven takes the eighth from whoever draws it and wins (<span class="zh">七搶一</span>); that player pays as a discarder.</li>
+    </ul>
+    <h3>The deal passes</h3>
+    <ul>
+      <li>The dealer keeps the deal after winning or after a drawn hand, and each extra deal adds to the dealer's streak (<span class="zh">連莊</span>), shown in the top bar. Otherwise the deal passes to the right and the streak resets.</li>
+      <li>A wind round ends when every seat has dealt. A game is the East round, or four rounds (East, South, West, North) for the longer setting.</li>
     </ul>
     <h3>Tai</h3>
     <table class="faan" id="tai-table"></table>
@@ -650,36 +666,101 @@ function renderHud() {
 }
 function placeOverlays() {
   if (!layout || !G.view) return;
-  const { cx, cy, Sx, Sy, strip, handY, th } = layout;
+  const { cx, cy, Sx, Sy, handY } = layout;
   const box = $('badges');
   if (box.children.length !== 4) return;
   const W = innerWidth;
-  // Portrait: the three opponents share a row under the top bar (left, across, right), fixed while zooming.
-  // Landscape: beside their strips. My badge sits under my discards, or beside the hint when that is crowded.
-  const row = layout.badgeRowY;
+  const zoomed = cam.z > 1.001;
   const hintY = layout.stackTop - 6;
-  let mine = [Math.max(64, cx - Sx / 2 + 44), cy + Sy / 2 + 14];
-  const crowded = layout.portrait && mine[1] + 14 > hintY - 30;
-  if (crowded) mine = [62, hintY - 12];
-  const pos = layout.portrait
-    ? [mine, [W - 6, row, 'r'], [cx, row], [6, row, 'l']]
-    : [[layout.handLeft > 150 ? layout.handLeft - 72 : Math.max(64, layout.handLeft + 50), layout.handLeft > 150 ? handY : layout.handTop - 16],
-       [Math.min(W - 64, cx + Sx / 2 + strip / 2 + 4), cy - Sy / 2 - 14], [cx, cy - Sy / 2 - strip - 16], [Math.max(64, cx - Sx / 2 - strip / 2 - 4), cy - Sy / 2 - 14]];
-  G.view.players.forEach((p, s) => {
-    const [x, y, al] = pos[relOf(s)];
-    const el = box.children[s];
-    el.style.left = x + 'px'; el.style.top = y + 'px';
-    el.classList.toggle('l', al === 'l'); el.classList.toggle('r', al === 'r');
-  });
+  const view = (x, y) => (zoomed ? camApply(cam, x, y) : [x, y]);
+  // Screen rectangles of every table tile, clipped to what is visible, and of the top bar's controls.
+  const top = zoomed ? zoomTop() : -1e9, bot = zoomed ? layout.zoomBottom : 1e9;
+  const tiles = [];
+  const strips = [null, null, null, null];
+  for (const s of layout.sprites) {
+    const fixed = s.flags & F.FIXED;
+    const [x, y] = fixed ? [s.x, s.y] : view(s.x, s.y);
+    const z = fixed || !zoomed ? 1 : cam.z;
+    const c = Math.abs(Math.cos(s.rot)), n = Math.abs(Math.sin(s.rot));
+    const hw = (c * s.w + n * s.h) * z / 2 + 2, hh = (n * s.w + c * s.h) * z / 2 + 2;
+    const r = { x0: x - hw, x1: x + hw, y0: Math.max(y - hh, fixed ? -1e9 : top), y1: Math.min(y + hh, fixed ? 1e9 : bot) };
+    if (r.y1 <= r.y0) continue;
+    tiles.push(r);
+    if (s.owner) { const b = strips[s.owner] || (strips[s.owner] = { x0: 1e9, x1: -1e9, y0: 1e9, y1: -1e9 }); b.x0 = Math.min(b.x0, r.x0); b.x1 = Math.max(b.x1, r.x1); b.y0 = Math.min(b.y0, r.y0); b.y1 = Math.max(b.y1, r.y1); }
+  }
+  const blocked = [...document.querySelectorAll('#hud .round, #hud button')].map(e => { const q = e.getBoundingClientRect(); return { x0: q.left - 4, x1: q.right + 4, y0: q.top - 4, y1: q.bottom + 4 }; });
+  const ov = (a, b) => Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0) > 0 && Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0) > 0;
+  const minY = zoomed ? top : 0, maxY = zoomed ? bot : innerHeight;
+  // Try each spot in turn and take the first that is on screen and clear of tiles, the top bar and placed badges.
+  const place = (el, cands, hideIfNone, wholeScreen) => {
+    const yLo = wholeScreen ? 0 : minY, yHi = wholeScreen ? innerHeight : maxY;
+    const w = el.offsetWidth || 120, hgt = el.offsetHeight || 28;
+    const rectAt = (x, y) => ({ x0: x - w / 2, x1: x + w / 2, y0: y - hgt / 2, y1: y + hgt / 2 });
+    let pick = null;
+    for (const [x, y] of cands) {
+      const r = rectAt(x, y);
+      if (r.x0 < 4 || r.x1 > W - 4 || r.y0 < yLo || r.y1 > yHi) continue;
+      if (tiles.some(t => ov(r, t)) || blocked.some(t => ov(r, t))) continue;
+      pick = r; break;
+    }
+    // No clear spot: hide it if asked, else pull the first spot that misses the top bar and other badges onto the screen.
+    if (!pick && !hideIfNone) {
+      for (const [x, y] of cands) {
+        const r = rectAt(Math.min(W - 4 - w / 2, Math.max(4 + w / 2, x)), Math.min(yHi - hgt / 2, Math.max(yLo + hgt / 2, y)));
+        if (!blocked.some(t => ov(r, t))) { pick = r; break; }
+      }
+    }
+    el.classList.remove('l', 'r');
+    if (!pick) { el.style.visibility = 'hidden'; return; }
+    el.style.visibility = 'visible';
+    el.style.left = (pick.x0 + pick.x1) / 2 + 'px'; el.style.top = (pick.y0 + pick.y1) / 2 + 'px';
+    blocked.push(pick);
+  };
+  const byRel = [];
+  G.view.players.forEach((p, s) => { byRel[relOf(s)] = box.children[s]; });
+  if (layout.portrait) {
+    // The three opponents share a row under the top bar (left, across, right), fixed while zooming.
+    const row = layout.badgeRowY;
+    [[3, 'l', 6], [2, '', W / 2], [1, 'r', W - 6]].forEach(([r, al, x]) => {
+      const el = byRel[r];
+      el.style.visibility = 'visible';
+      el.style.left = x + 'px'; el.style.top = row + 'px';
+      el.classList.toggle('l', al === 'l'); el.classList.toggle('r', al === 'r');
+      const q = el.getBoundingClientRect(); blocked.push({ x0: q.left, x1: q.right, y0: q.top, y1: q.bottom });
+    });
+  } else {
+    // Landscape: beside each opponent's strip, wherever there is room.
+    for (const r of [2, 1, 3]) {
+      const b = strips[r];
+      const el = byRel[r];
+      if (!b) { el.style.visibility = 'hidden'; continue; }
+      const w = el.offsetWidth || 120, hh = (el.offsetHeight || 28) / 2;
+      const midX = (b.x0 + b.x1) / 2, midY = (b.y0 + b.y1) / 2;
+      const cands = r === 2
+        ? [[midX, b.y0 - hh - 4], [b.x0 - w / 2 - 8, midY], [b.x1 + w / 2 + 8, midY], [midX, b.y1 + hh + 4]]
+        : [[midX, b.y0 - hh - 6], [midX, b.y1 + hh + 6], [r === 1 ? b.x0 - w / 2 - 6 : b.x1 + w / 2 + 6, b.y0 + hh], [r === 1 ? b.x1 + w / 2 + 6 : b.x0 - w / 2 - 6, midY]];
+      place(el, cands, zoomed);
+    }
+  }
+  // Me: under my discards, else beside the hint line (always there while zoomed).
+  const meEl = byRel[0];
+  const below = [Math.max(64, cx - Sx / 2 + 44), cy + Sy / 2 + 14];
+  const tray = [62, hintY - 12];
+  const mw = (meEl.offsetWidth || 90) / 2, mh = (meEl.offsetHeight || 28) / 2;
+  const aboveHand = layout.handTop - mh - 6;
+  const cands = zoomed ? [tray] : layout.portrait ? [below, tray]
+    : [[layout.handLeft - mw - 10, handY], [layout.handRight + mw + 10, handY], [6 + mw, aboveHand], [W - 6 - mw, aboveHand], below];
+  place(meEl, cands, false, true);
+  const crowded = meEl.style.top && Math.abs(parseFloat(meEl.style.top) - (hintY - 12)) < 2 && parseFloat(meEl.style.left) < 140;
   const [ccx, ccy] = camApply(cam, cx, cy);
   const c = $('center');
   c.style.left = ccx + 'px'; c.style.top = ccy + 'px';
   c.style.transform = `translate(-50%, -50%) scale(${cam.z})`;
-  c.style.visibility = ccy < (layout.stackTop - 10) ? 'visible' : 'hidden';
-  const h = $('hint');
-  h.style.top = hintY + 'px';
-  h.style.paddingLeft = crowded ? '124px' : '16px';
-  h.style.textAlign = crowded ? 'left' : 'center';
+  c.style.visibility = ccy < (zoomed ? layout.zoomBottom : layout.stackTop) - 10 && ccy > (zoomed ? zoomTop() + 10 : 0) ? 'visible' : 'hidden';
+  const hEl = $('hint');
+  hEl.style.top = hintY + 'px';
+  hEl.style.paddingLeft = crowded ? '124px' : '16px';
+  hEl.style.textAlign = crowded ? 'left' : 'center';
 }
 const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -771,12 +852,14 @@ let lastTap = { id: null, t: 0 };
 const cam = { z: 1, x: 0, y: 0 };
 let camGoal = null;               // animated target for the button and double-tap
 const ZMAX = 3.2;
+// While zoomed the table shows between this line and the hand: under the badge row (portrait) or the top bar.
+function zoomTop() { return layout.portrait ? layout.topReserve - 2 : layout.badgeRowY - 14; }
 function clampCam(c) {
   if (!layout) return c;
   if (c.z <= 1.001) return { z: 1, x: 0, y: 0 };
   const t = layout.table;
   const fit = (p, q, a, b, o) => ((q - p) * c.z <= b - a ? (a + b) / 2 - ((p + q) / 2) * c.z : Math.min(a - p * c.z, Math.max(b - q * c.z, o)));
-  return { z: c.z, x: fit(t.x0, t.x1, 0, innerWidth, c.x), y: fit(t.y0, layout.stackTop - 4, t.y0, layout.stackTop - 4, c.y) };
+  return { z: c.z, x: fit(t.x0, t.x1, 0, innerWidth, c.x), y: fit(t.y0, layout.zoomBottom, zoomTop(), layout.zoomBottom, c.y) };
 }
 function zoomAt(z, sx, sy, animate) {
   // Keep the table point under (sx, sy) where it is.
@@ -1190,7 +1273,8 @@ function frame(now) {
       if (Math.abs(camGoal.z - cam.z) < 0.002 && Math.abs(camGoal.x - cam.x) < 0.3 && Math.abs(camGoal.y - cam.y) < 0.3) { Object.assign(cam, camGoal); camGoal = null; }
       placeOverlays();
     }
-    renderer.frame(layout, dt, now / 1000, turnDir, cam, cam.z > 1.001 ? layout.stackTop - 4 : 1e5);
+    const zoomed = cam.z > 1.001;
+    renderer.frame(layout, dt, now / 1000, turnDir, cam, zoomed ? layout.zoomBottom : 1e5, zoomed ? zoomTop() : -1e5);
   }
   requestAnimationFrame(frame);
 }
