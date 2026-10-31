@@ -185,6 +185,7 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
       <span class="hk-only">Minimum faan</span><span class="seg hk-only" id="set-min"><button data-v="0">0</button><button data-v="1">1</button><button data-v="3">3</button></span>
       <span>Length</span><span class="seg" id="set-len"><button data-v="east">East round</button><button data-v="full">Four winds</button></span>
       <span>Hints</span><span class="seg" id="set-hint"><button data-v="on">On</button><button data-v="off">Off</button></span>
+      <span>Your seat</span><span class="seg" id="set-seat"><button data-v="0">East</button><button data-v="1">South</button><button data-v="2">West</button><button data-v="3">North</button><button data-v="r">Random</button></span>
       <span>Pace</span><span class="seg" id="set-pace"><button data-v="calm">Calm</button><button data-v="brisk">Brisk</button></span>
     </div>
     <p class="foot"><a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/games/mahjong/README.md">README</a> · <a href="/games/">More games</a></p>
@@ -194,7 +195,9 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
 <section class="panel" id="host" hidden>
   <div class="card">
     <h2>Your table</h2>
-    <p class="sub">You sit East for the first hand. Each empty seat plays as the computer until a friend takes it; you can also invite from the menu during a game.</p>
+    <p class="sub">Each empty seat plays as the computer, on this device, until a friend takes it; you can also invite from the menu during a game.</p>
+    <div class="row" style="margin-bottom:10px;font-size:13px;color:var(--dim)">Your seat <span class="seg" id="host-seat"><button data-v="0">East</button><button data-v="1">South</button><button data-v="2">West</button><button data-v="3">North</button><button data-v="r">Random</button></span></div>
+    <p class="sub" id="seat-note" style="margin-top:0"></p>
     <div class="seats" id="seats"></div>
     <div class="row" style="margin-top:14px">
       <button class="btn primary" id="btn-start"><span class="zh">開局</span>Start the game</button>
@@ -354,11 +357,20 @@ const settings = {
   hints: store.get('hints', 'on'),
   pace: store.get('pace', 'calm'),
   sound: store.get('sound', true),
+  seat: store.get('seat', '0'),      // the host's wind for the first hand: '0'-'3' (East-North) or 'r'
 };
-function bindSeg(id, key, conv = v => v) {
+// Segmented controls; several may share one setting (the seat picker sits in the lobby and on the host screen).
+const segPainters = [];
+function bindSeg(id, key, conv = v => v, onChange) {
   const el = $(id);
   const paint = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(conv(b.dataset.v) === settings[key])));
-  el.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; settings[key] = conv(b.dataset.v); store.set(key, settings[key]); paint(); });
+  segPainters.push(paint);
+  el.addEventListener('click', e => {
+    const b = e.target.closest('button'); if (!b) return;
+    settings[key] = conv(b.dataset.v); store.set(key, settings[key]);
+    segPainters.forEach(p => p());
+    if (onChange) onChange();
+  });
   paint();
 }
 bindSeg('set-min', 'minFaan', Number);
@@ -375,6 +387,8 @@ $('rules-tab').addEventListener('click', e => { const b = e.target.closest('butt
 bindSeg('set-len', 'length');
 bindSeg('set-hint', 'hints');
 bindSeg('set-pace', 'pace');
+bindSeg('set-seat', 'seat', v => v, () => renderSeats());
+bindSeg('host-seat', 'seat', v => v, () => renderSeats());
 $('name').value = store.get('name', '');
 $('join-name').value = store.get('name', '');
 const myName = () => ($('name').value.trim() || $('join-name').value.trim() || 'You').slice(0, 16);
@@ -526,7 +540,10 @@ async function runMatch() {
   H.running = true;
   const seed = params.has('seed') ? +params.get('seed') : undefined;
   const tw = settings.variant === 'tw';
-  H.match = new Match({ rules: { variant: settings.variant, minFaan: tw ? 0 : settings.minFaan, length: settings.length }, seed, firstDealer: 0 });
+  // The host is always seat 0 here; sitting in wind w for the first hand means seat (4 - w) % 4 deals first.
+  // Random rolls once per game, as the dice would.
+  const wind = settings.seat === 'r' ? (seed != null ? seed % 4 : Math.floor(Math.random() * 4)) : +settings.seat;
+  H.match = new Match({ rules: { variant: settings.variant, minFaan: tw ? 0 : settings.minFaan, length: settings.length }, seed, firstDealer: (4 - wind) % 4 });
   while (!H.match.over && H.running) {
     H.hand = H.match.newHand();
     G.ui.selected = null;
@@ -839,10 +856,15 @@ function startHosting(withNet) {
 const SEAT_DESC = ['you', 'on your right', 'across from you', 'on your left'];
 function renderSeats() {
   const el = $('seats');
+  // Before the game, show each seat's wind for the first hand (unless the seat is left to chance).
+  const w = settings.seat === 'r' || H.running ? null : +settings.seat;
+  const windTag = s => (w == null ? '' : `<span class="zh" style="color:var(--gold);font-size:18px;width:24px">${WIND_ZH[(s + w) % 4]}</span>`);
+  $('seat-note').textContent = H.running ? '' : w == null ? 'Seats are drawn at random when the game starts.'
+    : w === 0 ? 'You sit East and deal the first hand.' : `You sit ${WIND_EN[w]}; ${['', 'the player on your left', 'the player across', 'the player on your right'][w]} sits East and deals first.`;
   el.innerHTML = [0, 1, 2, 3].map(s => {
-    if (s === 0) return `<div class="seat"><div class="who"><b>${escapeHtml(H.names[0])}</b><small>you</small></div></div>`;
+    if (s === 0) return `<div class="seat">${windTag(0)}<div class="who"><b>${escapeHtml(H.names[0])}</b><small>you</small></div></div>`;
     const remote = H.kinds[s] === 'remote';
-    return `<div class="seat"><div class="who"><b>${escapeHtml(H.names[s])}</b><small>${SEAT_DESC[s]} · ${remote ? '<span class="ok">friend, connected</span>' : 'computer'}</small></div>` +
+    return `<div class="seat">${windTag(s)}<div class="who"><b>${escapeHtml(H.names[s])}</b><small>${SEAT_DESC[s]} · ${remote ? '<span class="ok">friend, connected</span>' : 'computer'}</small></div>` +
       (remote ? `<button class="btn small" data-drop="${s}">Remove</button>` : `<button class="btn small" data-inv="${s}">Invite a friend</button>`) + '</div>';
   }).join('');
   const mi = $('m-invites');

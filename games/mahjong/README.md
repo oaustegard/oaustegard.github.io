@@ -63,7 +63,8 @@ Tai tables differ from one Taiwanese table to the next. This one uses commonly c
 
 ## Playing with friends
 
-1. The host picks **Host a table**, then **Invite a friend** for a seat. Empty seats play as the
+1. The host picks **Host a table**, chooses their own seat (East, South, West, North, or Random as the
+   dice would decide; East deals the first hand), then **Invite a friend** for any other seat. Empty seats play as the
    computer, and the host can also invite from the menu during a game.
 2. The friend scans the invite QR with their phone camera, or opens the link the host texted them
    with **Text or share the link**.
