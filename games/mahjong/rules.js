@@ -58,7 +58,12 @@ export function makeRng(seed) {
   };
 }
 
-export const DEFAULT_RULES = { minFaan: 3, cap: 10, length: 'east' };
+// variant 'hk': Hong Kong old style (13 tiles, faan, minimum faan, half-gun payment).
+// variant 'tw': Taiwanese / Taipei 16-tile (five sets and a pair, tai, no minimum, 16 tiles kept back,
+// the discarder pays alone, dealer tai on every payment the dealer makes or receives).
+export const DEFAULT_RULES = { variant: 'hk', minFaan: 3, cap: 10, length: 'east' };
+export const setsFor = rules => (rules && rules.variant === 'tw' ? 5 : 4);
+export const TW_BASE = 100, TW_PER_TAI = 20;   // the common "100 / 20" table: base plus 20 a tai
 
 // Half-spicy (半辣) doubling table: points for 0..10 faan. A limit hand scores the cap.
 export const POINTS = [1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128];
@@ -109,17 +114,17 @@ export function isThirteenOrphans(counts) {
   return pair;
 }
 
-// Standard shanten (tiles away from ready, -1 = complete) for 4 sets + a pair, with `melds` sets already
-// fixed, plus the thirteen-orphans form when no sets are melded.
-export function shanten(counts, melds = 0) {
+// Standard shanten (tiles away from ready, -1 = complete) for `total` sets + a pair (4 in Hong Kong rules,
+// 5 in Taiwanese), with `melds` sets already fixed, plus thirteen orphans for a 13-tile hand with no melds.
+export function shanten(counts, melds = 0, total = 4) {
   const c = counts.slice();
-  let best = 8;
-  const maxSets = 4 - melds;
+  let best = 2 * total;
+  const maxSets = total - melds;
   function rec(i, sets, partials, pair) {
     while (i < KIND_COUNT && c[i] === 0) i++;
     if (i === KIND_COUNT) {
       const p = Math.min(partials, maxSets - sets);
-      const s = 8 - 2 * (sets + melds) - p - pair;
+      const s = 2 * total - 2 * (sets + melds) - p - pair;
       if (s < best) best = s;
       return;
     }
@@ -141,7 +146,7 @@ export function shanten(counts, melds = 0) {
     const n = c[i]; c[i] = 0; rec(i + 1, sets, partials, pair); c[i] = n;
   }
   rec(0, 0, 0, 0);
-  if (melds === 0) {
+  if (melds === 0 && total === 4) {
     let kinds = 0, pair = 0;
     for (const k of ORPHANS) { if (counts[k]) kinds++; if (counts[k] >= 2) pair = 1; }
     best = Math.min(best, 13 - kinds - pair);
@@ -156,6 +161,7 @@ export function shanten(counts, melds = 0) {
 // earthly }. Returns the best reading { faan, limit, items: [{ zh, en, faan }] } or null if the tiles
 // do not form a hand.
 export function scoreHand(p, ctx, rules = DEFAULT_RULES) {
+  if (rules.variant === 'tw') return scoreHandTW(p, ctx);
   const cap = rules.cap || 10;
   const counts = countsOf(p.concealed);
   const melds = p.melds || [];
@@ -207,6 +213,123 @@ export function scoreHand(p, ctx, rules = DEFAULT_RULES) {
       [...patternLimits(sets, d.pair, p, counts, open, ctx), ...limits]));
   }
   return best;
+}
+
+// Every reading of the tiles as `need` sets plus a pair, with melds first. A pung completed by the winning
+// discard counts as melded (exposed), unless the tile can be read into the pair or a chow.
+function arrangements(counts, melds, need, ctx) {
+  return decompositions(counts, need).map(d => {
+    const sets = [
+      ...melds.map(m => ({ type: m.type, kind: m.kind, concealed: !!m.concealed, melded: !m.concealed })),
+      ...d.sets.map(s => ({ type: s.type, kind: s.kind, concealed: true, melded: false })),
+    ];
+    if (!ctx.selfDrawn && ctx.winKind !== d.pair) {
+      const viaChow = d.sets.some(s => s.type === 'chow' && ctx.winKind >= s.kind && ctx.winKind <= s.kind + 2);
+      if (!viaChow) {
+        const i = sets.findIndex((s, j) => j >= melds.length && s.type === 'pung' && s.kind === ctx.winKind);
+        if (i >= 0) sets[i].concealed = false;
+      }
+    }
+    return { sets, pair: d.pair };
+  });
+}
+
+// Seven pairs and a pung, all concealed: the 16-tile special hand 嚦咕嚦咕.
+function isLiguLigu(counts) {
+  let pairs = 0, pungs = 0;
+  for (const n of counts) { if (n === 2) pairs++; else if (n === 3) pungs++; else if (n !== 0) return false; }
+  return pairs === 7 && pungs === 1;
+}
+
+function completeTW(counts, melds) {
+  return decompositions(counts, 5 - melds).length > 0 || (melds === 0 && isLiguLigu(counts));
+}
+
+// Tai for a Taiwanese 16-tile hand. Same inputs as scoreHand. No minimum and no cap; dealer tai are not
+// part of the hand: they go on each payment the dealer makes or receives (see Hand.settleWin).
+export function scoreHandTW(p, ctx) {
+  const counts = countsOf(p.concealed);
+  const melds = p.melds || [];
+  const open = melds.some(m => !m.concealed);
+  const fl = p.flowers || [];
+  const common = [];
+  if (!open && ctx.selfDrawn) common.push(['門清自摸', 'Concealed hand, self-drawn', 3]);
+  else {
+    if (ctx.selfDrawn) common.push(['自摸', 'Self-drawn', 1]);
+    if (!open) common.push(['門清', 'Concealed hand', 1]);
+  }
+  if (ctx.afterKong) common.push(['槓上開花', 'Win on a kong replacement', 1]);
+  if (ctx.robbing) common.push(['搶槓', 'Robbing the kong', 1]);
+  if (ctx.lastTile && ctx.selfDrawn) common.push(['海底撈月', 'Last tile before the dead wall', 1]);
+  if (ctx.lastTile && !ctx.selfDrawn) common.push(['河底撈魚', 'Last discard', 1]);
+  if (ctx.heavenly) common.push(['天胡', 'Heavenly hand', 16]);
+  if (ctx.earthly) common.push(['地胡', 'Earthly hand', 16]);
+  for (const [base, zhSet, enSet, zhOne, enOne] of [
+    [34, '四君子', 'All four flowers', '花牌', 'Seat flower'],
+    [38, '四季', 'All four seasons', '花牌', 'Seat season'],
+  ]) {
+    const have = fl.filter(k => k >= base && k < base + 4);
+    if (have.length === 4) common.push([zhSet, enSet, 2]);
+    else if (have.includes(base + p.seatWind)) common.push([zhOne, enOne, 1]);
+  }
+
+  // Single wait: only one tile kind would have completed the hand (edge, closed or pair wait).
+  const pre = counts.slice();
+  pre[ctx.winKind]--;
+  let waits = 0;
+  for (let k = 0; k < KIND_COUNT && waits < 2; k++) {
+    if (pre[k] >= 4) continue;
+    pre[k]++;
+    if (completeTW(pre, melds.length)) waits++;
+    pre[k]--;
+  }
+  const single = waits === 1;
+
+  let best = null;
+  const consider = items => {
+    const all = items.map(([zh, en, faan]) => ({ zh, en, faan }));
+    const faan = all.reduce((a, b) => a + b.faan, 0);
+    if (!best || faan > best.faan) best = { faan, limit: false, items: all };
+  };
+  if (melds.length === 0 && isLiguLigu(counts)) consider([['嚦咕嚦咕', 'Seven pairs and a pung', 8], ...common]);
+  for (const { sets, pair } of arrangements(counts, melds, 5 - melds.length, ctx)) {
+    consider([...patternTai(sets, pair, p, ctx, single, fl, melds), ...common]);
+  }
+  return best;
+}
+
+function patternTai(sets, pair, p, ctx, single, fl, melds) {
+  const items = [];
+  const kinds = [pair, ...sets.map(s => s.kind)];
+  const pungs = sets.filter(s => s.type !== 'chow');
+  const suits = new Set(kinds.filter(isSuited).map(suitOf));
+  const honors = kinds.some(isHonor);
+  if (!suits.size) items.push(['字一色', 'All honours', 16]);
+  else if (suits.size === 1 && !honors) items.push(['清一色', 'One suit only', 8]);
+  else if (suits.size === 1) items.push(['混一色', 'One suit plus honours', 4]);
+  if (pungs.length === 5) items.push(['碰碰胡', 'All pungs', 4]);
+  const hidden = pungs.filter(s => s.concealed).length;
+  if (hidden === 5) items.push(['五暗刻', 'Five concealed pungs', 8]);
+  else if (hidden === 4) items.push(['四暗刻', 'Four concealed pungs', 5]);
+  else if (hidden === 3) items.push(['三暗刻', 'Three concealed pungs', 2]);
+  const dragons = pungs.filter(s => isDragon(s.kind)).length;
+  if (dragons === 3) items.push(['大三元', 'Great three dragons', 8]);
+  else if (dragons === 2 && isDragon(pair)) items.push(['小三元', 'Small three dragons', 4]);
+  else for (const s of pungs) if (isDragon(s.kind)) items.push(['三元牌', DRAGON_EN[s.kind - 31] + ' dragon pung', 1]);
+  const winds = pungs.filter(s => isWind(s.kind)).length;
+  if (winds === 4) items.push(['大四喜', 'Great four winds', 16]);
+  else if (winds === 3 && isWind(pair)) items.push(['小四喜', 'Small four winds', 8]);
+  else for (const s of pungs) {
+    if (s.kind === 27 + p.seatWind) items.push(['門風', 'Seat wind pung (' + WIND_EN[p.seatWind] + ')', 1]);
+    if (s.kind === 27 + p.prevailing) items.push(['圈風', 'Prevailing wind pung (' + WIND_EN[p.prevailing] + ')', 1]);
+  }
+  const allMelded = melds.length === 5 && melds.every(m => !m.concealed);
+  if (allMelded && !ctx.selfDrawn) items.push(['全求人', 'Every set melded, won on a discard', 2]);
+  else if (single) items.push(['獨聽', 'Single wait', 1]);
+  if (sets.every(s => s.type === 'chow') && !isHonor(pair) && !fl.length && !ctx.selfDrawn && !single) {
+    items.push(['平胡', 'All chows, no honours or flowers, won on a discard', 2]);
+  }
+  return items;
 }
 
 function flowerFaan(flowers, seatWind) {
@@ -290,6 +413,10 @@ export class Hand {
     this.dealer = opts.dealer || 0;
     this.prevailing = opts.prevailing || 0;
     this.handNo = opts.handNo || 1;
+    this.streak = opts.streak || 0;     // consecutive extra deals by this dealer (連莊)
+    this.tw = this.rules.variant === 'tw';
+    this.sets = setsFor(this.rules);
+    this.reserve = this.tw ? 16 : 0;    // tiles kept back at the end of the wall
     this.rng = makeRng(opts.seed ?? (Math.random() * 2 ** 32));
     this.players = [0, 1, 2, 3].map(seat => ({
       seat, wind: (seat - this.dealer + 4) % 4, hand: [], melds: [], flowers: [], discards: [],
@@ -316,7 +443,7 @@ export class Hand {
     this.front = 0;              // next index drawn from the front
     this.back = 144;             // one past the next index drawn from the back (replacements)
     this.wallBreak = Math.floor(this.rng() * 72) * 2;
-    for (let r = 0; r < 13; r++) for (let i = 0; i < 4; i++) this.players[(this.dealer + i) % 4].hand.push(this.wall[this.front++]);
+    for (let r = 0; r < this.sets * 3 + 1; r++) for (let i = 0; i < 4; i++) this.players[(this.dealer + i) % 4].hand.push(this.wall[this.front++]);
     this.players[this.dealer].hand.push(this.wall[this.front++]);
     // Bonus tiles are set aside and replaced from the back, dealer first, until nobody holds one.
     for (let again = true; again;) {
@@ -335,19 +462,48 @@ export class Hand {
     this.turn = this.dealer;
     this.drawn = this.players[this.dealer].hand[this.players[this.dealer].hand.length - 1];
     this.log({ t: 'start', dealer: this.dealer });
+    if (this.tw) {
+      // Flowers dealt: eight to one player wins outright; seven to one and the eighth to another is robbed.
+      const eight = this.players.find(p => p.flowers.length === 8);
+      const seven = this.players.find(p => p.flowers.length === 7);
+      if (eight) this.flowerWin(eight.seat, null);
+      else if (seven) {
+        const one = this.players.find(p => p !== seven && p.flowers.length === 1);
+        if (one) this.flowerWin(seven.seat, one.seat);
+      }
+    }
   }
 
-  get wallLeft() { return this.back - this.front; }
+  // Playable tiles left: Taiwanese rules keep the last 16 back.
+  get wallLeft() { return this.back - this.front - this.reserve; }
+
+  // 八仙過海 (all eight bonus tiles) or 七搶一 (seven, robbing the eighth from `from`, who pays as a discarder).
+  flowerWin(seat, from) {
+    if (from !== null) {
+      const src = this.players[from];
+      const id = src.flowers.pop();
+      this.players[seat].flowers.push(id);
+    }
+    const score = from === null
+      ? { faan: 8, limit: false, items: [{ zh: '八仙過海', en: 'All eight flowers', faan: 8 }] }
+      : { faan: 8, limit: false, items: [{ zh: '七搶一', en: 'Seven flowers robbing the eighth', faan: 8 }] };
+    this.settleWin(seat, from, score, null, false, true);
+  }
 
   // Draw for `seat`: from the front normally, from the back after a kong. Bonus tiles replace from the back.
   draw(seat, fromBack) {
     const pl = this.players[seat];
     for (;;) {
-      if (this.back <= this.front) { this.endDraw(); return false; }
+      if (this.wallLeft <= 0) { this.endDraw(); return false; }
       const id = fromBack ? this.wall[--this.back] : this.wall[this.front++];
       if (isBonus(kindOf(id))) {
         pl.flowers.push(id);
         this.log({ t: 'flower', seat, id });
+        if (this.tw) {
+          if (pl.flowers.length === 8) { this.flowerWin(seat, null); return false; }
+          const seven = this.players.find(p => p !== pl && p.flowers.length === 7);
+          if (seven) { this.flowerWin(seven.seat, seat); return false; }
+        }
         fromBack = true;
         continue;
       }
@@ -395,6 +551,8 @@ export class Hand {
       const ws = this.winScore(seat, kinds, {
         winKind: kindOf(this.drawn), selfDrawn: true, lastTile: this.wallLeft === 0, afterKong: this.afterKong,
         heavenly: seat === this.dealer && this.discardCount === 0 && !this.claimed,
+        // Taiwanese 地胡: a non-dealer self-draws a win on their first draw, before any claim.
+        earthly: this.tw && seat !== this.dealer && pl.discards.length === 0 && pl.melds.length === 0 && !this.claimed,
       });
       if (ws && !ws.short) win = ws;
     }
@@ -485,7 +643,7 @@ export class Hand {
     const counts = countsOf(kinds);
     const win = this.winScore(seat, [...kinds, k], {
       winKind: k, selfDrawn: false, lastTile: this.wallLeft === 0,
-      earthly: seat !== this.dealer && this.discardCount === 1 && !this.claimed && this.lastDiscard.seat === this.dealer,
+      earthly: !this.tw && seat !== this.dealer && this.discardCount === 1 && !this.claimed && this.lastDiscard.seat === this.dealer,
     });
     const o = { win: win && !win.short ? win : null, pung: false, kong: false, chows: [] };
     if (this.wallLeft > 0) {
@@ -559,9 +717,27 @@ export class Hand {
     this.phase = 'turn';
   }
 
-  settleWin(seat, from, score, winId, robbed) {
+  settleWin(seat, from, score, winId, robbed, flowers) {
     const pl = this.players[seat];
-    if (from !== null && !pl.hand.includes(winId)) pl.hand.push(winId);
+    if (from !== null && winId != null && !pl.hand.includes(winId)) pl.hand.push(winId);
+    if (this.tw) {
+      // The discarder pays alone; on a self-draw all three pay. Each payment is base + 20 a tai, and any
+      // payment the dealer makes or receives carries 1 dealer tai plus 2 for each consecutive deal.
+      const dealerTai = 1 + 2 * this.streak;
+      const payments = [0, 0, 0, 0], bills = [null, null, null, null];
+      for (let s = 0; s < 4; s++) {
+        if (s === seat || (from !== null && s !== from)) continue;
+        const tai = score.faan + (s === this.dealer || seat === this.dealer ? dealerTai : 0);
+        const pay = TW_BASE + TW_PER_TAI * tai;
+        bills[s] = tai;
+        payments[s] -= pay;
+        payments[seat] += pay;
+      }
+      this.phase = 'over';
+      this.result = { type: 'win', winner: seat, from, winId, score, points: null, payments, bills, dealerTai, streak: this.streak, robbed: !!robbed, flowers: !!flowers };
+      this.log({ t: 'win', seat, from, faan: score.faan });
+      return;
+    }
     const pts = pointsFor(score.faan, this.rules.cap);
     const payments = [0, 0, 0, 0];
     // Half-gun (半銃): a discarder pays the full amount and the other two half; on a self-draw all three pay full.
@@ -592,7 +768,7 @@ export class Hand {
     }));
     // A hidden tile's id would give away its kind, so opponents' concealed hands carry no ids.
     return {
-      seat, phase: this.phase, turn: this.turn, dealer: this.dealer, prevailing: this.prevailing, handNo: this.handNo,
+      seat, phase: this.phase, turn: this.turn, dealer: this.dealer, prevailing: this.prevailing, handNo: this.handNo, streak: this.streak,
       rules: this.rules, players, wallLeft: this.wallLeft, front: this.front, back: this.back, wallBreak: this.wallBreak,
       drawn: this.turn === seat ? this.drawn : null,
       lastDiscard: this.lastDiscard,
@@ -620,6 +796,7 @@ export class Match {
     this.firstDealer = opts.firstDealer ?? Math.floor(this.rng() * 4);
     this.dealer = this.firstDealer;
     this.passes = 0;            // dealer changes within this prevailing wind
+    this.streak = 0;            // consecutive extra deals by the current dealer
     this.handNo = 0;
     this.history = [];
     this.over = false;
@@ -628,7 +805,7 @@ export class Match {
 
   newHand() {
     this.handNo++;
-    this.hand = new Hand({ rules: this.rules, dealer: this.dealer, prevailing: this.prevailing, handNo: this.handNo, seed: Math.floor(this.rng() * 2 ** 32) });
+    this.hand = new Hand({ rules: this.rules, dealer: this.dealer, prevailing: this.prevailing, handNo: this.handNo, streak: this.streak, seed: Math.floor(this.rng() * 2 ** 32) });
     this.hand.start();
     return this.hand;
   }
@@ -640,6 +817,7 @@ export class Match {
     for (let s = 0; s < 4; s++) this.scores[s] += r.payments[s];
     this.history.push({ handNo: h.handNo, dealer: h.dealer, prevailing: h.prevailing, type: r.type, winner: r.winner, from: r.from, faan: r.score?.faan, payments: r.payments.slice() });
     const stays = r.type === 'draw' || r.winner === h.dealer;
+    this.streak = stays ? this.streak + 1 : 0;
     if (!stays) {
       this.dealer = (this.dealer + 1) % 4;
       this.passes++;

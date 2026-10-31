@@ -1,6 +1,6 @@
 // Rules tests for games/mahjong/rules.js and ai.js. Run: node tests/mahjong-rules.mjs [hands]
 import assert from 'node:assert/strict';
-import { Hand, Match, scoreHand, shanten, countsOf, kindOf, decompositions, isThirteenOrphans, sortIds } from '../games/mahjong/rules.js';
+import { Hand, Match, scoreHand, shanten, countsOf, kindOf, decompositions, isThirteenOrphans, sortIds, TW_BASE, TW_PER_TAI } from '../games/mahjong/rules.js';
 import { botTurn, botClaim, readyKinds } from '../games/mahjong/ai.js';
 
 let failed = 0;
@@ -152,9 +152,9 @@ function handSizesOk(h) {
   for (const p of h.players) {
     const kongs = p.melds.filter(m => m.type === 'kong').length;
     const n = p.hand.length + p.melds.length * 3;
-    const expect = (h.phase === 'turn' && h.turn === p.seat) ? 14 : 13;
+    const expect = h.sets * 3 + ((h.phase === 'turn' && h.turn === p.seat) ? 2 : 1);
     if (h.phase === 'over') continue;
-    if (h.phase === 'rob' && h.pendingKong.seat === p.seat) { assert.equal(n, 13, 'rob size'); continue; }
+    if (h.phase === 'rob' && h.pendingKong.seat === p.seat) { assert.equal(n, h.sets * 3 + 1, 'rob size'); continue; }
     assert.equal(n, expect, `seat ${p.seat} holds ${n} (phase ${h.phase}, kongs ${kongs})`);
   }
 }
@@ -248,6 +248,123 @@ test('view hides opponents\' concealed tiles', () => {
   assert.ok(Array.isArray(v.players[1].hand));
   for (const s of [0, 2, 3]) assert.equal(v.players[s].hand, null);
   assert.ok(sortIds([5, 1, 9], 1).at(-1) === 1);
+});
+
+// ---------- Taiwanese 16-tile rules ----------
+const TW = { variant: 'tw', minFaan: 0 };
+const PT = (concealed, extra = {}) => P(concealed, extra);
+const tw = (p, ctx) => scoreHand(p, ctx, TW);
+
+test('tw shanten: five sets and a pair', () => {
+  assert.equal(shanten(countsOf(K('123m 456m 789m 234p 567p 99s')), 0, 5), -1);
+  assert.equal(shanten(countsOf(K('123m 456m 789m 234p 567p 9s')), 0, 5), 0);
+  assert.equal(shanten(countsOf(K('123m 456m 789m 234p 99s')), 1, 5), -1);
+});
+
+test('tw all chows on a two-sided wait: 平胡 2 + 門清 1', () => {
+  const r = tw(PT('123m 456m 789m 234p 567p 99s'), { winKind: K('4p')[0], selfDrawn: false });
+  assert.deepEqual(names(r), ['平胡', '門清'].sort());
+  assert.equal(r.faan, 3);
+});
+
+test('tw single wait blocks 平胡 and scores 獨聽', () => {
+  // 13m waiting on 2m only (the 9s pair is fixed).
+  const r = tw(PT('123m 456m 789m 234p 567p 99s'), { winKind: K('2m')[0], selfDrawn: false });
+  assert.ok(names(r).includes('獨聽'));
+  assert.ok(!names(r).includes('平胡'));
+});
+
+test('tw concealed self-draw is 門清自摸 3, not 1 + 1', () => {
+  const r = tw(PT('123m 456m 789m 234p 567p 99s', { flowers: [34] }), { winKind: K('4p')[0], selfDrawn: true });
+  assert.ok(names(r).includes('門清自摸'));
+  assert.ok(!names(r).includes('自摸') && !names(r).includes('門清'));
+});
+
+test('tw patterns: all pungs 4, concealed pungs, flushes, dragons', () => {
+  const pp = tw(PT('111m 999m 222p 555s 777s 33z', { flowers: [34] }), { winKind: K('3z')[0], selfDrawn: true });
+  assert.ok(names(pp).includes('碰碰胡')); assert.ok(names(pp).includes('五暗刻'));
+  assert.ok(names(tw(PT('123m 345m 567m 789m 111m 99m'), { winKind: 0, selfDrawn: true })).includes('清一色'));
+  assert.ok(names(tw(PT('123m 345m 567m 111z 555z 99m'), { winKind: 0, selfDrawn: true })).includes('混一色'));
+  const small = tw(PT('123m 456p 789s 555z 666z 77z'), { winKind: K('2m')[0] });
+  assert.ok(names(small).includes('小三元'));
+});
+
+test('tw seven pairs and a pung (嚦咕嚦咕) is a hand worth 8', () => {
+  const r = tw(PT('11m 22m 33p 44p 55s 66s 77z 999s'), { winKind: K('7z')[0], selfDrawn: false });
+  assert.ok(names(r).includes('嚦咕嚦咕'));
+  assert.equal(scoreHand(P('11m 22m 33p 44p 55s 66s 77z 999s'), { winKind: 0 }), null, 'not a hand in HK rules');
+});
+
+test('tw deal: 16 tiles each, dealer 17, 16 kept back', () => {
+  for (let seed = 1; seed < 30; seed++) {
+    const h = new Hand({ seed, dealer: seed % 4, rules: TW });
+    h.start();
+    if (h.phase === 'over') continue;   // a flower win on the deal
+    h.players.forEach(p => assert.equal(p.hand.length, p.seat === h.dealer ? 17 : 16));
+    assert.equal(h.wallLeft, h.back - h.front - 16);
+    accounted(h);
+  }
+});
+
+test('tw payments: discarder pays alone; dealer tai 1 + 2 per consecutive deal', () => {
+  const score = { faan: 3, items: [] };
+  const mk = () => { const h = new Hand({ seed: 1, dealer: 0, rules: TW, streak: 2 }); h.start(); return h; };
+  // Dealer self-draws: all three pay base + 20 × (3 + 5).
+  let h = mk(); h.settleWin(0, null, score, null);
+  assert.deepEqual(h.result.payments, [3 * (TW_BASE + TW_PER_TAI * 8), -(TW_BASE + TW_PER_TAI * 8), -(TW_BASE + TW_PER_TAI * 8), -(TW_BASE + TW_PER_TAI * 8)]);
+  // Seat 2 wins on seat 1's discard: only seat 1 pays, no dealer tai.
+  h = mk(); h.settleWin(2, 1, score, null);
+  assert.deepEqual(h.result.payments, [0, -(TW_BASE + TW_PER_TAI * 3), TW_BASE + TW_PER_TAI * 3, 0]);
+  // Seat 2 self-draws: the dealer's share carries dealer tai.
+  h = mk(); h.settleWin(2, null, score, null);
+  assert.equal(h.result.payments[0], -(TW_BASE + TW_PER_TAI * 8));
+  assert.equal(h.result.payments[1], -(TW_BASE + TW_PER_TAI * 3));
+});
+
+test('tw seven flowers rob the eighth', () => {
+  const h = new Hand({ seed: 4, dealer: 0, rules: TW });
+  h.start();
+  const all = [...h.players.flatMap(p => p.flowers)];
+  if (h.phase !== 'over' && all.length >= 1) {
+    // Rig: seat 1 holds seven flowers, seat 3 the eighth.
+    h.players.forEach(p => { p.flowers = []; });
+    h.players[1].flowers = [136, 137, 138, 139, 140, 141, 142];
+    h.players[3].flowers = [143];
+    h.flowerWin(1, 3);
+    assert.equal(h.result.winner, 1);
+    assert.equal(h.players[1].flowers.length, 8);
+    assert.ok(h.result.payments[3] < 0 && h.result.payments[0] === 0);
+  }
+});
+
+const NT = Math.max(20, Math.round(N / 2));
+test(`${NT} bot hands under Taiwanese rules: tiles accounted, payments balance`, () => {
+  const stats = { win: 0, draw: 0, self: 0, tai: {} };
+  for (let seed = 1; seed <= NT; seed++) {
+    const h = new Hand({ seed, dealer: seed % 4, rules: TW });
+    h.start();
+    playHand(h);
+    const r = h.result;
+    assert.equal(r.payments.reduce((a, b) => a + b, 0), 0);
+    if (r.type === 'win') { stats.win++; if (r.from === null) stats.self++; stats.tai[r.score.faan] = (stats.tai[r.score.faan] || 0) + 1; }
+    else stats.draw++;
+  }
+  console.log('     ', JSON.stringify(stats));
+  assert.ok(stats.win / NT > 0.4, 'bots win too rarely: ' + stats.win + '/' + NT);
+});
+
+test('tw match: dealer streak counts consecutive deals and resets on a pass', () => {
+  const m = new Match({ seed: 3, rules: { ...TW, length: 'east' }, firstDealer: 0 });
+  let guard = 0;
+  while (!m.over && guard++ < 40) {
+    const h = m.newHand();
+    const before = m.streak;
+    assert.equal(h.streak, before);
+    playHand(h);
+    const { stays } = m.finishHand();
+    assert.equal(m.streak, stays ? before + 1 : 0);
+  }
+  assert.equal(m.scores.reduce((a, b) => a + b, 0), 0);
 });
 
 if (failed) { console.log(failed + ' failed'); process.exit(1); }

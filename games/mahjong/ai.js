@@ -3,7 +3,10 @@
 // how far it leaves the hand from ready under that plan (shanten), how many unseen tiles would improve it,
 // whether the plan can still reach the table's minimum faan, and, late or against a threatening hand,
 // how dangerous the tile is to feed.
-import { kindOf, countsOf, shanten, isSuited, suitOf, isHonor, isDragon, isTerminal, KIND_COUNT } from './rules.js';
+import { kindOf, countsOf, shanten, isSuited, suitOf, isHonor, isDragon, isTerminal, KIND_COUNT, setsFor } from './rules.js';
+
+// Sets a complete hand needs (4, or 5 for Taiwanese rules); set per decision from the view's rules.
+let SETS = 4;
 
 const PLANS = ['any', 'flush0', 'flush1', 'flush2', 'pungs'];
 
@@ -31,23 +34,23 @@ function meldsFit(plan, melds) {
 }
 
 function pungShanten(c, m) {
-  const need = 4 - m;
+  const need = SETS - m;
   let t3 = 0, t2 = 0;
   for (let k = 0; k < KIND_COUNT; k++) { if (c[k] >= 3) t3++; else if (c[k] === 2) t2++; }
   const sets = Math.min(t3, need);
   const rest = need - sets;
   const pair = t2 > 0 ? 1 : 0;
   const partials = Math.min(Math.max(t2 - pair, 0), rest);
-  return 8 - 2 * (m + sets) - partials - pair;
+  return 2 * SETS - 2 * (m + sets) - partials - pair;
 }
 
 export function planShanten(plan, c, m) {
-  if (plan === 'any') return shanten(c, m);
+  if (plan === 'any') return shanten(c, m, SETS);
   if (plan === 'pungs') return pungShanten(c, m);
   const s = +plan[5];
   const d = c.slice();
   for (let k = 0; k < 27; k++) if (suitOf(k) !== s) d[k] = 0;
-  return shanten(d, m);
+  return shanten(d, m, SETS);
 }
 
 // Rough faan the plan would score: flowers and value pungs already held, likely value pungs from pairs,
@@ -57,7 +60,7 @@ function faanEstimate(plan, c, melds, view, open) {
   const seatW = 27 + me.wind, prevW = 27 + view.prevailing;
   let f = 0;
   const fl = me.flowers.map(kindOf);
-  if (fl.length === 0) f += 1;
+  if (fl.length === 0 && view.rules.variant !== 'tw') f += 1;
   if (fl.includes(34 + me.wind)) f += 1;
   if (fl.includes(38 + me.wind)) f += 1;
   const value = k => (isDragon(k) ? 1 : 0) + (k === seatW ? 1 : 0) + (k === prevW ? 1 : 0);
@@ -66,10 +69,11 @@ function faanEstimate(plan, c, melds, view, open) {
     if (c[k] >= 3) f += value(k);
     else if (c[k] === 2) f += value(k) * 0.45;
   }
-  if (plan === 'pungs') f += 3;
+  const tw = view.rules.variant === 'tw';
+  if (plan === 'pungs') f += tw ? 4 : 3;
   if (plan.startsWith('flush')) {
     const honors = c.slice(27).some(n => n > 0) || melds.some(mm => isHonor(mm.kind));
-    f += honors ? 3 : 5;
+    f += honors ? (tw ? 4 : 3) : (tw ? 7 : 5);
   }
   if (!open) f += 1.3;
   return f;
@@ -143,6 +147,7 @@ function evalDiscards(view, c, melds, plan) {
 }
 
 export function botTurn(view, opts) {
+  SETS = setsFor(view.rules);
   if (opts.win) return { type: 'win' };
   const me = view.players[view.seat];
   const c = countsOf(me.hand.map(kindOf));
@@ -172,6 +177,7 @@ function minusBest(c, plan, m) {
 }
 
 export function botClaim(view, o) {
+  SETS = setsFor(view.rules);
   if (o.win) return { type: 'win' };
   const me = view.players[view.seat];
   const k = kindOf(view.lastDiscard.id);
@@ -208,21 +214,21 @@ export function botClaim(view, o) {
   return null;
 }
 
-// For the human hint line: which kinds would complete this 13-tile hand (ignoring faan).
-export function readyKinds(hand, melds) {
+// For the human hint line: which kinds would complete this hand (ignoring faan). sets: 4, or 5 (Taiwanese).
+export function readyKinds(hand, melds, sets = 4) {
   const c = countsOf(hand.map(kindOf));
-  if (shanten(c, melds.length) !== 0) return [];
+  if (shanten(c, melds.length, sets) !== 0) return [];
   const out = [];
   for (let k = 0; k < KIND_COUNT; k++) {
     if (c[k] >= 4) continue;
     c[k]++;
-    if (shanten(c, melds.length) === -1) out.push(k);
+    if (shanten(c, melds.length, sets) === -1) out.push(k);
     c[k]--;
   }
   return out;
 }
 
 // For the human hint: shanten of the current hand.
-export function handShanten(hand, melds) {
-  return shanten(countsOf(hand.map(kindOf)), melds.length);
+export function handShanten(hand, melds, sets = 4) {
+  return shanten(countsOf(hand.map(kindOf)), melds.length, sets);
 }

@@ -208,7 +208,9 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   const portrait = H > W * 1.1;
   const m = 8;
   const topReserve = safe.top + (portrait ? 54 : 40);
-  const tw = Math.min((W - 2 * 12) / 14.8, portrait ? 52 : Math.min(58, H * 0.1));
+  // Room for the largest hand: 14 tiles (Hong Kong) or 17 (Taiwanese), plus the gap before the drawn tile.
+  const handSlots = (view.rules && view.rules.variant === 'tw' ? 17 : 14) + 0.8;
+  const tw = Math.min((W - 2 * 12) / handSlots, portrait ? 52 : Math.min(58, H * 0.1));
   const th = tw * TILE_ASPECT;
   const meldScale = portrait ? 0.78 : 0.82;
   const bottomBlock = safe.bottom + 10 + th + (portrait ? th * meldScale + 10 : 0) + 58;
