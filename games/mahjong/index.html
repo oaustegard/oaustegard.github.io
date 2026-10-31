@@ -1,0 +1,1017 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Mahjong</title>
+<meta name="description" content="Hong Kong mahjong for four, against the computer or with friends who join by text or QR code over a direct WebRTC connection. Tiles and a moonlit ink-wash scene drawn in WebGPU.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Mahjong">
+<meta property="og:description" content="Hong Kong mahjong for four: play the computer, or invite friends by text or QR code. No server, no accounts.">
+<meta property="og:url" content="https://austegard.com/games/mahjong/">
+<meta property="og:image" content="https://austegard.com/games/mahjong/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A mahjong table on jade felt under a moonlit ink-wash landscape">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mahjong">
+<meta name="twitter:description" content="Hong Kong mahjong for four: play the computer, or invite friends by text or QR code.">
+<meta name="twitter:image" content="https://austegard.com/games/mahjong/og-image.png">
+<meta name="theme-color" content="#0e0d14">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mahjong">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&display=swap">
+<!-- QR encode + decode, vendored (qrcode-generator 1.4.4, jsQR 1.4.0), shared with /fd. -->
+<script src="/scripts/vendor/qrcode-generator.js"></script>
+<script src="/scripts/vendor/jsqr.js"></script>
+<style>
+:root {
+  --ink: #0e0d14;
+  --glass: rgba(16, 14, 22, 0.86);
+  --rule: rgba(216, 180, 106, 0.35);
+  --fg: #f3ead6;
+  --dim: #b5a98e;
+  --gold: #d8b46a;
+  --jade: #3fae86;
+  --red: #d2533f;
+  --serif: "Cormorant Garamond", "Noto Serif SC", Georgia, serif;
+  --cjk: "Noto Serif SC", "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", serif;
+  --sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; background: var(--ink); color: var(--fg); overflow: hidden;
+  overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
+body { font: 14px/1.45 var(--sans); }
+[hidden] { display: none !important; }
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.zh { font-family: var(--cjk); }
+button { font: inherit; color: inherit; cursor: pointer; }
+
+/* HUD */
+#hud { position: fixed; top: 0; left: 0; right: 0; display: flex; align-items: center; gap: 10px;
+  padding: calc(env(safe-area-inset-top, 0px) + 8px) max(16px, env(safe-area-inset-right, 0px)) 6px max(16px, env(safe-area-inset-left, 0px));
+  pointer-events: none; }
+#hud .round { font: 600 17px/1.1 var(--serif); letter-spacing: 0.02em; text-shadow: 0 1px 3px #000; }
+#hud .round .zh { color: var(--gold); margin-right: 4px; }
+#hud .sp { flex: 1; }
+#hud button { pointer-events: auto; background: var(--glass); border: 1px solid var(--rule); border-radius: 999px;
+  width: 38px; height: 38px; display: grid; place-items: center; font-size: 18px; }
+.badge { position: fixed; transform: translate(-50%, -50%); padding: 3px 9px 3px 4px; border-radius: 999px;
+  background: rgba(10, 9, 14, 0.78); border: 1px solid var(--rule); display: flex; align-items: center; gap: 6px;
+  white-space: nowrap; font-size: 12px; pointer-events: none; transition: box-shadow 0.3s, border-color 0.3s; max-width: 46vw; }
+.badge .w { font: 700 15px/1 var(--cjk); width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%;
+  background: #241d14; color: var(--gold); }
+.badge.dealer .w { background: var(--red); color: #fff3e0; }
+.badge .nm { font-weight: 600; overflow: hidden; text-overflow: ellipsis; max-width: 90px; }
+.badge .sc { color: var(--dim); font-variant-numeric: tabular-nums; }
+.badge .kind { font-size: 10px; color: var(--dim); }
+.badge.turn { border-color: var(--gold); box-shadow: 0 0 12px rgba(216, 180, 106, 0.55); }
+.badge.away { opacity: 0.6; }
+#center { position: fixed; transform: translate(-50%, -50%); text-align: center; pointer-events: none; }
+#center .pw { font: 700 30px/1 var(--cjk); color: var(--gold); text-shadow: 0 0 10px rgba(0,0,0,0.6); }
+#center .wl { font: 600 12px/1.3 var(--sans); color: var(--dim); letter-spacing: 0.04em; }
+#toast { position: fixed; left: 50%; top: 42%; transform: translate(-50%, -50%) scale(0.9); opacity: 0; pointer-events: none;
+  padding: 10px 18px; border-radius: 14px; background: var(--glass); border: 1px solid var(--gold);
+  font: 700 22px/1.2 var(--serif); transition: opacity 0.25s, transform 0.25s; text-align: center; white-space: nowrap; }
+#toast.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+#toast .zh { color: var(--gold); margin-right: 8px; font-size: 26px; }
+#hint { position: fixed; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--dim); pointer-events: none;
+  text-shadow: 0 1px 2px #000; padding: 0 16px; }
+#hint b { color: var(--fg); }
+#actions { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px;
+  padding: 6px 16px calc(env(safe-area-inset-bottom, 0px) + 10px); }
+.act { min-width: 64px; height: 42px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--rule);
+  background: var(--glass); display: inline-flex; align-items: center; gap: 6px; font-weight: 600; }
+.act .zh { font-size: 18px; color: var(--gold); }
+.act.go { background: linear-gradient(#a3392a, #6e1f14); border-color: #e2836f; }
+.act.go .zh { color: #ffe3b0; }
+.act.win { background: linear-gradient(#c79a3c, #7c5a19); border-color: #f3d38c; color: #1a1206; }
+.act.win .zh { color: #1a1206; }
+.act:disabled { opacity: 0.45; }
+.act img { height: 26px; }
+
+/* Panels */
+.panel { position: fixed; inset: 0; display: grid; place-items: center; padding: 16px; overflow: auto;
+  background: rgba(8, 7, 12, 0.5); -webkit-user-select: text; user-select: text; }
+.card { width: min(460px, 100%); background: var(--glass); border: 1px solid var(--rule); border-radius: 18px;
+  padding: 20px 20px 18px; box-shadow: 0 20px 60px rgba(0,0,0,0.5); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+.card.wide { width: min(620px, 100%); }
+h1 { font: 700 40px/1 var(--serif); margin: 0 0 4px; letter-spacing: 0.01em; }
+h1 .zh { color: var(--gold); font-size: 34px; margin-right: 10px; }
+h2 { font: 700 24px/1.15 var(--serif); margin: 0 0 10px; }
+h3 { font: 700 17px/1.2 var(--serif); margin: 16px 0 6px; color: var(--gold); }
+.sub { color: var(--dim); margin: 0 0 16px; }
+.stack { display: flex; flex-direction: column; gap: 10px; }
+.row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.btn { height: 46px; padding: 0 18px; border-radius: 12px; border: 1px solid var(--rule); background: rgba(255,255,255,0.04);
+  font-weight: 600; display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.btn.primary { background: linear-gradient(#a3392a, #6e1f14); border-color: #e2836f; }
+.btn.small { height: 34px; padding: 0 12px; font-size: 13px; }
+.btn .zh { color: var(--gold); font-size: 18px; }
+.btn.primary .zh { color: #ffe3b0; }
+label.f { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--dim); }
+input[type=text], textarea, select { font: inherit; color: var(--fg); background: rgba(0,0,0,0.35); border: 1px solid var(--rule);
+  border-radius: 10px; padding: 9px 10px; width: 100%; box-sizing: border-box; }
+textarea { min-height: 64px; resize: vertical; font: 12px/1.3 ui-monospace, Menlo, monospace; }
+.seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.seg button { border: 0; background: transparent; padding: 7px 11px; font-size: 13px; }
+.seg button[aria-pressed=true] { background: rgba(216,180,106,0.25); color: #fff; }
+.settings { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; align-items: center; font-size: 13px; color: var(--dim); margin-top: 6px; }
+.seats { display: flex; flex-direction: column; gap: 8px; }
+.seat { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border: 1px solid var(--rule); border-radius: 12px; }
+.seat .who { flex: 1; }
+.seat .who small { display: block; color: var(--dim); }
+.ok { color: var(--jade); }
+.err { color: #ff9a85; }
+.qr { background: #fff; padding: 8px; border-radius: 10px; display: inline-block; }
+.qr img { display: block; width: min(240px, 62vw); height: auto; image-rendering: pixelated; }
+.status { font-size: 13px; color: var(--dim); min-height: 1.4em; }
+.mono { font: 11px/1.3 ui-monospace, Menlo, monospace; word-break: break-all; color: var(--dim); }
+table.faan { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.faan td { padding: 3px 4px; border-bottom: 1px solid rgba(216,180,106,0.12); vertical-align: top; }
+table.faan td:last-child { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+table.faan .zh { color: var(--gold); white-space: nowrap; }
+.tiles { display: flex; flex-wrap: wrap; gap: 2px; margin: 6px 0; }
+.tiles img { height: 38px; }
+.tiles .gap { width: 8px; }
+.pay { display: grid; grid-template-columns: 1fr auto auto; gap: 2px 12px; font-size: 13px; margin-top: 8px; }
+.pay .pos { color: var(--jade); text-align: right; } .pay .neg { color: #ff9a85; text-align: right; }
+.rules p, .rules li { color: #e6dcc6; font-size: 13.5px; }
+.rules ul { padding-left: 18px; margin: 6px 0; }
+#scanner { position: fixed; inset: 0; background: #000; display: grid; place-items: center; }
+#scanner video { width: 100%; height: 100%; object-fit: cover; }
+#scanner .bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 16px calc(env(safe-area-inset-bottom,0px) + 16px);
+  display: flex; justify-content: center; gap: 10px; background: linear-gradient(transparent, rgba(0,0,0,0.8)); }
+#scanner .note { position: absolute; top: calc(env(safe-area-inset-top,0px) + 20px); left: 16px; right: 16px; text-align: center; text-shadow: 0 1px 3px #000; }
+.foot { margin-top: 14px; font-size: 12px; color: var(--dim); }
+.foot a { color: var(--gold); }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+
+<div id="hud" hidden>
+  <div class="round" id="round"></div>
+  <div class="sp"></div>
+  <button id="btn-menu" aria-label="Menu">☰</button>
+</div>
+<div id="badges"></div>
+<div id="center" hidden><div class="pw" id="pw"></div><div class="wl" id="wl"></div></div>
+<div id="toast"></div>
+<div id="hint"></div>
+<div id="actions"></div>
+
+<section class="panel" id="lobby">
+  <div class="card">
+    <h1><span class="zh">麻雀</span>Mahjong</h1>
+    <p class="sub">Hong Kong rules for four players. Play the computer, or host a table and invite friends by text or QR code: the phones connect directly, with no server.</p>
+    <div class="stack">
+      <label class="f">Your name<input type="text" id="name" maxlength="16" placeholder="Player" autocomplete="nickname"></label>
+      <button class="btn primary" id="btn-solo"><span class="zh">開局</span>Play against the computer</button>
+      <button class="btn" id="btn-host"><span class="zh">邀</span>Host a table for friends</button>
+      <button class="btn" id="btn-join"><span class="zh">入</span>Join with a link or code</button>
+      <button class="btn" id="btn-rules"><span class="zh">規</span>How to play and score</button>
+    </div>
+    <div class="settings">
+      <span>Minimum faan</span><span class="seg" id="set-min"><button data-v="0">0</button><button data-v="1">1</button><button data-v="3">3</button></span>
+      <span>Length</span><span class="seg" id="set-len"><button data-v="east">East round</button><button data-v="full">Four winds</button></span>
+      <span>Hints</span><span class="seg" id="set-hint"><button data-v="on">On</button><button data-v="off">Off</button></span>
+      <span>Pace</span><span class="seg" id="set-pace"><button data-v="calm">Calm</button><button data-v="brisk">Brisk</button></span>
+    </div>
+    <p class="foot"><a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/games/mahjong/README.md">README</a> · <a href="/games/">More games</a></p>
+  </div>
+</section>
+
+<section class="panel" id="host" hidden>
+  <div class="card">
+    <h2>Your table</h2>
+    <p class="sub">You sit East for the first hand. Each empty seat plays as the computer until a friend takes it; you can also invite from the menu during a game.</p>
+    <div class="seats" id="seats"></div>
+    <div class="row" style="margin-top:14px">
+      <button class="btn primary" id="btn-start"><span class="zh">開局</span>Start the game</button>
+      <button class="btn" id="btn-host-back">Back</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="invite" hidden>
+  <div class="card">
+    <h2 id="inv-title">Invite a friend</h2>
+    <p class="sub" id="inv-sub">1. Send this invite: let them scan the code with their phone camera, or text them the link.</p>
+    <div id="inv-qr-wrap" class="qr" hidden><img id="inv-qr" alt="Invite QR code"></div>
+    <div class="row" style="margin:10px 0">
+      <button class="btn small" id="inv-share">Text or share the link</button>
+      <button class="btn small" id="inv-copy">Copy link</button>
+    </div>
+    <p class="sub" style="margin:12px 0 8px">2. Their page answers with a reply. Scan their reply code, or open the reply link they send back on this device, or paste it here.</p>
+    <div class="row">
+      <button class="btn small" id="inv-scan">Scan their reply</button>
+    </div>
+    <textarea id="inv-paste" placeholder="Paste the reply link" style="margin-top:8px"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn small primary" id="inv-apply">Connect</button>
+      <button class="btn small" id="inv-close">Done</button>
+    </div>
+    <p class="status" id="inv-status"></p>
+  </div>
+</section>
+
+<section class="panel" id="join" hidden>
+  <div class="card">
+    <h2><span class="zh" style="color:var(--gold)">入座</span> Join a table</h2>
+    <div id="join-step1" class="stack">
+      <p class="sub" id="join-sub">You have been invited to a mahjong table.</p>
+      <label class="f">Your name<input type="text" id="join-name" maxlength="16" placeholder="Player"></label>
+      <div id="join-paste-wrap" class="stack" hidden>
+        <textarea id="join-paste" placeholder="Paste the invite link"></textarea>
+        <button class="btn small" id="join-scan">Scan an invite code</button>
+      </div>
+      <button class="btn primary" id="join-go">Take the seat</button>
+    </div>
+    <div id="join-step2" hidden>
+      <p class="sub">Now send your reply back: let the host scan this code, or text them the link.</p>
+      <div class="qr" id="join-qr-wrap" hidden><img id="join-qr" alt="Reply QR code"></div>
+      <div class="row" style="margin:10px 0">
+        <button class="btn small" id="join-share">Text or share the reply</button>
+        <button class="btn small" id="join-copy">Copy reply</button>
+      </div>
+    </div>
+    <p class="status" id="join-status"></p>
+    <div class="row"><button class="btn small" id="join-back">Back</button></div>
+  </div>
+</section>
+
+<section class="panel" id="relay" hidden>
+  <div class="card">
+    <h2>Reply link</h2>
+    <p class="sub" id="relay-msg">Passing the reply to your table…</p>
+    <textarea id="relay-code" readonly hidden></textarea>
+    <div class="row"><button class="btn small" id="relay-copy" hidden>Copy reply</button></div>
+  </div>
+</section>
+
+<section class="panel" id="result" hidden>
+  <div class="card wide" id="result-card"></div>
+</section>
+
+<section class="panel" id="menu" hidden>
+  <div class="card">
+    <h2>Menu</h2>
+    <div class="stack">
+      <button class="btn" id="m-resume">Resume</button>
+      <div id="m-invites" class="stack"></div>
+      <button class="btn" id="m-rules">How to play and score</button>
+      <button class="btn" id="m-sound">Sound: on</button>
+      <button class="btn" id="m-quit">Leave the table</button>
+    </div>
+  </div>
+</section>
+
+<section class="panel" id="rules" hidden>
+  <div class="card wide rules">
+    <h2>Hong Kong mahjong</h2>
+    <p>144 tiles: three suits (characters <span class="zh">萬</span>, dots <span class="zh">筒</span>, bamboo <span class="zh">索</span>) numbered 1 to 9, four winds <span class="zh">東南西北</span>, three dragons <span class="zh">中 發 白</span>, four of each; plus eight bonus tiles, flowers <span class="zh">梅蘭菊竹</span> and seasons <span class="zh">春夏秋冬</span>.</p>
+    <h3>Play</h3>
+    <ul>
+      <li>Each player holds 13 tiles; the dealer (East) starts with 14. Play goes to the right (counter-clockwise round the table).</li>
+      <li>On your turn draw a tile, then discard one. A bonus tile is set aside at once and replaced from the back of the wall.</li>
+      <li>Any player may take the discard for a <b>pung</b> <span class="zh">碰</span> (three alike) or <b>kong</b> <span class="zh">槓</span> (four alike). Only the next player may take it for a <b>chow</b> <span class="zh">吃</span> (a run of three in one suit). A claimed set is laid face up and the claimer discards.</li>
+      <li>Four alike in your hand can be declared as a concealed kong; a drawn tile can be added to your own melded pung. After a kong you draw a replacement. Another player may rob an added kong if that tile completes their hand.</li>
+      <li>A complete hand is four sets and a pair (or thirteen orphans), worth at least the table's minimum faan. Win on any discard <span class="zh">食糊</span> or on your own draw <span class="zh">自摸</span>. A win beats a pung or kong, which beats a chow; if two players win on one discard, the next in turn takes it.</li>
+      <li>The hand is a draw when the wall runs out. The dealer keeps the deal after winning or a draw; otherwise it passes to the right. A wind round ends when every seat has dealt.</li>
+    </ul>
+    <h3>Faan</h3>
+    <table class="faan" id="faan-table"></table>
+    <h3>Payment</h3>
+    <p>Points double up to 4 faan, then rise by half steps: 0–10 faan pay 1, 2, 4, 8, 16, 24, 32, 48, 64, 96, 128. Limit hands and anything over 10 pay 128. On a discard win the discarder pays the full amount and the other two pay half (半銃); on a self-draw all three pay the full amount.</p>
+    <div class="row" style="margin-top:12px"><button class="btn" id="rules-close">Close</button></div>
+  </div>
+</section>
+
+<div id="scanner" hidden>
+  <video id="scan-video" playsinline muted></video>
+  <div class="note" id="scan-note">Hold the code up to the camera</div>
+  <div class="bar"><button class="btn" id="scan-cancel">Cancel</button></div>
+</div>
+
+<script type="module">
+import { Match, kindOf, kindName, kindShort, WIND_ZH, WIND_EN, pointsFor, DEFAULT_RULES } from './rules.js';
+import { botTurn, botClaim, readyKinds, handShanten } from './ai.js';
+import { buildAtlas, layoutTable, initGPU, init2D, F, CJK, TILE_ASPECT } from './render.js';
+import { HostNet, GuestNet, parseLink, listenForReplies, forwardReply } from './net.js';
+
+const $ = id => document.getElementById(id);
+const params = new URLSearchParams(location.search);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('mahjong.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('mahjong.' + k, JSON.stringify(v)); } catch {} },
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// ---------- fonts: a subset of Noto Serif SC holding just the characters the game draws ----------
+const ZH_CHARS = '一二三四五六七八九萬筒索東南西北中發白梅蘭菊竹春夏秋冬麻雀吃碰槓糊過打風圈莊番自摸門前清上開花搶海底撈月河魚天地八仙無正台色混坎對平么小元大子喜字羅漢十蓮寶燈食局流開邀入規座銃';
+{
+  const l = document.createElement('link');
+  l.rel = 'stylesheet';
+  l.href = 'https://fonts.googleapis.com/css2?family=Noto+Serif+SC:wght@700&display=swap&text=' + encodeURIComponent([...new Set(ZH_CHARS)].join(''));
+  document.head.appendChild(l);
+}
+
+// ---------- settings ----------
+const settings = {
+  minFaan: store.get('minFaan', DEFAULT_RULES.minFaan),
+  length: store.get('length', 'east'),
+  hints: store.get('hints', 'on'),
+  pace: store.get('pace', 'calm'),
+  sound: store.get('sound', true),
+};
+function bindSeg(id, key, conv = v => v) {
+  const el = $(id);
+  const paint = () => el.querySelectorAll('button').forEach(b => b.setAttribute('aria-pressed', String(conv(b.dataset.v) === settings[key])));
+  el.addEventListener('click', e => { const b = e.target.closest('button'); if (!b) return; settings[key] = conv(b.dataset.v); store.set(key, settings[key]); paint(); });
+  paint();
+}
+bindSeg('set-min', 'minFaan', Number);
+bindSeg('set-len', 'length');
+bindSeg('set-hint', 'hints');
+bindSeg('set-pace', 'pace');
+$('name').value = store.get('name', '');
+$('join-name').value = store.get('name', '');
+const myName = () => ($('name').value.trim() || $('join-name').value.trim() || 'You').slice(0, 16);
+
+// ---------- rules table ----------
+const FAAN_ROWS = [
+  ['自摸', 'Self-drawn win', 1], ['門前清', 'Concealed hand (no melded sets)', 1], ['無花', 'No flowers or seasons', 1],
+  ['正花', 'Seat flower or season (each)', 1], ['一台花', 'All four flowers, or all four seasons', 2],
+  ['番子', 'Pung of dragons (each)', 1], ['門風', 'Pung of your seat wind', 1], ['圈風', 'Pung of the prevailing wind', 1],
+  ['平糊', 'All chows, pair not a scoring honour', 1], ['混么九', 'Only terminals and honours (with all pungs)', 1],
+  ['槓上開花', 'Win on a kong replacement tile', 1], ['搶槓', 'Robbing a kong', 1], ['海底撈月', 'Self-drawn on the last tile', 1], ['河底撈魚', 'Win on the last discard', 1],
+  ['對對糊', 'All pungs', 3], ['混一色', 'One suit plus honours', 3], ['小三元', 'Two dragon pungs and a dragon pair', 5],
+  ['小四喜', 'Three wind pungs and a wind pair', 6], ['清一色', 'One suit only', 7], ['大三元', 'Three dragon pungs', 8], ['坎坎糊', 'Four concealed pungs', 8],
+  ['十三么', 'Thirteen orphans', 'limit'], ['九蓮寶燈', 'Nine gates', 'limit'], ['大四喜', 'Four wind pungs', 'limit'], ['字一色', 'All honours', 'limit'],
+  ['清么九', 'All terminals', 'limit'], ['十八羅漢', 'Four kongs', 'limit'], ['天糊', 'Dealer wins on the deal', 'limit'], ['地糊', 'Win on the dealer\'s first discard', 'limit'], ['八仙過海', 'All eight bonus tiles', 'limit'],
+];
+$('faan-table').innerHTML = FAAN_ROWS.map(([zh, en, f]) => `<tr><td class="zh">${zh}</td><td>${en}</td><td>${f === 'limit' ? 'limit' : f}</td></tr>`).join('');
+
+// ---------- tile images for HTML (buttons, results) ----------
+let atlas = null;
+const imgCache = new Map();
+function tileImg(k) {
+  if (imgCache.has(k)) return imgCache.get(k);
+  const w = 48, h = Math.round(48 * TILE_ASPECT), th = 5;
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h + th;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#11573f'; g.beginPath(); g.roundRect(0, th, w, h, 7); g.fill();
+  g.fillStyle = '#f4efe1'; g.beginPath(); g.roundRect(0, 0, w, h, 7); g.fill();
+  if (atlas && k >= 0) g.drawImage(atlas, (k % 8) * 96, Math.floor(k / 8) * 128, 96, 128, w * 0.07, h * 0.07, w * 0.86, h * 0.86);
+  const url = cv.toDataURL();
+  imgCache.set(k, url);
+  return url;
+}
+const tileTag = k => `<img src="${tileImg(k)}" alt="${kindName(k)}" title="${kindName(k)}">`;
+
+// ---------- sound ----------
+let audio = null;
+function snd(kind) {
+  if (!settings.sound) return;
+  try {
+    audio = audio || new (window.AudioContext || window.webkitAudioContext)();
+    const t = audio.currentTime;
+    if (kind === 'clack' || kind === 'draw') {
+      const len = 0.06;
+      const buf = audio.createBuffer(1, Math.floor(audio.sampleRate * len), audio.sampleRate);
+      const d = buf.getChannelData(0);
+      for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * Math.exp(-i / (d.length * 0.12));
+      const src = audio.createBufferSource(); src.buffer = buf;
+      const bp = audio.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = kind === 'clack' ? 2300 : 3400; bp.Q.value = 4;
+      const gn = audio.createGain(); gn.gain.value = kind === 'clack' ? 0.9 : 0.35;
+      src.connect(bp).connect(gn).connect(audio.destination); src.start(t);
+    } else {
+      const notes = kind === 'win' ? [523, 659, 784, 1046] : kind === 'claim' ? [440, 660] : [392];
+      notes.forEach((f, i) => {
+        const o = audio.createOscillator(); o.type = 'triangle'; o.frequency.value = f;
+        const gn = audio.createGain();
+        gn.gain.setValueAtTime(0, t + i * 0.09); gn.gain.linearRampToValueAtTime(0.18, t + i * 0.09 + 0.01);
+        gn.gain.exponentialRampToValueAtTime(0.0001, t + i * 0.09 + 0.6);
+        o.connect(gn).connect(audio.destination); o.start(t + i * 0.09); o.stop(t + i * 0.09 + 0.65);
+      });
+    }
+  } catch {}
+}
+
+// ---------- shared game-screen state (host and guest render the same way) ----------
+const BOT_NAMES = ['', 'Crane', 'Tiger', 'Tortoise'];
+const G = {
+  role: null,           // 'solo' | 'host' | 'guest'
+  view: null,           // Hand.view(mySeat)
+  prompt: null,         // { id, kind: 'turn'|'claim', options }
+  info: null,           // { names, kinds, scores, over, history }
+  ui: { selected: null, hover: null },
+  lastEvent: 0,
+};
+let layout = null, layoutDirty = true;
+const markDirty = () => { layoutDirty = true; };
+
+// ---------- host: match, seats, controllers ----------
+const H = {
+  match: null, hand: null, kinds: ['me', 'bot', 'bot', 'bot'], names: ['You', ...BOT_NAMES.slice(1)],
+  pending: [null, null, null, null],   // per seat: { id, kind, options, resolve, timer }
+  promptSeq: 0, net: null, nextWaiter: null, running: false,
+};
+
+function hostInfo() {
+  const m = H.match;
+  return { names: H.names.slice(), kinds: H.kinds.map(k => (k === 'remote' ? 'friend' : k === 'me' ? 'host' : 'bot')), scores: m ? m.scores.slice() : [0, 0, 0, 0], over: m ? m.over : false, history: m ? m.history.slice(-20) : [] };
+}
+function promptFor(seat) { const p = H.pending[seat]; return p ? { id: p.id, kind: p.kind, options: p.options } : null; }
+function pushAll() {
+  if (!H.hand) return;
+  const info = hostInfo();
+  for (let s = 0; s < 4; s++) {
+    if (H.kinds[s] === 'remote') H.net.send(s, { t: 'state', view: H.hand.view(s), prompt: promptFor(s), info: { ...info, you: s } });
+  }
+  applyState(H.hand.view(0), promptFor(0), { ...info, you: 0 });
+}
+
+const pace = () => (settings.pace === 'brisk' ? 0.45 : 1);
+function ask(seat, kind, options) {
+  const h = H.hand;
+  if (H.kinds[seat] === 'bot') {
+    const v = h.view(seat);
+    const a = kind === 'turn' ? botTurn(v, options) : botClaim(v, options);
+    const delay = kind === 'turn' ? (500 + Math.random() * 450) * pace() : (a ? 450 * pace() : 0);
+    return sleep(delay).then(() => a);
+  }
+  return new Promise(resolve => {
+    const id = ++H.promptSeq;
+    const p = { id, kind, options, resolve: null, timer: null };
+    p.resolve = a => { if (H.pending[seat] !== p) return; clearTimeout(p.timer); H.pending[seat] = null; resolve(a); };
+    H.pending[seat] = p;
+    if (H.kinds[seat] === 'remote') {
+      // A friend who wanders off: pass a claim after 30 s, let the computer discard after 75 s.
+      p.timer = setTimeout(() => p.resolve(kind === 'turn' ? botTurn(h.view(seat), options) : null), kind === 'turn' ? 75000 : 30000);
+    }
+    pushAll();
+  });
+}
+function answer(seat, id, action) {
+  const p = H.pending[seat];
+  if (p && p.id === id) p.resolve(action);
+}
+// A seat whose friend left goes back to the computer, including any question it was holding.
+function seatToBot(seat) {
+  H.kinds[seat] = 'bot';
+  H.names[seat] = BOT_NAMES[seat];
+  const p = H.pending[seat];
+  if (p && H.hand) p.resolve(p.kind === 'turn' ? botTurn(H.hand.view(seat), p.options) : botClaim(H.hand.view(seat), p.options));
+  pushAll();
+  renderSeats();
+}
+
+async function runMatch() {
+  H.running = true;
+  const seed = params.has('seed') ? +params.get('seed') : undefined;
+  H.match = new Match({ rules: { minFaan: settings.minFaan, length: settings.length }, seed, firstDealer: 0 });
+  while (!H.match.over && H.running) {
+    H.hand = H.match.newHand();
+    G.ui.selected = null;
+    pushAll();
+    await sleep(600 * pace());
+    await runHand(H.hand);
+    if (!H.running) return;
+    H.match.finishHand();
+    pushAll();
+    await new Promise(r => { H.nextWaiter = r; });
+    H.nextWaiter = null;
+  }
+}
+
+async function runHand(h) {
+  while (h.phase !== 'over' && H.running) {
+    if (h.phase === 'turn') {
+      const s = h.turn, o = h.turnOptions(s);
+      const a = await ask(s, 'turn', o);
+      if (h.phase !== 'turn' || h.turn !== s) continue;
+      try { h.act(s, a); } catch (e) { console.warn('bad turn action from seat', s, e.message); h.act(s, botTurn(h.view(s), o)); }
+    } else {
+      const res = await Promise.all([0, 1, 2, 3].map(s => { const o = h.claimOptions(s); return o ? ask(s, 'claim', o) : null; }));
+      h.resolveClaims(res);
+    }
+    pushAll();
+  }
+}
+
+// ---------- receiving a state (both roles) ----------
+function applyState(view, prompt, info) {
+  const prevHand = G.view && G.view.handNo;
+  G.view = view; G.prompt = prompt; G.info = info;
+  if (prevHand !== view.handNo) { G.lastEvent = 0; G.ui.selected = null; }
+  if (G.ui.selected != null && !(view.players[view.seat].hand || []).includes(G.ui.selected)) G.ui.selected = null;
+  // The hint (a suggested discard, the computer's own choice) is worked out once per turn prompt.
+  if (prompt && prompt.kind === 'turn' && settings.hints === 'on' && (!G.hint || G.hint.id !== prompt.id)) {
+    try { const a = botTurn(view, prompt.options); G.hint = { id: prompt.id, ids: a.type === 'discard' ? [a.id] : [] }; } catch { G.hint = null; }
+  }
+  for (const e of view.events) {
+    if (e.n <= G.lastEvent) continue;
+    G.lastEvent = e.n;
+    onEvent(e, view);
+  }
+  markDirty();
+  renderHud();
+  renderActions();
+  if (view.phase === 'over') showResult(); else $('result').hidden = true;
+}
+
+const nameOf = s => (G.info && G.info.names[s]) || WIND_EN[s];
+let toastTimer = 0;
+function toast(html, ms = 1300) {
+  const t = $('toast'); t.innerHTML = html; t.classList.add('on');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('on'), ms);
+}
+function onEvent(e, v) {
+  const who = e.seat === v.seat ? 'You' : nameOf(e.seat);
+  switch (e.t) {
+    case 'discard': snd('clack'); break;
+    case 'draw': if (e.seat === v.seat) snd('draw'); break;
+    case 'pung': toast(`<span class="zh">碰</span>${who}: pung`); snd('claim'); break;
+    case 'chow': toast(`<span class="zh">吃</span>${who}: chow`); snd('claim'); break;
+    case 'kong': toast(`<span class="zh">槓</span>${who}: ${e.concealed ? 'concealed ' : ''}kong`); snd('claim'); break;
+    case 'addkong': toast(`<span class="zh">槓</span>${who}: adding to a pung…`); break;
+    case 'flower': if (e.seat === v.seat) toast(`<span class="zh">花</span>Bonus tile`, 900); break;
+    case 'win': snd('win'); break;
+    case 'exhausted': snd('chime'); break;
+  }
+}
+
+// ---------- HUD ----------
+const relOf = s => (s - G.view.seat + 4) % 4;
+function renderHud() {
+  const v = G.view;
+  $('hud').hidden = false; $('center').hidden = false;
+  $('round').innerHTML = `<span class="zh">${WIND_ZH[v.prevailing]}風</span>${WIND_EN[v.prevailing]} round · hand ${v.handNo}`;
+  $('pw').textContent = WIND_ZH[v.prevailing];
+  $('wl').textContent = v.wallLeft + ' tiles';
+  const box = $('badges');
+  if (box.children.length !== 4) box.innerHTML = '<div class="badge"></div>'.repeat(4);
+  v.players.forEach((p, s) => {
+    const el = box.children[s];
+    const info = G.info;
+    el.className = 'badge' + (s === v.dealer ? ' dealer' : '') + (s === v.turn && v.phase !== 'over' ? ' turn' : '');
+    const kind = info ? info.kinds[s] : 'bot';
+    el.innerHTML = `<span class="w zh">${WIND_ZH[p.wind]}</span><span class="nm">${s === v.seat ? 'You' : escapeHtml(nameOf(s))}</span>` +
+      (kind === 'bot' && s !== v.seat ? '<span class="kind">cpu</span>' : '') + `<span class="sc">${info ? fmt(info.scores[s]) : 0}</span>`;
+  });
+  placeOverlays();
+}
+function placeOverlays() {
+  if (!layout || !G.view) return;
+  const { cx, cy, Sx, Sy, strip, handY, th } = layout;
+  const box = $('badges');
+  if (box.children.length !== 4) return;
+  const W = innerWidth;
+  const top = cy - Sy / 2 - strip - 16;
+  // Me under my discards; across above its strip; the sides at the top corners (portrait) or under their strips.
+  const pos = layout.portrait
+    ? [[Math.max(64, cx - Sx / 2 + 44), cy + Sy / 2 + 14], [W - 60, top], [cx, top - 26], [60, top]]
+    : [[layout.handLeft > 150 ? layout.handLeft - 72 : Math.max(64, layout.handLeft + 50), layout.handLeft > 150 ? handY : handY - th / 2 - 16],
+       [Math.min(W - 64, cx + Sx / 2 + strip / 2 + 4), cy - Sy / 2 - 14], [cx, top], [Math.max(64, cx - Sx / 2 - strip / 2 - 4), cy - Sy / 2 - 14]];
+  G.view.players.forEach((p, s) => { const [x, y] = pos[relOf(s)]; box.children[s].style.left = x + 'px'; box.children[s].style.top = y + 'px'; });
+  $('center').style.left = cx + 'px'; $('center').style.top = cy + 'px';
+  $('hint').style.top = (handY - th / 2 - (layout.portrait ? th * 0.78 + 30 : 26)) + 'px';
+}
+const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
+const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+// ---------- actions and hints ----------
+function myTurnOpts() { return G.prompt && G.prompt.kind === 'turn' ? G.prompt.options : null; }
+function act(action) {
+  const pr = G.prompt;
+  if (!pr) return;
+  G.prompt = null;
+  G.ui.selected = null;
+  if (G.role === 'guest') guest.send({ t: 'act', id: pr.id, action });
+  else answer(0, pr.id, action);
+  renderActions();
+  markDirty();
+}
+function renderActions() {
+  const bar = $('actions');
+  const v = G.view;
+  const pr = G.prompt;
+  const parts = [];
+  let hint = '';
+  if (v && v.phase !== 'over' && pr) {
+    if (pr.kind === 'turn') {
+      const o = pr.options;
+      if (o.win) parts.push(`<button class="act win" data-a="win"><span class="zh">自摸</span>Win · ${o.win.faan} faan</button>`);
+      for (const kg of o.kongs) parts.push(`<button class="act" data-a="kong" data-k="${kg.kind}"><span class="zh">槓</span>Kong <img src="${tileImg(kg.kind)}" alt=""></button>`);
+      parts.push(`<button class="act go" data-a="discard" ${G.ui.selected == null ? 'disabled' : ''}><span class="zh">打</span>Discard</button>`);
+      hint = turnHint(v);
+    } else {
+      const o = pr.options;
+      const k = kindOf((v.lastDiscard || v.pendingKong).id);
+      if (o.win) parts.push(`<button class="act win" data-a="win"><span class="zh">食糊</span>Win · ${o.win.faan} faan</button>`);
+      if (o.kong) parts.push(`<button class="act" data-a="kong"><span class="zh">槓</span>Kong</button>`);
+      if (o.pung) parts.push(`<button class="act" data-a="pung"><span class="zh">碰</span>Pung</button>`);
+      for (const st of o.chows) parts.push(`<button class="act" data-a="chow" data-s="${st}"><span class="zh">吃</span>${[st, st + 1, st + 2].map(x => `<img src="${tileImg(x)}" alt="" style="${x === k ? 'outline:2px solid #d8b46a;border-radius:4px' : ''}">`).join('')}</button>`);
+      parts.push(`<button class="act" data-a="pass"><span class="zh">過</span>Pass</button>`);
+      hint = `Claim the ${kindName(k)}?`;
+    }
+  } else if (v && v.phase !== 'over') {
+    const t = v.turn;
+    hint = t === v.seat ? '' : (v.phase === 'claim' || v.phase === 'rob' ? 'Waiting for claims…' : `${escapeHtml(nameOf(t))} to play`);
+    const me = v.players[v.seat];
+    if (me.hand && settings.hints === 'on') {
+      const r = readyKinds(me.hand, me.melds);
+      if (r.length) hint += (hint ? ' · ' : '') + `<b>Ready</b>: waiting on ${r.map(kindShort).join(' ')}`;
+    }
+  }
+  bar.innerHTML = parts.join('');
+  $('hint').innerHTML = hint;
+}
+function turnHint(v) {
+  const me = v.players[v.seat];
+  const hand = me.hand || [];
+  if (G.ui.selected != null) {
+    const rest = hand.filter(i => i !== G.ui.selected);
+    const r = readyKinds(rest, me.melds);
+    const name = kindName(kindOf(G.ui.selected));
+    if (r.length) return `Discard ${name}: <b>ready</b>, waiting on ${r.map(kindShort).join(' ')}`;
+    const s = handShanten(rest, me.melds);
+    return `Discard ${name}: ${s} tile${s === 1 ? '' : 's'} from ready · tap again to discard`;
+  }
+  return 'Your turn: tap a tile to choose it, tap again to discard';
+}
+$('actions').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b || b.disabled) return;
+  const a = b.dataset.a;
+  if (a === 'discard') act({ type: 'discard', id: G.ui.selected });
+  else if (a === 'win') act({ type: 'win' });
+  else if (a === 'kong') act(G.prompt.kind === 'turn' ? { type: 'kong', kind: +b.dataset.k } : { type: 'kong' });
+  else if (a === 'pung') act({ type: 'pung' });
+  else if (a === 'chow') act({ type: 'chow', start: +b.dataset.s });
+  else if (a === 'pass') act(null);
+});
+
+// ---------- pointer on the canvas: choose and discard ----------
+function hitTile(x, y) {
+  if (!layout) return null;
+  const hb = layout.hitboxes.find(b => x >= b.x0 && x < b.x1 && y >= b.y0 && y <= b.y1);
+  return hb ? hb.id : null;
+}
+let lastTap = { id: null, t: 0 };
+$('gl').addEventListener('pointerdown', e => {
+  const id = hitTile(e.clientX, e.clientY);
+  if (id == null) { if (G.ui.selected != null) { G.ui.selected = null; renderActions(); markDirty(); } return; }
+  const opts = myTurnOpts();
+  const now = performance.now();
+  if (opts && (G.ui.selected === id || (lastTap.id === id && now - lastTap.t < 350))) { act({ type: 'discard', id }); return; }
+  lastTap = { id, t: now };
+  G.ui.selected = id;
+  snd('draw');
+  renderActions();
+  markDirty();
+});
+$('gl').addEventListener('pointermove', e => {
+  if (e.pointerType !== 'mouse') return;
+  const id = hitTile(e.clientX, e.clientY);
+  if (id !== G.ui.hover) { G.ui.hover = id; markDirty(); }
+});
+addEventListener('keydown', e => {
+  if (!G.view || !G.prompt) return;
+  const me = G.view.players[G.view.seat];
+  const hand = me.hand || [];
+  if (G.prompt.kind === 'turn') {
+    const i = hand.indexOf(G.ui.selected);
+    if (e.key === 'ArrowRight') { G.ui.selected = hand[Math.min(hand.length - 1, i + 1)]; }
+    else if (e.key === 'ArrowLeft') { G.ui.selected = hand[Math.max(0, i < 0 ? hand.length - 1 : i - 1)]; }
+    else if ((e.key === 'Enter' || e.key === ' ') && G.ui.selected != null) { act({ type: 'discard', id: G.ui.selected }); return; }
+    else return;
+    renderActions(); markDirty();
+  } else if (e.key === 'Escape' || e.key === 'p') act(null);
+});
+
+// ---------- result panel ----------
+function showResult() {
+  const v = G.view, r = v.result, info = G.info;
+  if (!r) return;
+  let html = '';
+  if (r.type === 'draw') {
+    html += `<h2><span class="zh" style="color:var(--gold)">流局</span> Drawn hand</h2><p class="sub">The wall ran out with no winner. The dealer deals again.</p>`;
+  } else {
+    const w = r.winner;
+    const who = w === v.seat ? 'You' : escapeHtml(nameOf(w));
+    const how = r.from == null ? 'self-drawn' : r.robbed ? `robbing ${r.from === v.seat ? 'your' : escapeHtml(nameOf(r.from)) + '’s'} kong` : `on ${r.from === v.seat ? 'your' : escapeHtml(nameOf(r.from)) + '’s'} discard`;
+    html += `<h2><span class="zh" style="color:var(--gold)">${r.from == null ? '自摸' : '食糊'}</span> ${who} won ${how}</h2>`;
+    const p = v.players[w];
+    html += '<div class="tiles">' + (p.hand || []).map(id => tileTag(kindOf(id))).join('') +
+      p.melds.map(m => '<span class="gap"></span>' + m.tiles.map(id => (id == null ? tileTag(-1) : tileTag(kindOf(id)))).join('')).join('') +
+      (p.flowers.length ? '<span class="gap"></span>' + p.flowers.map(id => tileTag(kindOf(id))).join('') : '') + '</div>';
+    html += '<table class="faan">' + r.score.items.map(i => `<tr><td class="zh">${i.zh}</td><td>${i.en}</td><td>${i.limit ? 'limit' : i.faan}</td></tr>`).join('') +
+      `<tr><td></td><td><b>Total</b></td><td><b>${r.score.faan} faan${r.score.limit ? ' (limit)' : ''} · ${r.points} pts</b></td></tr></table>`;
+  }
+  if (info) {
+    html += '<div class="pay">' + [0, 1, 2, 3].map(s => {
+      const d = r.payments[s];
+      return `<span>${WIND_ZH[v.players[s].wind]} ${s === v.seat ? 'You' : escapeHtml(nameOf(s))}</span><span class="${d > 0 ? 'pos' : d < 0 ? 'neg' : ''}">${d > 0 ? '+' : ''}${fmt(d)}</span><span>${fmt(info.scores[s])}</span>`;
+    }).join('') + '</div>';
+  }
+  const over = info && info.over;
+  if (over) {
+    const order = [0, 1, 2, 3].sort((a, b) => info.scores[b] - info.scores[a]);
+    html += `<h3>Game over</h3><p>${order.map((s, i) => `${i + 1}. ${s === v.seat ? 'You' : escapeHtml(nameOf(s))} ${fmt(info.scores[s])}`).join(' · ')}</p>`;
+  }
+  if (G.role === 'guest') html += `<p class="status">${over ? 'The host can start a new game.' : 'Waiting for the host to deal the next hand…'}</p><div class="row"><button class="btn small" data-r="hide">Look at the table</button></div>`;
+  else html += `<div class="row" style="margin-top:12px"><button class="btn primary" data-r="${over ? 'again' : 'next'}">${over ? 'New game' : 'Next hand'}</button><button class="btn small" data-r="hide">Look at the table</button></div>`;
+  $('result-card').innerHTML = html;
+  $('result').hidden = false;
+}
+$('result-card').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  if (b.dataset.r === 'hide') { $('result').hidden = true; setTimeout(() => { if (G.view?.phase === 'over') $('result').hidden = false; }, 4000); }
+  if (b.dataset.r === 'next' && H.nextWaiter) { $('result').hidden = true; H.nextWaiter(); }
+  if (b.dataset.r === 'again') { $('result').hidden = true; runMatch(); }
+});
+
+// ---------- lobby / host screens ----------
+function show(id) {
+  for (const p of ['lobby', 'host', 'invite', 'join', 'relay', 'menu', 'rules']) $(p).hidden = p !== id;
+}
+function savename() { store.set('name', myName()); }
+$('btn-solo').onclick = () => { savename(); G.role = 'solo'; H.kinds = ['me', 'bot', 'bot', 'bot']; startHosting(false); show(null); runMatch(); keepAwake(); };
+$('btn-host').onclick = () => { savename(); G.role = 'host'; H.kinds = ['me', 'bot', 'bot', 'bot']; startHosting(true); renderSeats(); show('host'); };
+$('btn-host-back').onclick = () => show('lobby');
+$('btn-start').onclick = () => { show(null); if (!H.running) runMatch(); keepAwake(); };
+$('btn-rules').onclick = () => { rulesBack = 'lobby'; show('rules'); };
+let rulesBack = 'lobby';
+$('rules-close').onclick = () => show(rulesBack === 'game' ? null : rulesBack);
+$('btn-join').onclick = () => { $('join-paste-wrap').hidden = false; $('join-sub').textContent = 'Paste the invite link a host sent you, or scan their code.'; show('join'); };
+$('join-back').onclick = () => { history.replaceState(null, '', location.pathname); show('lobby'); };
+
+function startHosting(withNet) {
+  H.names = [myName(), ...BOT_NAMES.slice(1)];
+  if (!withNet || H.net) return;
+  H.net = new HostNet({
+    onJoin(seat, name) {
+      H.kinds[seat] = 'remote'; H.names[seat] = name;
+      if (inviteSeat === seat) { $('inv-status').innerHTML = `<span class="ok">${escapeHtml(name)} joined.</span>`; setTimeout(() => { if (inviteSeat === seat) closeInvite(); }, 900); }
+      toast(`<span class="zh">入座</span>${escapeHtml(name)} joined`);
+      renderSeats(); pushAll();
+    },
+    onMessage(seat, m) {
+      if (m.t === 'act') answer(seat, m.id, m.action);
+      if (m.t === 'bye' && H.kinds[seat] === 'remote') { toast(`${escapeHtml(H.names[seat])} left; the computer takes the seat`, 2200); H.net.drop(seat); seatToBot(seat); }
+    },
+    onLeave(seat) {
+      if (H.kinds[seat] !== 'remote') return;
+      toast(`${escapeHtml(H.names[seat])} left; the computer takes the seat`, 2200);
+      seatToBot(seat);
+    },
+    onStatus(seat, st) { if (inviteSeat === seat && st !== 'connected') $('inv-status').textContent = 'Connection: ' + st; },
+  });
+  listenForReplies(async link => { const s = await H.net.applyReply(link); $('inv-status').textContent = 'Reply received, connecting…'; return s; });
+}
+
+const SEAT_DESC = ['you', 'on your right', 'across from you', 'on your left'];
+function renderSeats() {
+  const el = $('seats');
+  el.innerHTML = [0, 1, 2, 3].map(s => {
+    if (s === 0) return `<div class="seat"><div class="who"><b>${escapeHtml(H.names[0])}</b><small>you</small></div></div>`;
+    const remote = H.kinds[s] === 'remote';
+    return `<div class="seat"><div class="who"><b>${escapeHtml(H.names[s])}</b><small>${SEAT_DESC[s]} · ${remote ? '<span class="ok">friend, connected</span>' : 'computer'}</small></div>` +
+      (remote ? `<button class="btn small" data-drop="${s}">Remove</button>` : `<button class="btn small" data-inv="${s}">Invite a friend</button>`) + '</div>';
+  }).join('');
+  const mi = $('m-invites');
+  if (G.role === 'host') {
+    mi.innerHTML = [1, 2, 3].map(s => (H.kinds[s] === 'remote' ? '' : `<button class="btn" data-inv="${s}">Invite a friend to ${SEAT_DESC[s].replace('on ', '').replace('across from you', 'the seat across')} seat (${escapeHtml(H.names[s])})</button>`)).join('');
+  } else mi.innerHTML = '';
+}
+document.addEventListener('click', e => {
+  const b = e.target.closest('[data-inv],[data-drop]');
+  if (!b) return;
+  if (b.dataset.inv) openInvite(+b.dataset.inv);
+  else { const s = +b.dataset.drop; H.net.drop(s); seatToBot(s); }
+});
+
+let inviteSeat = null, inviteLink = '', inviteFrom = 'host';
+async function openInvite(seat) {
+  inviteFrom = $('menu').hidden ? 'host' : 'menu';
+  inviteSeat = seat;
+  show('invite');
+  $('inv-title').textContent = `Invite a friend to sit ${SEAT_DESC[seat]}`;
+  $('inv-status').textContent = 'Preparing the invite…';
+  $('inv-qr-wrap').hidden = true;
+  $('inv-paste').value = '';
+  try {
+    const { link } = await H.net.invite(seat);
+    if (inviteSeat !== seat) return;
+    inviteLink = link;
+    renderQR($('inv-qr'), $('inv-qr-wrap'), link);
+    $('inv-status').textContent = 'Waiting for their reply…';
+  } catch (e) { $('inv-status').innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`; }
+}
+function closeInvite() {
+  inviteSeat = null;
+  if (H.running && inviteFrom === 'menu') show(null); else { renderSeats(); show(H.running ? null : 'host'); }
+}
+$('inv-close').onclick = closeInvite;
+$('inv-copy').onclick = () => copy(inviteLink, $('inv-status'));
+$('inv-share').onclick = () => share('Join my mahjong table: open this link, then send me back the reply it shows.', inviteLink, $('inv-status'));
+$('inv-apply').onclick = async () => {
+  try { await H.net.applyReply($('inv-paste').value); $('inv-status').textContent = 'Reply accepted, connecting…'; }
+  catch (e) { $('inv-status').innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`; }
+};
+$('inv-scan').onclick = () => scan(async text => {
+  try { await H.net.applyReply(text); $('inv-status').textContent = 'Reply scanned, connecting…'; }
+  catch (e) { $('inv-status').innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`; }
+});
+
+function renderQR(img, wrap, text) {
+  if (typeof qrcode !== 'function' || text.length > 1000) { wrap.hidden = true; return; }
+  try { const qr = qrcode(0, 'L'); qr.addData(text); qr.make(); img.src = qr.createDataURL(6, 3); wrap.hidden = false; }
+  catch { wrap.hidden = true; }
+}
+async function copy(text, statusEl) {
+  try { await navigator.clipboard.writeText(text); statusEl.textContent = 'Copied.'; }
+  catch { statusEl.innerHTML = 'Copy failed; select it here:<div class="mono">' + escapeHtml(text) + '</div>'; }
+}
+async function share(msg, url, statusEl) {
+  if (navigator.share) { try { await navigator.share({ title: 'Mahjong', text: msg, url }); return; } catch (e) { if (e.name === 'AbortError') return; } }
+  location.href = 'sms:?&body=' + encodeURIComponent(msg + ' ' + url);
+  setTimeout(() => copy(url, statusEl), 400);
+}
+
+// ---------- guest ----------
+let guest = null, guestInvite = null;
+function startGuest(code, seat) {
+  guestInvite = { code, seat };
+  show('join');
+  $('join-step1').hidden = false; $('join-step2').hidden = true;
+  $('join-status').textContent = '';
+}
+$('join-go').onclick = async () => {
+  if (!guestInvite) {
+    const p = parseLink($('join-paste').value);
+    if (!p || p.kind === 'reply') { $('join-status').innerHTML = '<span class="err">That is not an invite link.</span>'; return; }
+    guestInvite = { code: p.code, seat: p.seat };
+  }
+  store.set('name', $('join-name').value.trim() || 'Guest');
+  G.role = 'guest';
+  $('join-status').textContent = 'Preparing your reply…';
+  guest = new GuestNet({
+    onOpen() { $('join-status').innerHTML = '<span class="ok">Connected.</span> Waiting for the host to start…'; guest.send({ t: 'hello', name: ($('join-name').value.trim() || 'Guest').slice(0, 16) }); keepAwake(); },
+    onMessage(m) {
+      if (m.t === 'state') { if (!$('join').hidden) show(null); applyState(m.view, m.prompt, m.info); }
+      if (m.t === 'bye') { toast('The host closed the table', 4000); $('hint').textContent = 'The host has left. Ask them for a fresh invite.'; }
+    },
+    onClose() { toast('Lost the connection to the host', 4000); $('hint').textContent = 'Disconnected from the host. Ask them for a fresh invite.'; },
+    onStatus(st) { if (!$('join').hidden && st !== 'connected') $('join-status').textContent = 'Connection: ' + st; },
+  });
+  try {
+    const link = await guest.accept(guestInvite.code, guestInvite.seat);
+    G.replyLink = link;
+    $('join-step1').hidden = true; $('join-step2').hidden = false;
+    renderQR($('join-qr'), $('join-qr-wrap'), link);
+    $('join-status').textContent = 'Waiting for the host to take your reply…';
+  } catch (e) { $('join-status').innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`; }
+};
+$('join-copy').onclick = () => copy(G.replyLink, $('join-status'));
+$('join-share').onclick = () => share('My mahjong reply: open this on your phone to seat me.', G.replyLink, $('join-status'));
+$('join-scan').onclick = () => scan(text => { $('join-paste').value = text; $('join-go').click(); });
+
+// A reply link opened on the host's device: hand it to the table tab.
+async function relayReply(link) {
+  show('relay');
+  const r = await forwardReply(link);
+  if (r.ok) { $('relay-msg').innerHTML = '<span class="ok">Done.</span> Your table has the reply; you can close this tab and go back to it.'; return; }
+  $('relay-msg').textContent = 'This is a reply to a mahjong invite. Open the table where you made the invite and paste it there (its invite window has a box for it).';
+  $('relay-code').hidden = false; $('relay-code').value = link; $('relay-copy').hidden = false;
+  $('relay-copy').onclick = () => copy(link, $('relay-msg'));
+}
+
+// ---------- scanner ----------
+let scanStream = null, scanning = false;
+async function scan(onText) {
+  const hasBD = 'BarcodeDetector' in window;
+  if (!navigator.mediaDevices?.getUserMedia || (!hasBD && typeof jsQR !== 'function')) { alert('Camera scanning is not available here; paste the link instead.'); return; }
+  try { scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); }
+  catch (e) { alert('No camera: ' + e.message); return; }
+  const video = $('scan-video');
+  video.srcObject = scanStream; await video.play().catch(() => {});
+  $('scanner').hidden = false;
+  scanning = true;
+  const bd = hasBD ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
+  const cv = document.createElement('canvas'), g = cv.getContext('2d', { willReadFrequently: true });
+  while (scanning) {
+    await sleep(160);
+    if (!video.videoWidth) continue;
+    let text = null;
+    try {
+      if (bd) { const r = await bd.detect(video); if (r[0]) text = r[0].rawValue; }
+      else {
+        const w = Math.min(720, video.videoWidth), h = Math.round(w * video.videoHeight / video.videoWidth);
+        cv.width = w; cv.height = h; g.drawImage(video, 0, 0, w, h);
+        const r = jsQR(g.getImageData(0, 0, w, h).data, w, h); if (r) text = r.data;
+      }
+    } catch {}
+    if (text) { stopScan(); onText(text); return; }
+  }
+}
+function stopScan() { scanning = false; $('scanner').hidden = true; if (scanStream) scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
+$('scan-cancel').onclick = stopScan;
+
+// ---------- menu ----------
+$('btn-menu').onclick = () => { renderSeats(); $('m-sound').textContent = 'Sound: ' + (settings.sound ? 'on' : 'off'); show('menu'); };
+$('m-resume').onclick = () => show(null);
+$('m-rules').onclick = () => { rulesBack = 'game'; show('rules'); };
+$('m-sound').onclick = () => { settings.sound = !settings.sound; store.set('sound', settings.sound); $('m-sound').textContent = 'Sound: ' + (settings.sound ? 'on' : 'off'); };
+$('m-quit').onclick = () => { if (confirm('Leave this table?')) { location.href = location.pathname; } };
+
+// Say goodbye on the way out, so the other side reacts at once instead of after the ICE timeout.
+addEventListener('pagehide', () => {
+  if (guest) guest.send({ t: 'bye' });
+  if (H.net) for (let s = 1; s < 4; s++) if (H.kinds[s] === 'remote') H.net.send(s, { t: 'bye' });
+});
+
+// ---------- wake lock and resume ----------
+let wake = null;
+async function keepAwake() { try { if ('wakeLock' in navigator && !wake) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); } } catch {} }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (G.role) keepAwake();
+  H.net?.checkAfterResume(); guest?.checkAfterResume();
+});
+
+// ---------- render loop ----------
+const canvas = $('gl');
+let renderer = null;
+function safeArea() {
+  const bottom = parseFloat(getComputedStyle($('actions')).paddingBottom) - 10 || 0;
+  const top = parseFloat(getComputedStyle($('hud')).paddingTop) - 8 || 0;
+  return { top: Math.max(0, top), bottom: Math.max(0, bottom) };
+}
+function resize() {
+  const d = Math.min(devicePixelRatio || 1, 2);
+  renderer && renderer.resize(innerWidth, innerHeight, d);
+  markDirty();
+}
+addEventListener('resize', resize);
+function emptyView() {
+  return { seat: 0, phase: 'lobby', turn: -1, dealer: 0, prevailing: 0, handNo: 0, rules: DEFAULT_RULES, wallLeft: 144, drawn: null, lastDiscard: null, pendingKong: null, events: [], result: null,
+    players: [0, 1, 2, 3].map(s => ({ seat: s, wind: s, handCount: s === 0 ? 0 : 13, hand: s === 0 ? [] : null, melds: [], flowers: [], discards: [] })) };
+}
+let lastT = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - lastT) / 1000); lastT = now;
+  if (renderer) {
+    if (layoutDirty || !layout) {
+      const v = G.view || emptyView();
+      const hint = G.hint && G.prompt && G.hint.id === G.prompt.id ? G.hint.ids : null;
+      layout = layoutTable(v, innerWidth, innerHeight, safeArea(), { ...G.ui, claimKind: G.prompt?.kind === 'claim' ? 1 : null, hint });
+      layoutDirty = false;
+      placeOverlays();
+    }
+    const v = G.view;
+    const turnDir = v && v.phase !== 'over' && v.turn >= 0 ? [[0, 1], [1, 0], [0, -1], [-1, 0]][(v.turn - v.seat + 4) % 4] : [0, 0];
+    renderer.frame(layout, dt, now / 1000, turnDir);
+  }
+  requestAnimationFrame(frame);
+}
+
+async function boot() {
+  try { await Promise.race([document.fonts.load(`700 40px ${CJK}`, '萬東中發梅春'), sleep(2500)]); } catch {}
+  atlas = buildAtlas();
+  const force2D = params.get('renderer') === '2d';
+  try { renderer = force2D ? null : await initGPU(canvas, atlas); } catch (e) { console.warn('WebGPU unavailable:', e.message); renderer = null; }
+  if (!renderer) renderer = init2D(canvas, atlas);
+  document.documentElement.dataset.renderer = renderer.kind;
+  resize();
+  requestAnimationFrame(frame);
+  // Once the web font arrives (it may lag the first paint), redraw the atlas with it.
+  document.fonts.ready.then(() => { atlas = buildAtlas(); imgCache.clear(); renderer.uploadAtlas(atlas); if (G.view) renderActions(); });
+}
+
+// ---------- entry: lobby, invite link, or reply link ----------
+const link = parseLink(location.hash);
+if (link && link.kind === 'invite') startGuest(link.code, link.seat);
+else if (link && link.kind === 'reply') relayReply(location.href);
+boot();
+
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+
+// Test hooks.
+window.__mahjong = {
+  get G() { return G; }, get H() { return H; }, get renderer() { return renderer && renderer.kind; }, get layout() { return layout; },
+  act, answer, show, get inviteLink() { return inviteLink; }, get replyLink() { return G.replyLink; },
+};
+</script>
+</body>
+</html>
