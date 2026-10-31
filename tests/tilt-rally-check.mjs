@@ -3,6 +3,7 @@
 //   node tests/tilt-rally-check.mjs demo    autopilot race: no WebGPU errors, every car moving and on the road
 //   node tests/tilt-rally-check.mjs tilt    synthetic deviceorientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 //   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
+//   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
 const { chromium } = createRequire(import.meta.url)("playwright");
 import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import { fileURLToPath } from "node:url";
@@ -107,6 +108,24 @@ if (what === "cars") {
     await page.waitForTimeout(400);
     await page.screenshot({ path: path.join(OUT, "car-" + name + ".png") });
   }
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+if (what === "rotated") {
+  const page = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }), errors = [];
+  page.on("pageerror", (e) => errors.push(e.message)); page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  await page.goto(base + "index.html?demo");
+  await waitFor(page, () => window.__game?.()?.state === "race");
+  const g = await page.evaluate(() => { const st = document.getElementById("stage"), r = st.getBoundingClientRect(), cv = document.getElementById("view");
+    const sp = document.getElementById("speed").getBoundingClientRect();
+    return { rot: document.documentElement.classList.contains("rot"), box: [r.left, r.top, r.width, r.height], canvas: [cv.width, cv.height, cv.clientWidth, cv.clientHeight], speed: [sp.left, sp.top] }; });
+  console.log(JSON.stringify(g));
+  check("portrait touch screen turns the stage", g.rot);
+  check("turned stage covers the screen exactly", Math.abs(g.box[0]) < 1 && Math.abs(g.box[1]) < 1 && Math.abs(g.box[2] - 390) < 1 && Math.abs(g.box[3] - 844) < 1, g.box.join(","));
+  check("canvas is laid out landscape", g.canvas[2] === 844 && g.canvas[3] === 390, g.canvas.join(","));
+  // the speedometer sits bottom-right of the stage, which a quarter turn counter-clockwise puts at the screen's top right
+  check("speedometer lands top right of the portrait screen", g.speed[0] > 195 && g.speed[1] < 200, g.speed.map(Math.round).join(","));
+  await page.screenshot({ path: path.join(OUT, "rotated.png") });
   check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 

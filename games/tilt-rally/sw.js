@@ -1,6 +1,6 @@
 // Tilt Rally service worker: the page is network-first, other files cache-first with a background refresh.
 // Every network fetch skips the HTTP cache (GitHub Pages sets max-age=600), so a new version is seen at once.
-const VERSION = 'tilt-rally-v1';
+const VERSION = 'tilt-rally-v2';
 const CORE = ['./', 'index.html', 'engine.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
