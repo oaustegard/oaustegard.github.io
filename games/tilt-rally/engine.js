@@ -68,8 +68,8 @@ export function buildTrack(seed) {
   for (let i = 0; i < M; i++) { let s = 0; for (let k = -12; k <= 12; k++) s += kap[(i + k + M) % M]; bank[i] = clamp(-s / 25 * 22, -0.09, 0.09); }
   // AI speed plan: the grip limit per sample, then a backward pass so braking starts early enough
   const vlim = new Float32Array(M);
-  for (let i = 0; i < M; i++) { let k = 0; for (let d = -6; d <= 6; d++) k = Math.max(k, Math.abs(kap[(i + d + M) % M])); vlim[i] = Math.min(62, Math.sqrt(14.5 / Math.max(k, 1e-4))); }
-  for (let pass = 0; pass < 2; pass++) for (let i = M - 1; i >= 0; i--) vlim[i] = Math.min(vlim[i], Math.sqrt(vlim[(i + 1) % M] ** 2 + 2 * 10 * ds));
+  for (let i = 0; i < M; i++) { let k = 0; for (let d = -6; d <= 6; d++) k = Math.max(k, Math.abs(kap[(i + d + M) % M])); vlim[i] = Math.min(62, Math.sqrt(18.5 / Math.max(k, 1e-4))); }
+  for (let pass = 0; pass < 2; pass++) for (let i = M - 1; i >= 0; i--) vlim[i] = Math.min(vlim[i], Math.sqrt(vlim[(i + 1) % M] ** 2 + 2 * 14 * ds));
   let minR = 1e9; for (let i = 0; i < M; i++) minR = Math.min(minR, 1 / Math.max(Math.abs(kap[i]), 1e-6));
   return { x, y, z, tx, tz, kap, bank, vlim, L, ds, minR, seed };
 }
@@ -384,7 +384,7 @@ export const CARS = [
 
 // ---------------------------------------------------------------- engine
 export async function createEngine(device, format, { sampleCount = 4, onEvent = () => {} } = {}) {
-  const E = { device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
+  const E = { tune: { grip: [20, 13, 7], side: [10, 6, 3], assist: 1, scrub: 20 }, device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
   const emit = (type, data) => { try { onEvent(type, data); } catch (e) { console.error(e); } };
 
   async function buildWorld(seed) {
@@ -507,10 +507,16 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const fx = Math.sin(c.h), fz = Math.cos(c.h), rx = -fz, rz = fx;
     let vf = c.vx * fx + c.vz * fz, vl = c.vx * rx + c.vz * rz;
     const pr = probe(c.x, c.z, c.idx), surf = pr.surf;
-    const grip = [15, 11, 7][surf] * c.skill, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1), roll = [0.35, 1.2, 3.2][surf];
+    const TU = E.tune, grip = TU.grip[surf] * c.skill, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1), roll = [0.35, 1.2, 3.2][surf];
+    // Stability assist (player only): when the wheel asks for more turn than the tyres can give at this speed, ease
+    // the throttle and scrub speed, so holding full gas through a fast bend runs wide less instead of off the road.
+    const sp0 = Math.abs(vf), geom0 = sp0 * Math.tan(0.6) / 2.6, lim0 = grip / Math.max(sp0, 0.5);
+    // how close to the grip limit the wheel is asking for: 0 below 75% of it, 1 at full lock on the limit
+    const over = c.ai || geom0 < lim0 ? 0 : TU.assist * clamp((Math.abs(c.steer) - 0.75) / 0.25, 0, 1);
     let a = 0;
-    if (c.thr > 0) a = c.thr * 11.5 * Math.max(0, 1 - vf / vmax) - (vf > vmax ? (vf - vmax) * 0.8 : 0);
+    if (c.thr > 0) a = c.thr * 11.5 * Math.max(0, 1 - vf / vmax) * (1 - Math.min(1, over)) - (vf > vmax ? (vf - vmax) * 0.8 : 0);
     else if (c.thr < 0) a = vf > 0.5 ? c.thr * 17 : c.thr * 5 * (vf > -9 ? 1 : 0);
+    a -= over * TU.scrub * clamp((sp0 - 12) / 25, 0, 1) * Math.sign(vf);   // gentle in slow corners, hard in fast ones
     a -= Math.sign(vf) * roll + 0.00045 * vf * Math.abs(vf);
     const hf = probe(c.x + fx * 1.4, c.z + fz * 1.4, pr.idx).y, hb = probe(c.x - fx * 1.4, c.z - fz * 1.4, pr.idx).y;
     a -= 9.81 * (hf - hb) / 2.8;
@@ -518,7 +524,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const sp = Math.abs(vf), geom = sp * Math.tan(0.6) / 2.6, lim = grip / Math.max(sp, 0.5);
     c.yawRate = lerp(c.yawRate, c.steer * Math.min(geom, lim * 1.06) * Math.sign(vf), 1 - Math.exp(-dt * 12));
     c.h -= c.yawRate * dt;
-    vl *= Math.exp(-dt * [7.5, 5, 3][surf]);
+    vl *= Math.exp(-dt * TU.side[surf]);
     const nfx = Math.sin(c.h), nfz = Math.cos(c.h);
     c.vx = nfx * vf + -nfz * vl; c.vz = nfz * vf + nfx * vl;
     c.slip = Math.abs(vl);
@@ -550,7 +556,10 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     c.lane = lerp(c.lane, clamp(-T.kap[(c.idx + look * 2) % M] * 260, -3.5, 3.5) + (c.name !== "You" ? (c.name.length % 3 - 1) * 1.2 : 0), dt * 0.6);
     const tx = T.x[i] + -T.tz[i] * c.lane, tz = T.z[i] + T.tx[i] * c.lane, fx = Math.sin(c.h), fz = Math.cos(c.h);
     const dx = tx - c.x, dz = tz - c.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
-    c.steer = clamp(err * 2.6, -1, 1);
+    // feed-forward: the turn rate the road needs here, as a share of what the tyres allow, plus the aim correction
+    const grip = E.tune.grip[0] * c.skill, cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06);
+    const ff = sp * T.kap[(c.idx + Math.round(4 / T.ds)) % M] / Math.max(cap, 1e-3);
+    c.steer = clamp(ff + err * 2.6, -1, 1);
     const target = T.vlim[(c.idx + Math.round(6 / T.ds)) % M] * (c.ai ? c.skill : 0.97);
     c.thr = clamp((target - sp) * 0.35, -1, 1);
   }

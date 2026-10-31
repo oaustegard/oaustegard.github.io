@@ -30,7 +30,7 @@ Each body is lofted from 64 cross-sections between nose and tail. Every cross-se
 - **Tyre smoke and dust (compute).** A pool of 4,096 particles is spawned from the rear wheels when the car slides or leaves the tarmac, and drawn straight from the storage buffer.
 - **Rendering.** 4× MSAA. The sky has a sun and procedural clouds; the road shader draws the kerbs, lines and start checker; trees, chevron boards, cars and wheels are instanced.
 
-Car physics runs on the CPU at 120 Hz. It uses a simple bicycle model: turning rate is capped by tyre grip, and sideways slide dies away faster on tarmac than on gravel or grass. The computer cars aim at a point ahead in their lane and follow a speed plan worked out from the track's curvature.
+Car physics runs on the CPU at 120 Hz. It uses a simple bicycle model: turning rate is capped by tyre grip (2 g on tarmac), and sideways slide dies away faster on tarmac than on gravel or grass. A stability assist helps the player: when the wheel is past three quarters of full lock and the tyres are at their limit, it eases the throttle and scrubs speed, harder the faster you go. A driver who holds full gas and steers well then makes every sweeping bend; only the tightest hairpin needs the brake. The computer cars aim at a point ahead in their lane, steer by the curvature of the road ahead, and follow a speed plan worked out from it.
 
 `engine.js` holds the track, physics and renderer and has no DOM, so it also runs in a Worker. The GPU Bridge uses that to render race frames on a real phone or laptop GPU. `index.html` owns the input, the HUD and the sound.
 
@@ -41,6 +41,7 @@ node tests/tilt-rally-check.mjs math   # orientation -> wheel and pedal on known
 node tests/tilt-rally-check.mjs demo   # autopilot race on SwiftShader: no WebGPU errors, all cars moving and on the road
 node tests/tilt-rally-check.mjs tilt   # synthetic orientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 node tests/tilt-rally-check.mjs cars   # close-up stills of the cars
+node tests/tilt-rally-check.mjs grip      # a full-gas driver with perfect aim stays on every bend wider than 40 m
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```

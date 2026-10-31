@@ -3,6 +3,7 @@
 //   node tests/tilt-rally-check.mjs demo    autopilot race: no WebGPU errors, every car moving and on the road
 //   node tests/tilt-rally-check.mjs tilt    synthetic deviceorientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 //   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
+//   node tests/tilt-rally-check.mjs grip    a full-gas driver with perfect aim stays on the road (pass a JSON list of tunings to compare)
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -143,6 +144,33 @@ if (what === "intro") {
     check(`${w}x${h}: Allow motion and Start engine are on screen`, inside(r.motion) && inside(r.start), JSON.stringify([r.motion, r.start].map((q) => q.map(Math.round))));
     await page.screenshot({ path: path.join(OUT, `intro-${w}x${h}.png`) });
     await page.close();
+  }
+}
+
+if (what === "grip") {
+  // A heavy-footed driver: perfect steering toward the road ahead (the AI's aim, clamped to the wheel), full gas always.
+  // Seconds spent off the tarmac over 70 s of racing, for each tuning.
+  const { page } = await open("index.html?demo");
+  await waitFor(page, () => window.__game?.()?.state === "race");
+  const tunes = JSON.parse(process.argv[3] || "[{}]"), defaults = await page.evaluate(() => JSON.parse(JSON.stringify(window.__engine.tune)));
+  for (const tune of tunes) {
+    const r = await page.evaluate(([tune, defaults]) => { window.__hold = true; const E = window.__engine; E.tune = { ...defaults, ...tune };
+      E.newRace(); for (let i = 0; i < 120 * 4; i++) E.tick(1 / 120);
+      const P = E.player, T = E.T, ais = E.cars.filter((c) => c.ai), p0 = P.prog, a0 = ais.map((c) => c.prog); let off = 0, gravel = 0, vmax = 0;
+      for (let i = 0; i < 120 * 70; i++) {
+        const sp = Math.max(0, P.speed), look = Math.round((9 + sp * 0.55) / T.ds), k = (P.idx + look) % T.x.length;
+        const fx = Math.sin(P.h), fz = Math.cos(P.h), dx = T.x[k] - P.x, dz = T.z[k] - P.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
+        E.input.steer = Math.max(-1, Math.min(1, err * 2.6)); E.input.thr = 1;
+        E.tick(1 / 120);
+        if (P.surf === 2) { if (!P.__off) { P.__off = 1; (P.__ev ||= []).push([P.idx, Math.round(P.speed * 3.6), Math.round(1 / Math.abs(T.kap[P.idx])), Math.sign(T.kap[P.idx]) > 0 ? 'R' : 'L', +E.input.steer.toFixed(2)]); } off += 1 / 120; } else { P.__off = 0; if (P.surf === 1) gravel += 1 / 120; }
+        vmax = Math.max(vmax, P.speed);
+      }
+      return { ev: P.__ev, off, gravel, vmax: vmax * 3.6, km: (P.prog - p0) * T.ds / 1000, ai: Math.max(...ais.map((c, i) => (c.prog - a0[i]) * T.ds / 1000)) }; }, [tune, defaults]);
+    console.log("   episodes [idx, km/h, radius m, turn, steer]:", JSON.stringify(r.ev)); console.log(JSON.stringify(tune), "off-road", r.off.toFixed(1), "s, kerb/gravel", r.gravel.toFixed(1), "s, top", r.vmax.toFixed(0), "km/h, covered", r.km.toFixed(2), "km (fastest AI", r.ai.toFixed(2) + ")");
+    if (!process.argv[3]) { const sweeping = (r.ev || []).filter((e) => e[2] > 40);
+      check("full gas never leaves the road on a bend wider than 40 m", sweeping.length === 0, JSON.stringify(sweeping));
+      check("full gas: under 5 s off the road in 70 s (the 30 m hairpin wants the brake)", r.off < 5, r.off.toFixed(1) + " s");
+      check("full gas keeps within 15% of the fastest computer car", r.km > r.ai * 0.85, r.km.toFixed(2) + " vs " + r.ai.toFixed(2) + " km"); }
   }
 }
 
