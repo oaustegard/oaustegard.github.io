@@ -1,15 +1,18 @@
-// Multiplayer over WebRTC data channels with no server: the host runs the game and each guest holds one
-// peer connection to it (a star). Pairing is FileDrop's manual exchange (scripts/fd/signaling.js): the
-// host's invite link or QR carries a packed SDP offer, the guest's page answers with a reply link or QR,
-// and the host scans or opens that. A link can travel by text message as well as by camera.
+// Multiplayer over WebRTC data channels with no server, shared by the table games (/games/mahjong,
+// /games/poker). The host runs the game and each guest holds one peer connection to it (a star).
+// Pairing is FileDrop's manual exchange (scripts/fd/signaling.js): the host's invite link or QR carries a
+// packed SDP offer, the guest's page answers with a reply link or QR, and the host scans or opens that.
+// A link can travel by text message as well as by camera.
 //
 // Invite link: <page>?b=<bust>#o=<code>&s=<seat>    Reply link: <page>?b=<bust>#a=<code>&s=<seat>
-// Messages are JSON on the channel:
-//   guest → host  { t: 'hello', name }   { t: 'act', id, action }   { t: 'next' }
-//   host → guest  { t: 'welcome', seat }  { t: 'state', view, prompt, info }   { t: 'bye' }
+// Messages are JSON objects with a `t` field. This module handles two of them itself:
+//   guest → host  { t: 'hello', name }      host → guest  { t: 'welcome', seat }   either way { t: 'bye' }
+// Everything else goes to the game's handlers.
+//
+// `label` names the data channel and the BroadcastChannel that carries reply links between tabs, so two
+// games open in one browser never take each other's replies.
 import { Signaling } from '/scripts/fd/signaling.js';
 
-const LABEL = 'mahjong';
 const pageUrl = () => location.origin + location.pathname + '?b=' + Date.now().toString(36);
 
 export function parseLink(text) {
@@ -37,14 +40,16 @@ function wrap(channel, onMsg, onClose) {
 }
 
 export class HostNet {
-  constructor(handlers) {
-    this.h = handlers;   // { onJoin(seat, name), onMessage(seat, msg), onLeave(seat), onStatus(seat, text) }
+  // handlers: { onJoin(seat, name), onMessage(seat, msg), onLeave(seat), onStatus(seat, text) }
+  constructor(handlers, { label = 'table' } = {}) {
+    this.h = handlers;
+    this.label = label;
     this.peers = new Map();   // seat → { sig, dc, name, state }
   }
 
   async invite(seat) {
     this.drop(seat);
-    const sig = new Signaling({ channelLabel: LABEL, pageUrl });
+    const sig = new Signaling({ channelLabel: this.label, pageUrl });
     const peer = { sig, dc: null, name: null, state: 'inviting' };
     this.peers.set(seat, peer);
     sig.on('channelopen', dc => {
@@ -70,7 +75,7 @@ export class HostNet {
     if (!p || p.kind === 'invite') throw new Error(p ? 'That is an invite link. Paste the reply your friend sent back.' : 'Not a reply link.');
     let seat = p.seat;
     if (seat == null) {
-      const waiting = [...this.peers].filter(([, v]) => v.state === 'inviting').map(([s]) => s);
+      const waiting = this.waiting();
       if (waiting.length !== 1) throw new Error('Paste the full reply link so it is clear which seat it answers.');
       seat = waiting[0];
     }
@@ -102,9 +107,10 @@ export class HostNet {
 }
 
 export class GuestNet {
-  constructor(handlers) {
-    this.h = handlers;   // { onOpen(), onMessage(msg), onClose(), onStatus(text) }
-    this.sig = new Signaling({ channelLabel: LABEL, pageUrl });
+  // handlers: { onOpen(), onMessage(msg), onClose(), onStatus(text) }
+  constructor(handlers, { label = 'table' } = {}) {
+    this.h = handlers;
+    this.sig = new Signaling({ channelLabel: label, pageUrl });
     this.dc = null;
     this.sig.on('channelopen', dc => {
       this.dc = dc;
@@ -126,10 +132,9 @@ export class GuestNet {
 }
 
 // Reply-link bridge: a reply link opened in a new tab on the host's device hands its code to the table tab.
-const BC_NAME = 'mahjong-reply';
-export function listenForReplies(onReply) {
+export function listenForReplies(label, onReply) {
   if (typeof BroadcastChannel !== 'function') return () => {};
-  const bc = new BroadcastChannel(BC_NAME);
+  const bc = new BroadcastChannel(label + '-reply');
   bc.onmessage = async ev => {
     if (!ev.data || ev.data.type !== 'reply') return;
     try { const seat = await onReply(ev.data.link); bc.postMessage({ type: 'ack', nonce: ev.data.nonce, ok: true, seat }); }
@@ -137,10 +142,10 @@ export function listenForReplies(onReply) {
   };
   return () => bc.close();
 }
-export function forwardReply(link, timeoutMs = 1500) {
+export function forwardReply(label, link, timeoutMs = 1500) {
   return new Promise(resolve => {
     if (typeof BroadcastChannel !== 'function') { resolve({ ok: false, error: 'no bridge' }); return; }
-    const bc = new BroadcastChannel(BC_NAME);
+    const bc = new BroadcastChannel(label + '-reply');
     const nonce = Math.random().toString(36).slice(2);
     const done = r => { clearTimeout(timer); bc.close(); resolve(r); };
     const timer = setTimeout(() => done({ ok: false, error: 'no table tab answered' }), timeoutMs);

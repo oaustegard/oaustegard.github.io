@@ -77,7 +77,9 @@ melds, the discards and the other hands' tile counts, so no guest's browser ever
 player's tiles. A friend who closes the page hands the seat back to the computer. One who wanders off
 passes on claims after 30 s, and the computer discards for them after 75 s.
 
-Pairing uses FileDrop's manual signaling (`/scripts/fd/signaling.js` and `sdp-codec.js`): the SDP
+Pairing lives in the table-game library shared with [Poker](../poker/), [`/scripts/tabletop/`](../../scripts/tabletop/)
+(`net.js` for the connections, `pairing.js` for QR codes, sharing and scanning), on top of FileDrop's manual
+signaling (`/scripts/fd/signaling.js` and `sdp-codec.js`): the SDP
 offer and answer are packed to about 115 characters, which makes 169-character links and small QR
 codes. The connection uses STUN only, with no TURN relay, so two phones behind strict NATs (some
 carrier networks, corporate Wi-Fi) may fail to connect. The same Wi-Fi network always works.

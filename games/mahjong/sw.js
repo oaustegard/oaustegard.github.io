@@ -1,8 +1,8 @@
 // Mahjong service worker: this site's files are network-first; fonts are cache-first with a background refresh.
 // Every network fetch skips the HTTP cache (GitHub Pages sets max-age=600), so a new version is seen at once.
-const VERSION = 'mahjong-v5';
-const CORE = ['./', 'index.html', 'manifest.json', 'rules.js', 'ai.js', 'render.js', 'net.js', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png',
-  '/scripts/fd/signaling.js', '/scripts/fd/sdp-codec.js', '/scripts/vendor/qrcode-generator.js', '/scripts/vendor/jsqr.js'];
+const VERSION = 'mahjong-v6';
+const CORE = ['./', 'index.html', 'manifest.json', 'rules.js', 'ai.js', 'render.js', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png',
+  '/scripts/tabletop/net.js', '/scripts/tabletop/pairing.js', '/scripts/fd/signaling.js', '/scripts/fd/sdp-codec.js', '/scripts/vendor/qrcode-generator.js', '/scripts/vendor/jsqr.js'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
 self.addEventListener('install', e => {

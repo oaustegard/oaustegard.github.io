@@ -152,11 +152,6 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
 .pay .pos { color: var(--jade); text-align: right; } .pay .neg { color: #ff9a85; text-align: right; }
 .rules p, .rules li { color: #e6dcc6; font-size: 13.5px; }
 .rules ul { padding-left: 18px; margin: 6px 0; }
-#scanner { position: fixed; inset: 0; background: #000; display: grid; place-items: center; }
-#scanner video { width: 100%; height: 100%; object-fit: cover; }
-#scanner .bar { position: absolute; left: 0; right: 0; bottom: 0; padding: 16px 16px calc(env(safe-area-inset-bottom,0px) + 16px);
-  display: flex; justify-content: center; gap: 10px; background: linear-gradient(transparent, rgba(0,0,0,0.8)); }
-#scanner .note { position: absolute; top: calc(env(safe-area-inset-top,0px) + 20px); left: 16px; right: 16px; text-align: center; text-shadow: 0 1px 3px #000; }
 .foot { margin-top: 14px; font-size: 12px; color: var(--dim); }
 .foot a { color: var(--gold); }
 </style>
@@ -345,17 +340,14 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
   </div>
 </section>
 
-<div id="scanner" hidden>
-  <video id="scan-video" playsinline muted></video>
-  <div class="note" id="scan-note">Hold the code up to the camera</div>
-  <div class="bar"><button class="btn" id="scan-cancel">Cancel</button></div>
-</div>
 
 <script type="module">
 import { Match, kindOf, kindName, kindShort, WIND_ZH, WIND_EN, pointsFor, DEFAULT_RULES, setsFor } from './rules.js';
 import { botTurn, botClaim, readyKinds, handShanten } from './ai.js';
 import { buildAtlas, layoutTable, initGPU, init2D, F, CJK, TILE_ASPECT, CELL_W, CELL_H, camApply } from './render.js';
-import { HostNet, GuestNet, parseLink, listenForReplies, forwardReply } from './net.js';
+import { HostNet, GuestNet, parseLink, listenForReplies, forwardReply } from '/scripts/tabletop/net.js';
+import { renderQR, copyText as copy, shareLink, scanQR as scan, keepAwake, onResume, escapeHtml } from '/scripts/tabletop/pairing.js';
+const NET = { label: 'mahjong' };
 
 const $ = id => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -763,7 +755,6 @@ function placeOverlays() {
   hEl.style.textAlign = crowded ? 'left' : 'center';
 }
 const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
-const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 // ---------- actions and hints ----------
 const isTW = () => G.view?.rules?.variant === 'tw';
@@ -1056,8 +1047,8 @@ function startHosting(withNet) {
       seatToBot(seat);
     },
     onStatus(seat, st) { if (inviteSeat === seat && st !== 'connected') $('inv-status').textContent = 'Connection: ' + st; },
-  });
-  listenForReplies(async link => { const s = await H.net.applyReply(link); $('inv-status').textContent = 'Reply received, connecting…'; return s; });
+  }, NET);
+  listenForReplies(NET.label, async link => { const s = await H.net.applyReply(link); $('inv-status').textContent = 'Reply received, connecting…'; return s; });
 }
 
 const SEAT_DESC = ['you', 'on your right', 'across from you', 'on your left'];
@@ -1119,20 +1110,7 @@ $('inv-scan').onclick = () => scan(async text => {
   catch (e) { $('inv-status').innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`; }
 });
 
-function renderQR(img, wrap, text) {
-  if (typeof qrcode !== 'function' || text.length > 1000) { wrap.hidden = true; return; }
-  try { const qr = qrcode(0, 'L'); qr.addData(text); qr.make(); img.src = qr.createDataURL(6, 3); wrap.hidden = false; }
-  catch { wrap.hidden = true; }
-}
-async function copy(text, statusEl) {
-  try { await navigator.clipboard.writeText(text); statusEl.textContent = 'Copied.'; }
-  catch { statusEl.innerHTML = 'Copy failed; select it here:<div class="mono">' + escapeHtml(text) + '</div>'; }
-}
-async function share(msg, url, statusEl) {
-  if (navigator.share) { try { await navigator.share({ title: 'Mahjong', text: msg, url }); return; } catch (e) { if (e.name === 'AbortError') return; } }
-  location.href = 'sms:?&body=' + encodeURIComponent(msg + ' ' + url);
-  setTimeout(() => copy(url, statusEl), 400);
-}
+const share = (msg, url, statusEl) => shareLink('Mahjong', msg, url, statusEl);
 
 // ---------- guest ----------
 let guest = null, guestInvite = null;
@@ -1159,7 +1137,7 @@ $('join-go').onclick = async () => {
     },
     onClose() { toast('Lost the connection to the host', 4000); $('hint').textContent = 'Disconnected from the host. Ask them for a fresh invite.'; },
     onStatus(st) { if (!$('join').hidden && st !== 'connected') $('join-status').textContent = 'Connection: ' + st; },
-  });
+  }, NET);
   try {
     const link = await guest.accept(guestInvite.code, guestInvite.seat);
     G.replyLink = link;
@@ -1175,43 +1153,12 @@ $('join-scan').onclick = () => scan(text => { $('join-paste').value = text; $('j
 // A reply link opened on the host's device: hand it to the table tab.
 async function relayReply(link) {
   show('relay');
-  const r = await forwardReply(link);
+  const r = await forwardReply(NET.label, link);
   if (r.ok) { $('relay-msg').innerHTML = '<span class="ok">Done.</span> Your table has the reply; you can close this tab and go back to it.'; return; }
   $('relay-msg').textContent = 'This is a reply to a mahjong invite. Open the table where you made the invite and paste it there (its invite window has a box for it).';
   $('relay-code').hidden = false; $('relay-code').value = link; $('relay-copy').hidden = false;
   $('relay-copy').onclick = () => copy(link, $('relay-msg'));
 }
-
-// ---------- scanner ----------
-let scanStream = null, scanning = false;
-async function scan(onText) {
-  const hasBD = 'BarcodeDetector' in window;
-  if (!navigator.mediaDevices?.getUserMedia || (!hasBD && typeof jsQR !== 'function')) { alert('Camera scanning is not available here; paste the link instead.'); return; }
-  try { scanStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }); }
-  catch (e) { alert('No camera: ' + e.message); return; }
-  const video = $('scan-video');
-  video.srcObject = scanStream; await video.play().catch(() => {});
-  $('scanner').hidden = false;
-  scanning = true;
-  const bd = hasBD ? new BarcodeDetector({ formats: ['qr_code'] }) : null;
-  const cv = document.createElement('canvas'), g = cv.getContext('2d', { willReadFrequently: true });
-  while (scanning) {
-    await sleep(160);
-    if (!video.videoWidth) continue;
-    let text = null;
-    try {
-      if (bd) { const r = await bd.detect(video); if (r[0]) text = r[0].rawValue; }
-      else {
-        const w = Math.min(720, video.videoWidth), h = Math.round(w * video.videoHeight / video.videoWidth);
-        cv.width = w; cv.height = h; g.drawImage(video, 0, 0, w, h);
-        const r = jsQR(g.getImageData(0, 0, w, h).data, w, h); if (r) text = r.data;
-      }
-    } catch {}
-    if (text) { stopScan(); onText(text); return; }
-  }
-}
-function stopScan() { scanning = false; $('scanner').hidden = true; if (scanStream) scanStream.getTracks().forEach(t => t.stop()); scanStream = null; }
-$('scan-cancel').onclick = stopScan;
 
 // ---------- menu ----------
 $('btn-menu').onclick = () => { renderSeats(); $('m-sound').textContent = 'Sound: ' + (settings.sound ? 'on' : 'off'); show('menu'); };
@@ -1227,10 +1174,7 @@ addEventListener('pagehide', () => {
 });
 
 // ---------- wake lock and resume ----------
-let wake = null;
-async function keepAwake() { try { if ('wakeLock' in navigator && !wake) { wake = await navigator.wakeLock.request('screen'); wake.addEventListener('release', () => { wake = null; }); } } catch {} }
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
+onResume(() => {
   if (G.role) keepAwake();
   H.net?.checkAfterResume(); guest?.checkAfterResume();
 });
