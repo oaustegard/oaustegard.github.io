@@ -193,8 +193,8 @@ import { Board, DIRS, DIR_NAMES, makeRng, scoreClear } from './logic.js';
 
 /* ---------- tuning ---------- */
 const LEVELS = {
-  easy:   { cols: 7, rows: 9,  colors: 5, fill: 0.5,  pourEvery: 9,   pourCount: 3, speedup: 0.05, minEvery: 4,   thr: 16, hints: true },
-  normal: { cols: 8, rows: 10, colors: 6, fill: 0.55, pourEvery: 6,   pourCount: 4, speedup: 0.07, minEvery: 2.4, thr: 13, hints: false },
+  easy:   { cols: 7, rows: 9,  colors: 5, fill: 0.5,  pourEvery: 9,   pourCount: 3, speedup: 0.05, minEvery: 3, growEvery: 4, thr: 16, hints: true },
+  normal: { cols: 8, rows: 10, colors: 6, fill: 0.55, pourEvery: 6,   pourCount: 4, speedup: 0.07, minEvery: 2, growEvery: 4, thr: 13, hints: false },
 };
 const LEVEL_UP = 30;         // tiles cleared per level
 const POP = 0.26;            // seconds a matched tile flashes before it bursts
@@ -375,7 +375,9 @@ function newGame() {
   updateHUD();
   showTip(tiltActive() ? 'Tilt to slide the tiles' : 'Arrows turn gravity; swipe tiles to swap');
 }
-function makePour() { return Array.from({ length: L.pourCount }, () => board.randomColor()); }
+// Pours grow by a tile every growEvery levels, so the ramp keeps climbing after the interval floor.
+const pourSize = () => L.pourCount + Math.floor((level - 1) / L.growEvery);
+function makePour() { return Array.from({ length: pourSize() }, () => board.randomColor()); }
 
 function setGravity(d) {
   if (d === g || mode !== 'play') return;
@@ -468,7 +470,7 @@ function step(dt) {
   if (phase !== 'popping') pourT -= dt;
   if (pourT <= 0 && phase !== 'popping') { doPour(); pourT = pourEvery; }
 
-  const low = board.free() < L.pourCount * 2;
+  const low = board.free() < pourSize() * 2;
   if (low && !warned) { warned = true; sfx.warn(); }
   if (!low) warned = false;
 
@@ -530,7 +532,7 @@ function resolve() {
     level = lv;
     pourEvery = Math.max(L.minEvery, pourEvery * (1 - L.speedup));
     sfx.levelUp();
-    showTip(`Level ${level}: pours come faster`);
+    showTip((level - 1) % L.growEvery === 0 ? `Level ${level}: bigger pours` : `Level ${level}: pours come faster`);
   }
   updateHUD();
 }
@@ -573,7 +575,7 @@ function updateHUD() {
 function updateMeter() {
   const f = clamp(pourT / pourEvery, 0, 1);
   $('meter').firstChild.style.transform = `scaleX(${f})`;
-  $('meter').classList.toggle('low', board && board.free() < L.pourCount * 2);
+  $('meter').classList.toggle('low', board && board.free() < pourSize() * 2);
 }
 function updateDial() {
   const tilt = tiltActive();
@@ -733,7 +735,7 @@ function buildInstances(out) {
 function frameUniforms(dt) {
   const [gx, gy] = DIRS[g];
   const lx = tiltActive() ? clamp(tiltX() / 40, -0.6, 0.6) : 0, ly = tiltActive() ? clamp(tiltY() / 40, -0.6, 0.6) : 0;
-  const danger = board && (mode === 'play' || mode === 'ending') ? clamp(1 - (board.free() - L.pourCount) / (L.pourCount * 2), 0, 1) : 0;
+  const danger = board && (mode === 'play' || mode === 'ending') ? clamp(1 - (board.free() - pourSize()) / (pourSize() * 2), 0, 1) : 0;
   return new Float32Array([
     geo.w, geo.h, geo.cell, performance.now() / 1000,
     geo.bx, geo.by, (board ? L.cols : 7) * geo.cell, (board ? L.rows : 9) * geo.cell,

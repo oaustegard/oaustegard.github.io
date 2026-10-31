@@ -29,8 +29,11 @@ threshold (8° to 30°).
 ## Rules
 
 - **Levels.** Easy: 7×9 board, five colours, half full at the start, three tiles every 9 s, hints.
-  Normal: 8×10, six colours, four tiles every 6 s. Every 30 tiles cleared is a level, and each
-  level shortens the pour interval (5% on Easy down to 4 s, 7% on Normal down to 2.4 s).
+  Normal: 8×10, six colours, four tiles every 6 s. Every 30 tiles cleared is a level. Each level
+  shortens the pour interval (5% on Easy down to 3 s, 7% on Normal down to 2 s), and every fourth
+  level adds a tile to each pour, so no pace survives for ever. Tuned by simulation: a player who
+  makes the first clearing move they find every 4 s lasts a median 13 minutes on Easy and 5 on
+  Normal; one move a second, 18 and 7.
 - **Pours** drop each new tile into the line along gravity with the most room, so they land on the
   shortest stacks. The next pour's colours show above the timer. The timer bar and the board's high
   edge turn red when fewer than two pours' worth of cells are free.
