@@ -1,0 +1,1116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Careen</title>
+<meta name="description" content="Tile matching where you tilt the phone to choose which way the tiles fall. Line up three of a colour; don't let the pour fill the board.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Careen">
+<meta property="og:description" content="Tile matching where you tilt the phone to choose which way the tiles fall.">
+<meta property="og:url" content="https://austegard.com/games/careen/">
+<meta property="og:image" content="https://austegard.com/games/careen/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A Careen board of coloured gem tiles">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Careen">
+<meta name="twitter:description" content="Tile matching where you tilt the phone to choose which way the tiles fall.">
+<meta name="twitter:image" content="https://austegard.com/games/careen/og-image.png">
+<meta name="theme-color" content="#120f1d">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Careen">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&family=IBM+Plex+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one portrait screen. Score strip on top, the board fills the middle (#stage only measures
+   it; the canvas behind everything draws it), the gravity dial sits in the bottom bar. */
+:root {
+  --ink: #120f1d;
+  --glass: rgba(20, 16, 34, 0.82);
+  --rule: #2c2647;
+  --fg: #f1ecff;
+  --dim: #9a91b8;
+  --accent: #ffbe3b;
+  --hot: #ff5d55;
+  --display: "Fredoka", "Trebuchet MS", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; background: var(--ink); color: var(--fg); overflow: hidden;
+  overscroll-behavior: none; touch-action: none; -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+body { font: 13px/1.45 var(--mono); }
+[hidden] { display: none !important; }
+#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+#app { position: fixed; inset: 0; display: flex; flex-direction: column; gap: 8px;
+  padding-top: calc(env(safe-area-inset-top, 0px) + 10px);
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 8px);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+#hud { display: grid; grid-template-columns: 1fr auto 1fr; align-items: end; gap: 10px; }
+.stat { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.stat.right { align-items: flex-end; text-align: right; }
+.label { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+.big { font: 700 30px/1 var(--display); font-variant-numeric: tabular-nums; }
+.mid { font: 600 18px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+#pour { display: flex; flex-direction: column; align-items: center; gap: 4px; }
+#next { display: flex; gap: 4px; height: 18px; align-items: center; }
+#next svg { width: 16px; height: 16px; }
+#meter { width: 96px; height: 6px; border-radius: 3px; background: var(--rule); overflow: hidden; }
+#meter i { display: block; height: 100%; width: 100%; background: var(--accent); transform-origin: left; }
+#meter.low i { background: var(--hot); }
+
+#stage { flex: 1; min-height: 0; position: relative; }
+
+#bar { display: grid; grid-template-columns: 56px 1fr 56px; align-items: center; gap: 8px; height: 112px; }
+.round { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--rule); background: var(--glass);
+  color: var(--fg); font: 600 15px var(--display); display: grid; place-items: center; cursor: pointer; padding: 0; }
+.round:active { background: #2a2346; }
+.round svg { width: 22px; height: 22px; }
+#dial { justify-self: center; position: relative; width: 108px; height: 108px; }
+#dial .ring { position: absolute; inset: 27px; border-radius: 50%; border: 1px dashed #4a4170; }
+#dial .ball { position: absolute; left: 50%; top: 50%; width: 14px; height: 14px; margin: -7px 0 0 -7px;
+  border-radius: 50%; background: var(--fg); box-shadow: 0 0 10px rgba(255,255,255,.5); opacity: 0.85; }
+#dial button { position: absolute; width: 36px; height: 36px; border-radius: 50%; border: 1px solid var(--rule);
+  background: var(--glass); color: var(--dim); display: grid; place-items: center; cursor: pointer; padding: 0; }
+#dial button svg { width: 16px; height: 16px; }
+#dial button.on { color: var(--ink); background: var(--accent); border-color: var(--accent); }
+#dial button.hint { animation: pulse 0.8s ease-in-out infinite alternate; }
+#dial [data-dir=up] { left: 36px; top: 0; }
+#dial [data-dir=down] { left: 36px; bottom: 0; }
+#dial [data-dir=left] { left: 0; top: 36px; }
+#dial [data-dir=right] { right: 0; top: 36px; }
+#dial.tilt button { pointer-events: none; }
+@keyframes pulse { from { box-shadow: 0 0 0 0 rgba(255,190,59,.0); } to { box-shadow: 0 0 0 6px rgba(255,190,59,.55); } }
+
+#tip { position: absolute; left: 0; right: 0; bottom: 4px; text-align: center; color: var(--dim); font-size: 12px;
+  pointer-events: none; transition: opacity .3s; }
+
+.pop { position: fixed; pointer-events: none; font: 700 20px var(--display); color: var(--fg);
+  text-shadow: 0 2px 8px rgba(0,0,0,.6); transform: translate(-50%, -50%); animation: rise 0.9s ease-out forwards; white-space: nowrap; }
+.pop.chain { font-size: 30px; color: var(--accent); animation-duration: 1.2s; }
+@keyframes rise { from { opacity: 1; transform: translate(-50%, -50%) scale(.8); }
+  20% { transform: translate(-50%, -60%) scale(1.08); } to { opacity: 0; transform: translate(-50%, -150%) scale(1); } }
+
+.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(10, 8, 18, 0.55);
+  padding: 16px; z-index: 5; }
+.card { width: min(360px, 100%); background: var(--glass); border: 1px solid var(--rule); border-radius: 18px;
+  padding: 22px 20px 18px; display: flex; flex-direction: column; gap: 14px;
+  -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); box-sizing: border-box; max-height: 100%; overflow: auto; }
+.card h1 { margin: 0; font: 700 44px/1 var(--display); letter-spacing: 0.01em; }
+.card h2 { margin: 0; font: 700 28px/1.1 var(--display); }
+.card p { margin: 0; color: var(--dim); line-height: 1.5; }
+.card p b { color: var(--fg); font-weight: 600; }
+.btn { font: 600 18px var(--display); border-radius: 12px; border: 0; padding: 12px 16px; cursor: pointer;
+  background: var(--accent); color: var(--ink); }
+.btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--rule); }
+.row { display: flex; gap: 8px; }
+.row > * { flex: 1; }
+.seg { display: flex; border: 1px solid var(--rule); border-radius: 10px; overflow: hidden; }
+.seg button { flex: 1; font: 600 15px var(--display); padding: 9px 0; background: transparent; color: var(--dim); border: 0; cursor: pointer; }
+.seg button.on { background: #2f2752; color: var(--fg); }
+.opt { display: flex; align-items: center; justify-content: space-between; gap: 12px; color: var(--fg); }
+.opt input[type=range] { flex: 1; max-width: 160px; accent-color: var(--accent); }
+.opt input[type=checkbox] { width: 20px; height: 20px; accent-color: var(--accent); }
+.small { font-size: 11px; color: var(--dim); }
+.legend { display: flex; justify-content: center; gap: 8px; }
+.legend svg { width: 24px; height: 24px; }
+</style>
+</head>
+<body>
+<canvas id="gl"></canvas>
+<div id="app">
+  <div id="hud">
+    <div class="stat"><span class="label">Score</span><span class="big" id="score">0</span></div>
+    <div id="pour">
+      <span class="label">Next pour</span>
+      <div id="next"></div>
+      <div id="meter"><i></i></div>
+    </div>
+    <div class="stat right"><span class="label" id="lvlLabel">Level</span><span class="mid" id="level">1</span>
+      <span class="small" id="best">best 0</span></div>
+  </div>
+  <div id="stage"><div id="tip"></div></div>
+  <div id="bar">
+    <button class="round" id="pauseBtn" aria-label="Pause"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg></button>
+    <div id="dial" aria-label="Gravity">
+      <div class="ring"></div><div class="ball"></div>
+      <button data-dir="up" aria-label="Gravity up"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 3l5 7H3z"/></svg></button>
+      <button data-dir="left" aria-label="Gravity left"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M3 8l7-5v10z"/></svg></button>
+      <button data-dir="right" aria-label="Gravity right"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M13 8L6 3v10z"/></svg></button>
+      <button data-dir="down" aria-label="Gravity down"><svg viewBox="0 0 16 16" fill="currentColor"><path d="M8 13l5-7H3z"/></svg></button>
+    </div>
+    <button class="round" id="levelBtn" aria-label="Level the phone here"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5" fill="currentColor"/></svg></button>
+  </div>
+</div>
+
+<div class="overlay" id="menu">
+  <div class="card">
+    <h1>Careen</h1>
+    <div class="legend" id="legend"></div>
+    <p>Tilt the phone and every tile slides to the low wall. Line up <b>three of a colour</b> to clear them;
+      a tilt mid-cascade can set off the next clear. <b>Swipe</b> a tile to swap it with a neighbour.
+      New tiles pour in from the high side, so keep clearing before the board fills.</p>
+    <div class="seg" id="levelSeg"><button data-level="easy">Easy</button><button data-level="normal">Normal</button></div>
+    <button class="btn" id="startBtn">Start</button>
+    <label class="opt">Tilt steering<input type="checkbox" id="optTilt"></label>
+    <label class="opt">Sound<input type="checkbox" id="optSound"></label>
+    <p class="small" id="menuNote">Hold the phone the way you want to play when you press Start: that pose is level. Without tilt, use the arrows or the arrow keys.</p>
+  </div>
+</div>
+
+<div class="overlay" id="pause" hidden>
+  <div class="card">
+    <h2>Paused</h2>
+    <button class="btn" id="resumeBtn">Resume</button>
+    <div class="row"><button class="btn ghost" id="relevelBtn">Level here</button><button class="btn ghost" id="restartBtn">Restart</button></div>
+    <label class="opt">Tilt to turn <input type="range" id="optThr" min="8" max="30" step="1"><span id="thrVal"></span></label>
+    <label class="opt">Tilt steering<input type="checkbox" id="optTilt2"></label>
+    <label class="opt">Sound<input type="checkbox" id="optSound2"></label>
+    <button class="btn ghost" id="quitBtn">Menu</button>
+  </div>
+</div>
+
+<div class="overlay" id="over" hidden>
+  <div class="card">
+    <h2 id="overTitle">The board filled</h2>
+    <p id="overText"></p>
+    <div class="row"><button class="btn" id="againBtn">Play again</button><button class="btn ghost" id="menuBtn">Menu</button></div>
+  </div>
+</div>
+
+<script type="module">
+import { Board, DIRS, DIR_NAMES, makeRng, scoreClear } from './logic.js';
+
+/* ---------- tuning ---------- */
+const LEVELS = {
+  easy:   { cols: 7, rows: 9,  colors: 5, fill: 0.5,  pourEvery: 9,   pourCount: 3, speedup: 0.05, minEvery: 4,   thr: 16, hints: true },
+  normal: { cols: 8, rows: 10, colors: 6, fill: 0.55, pourEvery: 6,   pourCount: 4, speedup: 0.07, minEvery: 2.4, thr: 13, hints: false },
+};
+const LEVEL_UP = 30;         // tiles cleared per level
+const POP = 0.26;            // seconds a matched tile flashes before it bursts
+const ACC = 70, VMAX = 24;   // tile slide, cells/s² and cells/s
+const SWAP_ACC = 260, SWAP_VMAX = 12;
+const DWELL = 0.12;          // a tilt must point a new way this long before gravity turns
+const PALETTE = ['#ff5d55', '#ffbe3b', '#4fd17a', '#45a8ff', '#b07cff', '#ff7ac3'];
+const SHAPE_NAMES = ['circle', 'square', 'triangle', 'diamond', 'hexagon', 'cross'];
+
+/* ---------- settings ---------- */
+const store = {
+  get(k, d) { try { const v = localStorage.getItem('careen-' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('careen-' + k, JSON.stringify(v)); } catch {} },
+};
+const settings = {
+  level: store.get('level', 'easy'),
+  tilt: store.get('tilt', true),
+  sound: store.get('sound', true),
+  thr: store.get('thr', null),
+};
+if (!LEVELS[settings.level]) settings.level = 'easy';
+const thr = () => settings.thr ?? LEVELS[settings.level].thr;
+const bestKey = () => 'best-' + settings.level;
+
+/* ---------- DOM ---------- */
+const $ = id => document.getElementById(id);
+const canvas = $('gl'), stage = $('stage');
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+function shapeSVG(k) {
+  const c = PALETTE[k], s = 'fill="' + c + '"';
+  const body = [
+    `<circle cx="8" cy="8" r="6.3" ${s}/>`,
+    `<rect x="2" y="2" width="12" height="12" rx="2.6" ${s}/>`,
+    `<path d="M8 1.6L14.6 13.4H1.4z" ${s} stroke="${c}" stroke-width="1.4" stroke-linejoin="round"/>`,
+    `<path d="M8 1L15 8L8 15L1 8z" ${s} stroke="${c}" stroke-width="1" stroke-linejoin="round"/>`,
+    `<path d="M8 1.2L14 4.6V11.4L8 14.8L2 11.4V4.6z" ${s}/>`,
+    `<path d="M5.6 1.5h4.8v4.1h4.1v4.8h-4.1v4.1H5.6v-4.1H1.5V5.6h4.1z" ${s} stroke="${c}" stroke-width="0.8" stroke-linejoin="round"/>`,
+  ][k];
+  return `<svg viewBox="0 0 16 16" aria-label="${SHAPE_NAMES[k]}">${body}</svg>`;
+}
+$('legend').innerHTML = PALETTE.map((_, k) => shapeSVG(k)).join('');
+
+/* ---------- audio ---------- */
+const sfx = {
+  ctx: null, out: null, lastLand: 0,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -16; comp.ratio.value = 4;
+      const out = ctx.createGain(); out.gain.value = 0.55;
+      out.connect(comp); comp.connect(ctx.destination);
+      this.ctx = ctx; this.out = out;
+    } catch {}
+  },
+  ok() { return settings.sound && this.ctx && this.ctx.state === 'running'; },
+  tone(f0, f1, dur, type = 'sine', vol = 0.2, delay = 0) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime + delay, o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(f0, t);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.008);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(this.out); o.start(t); o.stop(t + dur + 0.02);
+  },
+  noise(dur, vol, f0, f1, q = 1, delay = 0) {
+    if (!this.ok()) return;
+    const ctx = this.ctx, t = ctx.currentTime + delay, n = Math.ceil(ctx.sampleRate * dur);
+    const buf = ctx.createBuffer(1, n, ctx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    const src = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    src.buffer = buf; f.type = 'bandpass'; f.Q.value = q;
+    f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + dur * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f); f.connect(g); g.connect(this.out); src.start(t);
+  },
+  swap() { this.tone(520, 780, 0.07, 'triangle', 0.12); },
+  slide(n) { this.noise(0.24, clamp(0.05 + n * 0.006, 0.05, 0.22), 500, 1800, 0.8); },
+  land(n) {
+    const now = performance.now();
+    if (now - this.lastLand < 70) return;
+    this.lastLand = now;
+    this.tone(150, 70, 0.09, 'sine', clamp(0.06 + n * 0.02, 0.06, 0.25));
+  },
+  pop(chain, size) {
+    const steps = [0, 2, 4, 7, 9, 12, 14, 16, 19, 21, 24];
+    const f = 440 * Math.pow(2, steps[Math.min(chain - 1, steps.length - 1)] / 12);
+    this.tone(f, f, 0.32, 'sine', 0.2);
+    this.tone(f * 2, f * 2, 0.18, 'triangle', 0.06, 0.02);
+    if (size > 3) this.tone(f * 1.5, f * 1.5, 0.3, 'sine', 0.1, 0.06);
+    this.noise(0.12, 0.06, 4000, 8000, 2);
+  },
+  pour() { this.tone(180, 95, 0.22, 'sine', 0.18); this.tone(240, 120, 0.16, 'sine', 0.08, 0.08); },
+  warn() { this.tone(90, 70, 0.14, 'sine', 0.25); this.tone(90, 70, 0.14, 'sine', 0.18, 0.18); },
+  levelUp() { [0, 4, 7, 12].forEach((s, i) => this.tone(523 * Math.pow(2, s / 12), 523 * Math.pow(2, s / 12), 0.25, 'triangle', 0.12, i * 0.08)); },
+  over() { [0, -3, -7, -12].forEach((s, i) => this.tone(330 * Math.pow(2, s / 12), 300 * Math.pow(2, s / 12), 0.4, 'triangle', 0.14, i * 0.16)); },
+};
+
+/* ---------- motion ---------- */
+// gx, gd: gravity along the screen's right edge and down its long axis, -1..1, valid in any pose
+// (cos β · sin γ and sin β rather than raw γ, which flips sign when the screen faces the floor).
+const motion = { ok: false, listening: false, denied: false, gx: 0, gd: 0.7, sgx: 0, sgd: 0.7, gx0: 0, gd0: 0.7, pendingLevel: false };
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  const b = e.beta * Math.PI / 180, gm = e.gamma * Math.PI / 180;
+  let gx = Math.cos(b) * Math.sin(gm), gd = Math.sin(b);
+  const ang = (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+  if (Math.abs(ang) === 180) { gx = -gx; gd = -gd; }
+  motion.gx = gx; motion.gd = gd;
+  if (!motion.ok) { motion.ok = true; motion.sgx = gx; motion.sgd = gd; }
+  motion.sgx += (gx - motion.sgx) * 0.25; motion.sgd += (gd - motion.sgd) * 0.25;
+  if (motion.pendingLevel) { motion.pendingLevel = false; levelHere(true); }
+}
+async function enableMotion() {
+  if (motion.listening) return;
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') { motion.denied = true; return; }
+    }
+  } catch { motion.denied = true; return; }
+  addEventListener('deviceorientation', onOrient);
+  motion.listening = true;
+}
+const deg = v => Math.asin(clamp(v, -1, 1)) * 180 / Math.PI;
+function levelHere(raw) {
+  if (!motion.ok) { motion.pendingLevel = true; return; }
+  motion.gx0 = raw ? motion.gx : motion.sgx;
+  motion.gd0 = raw ? motion.gd : motion.sgd;
+  tiltState.cand = null;
+}
+const tiltX = () => deg(motion.sgx) - deg(motion.gx0);  // + = right edge down
+const tiltY = () => deg(motion.sgd) - deg(motion.gd0);  // + = steeper than level
+const tiltActive = () => settings.tilt && motion.ok;
+
+const tiltState = { cand: null, t: 0 };
+function tiltDirection() {
+  const x = tiltX(), y = tiltY(), ax = Math.abs(x), ay = Math.abs(y);
+  // Leaving "down" takes the full threshold; staying in a turned direction only needs 70% of it.
+  const need = g === 'down' ? thr() : thr() * 0.7;
+  if (Math.max(ax, ay) < need) return 'down';
+  if (ax > ay) return x > 0 ? 'right' : 'left';
+  return y > 0 ? 'down' : 'up';
+}
+
+/* ---------- game state ---------- */
+let L = LEVELS[settings.level];
+let board = null, g = 'down', mode = 'menu', phase = 'idle';
+let chain = 0, score = 0, cleared = 0, level = 1, best = 0;
+let pourT = 0, pourEvery = 0, nextColors = [], overflowT = -1;
+let idleT = 0, hint = null, selected = null, warned = false;
+let popT = 0, pendingSettle = false;
+const vis = new Map(); // tile id -> { x, y, v, acc, vmax, sq, sqx, dying }
+let rng = Math.random;
+
+function newVis(id, x, y) {
+  vis.set(id, { x, y, v: 0, acc: ACC, vmax: VMAX, sq: 0, sqx: false, dying: false });
+}
+function newGame() {
+  L = LEVELS[settings.level];
+  const seed = (new URLSearchParams(location.search).get('seed') | 0) || (Math.random() * 2 ** 31) | 0;
+  rng = makeRng(seed);
+  board = new Board(L.cols, L.rows, L.colors, rng);
+  g = 'down';
+  board.fill(g, L.fill);
+  vis.clear();
+  for (const t of board.tiles.values()) newVis(t.id, t.c, t.r - L.rows - 1 - rng() * 2);
+  chain = 0; score = 0; cleared = 0; level = 1;
+  best = store.get(bestKey(), 0);
+  pourEvery = L.pourEvery; pourT = pourEvery + 1.5;
+  nextColors = makePour();
+  overflowT = -1; idleT = 0; hint = null; selected = null; warned = false; pendingSettle = false;
+  phase = 'moving';
+  layout();
+  updateHUD();
+  showTip(tiltActive() ? 'Tilt to slide the tiles' : 'Arrows turn gravity; swipe tiles to swap');
+}
+function makePour() { return Array.from({ length: L.pourCount }, () => board.randomColor()); }
+
+function setGravity(d) {
+  if (d === g || mode !== 'play') return;
+  g = d;
+  selected = null;
+  touchAction();
+  if (phase === 'popping') { pendingSettle = true; return; }
+  const moved = board.settle(g);
+  if (moved) { phase = 'moving'; sfx.slide(moved); }
+  updateDial();
+}
+function atRest(id) {
+  const t = board.tiles.get(id), v = vis.get(id);
+  return t && v && !v.dying && v.v === 0 && v.x === t.c && v.y === t.r;
+}
+function trySwap(a, b) {
+  if (mode !== 'play' || phase === 'popping') return false;
+  if (!board.inside(b[0], b[1])) return false;
+  const ia = board.at(a[0], a[1]), ib = board.at(b[0], b[1]);
+  if (ia < 0 && ib < 0) return false;
+  if ((ia >= 0 && !atRest(ia)) || (ib >= 0 && !atRest(ib))) return false;
+  board.swap(a, b);
+  for (const id of [ia, ib]) if (id >= 0) Object.assign(vis.get(id), { acc: SWAP_ACC, vmax: SWAP_VMAX });
+  board.settle(g);
+  chain = 0;
+  phase = 'moving';
+  selected = null;
+  touchAction();
+  sfx.swap();
+  return true;
+}
+function touchAction() { idleT = 0; if (hint) { hint = null; updateDial(); } }
+
+function doPour() {
+  const colors = nextColors;
+  nextColors = makePour();
+  const lines = board.lines(g);
+  const { placed, overflow } = board.pour(g, colors);
+  const [dx, dy] = DIRS[g];
+  for (const p of placed) {
+    const edge = lines[p.line][lines[p.line].length - 1];
+    newVis(p.id, edge[0] - dx * (1 + p.depth), edge[1] - dy * (1 + p.depth));
+  }
+  phase = 'moving';
+  sfx.pour();
+  if (overflow) { overflowT = 0.7; mode = 'ending'; }
+  updateHUD();
+}
+
+function endGame() {
+  mode = 'over';
+  const isBest = score > best;
+  if (isBest) { best = score; store.set(bestKey(), best); }
+  sfx.over();
+  $('overTitle').textContent = isBest && score > 0 ? 'New best' : 'The board filled';
+  $('overText').innerHTML = `<b>${score.toLocaleString()}</b> points, level ${level}, ${cleared} tiles cleared.` +
+    `<br>Best on ${settings.level === 'easy' ? 'Easy' : 'Normal'}: ${best.toLocaleString()}.`;
+  $('over').hidden = false;
+  updateHUD();
+}
+
+/* ---------- simulation ---------- */
+function step(dt) {
+  if (mode === 'ending') {
+    integrate(dt);
+    overflowT -= dt;
+    if (overflowT <= 0) endGame();
+    return;
+  }
+  if (mode !== 'play') return;
+
+  if (tiltActive()) {
+    const d = tiltDirection();
+    if (d !== g) {
+      if (tiltState.cand !== d) { tiltState.cand = d; tiltState.t = 0; }
+      tiltState.t += dt;
+      if (tiltState.t >= DWELL) setGravity(d);
+    } else tiltState.cand = null;
+  }
+
+  if (phase === 'popping') {
+    popT += dt;
+    if (popT >= POP) burst();
+  } else {
+    const landed = integrate(dt);
+    if (landed) sfx.land(landed);
+    if (phase === 'moving' && allAtRest()) resolve();
+  }
+
+  if (phase !== 'popping') pourT -= dt;
+  if (pourT <= 0 && phase !== 'popping') { doPour(); pourT = pourEvery; }
+
+  const low = board.free() < L.pourCount * 2;
+  if (low && !warned) { warned = true; sfx.warn(); }
+  if (!low) warned = false;
+
+  if (phase === 'idle') {
+    idleT += dt;
+    if (L.hints && !hint && idleT > 7) { hint = board.findHint(g); updateDial(); }
+  }
+  updateMeter();
+}
+
+function integrate(dt) {
+  let landed = 0;
+  for (const [id, v] of vis) {
+    if (v.sq > 0) v.sq = Math.max(0, v.sq - dt * 4);
+    if (v.dying) continue;
+    const t = board.tiles.get(id);
+    if (!t) continue;
+    const dx = t.c - v.x, dy = t.r - v.y, dist = Math.hypot(dx, dy);
+    if (dist === 0) { v.v = 0; continue; }
+    v.v = Math.min(v.vmax, v.v + v.acc * dt);
+    const s = v.v * dt;
+    if (s >= dist) {
+      if (v.v > 4 && v.acc === ACC) { v.sq = Math.min(0.2, v.v * 0.011); v.sqx = Math.abs(dx) > Math.abs(dy); landed++; }
+      v.x = t.c; v.y = t.r; v.v = 0; v.acc = ACC; v.vmax = VMAX;
+    } else { v.x += dx / dist * s; v.y += dy / dist * s; }
+  }
+  return landed;
+}
+function allAtRest() {
+  for (const id of board.tiles.keys()) if (!atRest(id)) return false;
+  return true;
+}
+function resolve() {
+  const { runs, cells } = board.findMatches();
+  if (!cells.size) {
+    phase = 'idle';
+    chain = 0;
+    return;
+  }
+  chain++;
+  const pts = scoreClear(runs, cells.size, chain);
+  score += pts;
+  cleared += cells.size;
+  let cx = 0, cy = 0;
+  for (const i of cells) {
+    const id = board.cells[i];
+    vis.get(id).dying = true;
+    const t = board.tiles.get(id);
+    cx += t.c; cy += t.r;
+  }
+  floatText(`+${pts}`, cx / cells.size, cy / cells.size, false);
+  if (chain > 1) floatText(`Chain ×${chain}`, (L.cols - 1) / 2, (L.rows - 1) / 2, true);
+  sfx.pop(chain, Math.max(...runs.map(r => r.cells.length)));
+  popT = 0;
+  phase = 'popping';
+  idleT = 0;
+  const lv = 1 + Math.floor(cleared / LEVEL_UP);
+  if (lv > level) {
+    level = lv;
+    pourEvery = Math.max(L.minEvery, pourEvery * (1 - L.speedup));
+    sfx.levelUp();
+    showTip(`Level ${level}: pours come faster`);
+  }
+  updateHUD();
+}
+function burst() {
+  for (const [id, v] of vis) {
+    if (!v.dying) continue;
+    const t = board.tiles.get(id);
+    renderer.spawn(v.x, v.y, t.color, 18);
+    board.remove(id);
+    vis.delete(id);
+  }
+  pendingSettle = false;
+  board.settle(g);
+  phase = 'moving';
+}
+
+/* ---------- layout & HUD ---------- */
+const geo = { dpr: 1, w: 0, h: 0, bx: 0, by: 0, cell: 40, cssCell: 40, cssX: 0, cssY: 0 };
+function layout() {
+  geo.dpr = Math.min(window.devicePixelRatio || 1, 2.5);
+  geo.w = Math.round(innerWidth * geo.dpr); geo.h = Math.round(innerHeight * geo.dpr);
+  canvas.width = geo.w; canvas.height = geo.h;
+  const r = stage.getBoundingClientRect();
+  const cols = L.cols, rows = L.rows, pad = 10;
+  const css = Math.floor(Math.min((r.width - pad * 2) / cols, (r.height - pad * 2 - 18) / rows));
+  geo.cssCell = Math.max(16, css);
+  geo.cssX = r.left + (r.width - geo.cssCell * cols) / 2;
+  geo.cssY = r.top + (r.height - 18 - geo.cssCell * rows) / 2;
+  geo.cell = geo.cssCell * geo.dpr; geo.bx = geo.cssX * geo.dpr; geo.by = geo.cssY * geo.dpr;
+  renderer && renderer.resize();
+}
+addEventListener('resize', layout);
+
+function updateHUD() {
+  $('score').textContent = score.toLocaleString();
+  $('level').textContent = level;
+  $('best').textContent = 'best ' + Math.max(best, score).toLocaleString();
+  $('next').innerHTML = nextColors.map(shapeSVG).join('');
+}
+function updateMeter() {
+  const f = clamp(pourT / pourEvery, 0, 1);
+  $('meter').firstChild.style.transform = `scaleX(${f})`;
+  $('meter').classList.toggle('low', board && board.free() < L.pourCount * 2);
+}
+function updateDial() {
+  const tilt = tiltActive();
+  $('dial').classList.toggle('tilt', tilt);
+  for (const b of $('dial').querySelectorAll('button')) {
+    b.classList.toggle('on', b.dataset.dir === g);
+    b.classList.toggle('hint', !!hint && hint.kind === 'tilt' && hint.dir === b.dataset.dir);
+  }
+  if (hint && hint.kind === 'tilt') showTip(tilt ? `Try tilting ${hint.dir}` : `Try gravity ${hint.dir}`);
+  else if (hint && hint.kind === 'swap') showTip('Try swapping the glowing pair');
+}
+function updateBall() {
+  const ball = $('dial').querySelector('.ball'), ring = $('dial').querySelector('.ring');
+  if (!tiltActive()) { ball.style.opacity = 0; return; }
+  // The ball goes where the tiles go; the dashed ring is the turning threshold.
+  const R = 27, s = R / thr();
+  const x = clamp(tiltX() * s, -48, 48), y = clamp(tiltY() * s, -48, 48);
+  ball.style.opacity = 0.85;
+  ball.style.transform = `translate(${x}px, ${y}px)`;
+  ring.style.borderColor = Math.max(Math.abs(x), Math.abs(y)) >= R ? '#ffbe3b' : '#4a4170';
+}
+let tipTimer = 0;
+function showTip(text) {
+  const el = $('tip');
+  el.textContent = text; el.style.opacity = 1;
+  clearTimeout(tipTimer);
+  tipTimer = setTimeout(() => { el.style.opacity = 0; }, 3200);
+}
+function floatText(text, c, r, isChain) {
+  const el = document.createElement('div');
+  el.className = 'pop' + (isChain ? ' chain' : '');
+  el.textContent = text;
+  el.style.left = (geo.cssX + (c + 0.5) * geo.cssCell) + 'px';
+  el.style.top = (geo.cssY + (r + 0.5) * geo.cssCell - (isChain ? geo.cssCell : 0)) + 'px';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 1300);
+}
+
+/* ---------- input ---------- */
+let drag = null;
+function cellAt(clientX, clientY) {
+  return [Math.floor((clientX - geo.cssX) / geo.cssCell), Math.floor((clientY - geo.cssY) / geo.cssCell)];
+}
+stage.addEventListener('pointerdown', e => {
+  if (mode !== 'play') return;
+  sfx.init();
+  const cell = cellAt(e.clientX, e.clientY);
+  if (!board.inside(cell[0], cell[1])) { selected = null; return; }
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, cell, done: false };
+  stage.setPointerCapture(e.pointerId);
+});
+stage.addEventListener('pointermove', e => {
+  if (!drag || drag.id !== e.pointerId || drag.done) return;
+  const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+  if (Math.hypot(dx, dy) < geo.cssCell * 0.35) return;
+  const d = Math.abs(dx) > Math.abs(dy) ? [Math.sign(dx), 0] : [0, Math.sign(dy)];
+  drag.done = true;
+  trySwap(drag.cell, [drag.cell[0] + d[0], drag.cell[1] + d[1]]);
+});
+stage.addEventListener('pointerup', e => {
+  if (!drag || drag.id !== e.pointerId) return;
+  const d = drag; drag = null;
+  if (d.done) return;
+  const c = d.cell;
+  if (selected && Math.abs(selected[0] - c[0]) + Math.abs(selected[1] - c[1]) === 1) {
+    const a = selected; selected = null; trySwap(a, c);
+  } else if (selected && selected[0] === c[0] && selected[1] === c[1]) selected = null;
+  else selected = board.at(c[0], c[1]) >= 0 ? c : null;
+});
+stage.addEventListener('pointercancel', () => { drag = null; });
+
+for (const b of $('dial').querySelectorAll('button')) {
+  b.addEventListener('click', () => { sfx.init(); if (!tiltActive()) setGravity(b.dataset.dir); });
+}
+const KEYS = { ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right', w: 'up', s: 'down', a: 'left', d: 'right' };
+addEventListener('keydown', e => {
+  if (KEYS[e.key] && mode === 'play') { e.preventDefault(); sfx.init(); if (!tiltActive()) setGravity(KEYS[e.key]); return; }
+  if ((e.key === 'p' || e.key === 'Escape' || e.key === ' ') && (mode === 'play' || mode === 'paused')) {
+    e.preventDefault(); mode === 'play' ? pauseGame() : resumeGame();
+  }
+});
+
+/* ---------- menus ---------- */
+function syncOptions() {
+  for (const id of ['optTilt', 'optTilt2']) $(id).checked = settings.tilt;
+  for (const id of ['optSound', 'optSound2']) $(id).checked = settings.sound;
+  for (const b of $('levelSeg').children) b.classList.toggle('on', b.dataset.level === settings.level);
+  $('optThr').value = thr(); $('thrVal').textContent = thr() + '°';
+  updateDial();
+}
+for (const b of $('levelSeg').children) b.addEventListener('click', () => {
+  settings.level = b.dataset.level; store.set('level', settings.level);
+  settings.thr = null; store.set('thr', null);
+  L = LEVELS[settings.level]; best = store.get(bestKey(), 0);
+  if (mode === 'menu') demoBoard();
+  syncOptions(); updateHUD();
+});
+for (const id of ['optTilt', 'optTilt2']) $(id).addEventListener('change', async e => {
+  settings.tilt = e.target.checked; store.set('tilt', settings.tilt);
+  if (settings.tilt) { await enableMotion(); levelHere(); }
+  syncOptions();
+});
+for (const id of ['optSound', 'optSound2']) $(id).addEventListener('change', e => {
+  settings.sound = e.target.checked; store.set('sound', settings.sound); syncOptions();
+});
+$('optThr').addEventListener('input', e => { settings.thr = +e.target.value; store.set('thr', settings.thr); syncOptions(); });
+
+async function start() {
+  sfx.init();
+  if (settings.tilt) await enableMotion();
+  levelHere(true);
+  $('menu').hidden = true; $('over').hidden = true; $('pause').hidden = true;
+  newGame();
+  mode = 'play';
+  syncOptions();
+}
+function pauseGame() { if (mode !== 'play') return; mode = 'paused'; syncOptions(); $('pause').hidden = false; }
+function resumeGame() { if (mode !== 'paused') return; $('pause').hidden = true; mode = 'play'; last = performance.now(); }
+$('startBtn').addEventListener('click', start);
+$('againBtn').addEventListener('click', start);
+$('restartBtn').addEventListener('click', start);
+$('pauseBtn').addEventListener('click', () => mode === 'play' ? pauseGame() : resumeGame());
+$('resumeBtn').addEventListener('click', resumeGame);
+$('relevelBtn').addEventListener('click', () => { levelHere(); showTip('Level set to this pose'); resumeGame(); });
+$('levelBtn').addEventListener('click', () => { levelHere(); showTip('Level set to this pose'); });
+for (const id of ['quitBtn', 'menuBtn']) $(id).addEventListener('click', () => {
+  mode = 'menu'; $('pause').hidden = true; $('over').hidden = true; $('menu').hidden = false; syncOptions();
+});
+document.addEventListener('visibilitychange', () => { if (document.hidden) pauseGame(); });
+
+/* ---------- rendering ---------- */
+// Per tile instance: centre x, y and width, height in device px; colour, alpha, flash, glow.
+const MAXT = 256, NP = 4096;
+function buildInstances(out) {
+  let n = 0;
+  const now = performance.now() / 1000;
+  const hintIds = new Set();
+  if (hint && hint.kind === 'swap') { hintIds.add(board.at(...hint.a)); hintIds.add(board.at(...hint.b)); }
+  const selId = selected ? board.at(selected[0], selected[1]) : -1;
+  for (const [id, v] of vis) {
+    const t = board.tiles.get(id);
+    if (!t || n >= MAXT) continue;
+    let sx = 1, sy = 1, alpha = 1, flash = 0, glow = 0;
+    if (v.sq > 0) { const a = v.sq, b = v.sq * 0.6; if (v.sqx) { sx = 1 - a; sy = 1 + b; } else { sx = 1 + b; sy = 1 - a; } }
+    if (v.dying) { const k = clamp(popT / POP, 0, 1); sx = sy = 1 + 0.28 * k; flash = k; alpha = 1 - Math.max(0, k - 0.7) / 0.3; }
+    if (id === selId) glow = 1;
+    if (hintIds.has(id)) glow = 0.5 + 0.5 * Math.sin(now * 7);
+    const o = n * 8;
+    out[o] = geo.bx + (v.x + 0.5) * geo.cell;
+    out[o + 1] = geo.by + (v.y + 0.5) * geo.cell;
+    out[o + 2] = geo.cell * sx; out[o + 3] = geo.cell * sy;
+    out[o + 4] = t.color; out[o + 5] = alpha; out[o + 6] = flash; out[o + 7] = glow;
+    n++;
+  }
+  return n;
+}
+function frameUniforms(dt) {
+  const [gx, gy] = DIRS[g];
+  const lx = tiltActive() ? clamp(tiltX() / 40, -0.6, 0.6) : 0, ly = tiltActive() ? clamp(tiltY() / 40, -0.6, 0.6) : 0;
+  const danger = board && (mode === 'play' || mode === 'ending') ? clamp(1 - (board.free() - L.pourCount) / (L.pourCount * 2), 0, 1) : 0;
+  return new Float32Array([
+    geo.w, geo.h, geo.cell, performance.now() / 1000,
+    geo.bx, geo.by, (board ? L.cols : 7) * geo.cell, (board ? L.rows : 9) * geo.cell,
+    gx, gy, lx, ly,
+    danger, geo.dpr, dt, 0,
+  ]);
+}
+
+const WGSL_COMMON = /* wgsl */`
+struct U { a: vec4f, b: vec4f, c: vec4f, d: vec4f };
+// a: resolution xy, cell px, time · b: board rect · c: gravity xy, light tilt xy · d: danger, dpr, dt
+@group(0) @binding(0) var<uniform> u: U;
+fn palette(k: f32) -> vec3f {
+  let i = u32(k + 0.5);
+  switch i {
+    case 0u: { return vec3f(1.0, 0.365, 0.333); }
+    case 1u: { return vec3f(1.0, 0.745, 0.231); }
+    case 2u: { return vec3f(0.31, 0.82, 0.48); }
+    case 3u: { return vec3f(0.27, 0.66, 1.0); }
+    case 4u: { return vec3f(0.69, 0.486, 1.0); }
+    default: { return vec3f(1.0, 0.478, 0.765); }
+  }
+}
+fn toClip(p: vec2f) -> vec4f { return vec4f(p.x / u.a.x * 2.0 - 1.0, 1.0 - p.y / u.a.y * 2.0, 0.0, 1.0); }
+fn hash21(p: vec2f) -> f32 { return fract(sin(dot(p, vec2f(127.1, 311.7))) * 43758.5453); }
+fn sdBox(p: vec2f, b: vec2f, r: f32) -> f32 { let q = abs(p) - b + r; return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - r; }
+`;
+
+const WGSL_BG = WGSL_COMMON + /* wgsl */`
+struct V { @builtin(position) pos: vec4f };
+@vertex fn vs(@builtin(vertex_index) i: u32) -> V {
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  return V(vec4f(p[i], 0.0, 1.0));
+}
+@fragment fn fs(v: V) -> @location(0) vec4f {
+  let px = v.pos.xy;
+  let res = u.a.xy;
+  var col = mix(vec3f(0.086, 0.07, 0.14), vec3f(0.055, 0.045, 0.09), px.y / res.y);
+  let b = u.b; let cell = u.a.z;
+  let center = b.xy + b.zw * 0.5;
+  let half = b.zw * 0.5;
+  let d = sdBox(px - center, half + vec2f(cell * 0.12), cell * 0.28);
+  // Board well with a soft rim.
+  let inside = 1.0 - smoothstep(-1.0, 1.0, d);
+  let rim = exp(-abs(d) / (cell * 0.05)) * 0.35;
+  var well = vec3f(0.105, 0.09, 0.19);
+  let q = (px - b.xy) / cell;
+  // Faint cell grid.
+  let gq = abs(fract(q) - 0.5);
+  well += vec3f(0.03, 0.028, 0.05) * smoothstep(0.47, 0.5, max(gq.x, gq.y));
+  // Streaks flowing toward the low wall.
+  let gdir = u.c.xy;
+  let along = dot(q, gdir);
+  let across = dot(q, vec2f(-gdir.y, gdir.x));
+  let lane = floor(across * 3.0);
+  let ph = fract(along * 0.18 - u.a.w * (0.35 + hash21(vec2f(lane, 1.0)) * 0.4) + hash21(vec2f(lane, 7.0)));
+  let laneMask = 1.0 - smoothstep(0.04, 0.16, abs(fract(across * 3.0) - 0.5));
+  let streak = smoothstep(0.0, 0.08, ph) * (1.0 - smoothstep(0.08, 0.35, ph)) * laneMask;
+  well += vec3f(0.08, 0.07, 0.16) * streak;
+  // The low wall glows.
+  let rel = (px - center) / half;
+  let wallDist = 1.0 - dot(rel, gdir);
+  well += vec3f(1.0, 0.75, 0.25) * exp(-wallDist * 9.0) * 0.18 * inside;
+  col = mix(col, well, inside) + vec3f(0.45, 0.4, 0.75) * rim * 0.4;
+  // Danger: a red pulse at the high edge as the board fills.
+  let dz = u.d.x;
+  if (dz > 0.0) {
+    let pulse = 0.55 + 0.45 * sin(u.a.w * 6.0);
+    let high = exp(-(1.0 + dot(rel, gdir)) * 4.0);
+    col += vec3f(0.9, 0.12, 0.1) * dz * pulse * (high * 0.5 * inside + rim * 0.8);
+  }
+  return vec4f(col, 1.0);
+}
+`;
+
+const WGSL_TILE = WGSL_COMMON + /* wgsl */`
+struct TI { @location(0) rect: vec4f, @location(1) info: vec4f };
+struct TV { @builtin(position) pos: vec4f, @location(0) lp: vec2f, @location(1) @interpolate(flat) info: vec4f };
+const EXT = 0.62;
+@vertex fn vs(@builtin(vertex_index) vi: u32, t: TI) -> TV {
+  let corner = vec2f(f32(vi & 1u), f32(vi >> 1u)) * 2.0 - 1.0;
+  let lp = corner * EXT;
+  return TV(toClip(t.rect.xy + lp * t.rect.zw), lp, t.info);
+}
+fn sdTri(p0: vec2f, r: f32) -> f32 {
+  let k = sqrt(3.0);
+  var p = vec2f(abs(p0.x) - r, -p0.y + r / k);
+  if (p.x + k * p.y > 0.0) { p = vec2f(p.x - k * p.y, -k * p.x - p.y) / 2.0; }
+  p.x -= clamp(p.x, -2.0 * r, 0.0);
+  return -length(p) * sign(p.y);
+}
+fn sdHex(p0: vec2f, r: f32) -> f32 {
+  let k = vec3f(-0.866025404, 0.5, 0.577350269);
+  var p = abs(p0.yx);
+  p -= 2.0 * min(dot(k.xy, p), 0.0) * k.xy;
+  p -= vec2f(clamp(p.x, -k.z * r, k.z * r), r);
+  return length(p) * sign(p.y);
+}
+fn shape(k: u32, p: vec2f) -> f32 {
+  switch k {
+    case 0u: { return length(p) - 0.4; }
+    case 1u: { return sdBox(p, vec2f(0.36), 0.1); }
+    case 2u: { return sdTri(p - vec2f(0.0, 0.06), 0.36) - 0.06; }
+    case 3u: { let q = vec2f(p.x + p.y, p.y - p.x) * 0.70710678; return sdBox(q, vec2f(0.28), 0.06); }
+    case 4u: { return sdHex(p, 0.33) - 0.06; }
+    default: { return min(sdBox(p, vec2f(0.4, 0.15), 0.06), sdBox(p, vec2f(0.15, 0.4), 0.06)); }
+  }
+}
+fn height(k: u32, p: vec2f) -> f32 { return sqrt(clamp(-shape(k, p) / 0.13, 0.0, 1.0)); }
+@fragment fn fs(v: TV) -> @location(0) vec4f {
+  let k = u32(v.info.x + 0.5);
+  let alpha = v.info.y; let flash = v.info.z; let glow = v.info.w;
+  let p = v.lp;
+  let aa = 1.3 / u.a.z;
+  let d = shape(k, p);
+  let gdir = u.c.xy;
+  // Shadow, cast toward the low wall.
+  let ds = shape(k, p - gdir * 0.05 - vec2f(0.0, 0.03));
+  let shadow = (1.0 - smoothstep(-0.04, 0.1, ds)) * 0.5;
+  // Bevel normal from object-space finite differences of the height field.
+  let e = 0.006;
+  let h = height(k, p);
+  let hx = height(k, p + vec2f(e, 0.0));
+  let hy = height(k, p + vec2f(0.0, e));
+  let n = normalize(vec3f(-(hx - h) / e * 0.06, -(hy - h) / e * 0.06, 1.0));
+  let L = normalize(vec3f(-0.5 + u.c.z, -0.7 + u.c.w, 0.9));
+  let diff = max(dot(n, L), 0.0);
+  let spec = pow(max(dot(reflect(-L, n), vec3f(0.0, 0.0, 1.0)), 0.0), 28.0);
+  let base = palette(v.info.x);
+  var col = base * (0.28 + 0.85 * diff) + vec3f(spec * 0.6);
+  // A flat table facet in the middle reads as a cut gem.
+  let table = 1.0 - smoothstep(-aa, aa, shape(k, p * 1.8));
+  col = mix(col, base * 1.15 + 0.1, table * 0.35);
+  col = mix(col, vec3f(1.0), flash * 0.85);
+  let a = 1.0 - smoothstep(-aa, aa, d);
+  // Selection / hint ring.
+  let ring = exp(-abs(d - 0.05) * 45.0) * glow;
+  // Premultiplied: the gem over its (black) shadow, then the ring added on top.
+  let outc = col * a + vec3f(1.0, 0.95, 0.8) * ring;
+  let outa = min(1.0, a + shadow * (1.0 - a) + ring);
+  return vec4f(outc, outa) * alpha;
+}
+`;
+
+const WGSL_PART = /* wgsl */`
+struct P { pos: vec2f, vel: vec2f, life: f32, maxl: f32, kind: f32, size: f32 };
+`;
+const WGSL_PSIM = WGSL_COMMON + WGSL_PART + /* wgsl */`
+@group(0) @binding(1) var<storage, read_write> ps: array<P>;
+@compute @workgroup_size(64) fn sim(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x;
+  if (i >= arrayLength(&ps)) { return; }
+  var p = ps[i];
+  if (p.life <= 0.0) { return; }
+  let dt = u.d.z;
+  let cell = u.a.z;
+  p.vel += u.c.xy * cell * 22.0 * dt;
+  p.vel *= 1.0 - 1.2 * dt;
+  p.pos += p.vel * dt;
+  // Sparks bounce around inside the board, off every wall.
+  let lo = u.b.xy; let hi = u.b.xy + u.b.zw;
+  if (p.pos.x < lo.x) { p.pos.x = lo.x; p.vel.x = abs(p.vel.x) * 0.45; p.vel.y *= 0.8; }
+  if (p.pos.x > hi.x) { p.pos.x = hi.x; p.vel.x = -abs(p.vel.x) * 0.45; p.vel.y *= 0.8; }
+  if (p.pos.y < lo.y) { p.pos.y = lo.y; p.vel.y = abs(p.vel.y) * 0.45; p.vel.x *= 0.8; }
+  if (p.pos.y > hi.y) { p.pos.y = hi.y; p.vel.y = -abs(p.vel.y) * 0.45; p.vel.x *= 0.8; }
+  p.life -= dt;
+  ps[i] = p;
+}
+`;
+const WGSL_PDRAW = WGSL_COMMON + WGSL_PART + /* wgsl */`
+@group(0) @binding(1) var<storage, read> ps: array<P>;
+struct PV { @builtin(position) pos: vec4f, @location(0) lp: vec2f, @location(1) col: vec4f };
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> PV {
+  let p = ps[ii];
+  let corner = vec2f(f32(vi & 1u), f32(vi >> 1u)) * 2.0 - 1.0;
+  if (p.life <= 0.0) { return PV(vec4f(2.0, 2.0, 0.0, 1.0), corner, vec4f(0.0)); }
+  let k = clamp(p.life / p.maxl, 0.0, 1.0);
+  let r = p.size * u.a.z * (0.35 + 0.65 * k);
+  let c = mix(vec3f(1.0), palette(p.kind), 0.4 + 0.6 * (1.0 - k));
+  return PV(toClip(p.pos + corner * r), corner, vec4f(c, k));
+}
+@fragment fn fs(v: PV) -> @location(0) vec4f {
+  let d = length(v.lp);
+  let a = exp(-d * d * 4.0) * v.col.a;
+  return vec4f(v.col.rgb * a, 0.0);
+}
+`;
+
+async function initGPU() {
+  if (!navigator.gpu) return null;
+  const adapter = await navigator.gpu.requestAdapter();
+  if (!adapter) return null;
+  const device = await adapter.requestDevice();
+  const ctx = canvas.getContext('webgpu');
+  if (!ctx) return null;
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format, alphaMode: 'opaque' });
+  const U = GPUBufferUsage;
+  const ubuf = device.createBuffer({ size: 64, usage: U.UNIFORM | U.COPY_DST });
+  const tbuf = device.createBuffer({ size: MAXT * 32, usage: U.VERTEX | U.COPY_DST });
+  const pbuf = device.createBuffer({ size: NP * 32, usage: U.STORAGE | U.COPY_DST });
+  const mod = code => device.createShaderModule({ code });
+  const premul = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
+  const additive = { color: { srcFactor: 'one', dstFactor: 'one' }, alpha: { srcFactor: 'one', dstFactor: 'one' } };
+  const bgMod = mod(WGSL_BG), tileMod = mod(WGSL_TILE), simMod = mod(WGSL_PSIM), drawMod = mod(WGSL_PDRAW);
+  const [bg, tile, sim, draw] = await Promise.all([
+    device.createRenderPipelineAsync({ layout: 'auto', vertex: { module: bgMod, entryPoint: 'vs' },
+      fragment: { module: bgMod, entryPoint: 'fs', targets: [{ format }] }, primitive: { topology: 'triangle-list' } }),
+    device.createRenderPipelineAsync({ layout: 'auto',
+      vertex: { module: tileMod, entryPoint: 'vs', buffers: [{ arrayStride: 32, stepMode: 'instance',
+        attributes: [{ shaderLocation: 0, offset: 0, format: 'float32x4' }, { shaderLocation: 1, offset: 16, format: 'float32x4' }] }] },
+      fragment: { module: tileMod, entryPoint: 'fs', targets: [{ format, blend: premul }] }, primitive: { topology: 'triangle-strip' } }),
+    device.createComputePipelineAsync({ layout: 'auto', compute: { module: simMod, entryPoint: 'sim' } }),
+    device.createRenderPipelineAsync({ layout: 'auto', vertex: { module: drawMod, entryPoint: 'vs' },
+      fragment: { module: drawMod, entryPoint: 'fs', targets: [{ format, blend: additive }] }, primitive: { topology: 'triangle-strip' } }),
+  ]);
+  const bind = (pipe, entries) => device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries });
+  const bgBind = bind(bg, [{ binding: 0, resource: { buffer: ubuf } }]);
+  const tileBind = bind(tile, [{ binding: 0, resource: { buffer: ubuf } }]);
+  const simBind = bind(sim, [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: { buffer: pbuf } }]);
+  const drawBind = bind(draw, [{ binding: 0, resource: { buffer: ubuf } }, { binding: 1, resource: { buffer: pbuf } }]);
+  const inst = new Float32Array(MAXT * 8);
+  let ring = 0, lost = false;
+  device.lost.then(() => { lost = true; });
+  return {
+    kind: 'webgpu',
+    resize() {},
+    spawn(cx, cy, kind, count) {
+      const data = new Float32Array(count * 8);
+      const x = geo.bx + (cx + 0.5) * geo.cell, y = geo.by + (cy + 0.5) * geo.cell;
+      for (let i = 0; i < count; i++) {
+        const a = Math.random() * Math.PI * 2, s = geo.cell * (3 + Math.random() * 7), life = 0.6 + Math.random() * 0.7;
+        data.set([x + Math.cos(a) * geo.cell * 0.2, y + Math.sin(a) * geo.cell * 0.2, Math.cos(a) * s, Math.sin(a) * s,
+          life, life, kind, 0.06 + Math.random() * 0.1], i * 8);
+      }
+      // Write into the ring in at most two pieces.
+      const first = Math.min(count, NP - ring);
+      device.queue.writeBuffer(pbuf, ring * 32, data, 0, first * 8);
+      if (first < count) device.queue.writeBuffer(pbuf, 0, data, first * 8, (count - first) * 8);
+      ring = (ring + count) % NP;
+    },
+    draw(dt) {
+      if (lost) return;
+      device.queue.writeBuffer(ubuf, 0, frameUniforms(dt));
+      const n = board ? buildInstances(inst) : 0;
+      if (n) device.queue.writeBuffer(tbuf, 0, inst, 0, n * 8);
+      const enc = device.createCommandEncoder();
+      const cp = enc.beginComputePass();
+      cp.setPipeline(sim); cp.setBindGroup(0, simBind); cp.dispatchWorkgroups(Math.ceil(NP / 64)); cp.end();
+      const rp = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: { r: 0, g: 0, b: 0, a: 1 } }] });
+      rp.setPipeline(bg); rp.setBindGroup(0, bgBind); rp.draw(3);
+      if (n) {
+        const pad = Math.round(geo.cell * 0.12);
+        const sx = clamp(Math.floor(geo.bx) - pad, 0, geo.w), sy = clamp(Math.floor(geo.by) - pad, 0, geo.h);
+        const sw = clamp(Math.ceil(L.cols * geo.cell) + pad * 2, 0, geo.w - sx), sh = clamp(Math.ceil(L.rows * geo.cell) + pad * 2, 0, geo.h - sy);
+        if (sw > 0 && sh > 0) {
+          rp.setScissorRect(sx, sy, sw, sh);
+          rp.setPipeline(tile); rp.setBindGroup(0, tileBind); rp.setVertexBuffer(0, tbuf); rp.draw(4, n);
+          rp.setScissorRect(0, 0, geo.w, geo.h);
+        }
+      }
+      rp.setPipeline(draw); rp.setBindGroup(0, drawBind); rp.draw(4, NP);
+      rp.end();
+      device.queue.submit([enc.finish()]);
+    },
+  };
+}
+
+// Canvas 2D fallback: the same board, flat-shaded shapes, sparks simulated on the CPU.
+function init2D() {
+  const ctx = canvas.getContext('2d');
+  const inst = new Float32Array(MAXT * 8), parts = [];
+  function path(k, r) {
+    ctx.beginPath();
+    if (k === 0) ctx.arc(0, 0, r * 0.4, 0, Math.PI * 2);
+    else if (k === 1) ctx.roundRect(-r * 0.36, -r * 0.36, r * 0.72, r * 0.72, r * 0.1);
+    else if (k === 2) { ctx.moveTo(0, -r * 0.4); ctx.lineTo(r * 0.42, r * 0.34); ctx.lineTo(-r * 0.42, r * 0.34); ctx.closePath(); }
+    else if (k === 3) { ctx.moveTo(0, -r * 0.44); ctx.lineTo(r * 0.44, 0); ctx.lineTo(0, r * 0.44); ctx.lineTo(-r * 0.44, 0); ctx.closePath(); }
+    else if (k === 4) { for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; ctx.lineTo(Math.cos(a) * r * 0.42, Math.sin(a) * r * 0.42); } ctx.closePath(); }
+    else { const a = r * 0.4, b = r * 0.15; ctx.moveTo(-b, -a); ctx.lineTo(b, -a); ctx.lineTo(b, -b); ctx.lineTo(a, -b); ctx.lineTo(a, b); ctx.lineTo(b, b); ctx.lineTo(b, a); ctx.lineTo(-b, a); ctx.lineTo(-b, b); ctx.lineTo(-a, b); ctx.lineTo(-a, -b); ctx.lineTo(-b, -b); ctx.closePath(); }
+  }
+  return {
+    kind: '2d',
+    resize() {},
+    spawn(cx, cy, kind, count) {
+      const x = geo.bx + (cx + 0.5) * geo.cell, y = geo.by + (cy + 0.5) * geo.cell;
+      for (let i = 0; i < count / 2; i++) {
+        const a = Math.random() * Math.PI * 2, s = geo.cell * (3 + Math.random() * 6), life = 0.5 + Math.random() * 0.5;
+        parts.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s, life, maxl: life, kind });
+      }
+      if (parts.length > 600) parts.splice(0, parts.length - 600);
+    },
+    draw(dt) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#120f1d'; ctx.fillRect(0, 0, geo.w, geo.h);
+      if (!board) return;
+      const bw = L.cols * geo.cell, bh = L.rows * geo.cell, pad = geo.cell * 0.12;
+      ctx.fillStyle = '#1b1730';
+      ctx.beginPath(); ctx.roundRect(geo.bx - pad, geo.by - pad, bw + pad * 2, bh + pad * 2, geo.cell * 0.28); ctx.fill();
+      const [gx, gy] = DIRS[g];
+      ctx.fillStyle = 'rgba(255,190,59,0.22)';
+      if (gy > 0) ctx.fillRect(geo.bx, geo.by + bh - 3, bw, 3);
+      if (gy < 0) ctx.fillRect(geo.bx, geo.by, bw, 3);
+      if (gx > 0) ctx.fillRect(geo.bx + bw - 3, geo.by, 3, bh);
+      if (gx < 0) ctx.fillRect(geo.bx, geo.by, 3, bh);
+      ctx.save();
+      ctx.beginPath(); ctx.rect(geo.bx - pad, geo.by - pad, bw + pad * 2, bh + pad * 2); ctx.clip();
+      const n = buildInstances(inst);
+      for (let i = 0; i < n; i++) {
+        const o = i * 8, k = inst[o + 4];
+        ctx.setTransform(inst[o + 2] / geo.cell, 0, 0, inst[o + 3] / geo.cell, inst[o], inst[o + 1]);
+        ctx.globalAlpha = inst[o + 5];
+        path(k, geo.cell);
+        ctx.fillStyle = inst[o + 6] > 0.3 ? '#fff' : PALETTE[k]; ctx.fill();
+        if (inst[o + 7] > 0) { ctx.lineWidth = 3; ctx.strokeStyle = `rgba(255,245,210,${inst[o + 7]})`; ctx.stroke(); }
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'lighter';
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const p = parts[i];
+        p.vx += gx * geo.cell * 22 * dt; p.vy += gy * geo.cell * 22 * dt;
+        p.x += p.vx * dt; p.y += p.vy * dt; p.life -= dt;
+        if (p.life <= 0) { parts.splice(i, 1); continue; }
+        ctx.fillStyle = PALETTE[p.kind];
+        ctx.globalAlpha = p.life / p.maxl;
+        ctx.beginPath(); ctx.arc(p.x, p.y, geo.cell * 0.06, 0, Math.PI * 2); ctx.fill();
+      }
+      ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+    },
+  };
+}
+
+let renderer = null, last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  step(dt);
+  updateBall();
+  renderer.draw(mode === 'paused' ? 0 : dt);
+  requestAnimationFrame(frame);
+}
+
+// Behind the menu, a demo board idles so the first screen is not empty.
+function demoBoard() {
+  L = LEVELS[settings.level];
+  rng = makeRng(20261031);
+  board = new Board(L.cols, L.rows, L.colors, rng);
+  board.fill('down', 0.7);
+  vis.clear();
+  for (const t of board.tiles.values()) newVis(t.id, t.c, t.r);
+  layout();
+}
+
+(async () => {
+  const force2D = new URLSearchParams(location.search).get('renderer') === '2d';
+  try { renderer = force2D ? null : await initGPU(); } catch (e) { console.warn('WebGPU unavailable', e); renderer = null; }
+  if (!renderer) renderer = init2D();
+  document.documentElement.dataset.renderer = renderer.kind;
+  syncOptions();
+  demoBoard();
+  updateHUD();
+  requestAnimationFrame(frame);
+})();
+
+// Test hook.
+window.__careen = {
+  get state() { return { mode, phase, g, score, chain, level, cleared, free: board && board.free(), renderer: renderer && renderer.kind, pourT }; },
+  get board() { return board; },
+  start, setGravity, trySwap, levelHere,
+  pour() { doPour(); },
+  setTilt(x, y) { motion.ok = true; motion.gx0 = 0; motion.gd0 = Math.sin(40 * Math.PI / 180); motion.sgx = motion.gx = Math.sin(x * Math.PI / 180); motion.sgd = motion.gd = Math.sin((40 + y) * Math.PI / 180); },
+};
+
+if ('serviceWorker' in navigator && isSecureContext) {
+  navigator.serviceWorker.register('sw.js', { updateViaCache: 'none' }).catch(() => {});
+}
+</script>
+</body>
+</html>
