@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#11161c">
+<title>Tilt Rally</title>
+<meta name="description" content="A racing game for a phone held sideways like a steering wheel: turn the phone to steer, tilt the top away for gas and toward you to brake. Three laps of a mountain valley against three cars, drawn in WebGPU.">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Tilt Rally">
+<meta property="og:description" content="Hold your phone like a steering wheel: turn to steer, tilt for gas and brake. A WebGPU valley circuit against three cars.">
+<meta property="og:url" content="https://austegard.com/games/tilt-rally/">
+<meta property="og:image" content="https://austegard.com/games/tilt-rally/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A yellow race car on a mountain valley circuit, with the lap and speed readouts">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Tilt Rally">
+<meta name="twitter:description" content="Hold your phone like a steering wheel: turn to steer, tilt for gas and brake. A WebGPU valley circuit against three cars.">
+<meta name="twitter:image" content="https://austegard.com/games/tilt-rally/og-image.png">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Tilt Rally">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Semi+Condensed:wght@500;700&family=Saira+Stencil+One&display=swap">
+<style>
+/* One look on purpose: a dark telemetry HUD over a daylit alpine valley. Signal yellow is the only accent. */
+:root {
+  --ink: #f4f6f8;
+  --dim: #a9b4bf;
+  --panel: rgba(12, 17, 23, 0.62);
+  --panel-solid: #11161c;
+  --line: rgba(244, 246, 248, 0.16);
+  --signal: #ffd21f;
+  --gas: #52d27a;
+  --brake: #ff5a4e;
+  --hud: "Saira Semi Condensed", "Arial Narrow", system-ui, sans-serif;
+  --display: "Saira Stencil One", "Impact", "Arial Black", sans-serif;
+  color-scheme: dark;
+}
+html, body { height: 100%; margin: 0; background: var(--panel-solid); color: var(--ink); font-family: var(--hud); overflow: hidden;
+  -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; touch-action: none; }
+[hidden] { display: none !important; }
+canvas#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+.hud { position: fixed; inset: 0; pointer-events: none;
+  padding: max(10px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(10px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px)); }
+.chip { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 6px 10px; backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); }
+.label { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--dim); }
+.num { font-variant-numeric: tabular-nums; font-weight: 700; }
+#tl { position: absolute; top: max(10px, env(safe-area-inset-top, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 8px; }
+#tl .num { font-size: 26px; line-height: 1; }
+#tr { position: absolute; top: max(10px, env(safe-area-inset-top, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); display: flex; gap: 8px; align-items: flex-start; }
+#tr .num { font-size: 22px; line-height: 1; }
+#minimap { width: 120px; height: 120px; display: block; }
+#br { position: absolute; bottom: max(10px, env(safe-area-inset-bottom, 0px)); right: max(16px, env(safe-area-inset-right, 0px)); text-align: right; }
+#speed { font-size: 64px; line-height: 0.9; }
+#bl { position: absolute; bottom: max(10px, env(safe-area-inset-bottom, 0px)); left: max(16px, env(safe-area-inset-left, 0px)); display: flex; gap: 10px; align-items: flex-end; }
+#wheel { width: 64px; height: 64px; transition: none; }
+#pedal { width: 12px; height: 64px; position: relative; border-radius: 3px; background: rgba(255,255,255,0.08); overflow: hidden; border: 1px solid var(--line); }
+#pedal i { position: absolute; left: 0; right: 0; }
+#gas { bottom: 50%; background: var(--gas); height: 0; }
+#brk { top: 50%; background: var(--brake); height: 0; }
+#pedal::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 1px; background: var(--ink); opacity: 0.5; }
+#msg { position: absolute; left: 0; right: 0; top: 34%; text-align: center; font-family: var(--display); font-size: 56px; color: var(--signal);
+  text-shadow: 0 2px 0 rgba(0,0,0,0.5); letter-spacing: 0.04em; }
+#sub { position: absolute; left: 0; right: 0; top: calc(34% + 64px); text-align: center; font-size: 16px; color: var(--ink); text-shadow: 0 1px 2px rgba(0,0,0,0.8); }
+#center { pointer-events: auto; position: absolute; top: max(10px, env(safe-area-inset-top, 0px)); left: 50%; transform: translateX(-50%);
+  font: 700 12px var(--hud); letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink); }
+button { font-family: var(--hud); cursor: pointer; }
+button:focus-visible { outline: 2px solid var(--signal); outline-offset: 2px; }
+.overlay { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(9, 13, 18, 0.78);
+  padding: max(16px, env(safe-area-inset-top, 0px)) max(16px, env(safe-area-inset-right, 0px)) max(16px, env(safe-area-inset-bottom, 0px)) max(16px, env(safe-area-inset-left, 0px));
+  overflow-y: auto; }
+.card { max-width: 640px; width: 100%; display: grid; grid-template-columns: auto 1fr; gap: 14px 24px; align-items: center; }
+.card h1 { font-family: var(--display); font-weight: 400; font-size: clamp(40px, 9vw, 68px); line-height: 0.95; margin: 0; color: var(--signal); grid-column: 1 / -1; text-wrap: balance; }
+.card p { margin: 0; font-size: 16px; line-height: 1.4; color: var(--ink); max-width: 46ch; }
+.card .small { font-size: 13px; color: var(--dim); }
+.card ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 6px; font-size: 16px; }
+.card li b { color: var(--signal); font-weight: 700; }
+.row { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: center; grid-column: 1 / -1; }
+.go { background: var(--signal); color: #15120a; border: 0; border-radius: 6px; font-size: 20px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding: 12px 26px; }
+.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); border-radius: 6px; font-size: 14px; padding: 8px 14px; }
+label.opt { display: inline-flex; gap: 8px; align-items: center; font-size: 14px; color: var(--dim); }
+label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
+.diagram { width: 150px; height: 110px; }
+.full { grid-column: 1 / -1; }
+#results table { border-collapse: collapse; font-size: 18px; width: 100%; }
+#results td { padding: 4px 10px 4px 0; border-bottom: 1px solid var(--line); }
+#results td:last-child { text-align: right; }
+#rotate { display: none; }
+@media (orientation: portrait) and (pointer: coarse) {
+  #rotate:not([hidden]) { display: flex; z-index: 30; flex-direction: column; gap: 12px; text-align: center; font-size: 20px; }
+}
+@media (max-height: 420px) {
+  .card { gap: 8px 18px; } .card p, .card ul { font-size: 14px; } .diagram { width: 110px; height: 80px; }
+  #speed { font-size: 48px; } #minimap { width: 92px; height: 92px; } #msg { font-size: 44px; }
+}
+@media (max-width: 520px) and (orientation: portrait) { .card { grid-template-columns: 1fr; } }
+@media (prefers-reduced-motion: reduce) { #wheel { transition: none; } }
+</style>
+</head>
+<body>
+<canvas id="view"></canvas>
+
+<div class="hud" id="hud" hidden>
+  <div id="tl">
+    <div class="chip"><div class="label">Lap</div><div class="num" id="lap">1/3</div></div>
+    <div class="chip"><div class="label">Pos</div><div class="num" id="pos">4/4</div></div>
+  </div>
+  <button class="chip" id="center" type="button">Center wheel</button>
+  <div id="tr">
+    <div class="chip"><div class="label">Time</div><div class="num" id="time">0:00.00</div><div class="label" id="best" style="margin-top:4px">Best —</div></div>
+    <canvas class="chip" id="minimap" width="240" height="240" style="padding:0"></canvas>
+  </div>
+  <div id="bl">
+    <svg id="wheel" viewBox="-50 -50 100 100" aria-hidden="true">
+      <circle r="42" fill="none" stroke="#f4f6f8" stroke-width="9" opacity="0.9"/>
+      <path d="M-40 4 L-12 10 L-8 30 L8 30 L12 10 L40 4" fill="none" stroke="#f4f6f8" stroke-width="8" stroke-linejoin="round" opacity="0.9"/>
+      <rect x="-4" y="-50" width="8" height="12" fill="#ffd21f"/>
+    </svg>
+    <div id="pedal"><i id="gas"></i><i id="brk"></i></div>
+    <div class="label" id="mode" style="margin-bottom:2px">tilt</div>
+  </div>
+  <div id="br"><div class="num" id="speed">0</div><div class="label">km/h</div></div>
+  <div id="msg"></div>
+  <div id="sub"></div>
+</div>
+
+<div class="overlay" id="intro">
+  <div class="card">
+    <h1>Tilt Rally</h1>
+    <svg class="diagram" viewBox="0 0 150 110" aria-hidden="true">
+      <g transform="translate(75 58) rotate(-14)">
+        <rect x="-52" y="-26" width="104" height="52" rx="8" fill="#1d252e" stroke="#f4f6f8" stroke-width="2.5"/>
+        <rect x="-44" y="-19" width="88" height="38" rx="3" fill="#2f5d3a"/>
+        <path d="M-44 6 Q0 -6 44 6 L44 19 L-44 19 Z" fill="#3a3d42"/>
+      </g>
+      <path d="M22 26 A 62 62 0 0 1 128 26" fill="none" stroke="#ffd21f" stroke-width="3" stroke-linecap="round"/>
+      <path d="M128 26 l-9 -2 m9 2 l-3 9" stroke="#ffd21f" stroke-width="3" stroke-linecap="round" fill="none"/>
+      <path d="M22 26 l9 -2 m-9 2 l3 9" stroke="#ffd21f" stroke-width="3" stroke-linecap="round" fill="none"/>
+    </svg>
+    <div style="display:grid; gap:10px; min-width:0">
+      <p>Hold the phone sideways in both hands, like a steering wheel.</p>
+      <ul>
+        <li><b>Turn</b> the phone to steer</li>
+        <li><b>Tilt the top away</b> for gas</li>
+        <li><b>Tilt it toward you</b> to brake</li>
+      </ul>
+    </div>
+    <p class="full small">Three laps of a mountain valley circuit against three cars. Whatever angle you hold when the lights go out becomes straight ahead; double-tap the screen to re-center. On a keyboard: arrows or WASD.</p>
+    <div class="row">
+      <button class="go" id="start" type="button">Start engine</button>
+      <label class="opt"><input type="checkbox" id="level" checked> Keep horizon level</label>
+      <label class="opt"><input type="checkbox" id="sound" checked> Sound</label>
+    </div>
+    <p class="full small" id="status">Checking for WebGPU…</p>
+  </div>
+</div>
+
+<div class="overlay" id="results" hidden>
+  <div class="card" style="grid-template-columns:1fr">
+    <h1 id="rtitle">Finished</h1>
+    <table><tbody id="rtable"></tbody></table>
+    <div class="row"><button class="go" id="again" type="button">Race again</button><button class="ghost" id="newtrack" type="button">New valley</button></div>
+  </div>
+</div>
+
+<div class="overlay" id="rotate" hidden>
+  <svg width="90" height="90" viewBox="0 0 90 90" aria-hidden="true"><rect x="30" y="12" width="30" height="56" rx="5" fill="none" stroke="#ffd21f" stroke-width="3"/><path d="M14 74 Q45 92 76 74" fill="none" stroke="#f4f6f8" stroke-width="3"/><path d="M76 74 l-8 -1 m8 1 l-2 8" stroke="#f4f6f8" stroke-width="3" fill="none"/></svg>
+  Turn your phone sideways
+</div>
+
+<script type="module">
+import { createEngine, wheelFrom, upFromOrientation, clamp, lerp, M, LAPS } from "./engine.js";
+const D2R = Math.PI / 180, TAU = Math.PI * 2;
+const Q = new URLSearchParams(location.search);
+const DEMO = Q.has("demo");
+const $ = (id) => document.getElementById(id);
+const status = (s) => { $("status").textContent = s; };
+const canvas = $("view");
+
+// ---------------------------------------------------------------- the wheel
+const sensor = { up: null, neutral: null, events: 0, mode: "keys" };
+function onOrient(e) { if (e.beta == null || e.gamma == null) return; sensor.up = upFromOrientation(e.beta, e.gamma); sensor.events++; }
+function recenter() { if (sensor.up) sensor.neutral = sensor.up.slice(); }
+window.__tilt = { upFromOrientation, wheelFrom };
+
+// ---------------------------------------------------------------- engine sound (two detuned oscillators through a low-pass)
+const audio = { ctx: null, on: true };
+function startAudio() { if (!audio.on || audio.ctx) return; try {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)(), g = ctx.createGain(), lp = ctx.createBiquadFilter();
+  lp.type = "lowpass"; lp.frequency.value = 900; g.gain.value = 0; lp.connect(g); g.connect(ctx.destination);
+  const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(); o1.type = "sawtooth"; o2.type = "square"; o1.connect(lp); o2.connect(lp); o1.start(); o2.start();
+  Object.assign(audio, { ctx, g, lp, o1, o2 }); } catch (e) { audio.ctx = null; } }
+function engineSound(v, thr) { if (!audio.ctx) return; const span = 15, gear = Math.min(5, Math.floor(Math.abs(v) / span)), fr = (Math.abs(v) - gear * span) / span;
+  const rpm = 900 + (gear === 5 ? Math.abs(v) / (6 * span) : fr) * 5200 + Math.max(0, thr) * 400, t = audio.ctx.currentTime;
+  audio.o1.frequency.setTargetAtTime(rpm / 60 * 2, t, 0.03); audio.o2.frequency.setTargetAtTime(rpm / 60 * 1.003, t, 0.03);
+  audio.lp.frequency.setTargetAtTime(500 + Math.max(0, thr) * 1200 + rpm * 0.1, t, 0.05); audio.g.gain.setTargetAtTime(0.035 + Math.max(0, thr) * 0.03, t, 0.05); }
+
+// ---------------------------------------------------------------- race events -> HUD
+const fmt = (t) => { t = Math.max(0, t); const m = Math.floor(t / 60), s = t - m * 60; return m + ":" + (s < 10 ? "0" : "") + s.toFixed(2); };
+let flashT = 0; function flash(a, b = "") { $("msg").textContent = a; $("sub").textContent = b; flashT = 2.2; }
+function onEvent(type, d) {
+  if (type === "go") flash("Go");
+  else if (type === "lap") flash(d.lap === LAPS ? "Final lap" : "Lap " + d.lap, fmt(d.time));
+  else if (type === "bump") { try { navigator.vibrate?.(30); } catch (e) {} }
+  else if (type === "finish") {
+    const P = G.player; $("rtitle").textContent = ["Winner", "Second", "Third", "Fourth"][d.order.indexOf(P)];
+    $("rtable").innerHTML = "";
+    d.order.forEach((c, k) => { const tr = document.createElement("tr");
+      [String(k + 1), c.name, c.done ? fmt(c.finish) : "+" + (LAPS - c.lap + 1) + " lap", c.best < Infinity ? "best " + fmt(c.best) : ""].forEach((s) => { const td = document.createElement("td"); td.textContent = s; tr.appendChild(td); });
+      $("rtable").appendChild(tr); });
+    setTimeout(() => { $("results").hidden = false; }, 1500);
+  }
+}
+
+// ---------------------------------------------------------------- input
+const keys = new Set();
+addEventListener("keydown", (e) => { keys.add(e.key.toLowerCase()); if (e.key === " ") recenter(); });
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+let lastTap = 0;
+canvas.addEventListener("pointerdown", () => { const t = performance.now(); if (t - lastTap < 320) recenter(); lastTap = t; });
+$("center").addEventListener("click", recenter);
+const inp = { steer: 0, thr: 0, wheel: 0, kSteer: 0 };
+function readInput(dt) {
+  let steer = 0, thr = 0, wheel = 0;
+  if (sensor.up && sensor.neutral) {
+    sensor.mode = "tilt";
+    const w = wheelFrom(sensor.up, sensor.neutral); wheel = w.wheel;
+    const ad = Math.max(0, Math.abs(w.wheel) - 2 * D2R); steer = Math.sign(w.wheel) * Math.pow(clamp(ad / (55 * D2R), 0, 1), 1.25);
+    const p = w.pitch / D2R; thr = p > 3 ? clamp((p - 3) / 17, 0, 1) : p < -4 ? -clamp((-p - 4) / 14, 0, 1) : 0;
+  }
+  const kl = keys.has("arrowleft") || keys.has("a"), kr = keys.has("arrowright") || keys.has("d"), ku = keys.has("arrowup") || keys.has("w"), kd = keys.has("arrowdown") || keys.has("s");
+  if (kl || kr || ku || kd) { sensor.mode = "keys"; inp.kSteer = lerp(inp.kSteer, (kr ? 1 : 0) - (kl ? 1 : 0), 1 - Math.exp(-dt * 7)); steer = inp.kSteer; thr = (ku ? 1 : 0) - (kd ? 1 : 0); wheel = steer * 60 * D2R; }
+  else inp.kSteer = 0;
+  inp.steer = lerp(inp.steer, steer, 1 - Math.exp(-dt * 18)); inp.thr = thr; inp.wheel = lerp(inp.wheel, wheel, 1 - Math.exp(-dt * 18));
+  G.input.steer = inp.steer; G.input.thr = inp.thr;
+}
+
+// ---------------------------------------------------------------- frame
+let G = null, ctx = null, scale = 1;
+let last = 0, acc = 0, hudT = 0, ftAvg = 16, ftN = 0, lastLight = 4;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (!G?.cars || window.__hold) return;
+  const dtR = Math.min(0.1, (now - (last || now)) / 1000); last = now;
+  ftAvg = lerp(ftAvg, dtR * 1000, 0.05);
+  if (++ftN % 90 === 0 && !DEMO) { if (ftAvg > 24 && scale > 0.55) scale *= 0.85; else if (ftAvg < 15 && scale < 1) scale = Math.min(1, scale / 0.85); }
+  acc += dtR;
+  readInput(dtR);
+  if (G.state === "countdown") {
+    const light = Math.ceil(-G.raceT);
+    if (light !== lastLight) { lastLight = light; if (light >= 1 && light <= 3) { $("msg").textContent = String(light); $("sub").textContent = sensor.events ? "Hold the wheel where straight feels natural" : ""; } }
+    if (sensor.up && G.raceT > -0.6) recenter();
+  }
+  while (acc >= 1 / 120) { acc -= 1 / 120; G.tick(1 / 120); }
+  const dpr = Math.min(devicePixelRatio || 1, 2) * scale, w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
+  if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
+  // Counter-rotate the picture by the wheel angle: the phone turns, the horizon stays level with the real one.
+  G.render(ctx.getCurrentTexture().createView(), w, h, dtR, { roll: sensor.mode === "tilt" && $("level").checked ? inp.wheel : 0 });
+  engineSound(G.player.speed, G.state === "race" ? G.player.thr : 0);
+  if ((hudT += dtR) > 1 / 15) { hudT = 0; hud(); }
+  if (flashT > 0 && (flashT -= dtR) <= 0) { $("msg").textContent = ""; $("sub").textContent = ""; }
+  if (G.state === "race" && flashT <= 0) { const P = G.player;
+    if (P.wrong > 1) { $("msg").textContent = "Wrong way"; $("sub").textContent = ""; }
+    else if (P.offTime > 1.5) { $("msg").textContent = ""; $("sub").textContent = "Off the road: back to the track in " + Math.ceil(4 - P.offTime); }
+    else if ($("msg").textContent === "Wrong way" || $("sub").textContent.startsWith("Off")) { $("msg").textContent = ""; $("sub").textContent = ""; } }
+}
+
+// ---------------------------------------------------------------- HUD
+let mini = null;
+function drawMinimapBase() { const T = G.T, c = document.createElement("canvas"); c.width = c.height = 240; const x = c.getContext("2d");
+  let mnx = 1e9, mxx = -1e9, mnz = 1e9, mxz = -1e9; for (let i = 0; i < M; i++) { mnx = Math.min(mnx, T.x[i]); mxx = Math.max(mxx, T.x[i]); mnz = Math.min(mnz, T.z[i]); mxz = Math.max(mxz, T.z[i]); }
+  const s = 200 / Math.max(mxx - mnx, mxz - mnz), m = (px, pz) => [120 + (px - (mnx + mxx) / 2) * s, 120 + (pz - (mnz + mxz) / 2) * s];
+  x.lineJoin = "round"; x.beginPath(); for (let i = 0; i <= M; i += 4) { const p = m(T.x[i % M], T.z[i % M]); i ? x.lineTo(...p) : x.moveTo(...p); }
+  x.strokeStyle = "rgba(244,246,248,0.85)"; x.lineWidth = 7; x.stroke();
+  const s0 = m(T.x[0], T.z[0]); x.fillStyle = "#ffd21f"; x.fillRect(s0[0] - 6, s0[1] - 6, 12, 12);
+  mini = { c, m }; }
+function hud() {
+  const P = G.player;
+  $("speed").textContent = Math.round(Math.abs(P.speed || 0) * 3.6);
+  $("lap").textContent = clamp(P.lap, 1, LAPS) + "/" + LAPS;
+  $("pos").textContent = (G.rank().indexOf(P) + 1) + "/" + G.cars.length;
+  $("time").textContent = fmt(G.state === "countdown" ? 0 : P.done ? P.finish : G.raceT);
+  $("best").textContent = "Best " + (P.best < Infinity ? fmt(P.best) : "—");
+  $("wheel").style.transform = "rotate(" + (inp.wheel / D2R).toFixed(1) + "deg)";
+  $("gas").style.height = (Math.max(0, inp.thr) * 50) + "%"; $("brk").style.height = (Math.max(0, -inp.thr) * 50) + "%";
+  $("mode").textContent = sensor.mode;
+  const mm = $("minimap").getContext("2d"); mm.clearRect(0, 0, 240, 240); mm.drawImage(mini.c, 0, 0);
+  for (const c of G.cars) { const p = mini.m(c.x, c.z); mm.beginPath(); mm.arc(p[0], p[1], c === P ? 11 : 8, 0, TAU);
+    mm.fillStyle = "rgb(" + c.colour.map((v) => Math.round(v * 255)).join(",") + ")"; mm.fill(); mm.lineWidth = 3; mm.strokeStyle = "#11161c"; mm.stroke(); }
+}
+
+// ---------------------------------------------------------------- start
+function newRace() { G.newRace({ autopilot: DEMO }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; orientationCheck(); }
+function orientationCheck() { $("rotate").hidden = !(matchMedia("(orientation: portrait) and (pointer: coarse)").matches && G?.cars); }
+addEventListener("resize", orientationCheck);
+function start() {
+  // iOS asks for motion permission only from inside the tap itself. Listen regardless of the answer: without permission
+  // no events arrive, and some browsers expose requestPermission without ever settling it.
+  if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function") DeviceOrientationEvent.requestPermission().catch(() => {});
+  addEventListener("deviceorientation", onOrient);
+  audio.on = $("sound").checked; startAudio();
+  // Fullscreen, landscape lock and wake lock are niceties that can reject or never settle: never wait on them.
+  Promise.resolve().then(() => document.documentElement.requestFullscreen?.({ navigationUI: "hide" })).then(() => screen.orientation?.lock?.("landscape")).catch(() => {});
+  Promise.resolve().then(() => navigator.wakeLock?.request("screen")).catch(() => {});
+  $("intro").hidden = true; newRace();
+}
+$("start").addEventListener("click", start);
+$("again").addEventListener("click", newRace);
+$("newtrack").addEventListener("click", async () => { $("results").hidden = true; await G.buildWorld(Math.floor(Math.random() * 1e6)); drawMinimapBase(); newRace(); });
+document.addEventListener("visibilitychange", () => { if (audio.ctx) document.hidden ? audio.ctx.suspend() : audio.ctx.resume(); last = 0; });
+if ("serviceWorker" in navigator && location.hostname !== "127.0.0.1" && location.hostname !== "localhost") navigator.serviceWorker.register("sw.js").catch(() => {});
+
+window.__game = () => G && { frames: G.frames, state: G.state, raceT: G.raceT, stats: G.stats, scale,
+  input: { steer: inp.steer, thr: inp.thr, mode: sensor.mode, events: sensor.events },
+  cars: G.cars?.map((c) => ({ name: c.name, lap: c.lap, idx: c.idx, speed: c.speed, lat: c.lat, surf: c.surf, done: c.done, best: c.best })) };
+
+async function init() {
+  if (!navigator.gpu) { status("This game draws with WebGPU, which this browser does not offer. Try Chrome on Android, Safari on iOS 26 or later, or desktop Chrome or Edge."); $("start").disabled = true; return false; }
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: "high-performance" });
+  if (!adapter) { status("WebGPU is present but no GPU adapter was granted."); $("start").disabled = true; return false; }
+  const device = await adapter.requestDevice();
+  device.lost.then((i) => { status("GPU device lost: " + i.message); $("msg").textContent = "GPU lost"; });
+  device.addEventListener("uncapturederror", (e) => { console.error("WebGPU: " + e.error.message); });
+  ctx = canvas.getContext("webgpu"); const format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format, alphaMode: "opaque" });
+  G = await createEngine(device, format, { onEvent });
+  window.__engine = G;
+  status("Carving the valley on the GPU…");
+  await G.buildWorld(Number(Q.get("seed")) || 7);
+  drawMinimapBase();
+  status("Ready.");
+  return true;
+}
+const ok = await init().catch((e) => { status("Could not start WebGPU: " + e.message); console.error(e); return false; });
+if (ok) { if (DEMO) { $("intro").hidden = true; newRace(); } requestAnimationFrame(frame); }
+</script>
+</body>
+</html>

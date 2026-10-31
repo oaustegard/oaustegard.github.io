@@ -1,0 +1,114 @@
+// Tilt Rally headless checks on SwiftShader WebGPU (correctness only; real-GPU timing goes through the GPU Bridge):
+//   node tests/tilt-rally-check.mjs math    orientation -> wheel/pedal on known poses
+//   node tests/tilt-rally-check.mjs demo    autopilot race: no WebGPU errors, every car moving and on the road
+//   node tests/tilt-rally-check.mjs tilt    synthetic deviceorientation events: tilt away accelerates, clockwise steers right, tilt back brakes
+//   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
+import { createRequire } from "node:module";
+const { chromium } = createRequire(import.meta.url)("playwright");
+import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import { fileURLToPath } from "node:url";
+const ROOT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
+const OUT = process.env.OUT || "/tmp/tilt-rally";
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json", ".svg": "image/svg+xml", ".png": "image/png" };
+const srv = http.createServer((q, r) => {
+  const p = path.join(ROOT, decodeURIComponent(new URL(q.url, "http://x").pathname).replace(/\/$/, "/index.html"));
+  if (!p.startsWith(ROOT) || !fs.existsSync(p)) { r.writeHead(404); return r.end(); }
+  r.writeHead(200, { "content-type": MIME[path.extname(p)] || "application/octet-stream" }); r.end(fs.readFileSync(p));
+});
+await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
+const base = `http://127.0.0.1:${srv.address().port}/games/tilt-rally/`;
+const b = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-angle=swiftshader", "--use-webgpu-adapter=swiftshader"] });
+const what = process.argv[2] || "math";
+let failed = false;
+const check = (name, ok, detail = "") => { console.log((ok ? "ok   " : "FAIL ") + name + (detail ? "  " + detail : "")); if (!ok) failed = true; };
+async function open(url, viewport = { width: 844, height: 390 }) {
+  const page = await b.newPage({ viewport }), errors = [];
+  page.on("pageerror", (e) => errors.push(e.message)); page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  await page.goto(base + url); return { page, errors };
+}
+const waitFor = (page, fn, ms = 120000) => page.waitForFunction(fn, null, { timeout: ms, polling: 250 });
+fs.mkdirSync(OUT, { recursive: true });
+const you = (page) => page.evaluate(() => window.__game().cars.find((c) => c.name === "You"));
+const raceT = (page) => page.evaluate(() => window.__game().raceT);
+
+if (what === "math") {
+  const { page } = await open("index.html");
+  await waitFor(page, () => window.__tilt);
+  const r = await page.evaluate(() => {
+    const { upFromOrientation: up, wheelFrom: w } = window.__tilt, deg = (x) => x * 180 / Math.PI;
+    const N = up(0, -75);                                   // landscape, screen tilted back 15 degrees
+    return {
+      flat: up(0, 0), portrait: up(90, 0), landscape: up(0, -90),
+      right20: deg(w(up(20, -75), N).wheel),                // the wheel turned clockwise: beta rises in this pose
+      left20: deg(w(up(-20, -75), N).wheel),
+      away15: deg(w(up(0, -60), N).pitch),                  // screen faces more of the sky
+      toward14: deg(w(up(0, -89), N).pitch),
+      seam: deg(w(up(180, 89), up(0, -89)).pitch),          // past vertical: beta flips to 180, gamma to +89; up.z goes 0.017 -> -0.017
+      otherLandscape: deg(w(up(-20, 75), up(0, 75)).wheel), // the phone the other way round: clockwise lowers beta here
+    };
+  });
+  const near = (a, b, e = 1.0) => Math.abs(a - b) < e;
+  check("flat on a table: up = +z", near(r.flat[2], 1, 1e-6), JSON.stringify(r.flat));
+  check("upright portrait: up = +y", near(r.portrait[1], 1, 1e-6));
+  check("landscape upright: up = +x", near(r.landscape[0], 1, 1e-6));
+  check("clockwise 20 degrees steers right +20", near(r.right20, 20), r.right20.toFixed(2));
+  check("counter-clockwise 20 degrees steers left -20", near(r.left20, -20), r.left20.toFixed(2));
+  check("top tilted away 15 degrees is +15 pedal", near(r.away15, 15), r.away15.toFixed(2));
+  check("tilted toward you 14 degrees is -14 pedal", near(r.toward14, -14), r.toward14.toFixed(2));
+  check("continuous through the beta/gamma seam", near(r.seam, -2, 0.2), r.seam.toFixed(2));
+  check("other landscape: clockwise is still right", near(r.otherLandscape, 20), r.otherLandscape.toFixed(2));
+}
+
+if (what === "demo") {
+  const { page, errors } = await open("index.html?demo&seed=" + (process.argv[3] || 7));
+  await waitFor(page, () => window.__game?.()?.state === "race");
+  await page.screenshot({ path: path.join(OUT, "demo-start.png") });
+  await waitFor(page, () => window.__game().raceT > 25, 600000);
+  await page.screenshot({ path: path.join(OUT, "demo-25s.png") });
+  const s = await page.evaluate(() => window.__game());
+  console.log(JSON.stringify(s.stats), "frames", s.frames);
+  for (const c of s.cars) console.log("  ", c.name, "lap", c.lap, "idx", c.idx, "v", (c.speed * 3.6).toFixed(0), "km/h lat", c.lat.toFixed(1), "surf", c.surf);
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+  check("every car moving and on the road", s.cars.every((c) => c.speed > 8 && Math.abs(c.lat) < 9));
+  check("track has no corner tighter than 25 m", s.stats.minR > 25, s.stats.minR.toFixed(1) + " m");
+}
+
+if (what === "tilt") {
+  const { page, errors } = await open("index.html");
+  await waitFor(page, () => document.getElementById("status").textContent === "Ready.");
+  const send = (beta, gamma) => page.evaluate(([b, g]) => window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: b, gamma: g })), [beta, gamma]);
+  const hold = async (pose, secs) => { const t = await raceT(page); while ((await raceT(page)) < t + secs) { await send(...pose); await page.waitForTimeout(50); } };
+  await page.click("#start");
+  for (let k = 0; k < 20; k++) { await send(0, -75); await page.waitForTimeout(100); }
+  await waitFor(page, () => window.__game().state === "race");
+  await hold([0, -60], 3);
+  const s1 = await you(page);
+  check("tilting the top away accelerates", s1.speed > 10, (s1.speed * 3.6).toFixed(0) + " km/h");
+  await hold([30, -60], 1.2);
+  const s2 = await you(page);
+  check("turning the phone clockwise moves the car right", s2.lat > s1.lat + 1, s1.lat.toFixed(1) + " -> " + s2.lat.toFixed(1));
+  await hold([0, -89], 1.5);
+  const s3 = await you(page);
+  check("tilting toward you brakes", s3.speed < s2.speed - 5, (s2.speed * 3.6).toFixed(0) + " -> " + (s3.speed * 3.6).toFixed(0) + " km/h");
+  await page.screenshot({ path: path.join(OUT, "tilt.png") });
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+if (what === "cars") {
+  const { page, errors } = await open("index.html?demo", { width: 960, height: 540 });
+  await waitFor(page, () => window.__game?.()?.state === "race");
+  await waitFor(page, () => window.__game().raceT > 6, 300000);
+  // freeze the race and frame the leading cars from fixed points around the player
+  const shots = { front34: [4.2, 1.4, 5.4], rear34: [-3.6, 1.6, -5.6], side: [6.2, 1.0, 0.2], top: [2.5, 4.5, -5.5] };
+  for (const [name, off] of Object.entries(shots)) {
+    await page.evaluate((off) => { window.__hold = true; const G = window.__engine, P = G.player, f = [Math.sin(P.h), Math.cos(P.h)], r = [-Math.cos(P.h), Math.sin(P.h)];
+      const eye = [P.x + r[0] * off[0] + f[0] * off[2], P.y + off[1], P.z + r[1] * off[0] + f[1] * off[2]];
+      const cv = document.getElementById("view"); const ctx = cv.getContext("webgpu");
+      G.render(ctx.getCurrentTexture().createView(), cv.width, cv.height, 0, { eye, look: [P.x, P.y + 0.6, P.z] }); }, off);
+    await page.waitForTimeout(400);
+    await page.screenshot({ path: path.join(OUT, "car-" + name + ".png") });
+  }
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+await b.close(); srv.close();
+process.exit(failed ? 1 : 0);
