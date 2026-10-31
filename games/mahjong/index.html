@@ -51,7 +51,8 @@ html, body { height: 100%; margin: 0; background: var(--ink); color: var(--fg); 
   overscroll-behavior: none; -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; }
 body { font: 14px/1.45 var(--sans); }
 [hidden] { display: none !important; }
-#gl { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+/* The canvas covers the large viewport, so the scene also fills the strip behind Safari's toolbars. */
+#gl { position: fixed; left: 0; top: 0; width: 100%; height: 100%; height: 100lvh; display: block; touch-action: none; }
 .zh { font-family: var(--cjk); }
 button { font: inherit; color: inherit; cursor: pointer; }
 
@@ -62,6 +63,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 #hud .round { font: 600 17px/1.1 var(--serif); letter-spacing: 0.02em; text-shadow: 0 1px 3px #000; }
 #hud .round .zh { color: var(--gold); margin-right: 4px; }
 #hud .sp { flex: 1; }
+#hud { gap: 8px; }
 #hud button { pointer-events: auto; background: var(--glass); border: 1px solid var(--rule); border-radius: 999px;
   width: 38px; height: 38px; display: grid; place-items: center; font-size: 18px; }
 .badge { position: fixed; transform: translate(-50%, -50%); padding: 3px 9px 3px 4px; border-radius: 999px;
@@ -75,6 +77,10 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .badge .kind { font-size: 10px; color: var(--dim); }
 .badge.turn { border-color: var(--gold); box-shadow: 0 0 12px rgba(216, 180, 106, 0.55); }
 .badge.away { opacity: 0.6; }
+.badge.l { transform: translate(0, -50%); } .badge.r { transform: translate(-100%, -50%); }
+@media (max-width: 520px) { .badge { font-size: 11.5px; gap: 4px; max-width: 31vw; } .badge .kind { display: none; } .badge .nm { max-width: 18vw; } }
+#hud #btn-zoom { font-size: 17px; }
+#hud #btn-zoom[aria-pressed=true] { border-color: var(--gold); color: var(--gold); }
 #center { position: fixed; transform: translate(-50%, -50%); text-align: center; pointer-events: none; }
 #center .pw { font: 700 30px/1 var(--cjk); color: var(--gold); text-shadow: 0 0 10px rgba(0,0,0,0.6); }
 #center .wl { font: 600 12px/1.3 var(--sans); color: var(--dim); letter-spacing: 0.04em; }
@@ -83,7 +89,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
   font: 700 22px/1.2 var(--serif); transition: opacity 0.25s, transform 0.25s; text-align: center; white-space: nowrap; }
 #toast.on { opacity: 1; transform: translate(-50%, -50%) scale(1); }
 #toast .zh { color: var(--gold); margin-right: 8px; font-size: 26px; }
-#hint { position: fixed; left: 0; right: 0; text-align: center; font-size: 12px; color: var(--dim); pointer-events: none;
+#hint { position: fixed; left: 0; right: 0; text-align: center; transform: translateY(-100%); font-size: 12px; color: var(--dim); pointer-events: none;
   text-shadow: 0 1px 2px #000; padding: 0 16px; }
 #hint b { color: var(--fg); }
 #actions { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; flex-wrap: wrap; gap: 8px;
@@ -161,6 +167,7 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
 <div id="hud" hidden>
   <div class="round" id="round"></div>
   <div class="sp"></div>
+  <button id="btn-zoom" aria-label="Zoom the table" title="Zoom the table (or pinch, or double-tap)">⤢</button>
   <button id="btn-menu" aria-label="Menu">☰</button>
 </div>
 <div id="badges"></div>
@@ -186,6 +193,7 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
       <span>Length</span><span class="seg" id="set-len"><button data-v="east">East round</button><button data-v="full">Four winds</button></span>
       <span>Hints</span><span class="seg" id="set-hint"><button data-v="on">On</button><button data-v="off">Off</button></span>
       <span>Your seat</span><span class="seg" id="set-seat"><button data-v="0">East</button><button data-v="1">South</button><button data-v="2">West</button><button data-v="3">North</button><button data-v="r">Random</button></span>
+      <span>Hand</span><span class="seg" id="set-rows"><button data-v="auto">Auto</button><button data-v="2">Two rows</button><button data-v="1">One row</button></span>
       <span>Pace</span><span class="seg" id="set-pace"><button data-v="calm">Calm</button><button data-v="brisk">Brisk</button></span>
     </div>
     <p class="foot"><a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/games/mahjong/README.md">README</a> · <a href="/games/">More games</a></p>
@@ -273,6 +281,7 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
       <button class="btn" id="m-resume">Resume</button>
       <div id="m-invites" class="stack"></div>
       <button class="btn" id="m-rules">How to play and score</button>
+      <div class="row" style="font-size:13px;color:var(--dim)">Hand <span class="seg" id="m-rows"><button data-v="auto">Auto</button><button data-v="2">Two rows</button><button data-v="1">One row</button></span></div>
       <button class="btn" id="m-sound">Sound: on</button>
       <button class="btn" id="m-quit">Leave the table</button>
     </div>
@@ -329,7 +338,7 @@ table.faan .zh { color: var(--gold); white-space: nowrap; }
 <script type="module">
 import { Match, kindOf, kindName, kindShort, WIND_ZH, WIND_EN, pointsFor, DEFAULT_RULES, setsFor } from './rules.js';
 import { botTurn, botClaim, readyKinds, handShanten } from './ai.js';
-import { buildAtlas, layoutTable, initGPU, init2D, F, CJK, TILE_ASPECT } from './render.js';
+import { buildAtlas, layoutTable, initGPU, init2D, F, CJK, TILE_ASPECT, CELL_W, CELL_H, camApply } from './render.js';
 import { HostNet, GuestNet, parseLink, listenForReplies, forwardReply } from './net.js';
 
 const $ = id => document.getElementById(id);
@@ -357,7 +366,8 @@ const settings = {
   hints: store.get('hints', 'on'),
   pace: store.get('pace', 'calm'),
   sound: store.get('sound', true),
-  seat: store.get('seat', '0'),      // the host's wind for the first hand: '0'-'3' (East-North) or 'r'
+  seat: store.get('seat', '0'),
+  handRows: store.get('handRows', 'auto'),   // 'auto' wraps the hand into two rows on a phone held upright      // the host's wind for the first hand: '0'-'3' (East-North) or 'r'
 };
 // Segmented controls; several may share one setting (the seat picker sits in the lobby and on the host screen).
 const segPainters = [];
@@ -389,6 +399,8 @@ bindSeg('set-hint', 'hints');
 bindSeg('set-pace', 'pace');
 bindSeg('set-seat', 'seat', v => v, () => renderSeats());
 bindSeg('host-seat', 'seat', v => v, () => renderSeats());
+bindSeg('set-rows', 'handRows', v => v, () => markDirty());
+bindSeg('m-rows', 'handRows', v => v, () => markDirty());
 $('name').value = store.get('name', '');
 $('join-name').value = store.get('name', '');
 const myName = () => ($('name').value.trim() || $('join-name').value.trim() || 'You').slice(0, 16);
@@ -431,7 +443,7 @@ function tileImg(k) {
   const g = cv.getContext('2d');
   g.fillStyle = '#11573f'; g.beginPath(); g.roundRect(0, th, w, h, 7); g.fill();
   g.fillStyle = '#f4efe1'; g.beginPath(); g.roundRect(0, 0, w, h, 7); g.fill();
-  if (atlas && k >= 0) g.drawImage(atlas, (k % 8) * 96, Math.floor(k / 8) * 128, 96, 128, w * 0.07, h * 0.07, w * 0.86, h * 0.86);
+  if (atlas && k >= 0) g.drawImage(atlas, (k % 8) * CELL_W, Math.floor(k / 8) * CELL_H, CELL_W, CELL_H, w * 0.07, h * 0.07, w * 0.86, h * 0.86);
   const url = cv.toDataURL();
   imgCache.set(k, url);
   return url;
@@ -629,7 +641,7 @@ function renderHud() {
   v.players.forEach((p, s) => {
     const el = box.children[s];
     const info = G.info;
-    el.className = 'badge' + (s === v.dealer ? ' dealer' : '') + (s === v.turn && v.phase !== 'over' ? ' turn' : '');
+    el.className = 'badge' + (s === v.dealer ? ' dealer' : '') + (s === v.turn && v.phase !== 'over' ? ' turn' : '') + (el.classList.contains('l') ? ' l' : el.classList.contains('r') ? ' r' : '');
     const kind = info ? info.kinds[s] : 'bot';
     el.innerHTML = `<span class="w zh">${WIND_ZH[p.wind]}</span><span class="nm">${s === v.seat ? 'You' : escapeHtml(nameOf(s))}</span>` +
       (kind === 'bot' && s !== v.seat ? '<span class="kind">cpu</span>' : '') + `<span class="sc">${info ? fmt(info.scores[s]) : 0}</span>`;
@@ -642,15 +654,32 @@ function placeOverlays() {
   const box = $('badges');
   if (box.children.length !== 4) return;
   const W = innerWidth;
-  const top = cy - Sy / 2 - strip - 16;
-  // Me under my discards; across above its strip; the sides at the top corners (portrait) or under their strips.
+  // Portrait: the three opponents share a row under the top bar (left, across, right), fixed while zooming.
+  // Landscape: beside their strips. My badge sits under my discards, or beside the hint when that is crowded.
+  const row = layout.badgeRowY;
+  const hintY = layout.stackTop - 6;
+  let mine = [Math.max(64, cx - Sx / 2 + 44), cy + Sy / 2 + 14];
+  const crowded = layout.portrait && mine[1] + 14 > hintY - 30;
+  if (crowded) mine = [62, hintY - 12];
   const pos = layout.portrait
-    ? [[Math.max(64, cx - Sx / 2 + 44), cy + Sy / 2 + 14], [W - 60, top], [cx, top - 26], [60, top]]
-    : [[layout.handLeft > 150 ? layout.handLeft - 72 : Math.max(64, layout.handLeft + 50), layout.handLeft > 150 ? handY : handY - th / 2 - 16],
-       [Math.min(W - 64, cx + Sx / 2 + strip / 2 + 4), cy - Sy / 2 - 14], [cx, top], [Math.max(64, cx - Sx / 2 - strip / 2 - 4), cy - Sy / 2 - 14]];
-  G.view.players.forEach((p, s) => { const [x, y] = pos[relOf(s)]; box.children[s].style.left = x + 'px'; box.children[s].style.top = y + 'px'; });
-  $('center').style.left = cx + 'px'; $('center').style.top = cy + 'px';
-  $('hint').style.top = (handY - th / 2 - (layout.portrait ? th * 0.78 + 30 : 26)) + 'px';
+    ? [mine, [W - 6, row, 'r'], [cx, row], [6, row, 'l']]
+    : [[layout.handLeft > 150 ? layout.handLeft - 72 : Math.max(64, layout.handLeft + 50), layout.handLeft > 150 ? handY : layout.handTop - 16],
+       [Math.min(W - 64, cx + Sx / 2 + strip / 2 + 4), cy - Sy / 2 - 14], [cx, cy - Sy / 2 - strip - 16], [Math.max(64, cx - Sx / 2 - strip / 2 - 4), cy - Sy / 2 - 14]];
+  G.view.players.forEach((p, s) => {
+    const [x, y, al] = pos[relOf(s)];
+    const el = box.children[s];
+    el.style.left = x + 'px'; el.style.top = y + 'px';
+    el.classList.toggle('l', al === 'l'); el.classList.toggle('r', al === 'r');
+  });
+  const [ccx, ccy] = camApply(cam, cx, cy);
+  const c = $('center');
+  c.style.left = ccx + 'px'; c.style.top = ccy + 'px';
+  c.style.transform = `translate(-50%, -50%) scale(${cam.z})`;
+  c.style.visibility = ccy < (layout.stackTop - 10) ? 'visible' : 'hidden';
+  const h = $('hint');
+  h.style.top = hintY + 'px';
+  h.style.paddingLeft = crowded ? '124px' : '16px';
+  h.style.textAlign = crowded ? 'left' : 'center';
 }
 const fmt = n => (Number.isInteger(n) ? String(n) : n.toFixed(1));
 const escapeHtml = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -736,9 +765,60 @@ function hitTile(x, y) {
   return hb ? hb.id : null;
 }
 let lastTap = { id: null, t: 0 };
+
+// ---------- table camera: pinch to zoom, drag to pan, double-tap or ⤢ to zoom in and out ----------
+// screen = world * z + (x, y). The hand stays put; the table zooms under it.
+const cam = { z: 1, x: 0, y: 0 };
+let camGoal = null;               // animated target for the button and double-tap
+const ZMAX = 3.2;
+function clampCam(c) {
+  if (!layout) return c;
+  if (c.z <= 1.001) return { z: 1, x: 0, y: 0 };
+  const t = layout.table;
+  const fit = (p, q, a, b, o) => ((q - p) * c.z <= b - a ? (a + b) / 2 - ((p + q) / 2) * c.z : Math.min(a - p * c.z, Math.max(b - q * c.z, o)));
+  return { z: c.z, x: fit(t.x0, t.x1, 0, innerWidth, c.x), y: fit(t.y0, layout.stackTop - 4, t.y0, layout.stackTop - 4, c.y) };
+}
+function zoomAt(z, sx, sy, animate) {
+  // Keep the table point under (sx, sy) where it is.
+  const wx = (sx - cam.x) / cam.z, wy = (sy - cam.y) / cam.z;
+  const next = clampCam({ z, x: sx - wx * z, y: sy - wy * z });
+  if (animate) camGoal = next; else { Object.assign(cam, next); camGoal = null; }
+  $('btn-zoom').setAttribute('aria-pressed', String(next.z > 1));
+  placeOverlays();
+}
+$('btn-zoom').onclick = () => {
+  if (cam.z > 1.01 || (camGoal && camGoal.z > 1)) zoomAt(1, innerWidth / 2, innerHeight / 2, true);
+  else if (layout) {
+    // Zoom on the discards, centred on the centre box.
+    const z = layout.portrait ? 1.7 : 1.5;
+    const next = clampCam({ z, x: innerWidth / 2 - layout.cx * z, y: (layout.topReserve + layout.stackTop) / 2 - layout.cy * z });
+    camGoal = next;
+    $('btn-zoom').setAttribute('aria-pressed', 'true');
+  }
+};
+// iOS Safari would otherwise zoom the page itself.
+for (const ev of ['gesturestart', 'gesturechange']) document.addEventListener(ev, e => e.preventDefault(), { passive: false });
+
+const pointers = new Map();
+let gesture = null;   // { type: 'pinch', d0, z0, wx, wy } | { type: 'pan', sx, sy, cx, cy, moved }
+let lastEmptyTap = { t: 0, x: 0, y: 0 };
+function pinchState() {
+  const [a, b] = [...pointers.values()];
+  return { d: Math.hypot(a.x - b.x, a.y - b.y) || 1, mx: (a.x + b.x) / 2, my: (a.y + b.y) / 2 };
+}
 $('gl').addEventListener('pointerdown', e => {
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  try { $('gl').setPointerCapture(e.pointerId); } catch {}
+  if (pointers.size === 2) {
+    const p = pinchState();
+    camGoal = null;
+    gesture = { type: 'pinch', d0: p.d, z0: cam.z, wx: (p.mx - cam.x) / cam.z, wy: (p.my - cam.y) / cam.z };
+    return;
+  }
+  if (pointers.size > 2) return;
   const id = hitTile(e.clientX, e.clientY);
-  if (id == null) { if (G.ui.selected != null) { G.ui.selected = null; renderActions(); markDirty(); } return; }
+  if (id == null) { gesture = { type: 'pan', sx: e.clientX, sy: e.clientY, cx: cam.x, cy: cam.y, moved: false }; return; }
+  gesture = null;
   const opts = myTurnOpts();
   const now = performance.now();
   if (opts && (G.ui.selected === id || (lastTap.id === id && now - lastTap.t < 350))) { act({ type: 'discard', id }); return; }
@@ -748,6 +828,50 @@ $('gl').addEventListener('pointerdown', e => {
   renderActions();
   markDirty();
 });
+$('gl').addEventListener('pointermove', e => {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  if (gesture?.type === 'pinch' && pointers.size === 2) {
+    const p = pinchState();
+    const z = Math.min(ZMAX, Math.max(1, gesture.z0 * p.d / gesture.d0));
+    Object.assign(cam, clampCam({ z, x: p.mx - gesture.wx * z, y: p.my - gesture.wy * z }));
+    $('btn-zoom').setAttribute('aria-pressed', String(cam.z > 1));
+    placeOverlays();
+  } else if (gesture?.type === 'pan') {
+    const dx = e.clientX - gesture.sx, dy = e.clientY - gesture.sy;
+    if (Math.hypot(dx, dy) > 8) gesture.moved = true;
+    if (gesture.moved && cam.z > 1) { camGoal = null; Object.assign(cam, clampCam({ z: cam.z, x: gesture.cx + dx, y: gesture.cy + dy })); placeOverlays(); }
+  }
+});
+function pointerEnd(e) {
+  if (!pointers.has(e.pointerId)) return;
+  pointers.delete(e.pointerId);
+  if (gesture?.type === 'pinch') {
+    // Lifting one finger of a pinch carries on as a pan with the other.
+    const rest = [...pointers.values()][0];
+    gesture = rest ? { type: 'pan', sx: rest.x, sy: rest.y, cx: cam.x, cy: cam.y, moved: true } : null;
+    return;
+  }
+  if (gesture?.type === 'pan' && !gesture.moved && e.type === 'pointerup') {
+    // A tap on the table: clears the chosen tile; two quick taps zoom in there, or back out.
+    const now = performance.now();
+    if (now - lastEmptyTap.t < 320 && Math.hypot(e.clientX - lastEmptyTap.x, e.clientY - lastEmptyTap.y) < 40) {
+      zoomAt(cam.z > 1.01 ? 1 : 2.2, e.clientX, e.clientY, true);
+      lastEmptyTap.t = 0;
+    } else {
+      lastEmptyTap = { t: now, x: e.clientX, y: e.clientY };
+      if (G.ui.selected != null) { G.ui.selected = null; renderActions(); markDirty(); }
+    }
+  }
+  if (pointers.size === 0) gesture = null;
+}
+$('gl').addEventListener('pointerup', pointerEnd);
+$('gl').addEventListener('pointercancel', pointerEnd);
+$('gl').addEventListener('wheel', e => {
+  // Trackpad pinch arrives as ctrl+wheel; a plain wheel zooms too.
+  e.preventDefault();
+  zoomAt(Math.min(ZMAX, Math.max(1, cam.z * Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.002)))), e.clientX, e.clientY, false);
+}, { passive: false });
 $('gl').addEventListener('pointermove', e => {
   if (e.pointerType !== 'mouse') return;
   const id = hitTile(e.clientX, e.clientY);
@@ -1037,8 +1161,8 @@ function safeArea() {
   return { top: Math.max(0, top), bottom: Math.max(0, bottom) };
 }
 function resize() {
-  const d = Math.min(devicePixelRatio || 1, 2);
-  renderer && renderer.resize(innerWidth, innerHeight, d);
+  const d = Math.min(devicePixelRatio || 1, 3);
+  renderer && renderer.resize(innerWidth, Math.max(innerHeight, canvas.clientHeight || 0), d);
   markDirty();
 }
 addEventListener('resize', resize);
@@ -1053,13 +1177,20 @@ function frame(now) {
     if (layoutDirty || !layout) {
       const v = G.view || emptyView();
       const hint = G.hint && G.prompt && G.hint.id === G.prompt.id ? G.hint.ids : null;
-      layout = layoutTable(v, innerWidth, innerHeight, safeArea(), { ...G.ui, claimKind: G.prompt?.kind === 'claim' ? 1 : null, hint });
+      layout = layoutTable(v, innerWidth, innerHeight, safeArea(), { ...G.ui, claimKind: G.prompt?.kind === 'claim' ? 1 : null, hint, handRows: settings.handRows });
       layoutDirty = false;
+      Object.assign(cam, clampCam(cam));
       placeOverlays();
     }
     const v = G.view;
     const turnDir = v && v.phase !== 'over' && v.turn >= 0 ? [[0, 1], [1, 0], [0, -1], [-1, 0]][(v.turn - v.seat + 4) % 4] : [0, 0];
-    renderer.frame(layout, dt, now / 1000, turnDir);
+    if (camGoal) {
+      const k = 1 - Math.exp(-dt * 12);
+      cam.z += (camGoal.z - cam.z) * k; cam.x += (camGoal.x - cam.x) * k; cam.y += (camGoal.y - cam.y) * k;
+      if (Math.abs(camGoal.z - cam.z) < 0.002 && Math.abs(camGoal.x - cam.x) < 0.3 && Math.abs(camGoal.y - cam.y) < 0.3) { Object.assign(cam, camGoal); camGoal = null; }
+      placeOverlays();
+    }
+    renderer.frame(layout, dt, now / 1000, turnDir, cam, cam.z > 1.001 ? layout.stackTop - 4 : 1e5);
   }
   requestAnimationFrame(frame);
 }
@@ -1087,7 +1218,7 @@ if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.se
 
 // Test hooks.
 window.__mahjong = {
-  get G() { return G; }, get H() { return H; }, get renderer() { return renderer && renderer.kind; }, get layout() { return layout; },
+  get G() { return G; }, get H() { return H; }, get cam() { return cam; }, zoomAt, get renderer() { return renderer && renderer.kind; }, get layout() { return layout; },
   act, answer, show, get inviteLink() { return inviteLink; }, get replyLink() { return G.replyLink; },
 };
 </script>

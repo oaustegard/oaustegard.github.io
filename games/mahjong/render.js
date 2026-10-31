@@ -3,13 +3,29 @@
 import { kindOf, rankOf, suitOf } from './rules.js';
 
 export const TILE_ASPECT = 4 / 3;         // height / width of a tile face
-const CELL_W = 96, CELL_H = 128, ATLAS_COLS = 8, ATLAS_ROWS = 6;
+// Cells divide evenly through four halvings, so every mip level keeps whole-pixel cell borders.
+export const CELL_W = 128, CELL_H = 176, ATLAS_COLS = 8, ATLAS_ROWS = 6, ATLAS_MIPS = 5;
 const ZH_NUM = ['一', '二', '三', '四', '五', '六', '七', '八', '九'];
 export const CJK = '"Noto Serif SC", "Songti SC", "STSong", "SimSun", "Noto Serif CJK SC", "PingFang SC", "Hiragino Mincho ProN", "WenQuanYi Zen Hei", serif';
 
 const INK = '#1d2a4d', RED = '#b3241c', GREEN = '#1f6b3a', BLUE = '#1d4f8f';
 
 // ---------- atlas ----------
+
+// Halved copies of the atlas for mip levels 1.. (level 0 is the atlas itself).
+export function atlasMips(cv) {
+  const out = [cv];
+  for (let l = 1; l < ATLAS_MIPS; l++) {
+    const prev = out[l - 1];
+    const c = document.createElement('canvas');
+    c.width = prev.width / 2; c.height = prev.height / 2;
+    const g = c.getContext('2d');
+    g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+    g.drawImage(prev, 0, 0, c.width, c.height);
+    out.push(c);
+  }
+  return out;
+}
 
 export function buildAtlas() {
   const cv = document.createElement('canvas');
@@ -194,7 +210,7 @@ function drawFace(g, k, w, h) {
 
 // ---------- layout ----------
 // Every visible tile becomes a sprite: { key, k (atlas kind, -1 = face down), x, y, w, h, rot, flags, lift, spawn }.
-export const F = { SELECTED: 1, FRESH: 2, CLAIMABLE: 4, DIM: 8, WIN: 16, DRAWN: 32, HOVER: 64, SWAY: 128, HINT: 256 };
+export const F = { SELECTED: 1, FRESH: 2, CLAIMABLE: 4, DIM: 8, WIN: 16, DRAWN: 32, HOVER: 64, SWAY: 128, HINT: 256, FIXED: 512 };
 const ROT = [0, -Math.PI / 2, Math.PI, Math.PI / 2];   // screen orientation of the player at relative seat 0..3
 
 function rotAbout(cx, cy, x, y, a) {
@@ -203,17 +219,26 @@ function rotAbout(cx, cy, x, y, a) {
   return [cx + dx * c - dy * s, cy + dx * s + dy * c];
 }
 
-// view: Hand.view(seat). ui: { selected, hover, claimKind, winHighlight }.
+// view: Hand.view(seat). ui: { selected, hover, claimKind, hint, handRows: 'auto' | '1' | '2' }.
+// Coordinates are world (table) CSS pixels; sprites flagged FIXED (my hand, melds, flowers) are screen-anchored
+// and ignore the table camera.
 export function layoutTable(view, W, H, safe, ui = {}) {
   const portrait = H > W * 1.1;
   const m = 8;
-  const topReserve = safe.top + (portrait ? 54 : 40);
-  // Room for the largest hand: 14 tiles (Hong Kong) or 17 (Taiwanese), plus the gap before the drawn tile.
-  const handSlots = (view.rules && view.rules.variant === 'tw' ? 17 : 14) + 0.8;
-  const tw = Math.min((W - 2 * 12) / handSlots, portrait ? 52 : Math.min(58, H * 0.1));
+  // Portrait keeps a row under the top bar for the opponents' name badges.
+  const badgeRowY = safe.top + 52 + 16;
+  const topReserve = portrait ? badgeRowY + 18 : safe.top + 40;
+  // Room for the largest hand: 14 tiles (Hong Kong) or 17 (Taiwanese). On a narrow screen the hand wraps
+  // into two rows of 7 or 9, which roughly doubles the tile size.
+  const maxHand = view.rules && view.rules.variant === 'tw' ? 17 : 14;
+  const oneRowTw = (W - 2 * 12) / (maxHand + 0.8);
+  const rows = ui.handRows === '1' ? 1 : ui.handRows === '2' ? 2 : (portrait && oneRowTw < 32 ? 2 : 1);
+  const perRow = rows === 2 ? Math.ceil(maxHand / 2) : maxHand;
+  const tw = rows === 2 ? Math.min((W - 2 * 12) / (perRow + 0.45), 46) : Math.min(oneRowTw, portrait ? 52 : Math.min(58, H * 0.1));
   const th = tw * TILE_ASPECT;
-  const meldScale = portrait ? 0.78 : 0.82;
-  const bottomBlock = safe.bottom + 10 + th + (portrait ? th * meldScale + 10 : 0) + 58;
+  const rowGap = 6;
+  const meldScale = rows === 2 ? 0.62 : portrait ? 0.78 : 0.82;
+  const bottomBlock = safe.bottom + 10 + th * rows + rowGap * (rows - 1) + (portrait ? th * meldScale + 10 : 0) + 58;
   // dw: discard tile width. The centre box is cTB × cLR discard widths; each player's discards fill a zone
   // along one edge of it, `cols` long and `rows` deep. Portrait gives the side zones length and the
   // top/bottom zones depth (landscape the reverse), so the discard area fills the screen's shape.
@@ -296,47 +321,55 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   // Me: hand along the bottom, the drawn tile set apart, melds above (portrait) or to the right.
   const mine = view.players[me];
   const hand = mine.hand || [];
-  const handY = H - safe.bottom - 10 - th / 2 - 50;
+  const handY = H - safe.bottom - 10 - th / 2 - 50;   // centre of the bottom hand row
   const drawnGap = view.drawn != null ? 0.35 : 0;
   const meldTiles = [];
   mine.melds.forEach(md => md.tiles.forEach((id, i) => meldTiles.push({ id, md, i })));
   const meldW = tw * meldScale;
   let handLeft;
   const hitboxes = [];
-  const handWidth = (hand.length + drawnGap) * tw;
+  // Two rows only when the hand does not fit one: the upper row takes the first half, the lower the rest
+  // (with the drawn tile at its end), both starting at the same left edge.
+  const twoRows = rows === 2 && hand.length + drawnGap > perRow;
+  const upper = twoRows ? Math.ceil(hand.length / 2) : 0;
+  const handWidth = twoRows ? Math.max(upper, hand.length - upper + drawnGap) * tw : (hand.length + drawnGap) * tw;
+  const handTop = handY - th / 2 - (twoRows ? th + rowGap : 0);
   const sideMelds = !portrait && handWidth + (meldTiles.length + mine.melds.length * 0.3 + mine.flowers.length * 0.6) * meldW + 30 < W - 24;
   if (sideMelds) handLeft = (W - handWidth - (meldTiles.length + mine.melds.length * 0.3 + mine.flowers.length * 0.6) * meldW - 20) / 2;
   else handLeft = (W - handWidth) / 2;
   hand.forEach((id, i) => {
     const isDrawn = id === view.drawn && i === hand.length - 1;
-    const x = handLeft + (i + (isDrawn ? drawnGap : 0) + 0.5) * tw;
-    let flags = F.SWAY;
+    const inUpper = i < upper;
+    const col = inUpper ? i : i - upper;
+    const x = handLeft + (col + (isDrawn ? drawnGap : 0) + 0.5) * tw;
+    const y = inUpper ? handY - th - rowGap : handY;
+    let flags = F.SWAY | F.FIXED;
     if (ui.selected === id) flags |= F.SELECTED;
     if (ui.hover === id) flags |= F.HOVER;
     if (isDrawn) flags |= F.DRAWN;
     if (winIds.has(id)) flags |= F.WIN;
     if (ui.hint && ui.hint.includes(id)) flags |= F.HINT;
     const lift = ui.selected === id ? 1 : ui.hover === id ? 0.35 : 0;
-    sprites.push({ key: 't' + id, k: kindOf(id), x, y: handY, w: tw * 0.97, h: th * 0.97, rot: 0, flags, lift, spawn: 'wall' });
-    hitboxes.push({ id, x0: x - tw / 2, x1: x + tw / 2, y0: handY - th / 2 - th * 0.3, y1: handY + th / 2 });
+    sprites.push({ key: 't' + id, k: kindOf(id), x, y, w: tw * 0.97, h: th * 0.97, rot: 0, flags, lift, spawn: 'wall' });
+    hitboxes.push({ id, x0: x - tw / 2, x1: x + tw / 2, y0: y - th / 2 - (inUpper || !twoRows ? th * 0.3 : 0), y1: y + th / 2 });
   });
   {
     let x, y;
     if (sideMelds) { x = handLeft + handWidth + 20; y = handY + (th - meldW * TILE_ASPECT) / 2; }
     else {
       const tot = (meldTiles.length + mine.melds.length * 0.3 + mine.flowers.length * 0.6) * meldW;
-      x = (W - tot) / 2; y = handY - th / 2 - 8 - meldW * TILE_ASPECT / 2;
+      x = (W - tot) / 2; y = handTop - 8 - meldW * TILE_ASPECT / 2;
     }
     let lastMeld = null;
     for (const { id, md, i } of meldTiles) {
       if (md !== lastMeld && lastMeld) x += meldW * 0.3;
       lastMeld = md;
-      sprites.push({ key: id != null ? 't' + id : `c${md.id}-${i}`, k: id != null ? (md.concealed && (i === 0 || i === 3) ? -1 : kindOf(id)) : -1, x: x + meldW / 2, y, w: meldW * 0.96, h: meldW * 0.96 * TILE_ASPECT, rot: 0, flags: winIds.has(id) ? F.WIN : 0, lift: 0 });
+      sprites.push({ key: id != null ? 't' + id : `c${md.id}-${i}`, k: id != null ? (md.concealed && (i === 0 || i === 3) ? -1 : kindOf(id)) : -1, x: x + meldW / 2, y, w: meldW * 0.96, h: meldW * 0.96 * TILE_ASPECT, rot: 0, flags: (winIds.has(id) ? F.WIN : 0) | F.FIXED, lift: 0 });
       x += meldW;
     }
     if (mine.flowers.length) x += meldW * 0.3;
     for (const id of mine.flowers) {
-      sprites.push({ key: 't' + id, k: kindOf(id), x: x + meldW * 0.3, y: y + meldW * 0.1, w: meldW * 0.58, h: meldW * 0.58 * TILE_ASPECT, rot: 0, flags: 0, lift: 0 });
+      sprites.push({ key: 't' + id, k: kindOf(id), x: x + meldW * 0.3, y: y + meldW * 0.1, w: meldW * 0.58, h: meldW * 0.58 * TILE_ASPECT, rot: 0, flags: F.FIXED, lift: 0 });
       x += meldW * 0.6;
     }
   }
@@ -344,7 +377,24 @@ export function layoutTable(view, W, H, safe, ui = {}) {
 
   const tableTop = Math.max(safe.top + 4, cy - Sy / 2 - strip - 14);
   const table = { x0: Math.max(4, cx - Sx / 2 - strip - 14), y0: tableTop, x1: Math.min(W - 4, cx + Sx / 2 + strip + 14), y1: Math.min(H - 4, H - safe.bottom - 4) };
-  return { sprites, hitboxes, cx, cy, B, S, Bx, By, Sx, Sy, strip, dw, tw, th, handY, handLeft, handRight: handLeft + handWidth, table, handAnchor, portrait };
+  const stackTop = portrait && !sideMelds ? handTop - 8 - meldW * TILE_ASPECT : handTop;
+  return { sprites, hitboxes, cx, cy, B, S, Bx, By, Sx, Sy, strip, dw, tw, th, handY, handTop, stackTop, handLeft, handRight: handLeft + handWidth, table, handAnchor, portrait, badgeRowY, topReserve, rows };
+}
+
+// ---------- table camera ----------
+// screen = world * z + (x, y) for everything on the table; FIXED sprites (my hand) stay put. clipY hides table
+// tiles that would slide under the hand while zoomed in.
+export const camApply = (cam, x, y) => [x * cam.z + cam.x, y * cam.z + cam.y];
+function viewSprites(list, cam) {
+  if (!cam || cam.z === 1 && cam.x === 0 && cam.y === 0) return list;
+  return list.map(s => (s.flags & F.FIXED ? s : { ...s, x: s.x * cam.z + cam.x, y: s.y * cam.z + cam.y, w: s.w * cam.z, h: s.h * cam.z }));
+}
+function viewTable(layout, cam) {
+  const t = layout.table;
+  if (!cam) return { table: t, cx: layout.cx, cy: layout.cy, Bx: layout.Bx, By: layout.By };
+  const [x0, y0] = camApply(cam, t.x0, t.y0), [x1, y1] = camApply(cam, t.x1, t.y1), [cx, cy] = camApply(cam, layout.cx, layout.cy);
+  // The table's bottom edge sits under the hand; keep it there rather than letting it slide.
+  return { table: { x0, y0, x1, y1: cam.z > 1 ? Math.max(y1, t.y1) : y1 }, cx, cy, Bx: layout.Bx * cam.z, By: layout.By * cam.z };
 }
 
 // ---------- shared animation state ----------
@@ -376,7 +426,7 @@ class Anim {
     }
     for (const key of this.items.keys()) if (!seen.has(key)) this.items.delete(key);
     // Draw order: lower on screen and lifted tiles last, so they overlap correctly.
-    out.sort((p, q) => (p.lift > 0.05) - (q.lift > 0.05) || p.y - q.y);
+    out.sort((p, q) => (p.flags & F.FIXED ? 1 : 0) - (q.flags & F.FIXED ? 1 : 0) || (p.lift > 0.05) - (q.lift > 0.05) || p.y - q.y);
     return out;
   }
 }
@@ -391,6 +441,7 @@ struct U {
   table: vec4f,
   sq: vec4f,
   grid: vec4f,
+  px: vec4f,   // x: device pixel ratio, y: clip line (CSS px) under which table tiles are hidden
 };
 @group(0) @binding(0) var<uniform> u: U;
 
@@ -566,6 +617,11 @@ fn t_light(px: vec2f) -> f32 { return u.time * 0.4 + px.x * 0.004; }
   let px = fp.xy / u.dpr;
   var col = scene(px);
   col = tableCol(px, col);
+  // While zoomed in, a darker tray holds the hand, so the table reads as sliding under it.
+  if (px.y > u.px.y) {
+    col = col * 0.55;
+    col = mix(col, vec3f(0.62, 0.5, 0.25), smoothstep(1.5, 0.0, abs(px.y - u.px.y - 1.0)) * 0.8);
+  }
   // Vignette.
   let v = length((px / u.res - 0.5) * vec2f(1.0, 0.9));
   col *= 1.0 - 0.35 * smoothstep(0.4, 0.9, v);
@@ -627,6 +683,7 @@ struct VOut {
 @fragment fn fs(in: VOut) -> @location(0) vec4f {
   let k = i32(in.misc.x);
   let flags = u32(in.misc.y);
+  if ((flags & 512u) == 0u && in.pos.y / u.px.x > u.px.y) { discard; }
   let lift = in.misc.z;
   let seed = in.misc.w;
   let alpha = in.misc2.x;
@@ -704,7 +761,10 @@ struct VOut {
       let inset = 0.07;
       let auv = (uv - 0.5) / (1.0 - 2.0 * inset) + 0.5;
       if (all(auv >= vec2f(0.0)) && all(auv <= vec2f(1.0))) {
-        let t = textureSampleLevel(atlas, samp, (cell + auv) * u.grid.zw, 0.0);
+        // Mip level from how many device pixels the face covers against the atlas cell's width.
+        let facePx = max(in.size.x * (1.0 - 2.0 * inset) * u.px.x, 1.0);
+        let lod = clamp(log2(128.0 / facePx), 0.0, 4.0);
+        let t = textureSampleLevel(atlas, samp, (cell + auv) * u.grid.zw, lod);
         face = mix(face, t.rgb / max(t.a, 0.001), t.a);
       }
     }
@@ -738,10 +798,11 @@ export async function initGPU(canvas, atlasCanvas) {
   ctx.configure({ device, format, alphaMode: 'opaque' });
 
   const ubuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-  const tex = device.createTexture({ size: [atlasCanvas.width, atlasCanvas.height], format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
-  const uploadAtlas = cv => device.queue.copyExternalImageToTexture({ source: cv }, { texture: tex, premultipliedAlpha: true }, [cv.width, cv.height]);
+  const tex = device.createTexture({ size: [atlasCanvas.width, atlasCanvas.height], mipLevelCount: ATLAS_MIPS, format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT });
+  const uploadAtlas = cv => atlasMips(cv).forEach((lv, l) =>
+    device.queue.copyExternalImageToTexture({ source: lv }, { texture: tex, mipLevel: l, premultipliedAlpha: true }, [lv.width, lv.height]));
   uploadAtlas(atlasCanvas);
-  const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear' });
+  const samp = device.createSampler({ magFilter: 'linear', minFilter: 'linear', mipmapFilter: 'linear' });
 
   const bgMod = device.createShaderModule({ code: WGSL_BG });
   const tileMod = device.createShaderModule({ code: WGSL_TILE });
@@ -805,16 +866,18 @@ export async function initGPU(canvas, atlasCanvas) {
     get lost() { return lost; },
     uploadAtlas,
     resize(w, h, d) { W = w; H = h; dpr = d; canvas.width = Math.round(w * d); canvas.height = Math.round(h * d); makeBgTex(); },
-    frame(layout, dt, time, turnDir) {
+    frame(layout, dt, time, turnDir, cam, clipY = 1e5) {
       if (!bgTex) makeBgTex();
       if (lost) return;
-      const list = anim.update(layout.sprites, layout.handAnchor, dt);
+      const list = viewSprites(anim.update(layout.sprites, layout.handAnchor, dt), cam);
+      const vt = viewTable(layout, cam);
       const la = time * 0.13;
       const u = new Float32Array(24);
       u.set([W, H, time, dpr * BG_SCALE, Math.cos(la) * 0.35 - 0.3, -0.85 + Math.sin(la) * 0.1, turnDir[0], turnDir[1],
-        layout.table.x0, layout.table.y0, layout.table.x1, layout.table.y1,
-        layout.cx, layout.cy, layout.Bx / 2, layout.By / 2,
-        ATLAS_COLS, ATLAS_ROWS, CELL_W / atlasCanvas.width, CELL_H / atlasCanvas.height]);
+        vt.table.x0, vt.table.y0, vt.table.x1, vt.table.y1,
+        vt.cx, vt.cy, vt.Bx / 2, vt.By / 2,
+        ATLAS_COLS, ATLAS_ROWS, CELL_W / atlasCanvas.width, CELL_H / atlasCanvas.height,
+        dpr, clipY, 0, 0]);
       device.queue.writeBuffer(ubuf, 0, u);
       if (list.length * 48 > ibuf.size) { ibuf.destroy(); ibuf = device.createBuffer({ size: 48 * (list.length + 64), usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }); }
       const inst = new Float32Array(list.length * 12);
@@ -840,7 +903,8 @@ export function init2D(canvas, atlasIn) {
   const anim = new Anim();
   let W = 1, H = 1, dpr = 1;
   let bg = null;
-  function paintBg(layout) {
+  function paintBg(layout, cam, clipY) {
+    const vt = viewTable(layout, cam);
     bg = document.createElement('canvas');
     bg.width = canvas.width; bg.height = canvas.height;
     const b = bg.getContext('2d');
@@ -858,13 +922,17 @@ export function init2D(canvas, atlasIn) {
       }
       b.lineTo(W, H); b.fill();
     }
-    const t = layout.table;
+    const t = vt.table;
     b.fillStyle = '#4a1a0e'; b.beginPath(); b.roundRect(t.x0, t.y0, t.x1 - t.x0, t.y1 - t.y0, 16); b.fill();
-    const felt = b.createRadialGradient(layout.cx, layout.cy, 10, layout.cx, layout.cy, Math.max(t.x1 - t.x0, t.y1 - t.y0) * 0.7);
+    const felt = b.createRadialGradient(vt.cx, vt.cy, 10, vt.cx, vt.cy, Math.max(t.x1 - t.x0, t.y1 - t.y0) * 0.7);
     felt.addColorStop(0, '#176049'); felt.addColorStop(1, '#08261d');
     b.fillStyle = felt; b.beginPath(); b.roundRect(t.x0 + 12, t.y0 + 12, t.x1 - t.x0 - 24, t.y1 - t.y0 - 24, 8); b.fill();
     b.strokeStyle = 'rgba(160,128,64,0.6)'; b.lineWidth = 1;
-    b.strokeRect(layout.cx - layout.Bx / 2, layout.cy - layout.By / 2, layout.Bx, layout.By);
+    b.strokeRect(vt.cx - vt.Bx / 2, vt.cy - vt.By / 2, vt.Bx, vt.By);
+    if (clipY < H) {
+      b.fillStyle = 'rgba(0,0,0,0.45)'; b.fillRect(0, clipY, W, H - clipY);
+      b.fillStyle = 'rgba(160,128,64,0.8)'; b.fillRect(0, clipY, W, 1.5);
+    }
   }
   let lastKey = '';
   return {
@@ -872,15 +940,16 @@ export function init2D(canvas, atlasIn) {
     lost: false,
     uploadAtlas(cv) { atlasCanvas = cv; },
     resize(w, h, d) { W = w; H = h; dpr = d; canvas.width = Math.round(w * d); canvas.height = Math.round(h * d); lastKey = ''; },
-    frame(layout, dt, time) {
-      const key = [layout.table.x0, layout.table.y0, layout.table.x1, layout.table.y1, W, H].map(Math.round).join(',');
-      if (key !== lastKey) { paintBg(layout); lastKey = key; }
+    frame(layout, dt, time, turnDir, cam, clipY = 1e5) {
+      const key = [layout.table.x0, layout.table.y0, layout.table.x1, layout.table.y1, W, H, cam ? cam.z * 1000 : 1, cam ? cam.x : 0, cam ? cam.y : 0, Math.min(clipY, 1e4)].map(Math.round).join(',');
+      if (key !== lastKey) { paintBg(layout, cam, clipY); lastKey = key; }
       g.setTransform(1, 0, 0, 1, 0, 0);
       g.drawImage(bg, 0, 0);
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
-      const list = anim.update(layout.sprites, layout.handAnchor, dt);
+      const list = viewSprites(anim.update(layout.sprites, layout.handAnchor, dt), cam);
       for (const s of list) {
         g.save();
+        if (!(s.flags & F.FIXED) && clipY < H) { g.beginPath(); g.rect(0, 0, W, clipY); g.clip(); }
         g.globalAlpha = s.alpha;
         g.translate(s.x, s.y - s.lift * s.h * 0.22);
         g.rotate(s.rot);
@@ -898,6 +967,7 @@ export function init2D(canvas, atlasIn) {
         if (s.k >= 0) {
           const cx = (s.k % ATLAS_COLS) * CELL_W, cy = Math.floor(s.k / ATLAS_COLS) * CELL_H;
           const inset = 0.07;
+          g.imageSmoothingQuality = 'high';
           g.drawImage(atlasCanvas, cx, cy, CELL_W, CELL_H, -w / 2 + w * inset, -h / 2 + h * inset, w * (1 - 2 * inset), h * (1 - 2 * inset));
         }
         if (s.flags & F.DIM) { g.fillStyle = 'rgba(0,0,0,0.4)'; g.beginPath(); g.roundRect(-w / 2, -h / 2, w, h, r); g.fill(); }

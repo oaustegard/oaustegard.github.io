@@ -90,6 +90,15 @@ carrier networks, corporate Wi-Fi) may fail to connect. The same Wi-Fi network a
 | tap it again, double-tap, or **打 Discard** | discard it |
 | ← → and Enter | choose and discard with the keyboard |
 | claim buttons | 吃 chow (one button per run), 碰 pung, 槓 kong, 糊 win, 過 pass (Esc) |
+| pinch, or ⤢ in the top bar | zoom the table (up to 3.2×); your hand stays put and the table slides under it |
+| drag on the table | pan while zoomed |
+| double-tap the table | zoom in on that spot, or back out |
+| mouse wheel or trackpad pinch | zoom at the pointer |
+
+On a phone held upright the hand wraps into two rows (7 or 9 tiles each), about twice the size of a
+single row. **Hand** in the lobby or the menu switches between Auto, Two rows and One row. The canvas
+renders at the device's full pixel density (up to 3×), and the tile atlas carries mipmaps, so tiles stay
+sharp both small and zoomed.
 
 With hints on, the computer's choice of discard glows blue, and the hint line names the tiles you are
 waiting on once your hand is ready.
