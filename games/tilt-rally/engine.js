@@ -561,13 +561,16 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     if (Math.abs(c.lat) > 120 || c.offTime > 4) respawn(c);
   }
   function respawn(c) { const T = E.T, i = c.idx; c.x = T.x[i]; c.z = T.z[i]; c.y = T.y[i]; c.h = Math.atan2(T.tx[i], T.tz[i]); c.vx = c.vz = 0; c.yawRate = 0; c.offTime = 0; c.lat = 0; }
+  // A remote car belongs to another phone, which moves it; a bump against one moves only the car simulated here.
   function collide(cars) { for (let a = 0; a < cars.length; a++) for (let b = a + 1; b < cars.length; b++) { const A = cars[a], B = cars[b], dx = B.x - A.x, dz = B.z - A.z, d = Math.hypot(dx, dz);
-    if (d > 0.01 && d < 2.4) { const nx = dx / d, nz = dz / d, push = (2.4 - d) / 2; A.x -= nx * push; A.z -= nz * push; B.x += nx * push; B.z += nz * push;
-      const rv = (B.vx - A.vx) * nx + (B.vz - A.vz) * nz; if (rv < 0) { const j = -rv * 0.6; A.vx -= nx * j; A.vz -= nz * j; B.vx += nx * j; B.vz += nz * j; }
+    if (A.remote && B.remote) continue;
+    if (d > 0.01 && d < 2.4) { const nx = dx / d, nz = dz / d, wa = A.remote ? 0 : B.remote ? 2 : 1, wb = 2 - wa, push = (2.4 - d) / 2;
+      A.x -= nx * push * wa; A.z -= nz * push * wa; B.x += nx * push * wb; B.z += nz * push * wb;
+      const rv = (B.vx - A.vx) * nx + (B.vz - A.vz) * nz; if (rv < 0) { const j = -rv * 0.6; A.vx -= nx * j * wa; A.vz -= nz * j * wa; B.vx += nx * j * wb; B.vz += nz * j * wb; }
       if (A === E.player || B === E.player) { E.bump = 0.25; emit("bump"); } } } }
   function drive(c, dt) {      // the AI: aim at a point down the road in its lane, throttle toward the speed plan
     const T = E.T, sp = Math.max(0, c.speed || 0), look = Math.round((9 + sp * 0.55) / T.ds), i = (c.idx + look) % M;
-    c.lane = lerp(c.lane, clamp(-T.kap[(c.idx + look * 2) % M] * 260, -3.5, 3.5) + (c.name !== "You" ? (c.name.length % 3 - 1) * 1.2 : 0), dt * 0.6);
+    c.lane = lerp(c.lane, clamp(-T.kap[(c.idx + look * 2) % M] * 260, -3.5, 3.5) + (!c.local ? (c.slot % 3 - 1) * 1.2 : 0), dt * 0.6);
     const tx = T.x[i] + -T.tz[i] * c.lane, tz = T.z[i] + T.tx[i] * c.lane, fx = Math.sin(c.h), fz = Math.cos(c.h);
     const dx = tx - c.x, dz = tz - c.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
     // feed-forward: the turn rate the road needs here, as a share of what the tyres allow, plus the aim correction
@@ -583,6 +586,24 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     if (c.lap > LAPS && !c.done) { c.done = true; c.finish = E.raceT; if (c === E.player) { E.state = "done"; emit("finish", { order: rank() }); } }
     else if (c === E.player) emit("lap", { lap: c.lap, time: t });
   }
+  // ---- network: a car as a compact array, and a remote car chasing the last one heard
+  const NET = ["x", "y", "z", "h", "vx", "vz", "speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear"];
+  E.snapshot = (c) => [c.slot, ...NET.map((k) => k === "done" ? (c.done ? 1 : 0) : k === "best" ? (c.best === Infinity ? -1 : +c.best.toFixed(3)) : typeof c[k] === "number" ? +c[k].toFixed(k === "x" || k === "z" || k === "y" ? 2 : 3) : 0)];
+  E.applySnapshot = (a, age = 0) => {
+    const c = E.cars?.find((q) => q.slot === a[0] && q.remote); if (!c) return;
+    const n = {}; NET.forEach((k, i) => { n[k] = a[i + 1]; }); n.done = !!n.done; n.best = n.best < 0 ? Infinity : n.best; n.age = age;
+    if (!c.net) { c.x = n.x; c.z = n.z; c.y = n.y; c.h = n.h; }
+    c.net = n;
+  };
+  function follow(c, dt) {                     // dead-reckon from the last snapshot and ease toward it
+    const n = c.net; if (!n) return;
+    n.age += dt; const tx = n.x + n.vx * n.age, tz = n.z + n.vz * n.age, k = 1 - Math.exp(-dt * 10);
+    if (Math.hypot(tx - c.x, tz - c.z) > 25) { c.x = tx; c.z = tz; } else { c.x = lerp(c.x, tx, k); c.z = lerp(c.z, tz, k); }
+    c.y = lerp(c.y, n.y, k); c.h += wrapAng(n.h - c.h) * k; c.vx = n.vx; c.vz = n.vz;
+    for (const key of ["speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear"]) c[key] = n[key];
+    c.spin += c.speed * dt / 0.34; const pr = probe(c.x, c.z, c.idx); c.idx = pr.idx; c.surf = pr.surf;
+  }
+  E.dropCar = (slot) => { if (E.cars) E.cars = E.cars.filter((c) => c.slot !== slot); };
   const rank = () => E.cars.slice().sort((a, b) => (a.done && b.done) ? a.finish - b.finish : a.done ? -1 : b.done ? 1 : b.prog - a.prog);
   E.rank = rank;
 
@@ -593,9 +614,14 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     if (dir < 0 && Math.max(0, c.speed) > GEARS[g - 1] * 1.02) return false;
     c.gear = g; c.cut = 0.12; return true;
   };
-  E.newRace = ({ autopilot = false, manual = false } = {}) => {
-    E.cars = [3, 2, 1, 0].map((k) => newCar(k, CARS[k], k !== 0));
-    E.player = E.cars.find((c) => c.name === "You"); E.player.autopilot = autopilot; E.player.manual = manual && !autopilot;
+  // roster: one entry per grid slot, front row first: { kind: "local" | "remote" | "ai", name, id }. Without one, it is you
+  // against three computer cars. A remote slot is a car another phone drives (or, on a guest, a computer car the host runs).
+  E.newRace = ({ autopilot = false, manual = false, roster = null } = {}) => {
+    roster = roster || [{ kind: "local", name: "You" }, { kind: "ai" }, { kind: "ai" }, { kind: "ai" }];
+    E.cars = roster.map((r, k) => ({ r, k })).reverse().map(({ r, k }) => {
+      const c = newCar(k, { ...CARS[k], name: r.name || CARS[k].name }, r.kind === "ai");
+      c.slot = k; c.remote = r.kind === "remote"; c.netId = r.id || null; c.local = r.kind === "local"; return c; });
+    E.player = E.cars.find((c) => c.local); E.player.autopilot = autopilot; E.player.manual = manual && !autopilot;
     E.cam = null; E.raceT = -3.4; E.state = "countdown"; E.input = { steer: 0, thr: 0 };
   };
   E.tick = (dt) => {
@@ -608,6 +634,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     }
     E.raceT += dt;
     for (const c of E.cars) {
+      if (c.remote) { follow(c, dt); continue; }
       if (c.done || c.ai || c.autopilot) { drive(c, dt); if (c.done) c.thr = Math.min(c.thr, 0.3); }
       else { c.steer = E.input.steer; c.thr = E.input.thr; }
       stepCar(c, dt);

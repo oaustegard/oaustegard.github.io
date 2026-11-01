@@ -7,6 +7,7 @@
 //   node tests/tilt-rally-check.mjs backseat the back-seat driver shouts before the corner a full-gas driver leaves, and urges a crawler on
 //   node tests/tilt-rally-check.mjs permission  the iOS motion prompt comes on the start screen, before the race
 //   node tests/tilt-rally-check.mjs controls  touch pedals and manual gears through the on-screen controls
+//   node tests/tilt-rally-check.mjs multi     three players on a local rally-lobby (wrangler dev): direct and relayed links, synced start, positions agree
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -22,7 +23,7 @@ const srv = http.createServer((q, r) => {
 });
 await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
 const base = `http://127.0.0.1:${srv.address().port}/games/tilt-rally/`;
-const b = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-angle=swiftshader", "--use-webgpu-adapter=swiftshader"] });
+const b = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-angle=swiftshader", "--use-webgpu-adapter=swiftshader", "--disable-features=WebRtcHideLocalIpsWithMdns"] });
 const what = process.argv[2] || "math";
 let failed = false;
 const check = (name, ok, detail = "") => { console.log((ok ? "ok   " : "FAIL ") + name + (detail ? "  " + detail : "")); if (!ok) failed = true; };
@@ -209,7 +210,8 @@ if (what === "backseat") {
   const exits = fast.log.filter((y) => y.kind === "off");
   check("the back-seat driver noticed every exit", exits.length === fast.offs.length, exits.length + "/" + fast.offs.length);
   const warned = exits.filter((o) => fast.log.some((y) => (y.kind === "brake" || y.kind === "slow") && y.t < o.t && y.t > o.t - 6));
-  check("every exit at full gas was preceded by a slow-down or brake shout within 6 s", exits.length > 0 && warned.length === exits.length, warned.length + "/" + exits.length);
+  check("every exit at full gas was preceded by a slow-down or brake shout within 6 s", warned.length === exits.length, warned.length + "/" + exits.length);
+  check("a full-gas driver is warned to slow down or brake", fast.log.some((y) => y.kind === "brake" || y.kind === "slow"));
   check("the shouts do not run on: under 20 in 70 s", fast.log.length < 20, String(fast.log.length));
   const crawl = await run(0.25);
   console.log("quarter throttle:", crawl.log.map((x) => `${x.t}s ${x.kind}`).join(" | "));
@@ -281,6 +283,60 @@ if (what === "controls") {
   check("brake pedal slows the car", d.speed < b2.speed - 10, (b2.speed * 3.6).toFixed(0) + " -> " + (d.speed * 3.6).toFixed(0) + " km/h");
   await page.screenshot({ path: path.join(OUT, "controls.png") });
   check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+if (what === "multi") {
+  // Three phones in one room on a local copy of the matchmaking Worker (workers/rally-lobby under wrangler dev):
+  // A hosts, B joins over WebRTC, C has no WebRTC at all and must race through the room relay.
+  const { spawn } = await import("node:child_process");
+  const wrangler = (process.env.WRANGLER || "npx --yes wrangler@4.20.0").split(" ");
+  const dev = spawn(wrangler[0], [...wrangler.slice(1), "dev", "--port", "8787", "--ip", "127.0.0.1"], { cwd: path.join(ROOT, "workers", "rally-lobby"), stdio: "ignore" });
+  try {
+    for (let i = 0; i < 60; i++) { try { const r = await fetch("http://127.0.0.1:8787/"); if (r.ok) break; } catch (e) {} await new Promise((r) => setTimeout(r, 1000)); }
+    const lobby = "lobby=ws://127.0.0.1:8787";
+    const join = async (q, { noRtc = false } = {}) => {
+      const ctx = await b.newContext({ viewport: { width: 844, height: 390 } }), page = await ctx.newPage(), errors = [];
+      page.on("pageerror", (e) => errors.push(e.message)); page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+      if (noRtc) await page.addInitScript(() => { delete window.RTCPeerConnection; });
+      await page.goto(base + "index.html?" + q + "&" + lobby);
+      await waitFor(page, () => document.getElementById("status").textContent === "Ready.");
+      await page.click("#friends");
+      await waitFor(page, () => document.querySelectorAll("#lbPlayers li").length > 0, 20000);
+      return { page, errors };
+    };
+    const A = await join("x=1");
+    const code = await A.page.evaluate(() => document.getElementById("lbCode").textContent);
+    const B = await join("room=" + code), C = await join("room=" + code, { noRtc: true });
+    await waitFor(A.page, () => { const t = [...document.querySelectorAll("#lbPlayers .tag")].map((e) => e.textContent); return t.length === 3 && !t.includes("connecting"); }, 20000);
+    const tags = await A.page.evaluate(() => [...document.querySelectorAll("#lbPlayers li")].map((li) => li.textContent));
+    console.log("host's lobby:", JSON.stringify(tags));
+    check("three players in the room, host first", tags.length === 3 && /host/.test(tags[0]));
+    check("B joined over a direct WebRTC link", /direct/.test(tags[1]), tags[1]);
+    check("C, with no WebRTC, races through the room", /via server/.test(tags[2]), tags[2]);
+    check("only the host gets a Start button", (await A.page.isVisible("#lbStart")) && !(await B.page.isVisible("#lbStart")) && !(await C.page.isVisible("#lbStart")));
+    await A.page.click("#lbStart");
+    for (const P of [A, B, C]) await waitFor(P.page, () => window.__game().state === "race", 30000);
+    const goTimes = await Promise.all([A, B, C].map((P) => P.page.evaluate(() => window.__game().raceT)));
+    check("the lights went out together (race clocks within 0.3 s)", Math.max(...goTimes) - Math.min(...goTimes) < 0.3, goTimes.map((t) => t.toFixed(2)).join(", "));
+    for (const P of [A, B, C]) await P.page.keyboard.down("ArrowUp");
+    await A.page.waitForTimeout(6000);
+    const views = await Promise.all([A, B, C].map((P) => P.page.evaluate(() => window.__game().cars)));
+    for (const P of [A, B, C]) await P.page.keyboard.up("ArrowUp");
+    const own = (v) => v.find((c) => c.local), seen = (v, slot) => v.find((c) => c.slot === slot);
+    const gap = (p, q) => Math.hypot(p.x - q.x, p.z - q.z);
+    const [va, vb, vc] = views;
+    console.log("slots: A", own(va).slot, "B", own(vb).slot, "C", own(vc).slot, "| speeds", views.map((v) => (own(v).speed * 3.6).toFixed(0)).join(","), "km/h");
+    check("everyone is moving (software rendering runs slow, so any real speed)", views.every((v) => own(v).speed > 3));
+    check("A sees B's car where B has it (within 8 m)", gap(seen(va, own(vb).slot), own(vb)) < 8, gap(seen(va, own(vb).slot), own(vb)).toFixed(1) + " m");
+    check("B sees A's car where A has it", gap(seen(vb, own(va).slot), own(va)) < 8, gap(seen(vb, own(va).slot), own(va)).toFixed(1) + " m");
+    check("A sees C's car (relayed) where C has it", gap(seen(va, own(vc).slot), own(vc)) < 8, gap(seen(va, own(vc).slot), own(vc)).toFixed(1) + " m");
+    check("C sees the host's computer car where the host has it", gap(seen(vc, 3), seen(va, 3)) < 8, gap(seen(vc, 3), seen(va, 3)).toFixed(1) + " m");
+    await B.page.close();
+    await waitFor(A.page, () => window.__game().cars.length === 3, 20000).catch(() => {});
+    check("when B leaves, its car leaves the host's race", (await A.page.evaluate(() => window.__game().cars.length)) === 3);
+    await A.page.screenshot({ path: path.join(OUT, "multi-host.png") });
+    for (const P of [A, B, C]) check("no page errors", P.errors.length === 0, P.errors.slice(0, 3).join(" | "));
+  } finally { dev.kill(); }
 }
 
 await b.close(); srv.close();

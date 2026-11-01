@@ -18,6 +18,18 @@ Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lo
 
 Hold the phone the way you want to drive when you press Start engine. That pose becomes straight ahead with no gas, and both the wheel and the pedal are measured from it, so there is no calibration step. **Keep horizon level** (on by default) tilts the 3D picture opposite to the phone, so the road's horizon stays level with the real one while you steer.
 
+## Racing friends
+
+**Race friends** on the start screen opens a room with a four-character code and a link to share (`?room=CODE`). Anyone who opens the link and taps **Join race** lands in the same room. Up to four people race; empty grid places go to computer cars, and anyone beyond four can watch. The host is whoever has been in the room longest. Only the host has a **Start race** button: it picks the valley, the grid and the moment the lights go out, and runs the computer cars.
+
+- **Matchmaking:** `workers/rally-lobby` is a Cloudflare Worker with one Durable Object per room, deployed at `rally-lobby.austegard.workers.dev`. It accepts connections only from austegard.com, passes the WebRTC handshake between phones, keeps the clock every race start is timed on, and stores nothing.
+- **Racing:** each phone simulates its own car and sends its position 20 times a second over a WebRTC data channel. Positions go on an unreliable, unordered channel; start and leave messages go on a reliable one. Other cars are drawn by projecting the last update forward and easing toward it.
+- **Without a direct link:** some mobile networks block direct connections, and there is no TURN relay. If a pair's direct link isn't open after 8 seconds, they talk through the room's WebSocket instead. The lobby shows each link as "direct" or "via server".
+- **Bumps** between two phones' cars move only the car the phone itself simulates, so each phone sees its own car pushed, not the other's.
+- **Leaving:** when a player leaves, their car leaves everyone's race. If the host leaves, the computer cars go with them.
+
+`node tests/tilt-rally-check.mjs multi` runs three players against a local copy of the Worker (`wrangler dev`): one joins over WebRTC, one with WebRTC removed has to race through the room relay, and one leaves mid-race. It checks that the starts land within 0.3 s and that each phone sees the others' cars within 8 m of where those phones have them. Real phones on mobile data are untested.
+
 ## Gears
 
 Six gears; the limiter cuts in at 58, 94, 130, 162, 194 and 230 km/h. Below 55% of the limit speed the engine bogs, except in first, where the clutch slips. The automatic box changes up at 93% and down when the lower gear would run under 80%, so it stays where the engine pulls. With Manual gears on, each change cuts drive for 0.12 s while the clutch works. A downshift that would push the engine past the limiter is refused, and the paddle flashes red. Past the limiter, engine braking stops the car from running away downhill. The options you pick are remembered on that device.
