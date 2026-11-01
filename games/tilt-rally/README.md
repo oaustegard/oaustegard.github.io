@@ -28,6 +28,8 @@ Hold the phone the way you want to drive when you press Start engine. That pose 
 - **Bumps** between two phones' cars move only the car the phone itself simulates, so each phone sees its own car pushed, not the other's.
 - **Leaving:** when a player leaves, their car leaves everyone's race. If the host leaves, the computer cars go with them.
 
+**Measuring real networks.** `node tests/rally-observer.mjs ROOM [minutes]` joins a room as `observer:claude`. Observers never race or host, and the phones show them as "measuring the links". While one is present, every phone sends it a report every 3 s: device, browser and network type; then, for each link, its path (direct or via server), how long the direct link took to open, the ICE candidate types and transport it settled on (host = same network, srflx = through the NAT via STUN, relay = TURN), the network round trip, an in-game ping over the race channel, car updates per second, the longest gap between updates, and frame rate. The observer's WebSocket runs in headless Chromium so a cloud session can reach the room through its HTTPS proxy, even though WebRTC itself can't get out.
+
 `node tests/tilt-rally-check.mjs multi` runs three players against a local copy of the Worker (`wrangler dev`): one joins over WebRTC, one with WebRTC removed has to race through the room relay, and one leaves mid-race. It checks that the starts land within 0.3 s and that each phone sees the others' cars within 8 m of where those phones have them. Real phones on mobile data are untested.
 
 ## Gears

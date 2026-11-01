@@ -241,7 +241,7 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
 </div>
 <script type="module">
 import { createEngine, wheelFrom, upFromOrientation, clamp, lerp, M, LAPS } from "./engine.js";
-import { Net, roomCode, LOBBY } from "./net.js";
+import { Net, roomCode, LOBBY, isObserver } from "./net.js";
 const D2R = Math.PI / 180, TAU = Math.PI * 2;
 const Q = new URLSearchParams(location.search);
 const DEMO = Q.has("demo");
@@ -485,9 +485,10 @@ async function openLobby(code) {
   net.addEventListener("left", (e) => onLeft(e.detail));
   net.addEventListener("status", (e) => { $("lbStatus").textContent = e.detail; });
   net.addEventListener("closed", () => { $("lbStatus").textContent = "Lost the connection to the race server."; });
+  clearInterval(teleTimer); teleTimer = setInterval(teleTick, 3000);
   try { await net.connect(); renderLobby(); } catch (e) { $("lbStatus").textContent = e.message + " Check the connection and try again."; }
 }
-function leaveLobby() { net?.close(); net = null; mp = null; $("lobby").hidden = true; $("hud").hidden = true; $("intro").hidden = false; }
+function leaveLobby() { clearInterval(teleTimer); net?.close(); net = null; mp = null; $("lobby").hidden = true; $("hud").hidden = true; $("intro").hidden = false; }
 $("lbLeave").addEventListener("click", leaveLobby);
 addEventListener("pagehide", () => net?.close());
 $("lbName").addEventListener("change", () => { const n = $("lbName").value.trim().slice(0, 16) || "Driver"; try { localStorage.setItem("tilt-rally-name", n); } catch (e) {} net?.setName(n); });
@@ -499,6 +500,7 @@ $("lbShare").addEventListener("click", async () => {
 function renderLobby() {
   if (!net?.id) return;
   const list = net.list(), host = net.hostId(), ul = $("lbPlayers"); ul.innerHTML = "";
+  for (const o of net.observers()) { const li = document.createElement("li"); li.className = "out"; li.textContent = o.name.slice(9) + " (measuring the links, not racing)"; ul.appendChild(li); }
   list.forEach((p, k) => {
     const li = document.createElement("li"), n = document.createElement("span"), t = document.createElement("span");
     n.textContent = p.name + (p.id === host ? " · host" : "") + (p.me ? " (you)" : "");
@@ -532,7 +534,32 @@ async function beginNetRace(msg) {
   started = true; sensor.neutral = sensor.up ? sensor.up.slice() : null;     // straight ahead is the pose as the countdown starts
   G.raceT = (net.now() - mp.at) / 1000;
 }
+// ---- telemetry for an observer in the room (tests/rally-observer.mjs): how each link really behaves on real networks
+const rx = new Map(), pings = new Map();
+function teleTick() {
+  if (!net?.open) return;
+  for (const p of net.list()) if (!p.me) net.sendTo(p.id, { k: "ping", c: performance.now() });   // timed in the game, over the race channel
+  const obs = net.observers(); if (!obs.length) return;
+  net.linkStats().then((links) => {
+    const ua = navigator.userAgent, dev = /iPhone/.test(ua) ? "iPhone" : /iPad/.test(ua) ? "iPad" : /Android/.test(ua) ? "Android" : /Mac/.test(ua) ? "Mac" : /Windows/.test(ua) ? "Windows" : "other";
+    const c = navigator.connection, now = performance.now();
+    const peers = net.list().filter((p) => !p.me).map((p) => { const r = rx.get(p.id), pg = pings.get(p.id) || [];
+      return { id: p.id, name: p.name, path: p.path, ...(links[p.id] || {}),
+        carsPerSec: r ? +(r.n / Math.max(1, (now - r.since) / 1000)).toFixed(1) : 0, gapMaxMs: r ? Math.round(r.gapMax) : null, lastMsAgo: r ? Math.round(now - r.last) : null,
+        pingMs: pg.length ? Math.round(pg.slice().sort((a, b) => a - b)[pg.length >> 1]) : null }; });
+    const tele = { k: "tele", name: net.name, dev, browser: /CriOS/.test(ua) ? "Chrome iOS" : /FxiOS/.test(ua) ? "Firefox iOS" : /Safari/.test(ua) && !/Chrome/.test(ua) ? "Safari" : /Chrome/.test(ua) ? "Chrome" : "other",
+      conn: c ? { type: c.type, eff: c.effectiveType, rtt: c.rtt, down: c.downlink } : null, state: G?.state, raceT: G ? +G.raceT.toFixed(1) : null,
+      fps: Math.round((G.frames - (teleTick.f ?? G.frames)) / Math.max(0.5, (now - (teleTick.t ?? now - 3000)) / 1000)), scale: +scale.toFixed(2), gathered: net.gathered, serverRttMs: Math.round(net.rttBest), peers };
+    for (const o of obs) net.sendTo(o.id, tele);
+    for (const r of rx.values()) { r.n = 0; r.since = now; r.gapMax = 0; }            // per-report windows
+    teleTick.f = G.frames; teleTick.t = now;
+  });
+}
+let teleTimer = null;
 function onNet(from, msg) {
+  if (msg.k === "car") { const now = performance.now(), r = rx.get(from) || { n: 0, since: now, last: now, gapMax: 0 }; r.gapMax = Math.max(r.gapMax, now - r.last); r.last = now; r.n++; rx.set(from, r); }
+  if (msg.k === "ping") { net.sendTo(from, { k: "pong", c: msg.c }); return; }
+  if (msg.k === "pong") { const a = pings.get(from) || []; a.push(performance.now() - msg.c); if (a.length > 9) a.shift(); pings.set(from, a); return; }
   if (msg.k === "car" && mp && G.cars) for (const a of msg.s) G.applySnapshot(a);
   else if (msg.k === "start" && from === (msg.host || net.hostId())) beginNetRace(msg);
   else if (msg.k === "bye") net.dropPeer(from);
@@ -549,7 +576,7 @@ function netFrame(dt) {
   if (G.state !== "done") { const want = (net.now() - mp.at) / 1000; if (G.state === "countdown" || Math.abs(G.raceT - want) > 0.25) G.raceT = want; }
   if ((sendT += dt) < 0.05) return; sendT = 0;
   const mine = G.cars.filter((c) => !c.remote);                             // my car, plus the computer cars if I host
-  net.broadcast({ k: "car", s: mine.map(G.snapshot) });
+  net.broadcast({ k: "car", s: mine.map(G.snapshot) }); net.sent = (net.sent || 0) + 1;
 }
 document.addEventListener("visibilitychange", () => { if (audio.ctx) document.hidden ? audio.ctx.suspend() : audio.ctx.resume(); last = 0; });
 if ("serviceWorker" in navigator && location.hostname !== "127.0.0.1" && location.hostname !== "localhost") navigator.serviceWorker.register("sw.js").catch(() => {});
@@ -604,6 +631,7 @@ function backseat(dt) {
 }
 window.__backseat = { step: backseat, log: bs.log };
 
+window.__net = () => net;
 window.__game = () => G && { frames: G.frames, state: G.state, raceT: G.raceT, stats: G.stats, scale,
   input: { steer: inp.steer, thr: inp.thr, mode: sensor.mode, events: sensor.events },
   cars: G.cars?.map((c) => ({ name: c.name, slot: c.slot, remote: !!c.remote, local: !!c.local, x: c.x, z: c.z, lap: c.lap, idx: c.idx, speed: c.speed, lat: c.lat, surf: c.surf, done: c.done, best: c.best, gear: c.gear, rpm: c.rpm, manual: c.manual })) };

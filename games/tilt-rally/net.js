@@ -6,6 +6,10 @@ export const LOBBY = "wss://rally-lobby.austegard.workers.dev";
 const ICE = [{ urls: ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"] }];
 const DIRECT_DEADLINE = 8000;   // ms to wait for a data channel before settling on the room relay
 
+// A peer named "observer:…" watches without racing (the test harness in tests/rally-observer.mjs): it gets no grid
+// place, never hosts, and phones send it telemetry instead of opening a WebRTC link to it.
+export const isObserver = (p) => typeof p?.name === "string" && p.name.startsWith("observer:");
+
 export function roomCode() {
   const A = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
   return Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => A[b % A.length]).join("");
@@ -15,7 +19,7 @@ export function roomCode() {
 export class Net extends EventTarget {
   constructor({ code, name, url = LOBBY, rtc = typeof RTCPeerConnection !== "undefined" }) {
     super();
-    Object.assign(this, { code, name, url, rtc, id: null, joined: 0, peers: new Map(), offset: 0, rttBest: Infinity, open: false });
+    Object.assign(this, { code, name, url, rtc, id: null, joined: 0, peers: new Map(), offset: 0, rttBest: Infinity, open: false, gathered: {} });
   }
   emit(type, detail) { this.dispatchEvent(new CustomEvent(type, { detail })); }
 
@@ -47,9 +51,10 @@ export class Net extends EventTarget {
   }
 
   // the host is whoever has been in the room longest
-  hostId() { let best = { id: this.id, joined: this.joined }; for (const p of this.peers.values()) if (p.joined < best.joined || (p.joined === best.joined && p.id < best.id)) best = p; return best.id; }
+  hostId() { let best = { id: this.id, joined: this.joined }; for (const p of this.peers.values()) if (!isObserver(p)) if (p.joined < best.joined || (p.joined === best.joined && p.id < best.id)) best = p; return best.id; }
   isHost() { return this.hostId() === this.id; }
-  list() { return [{ id: this.id, name: this.name, joined: this.joined, me: true, path: "you" }, ...[...this.peers.values()].map((p) => ({ id: p.id, name: p.name, joined: p.joined, path: p.path }))].sort((a, b) => a.joined - b.joined || (a.id < b.id ? -1 : 1)); }
+  list() { return [{ id: this.id, name: this.name, joined: this.joined, me: true, path: "you" }, ...[...this.peers.values()].filter((p) => !isObserver(p)).map((p) => ({ id: p.id, name: p.name, joined: p.joined, path: p.path }))].sort((a, b) => a.joined - b.joined || (a.id < b.id ? -1 : 1)); }
+  observers() { return [...this.peers.values()].filter(isObserver); }
 
   onRoom(m, ready) {
     switch (m.t) {
@@ -71,15 +76,15 @@ export class Net extends EventTarget {
 
   addPeer(info, call) {
     if (this.peers.has(info.id)) return;
-    const p = { ...info, path: "relay", pc: null, fast: null, sure: null };
+    const p = { ...info, path: "relay", pc: null, fast: null, sure: null, since: performance.now(), connectMs: null };
     this.peers.set(info.id, p);
-    if (!this.rtc) return;
+    if (!this.rtc || isObserver(p)) return;
     p.path = "connecting";
     const pc = new RTCPeerConnection({ iceServers: ICE }); p.pc = pc;
-    pc.onicecandidate = (e) => { if (e.candidate) this.raw({ t: "ice", to: p.id, c: e.candidate.toJSON() }); };
+    pc.onicecandidate = (e) => { if (e.candidate) { const k = e.candidate.type || "?"; this.gathered[k] = (this.gathered[k] || 0) + 1; this.raw({ t: "ice", to: p.id, c: e.candidate.toJSON() }); } };
     const wire = (ch) => {
       if (ch.label === "fast") p.fast = ch; else p.sure = ch;
-      ch.onopen = () => { if (p.fast?.readyState === "open" && p.sure?.readyState === "open") { p.path = "direct"; clearTimeout(p.deadline); this.emit("peers"); } };
+      ch.onopen = () => { if (p.fast?.readyState === "open" && p.sure?.readyState === "open") { p.path = "direct"; p.connectMs = Math.round(performance.now() - p.since); clearTimeout(p.deadline); this.emit("peers"); } };
       ch.onclose = () => { if (p.path === "direct") { p.path = "relay"; this.emit("peers"); } };
       ch.onmessage = (e) => { let msg; try { msg = JSON.parse(e.data); } catch (err) { return; } this.emit("message", { from: p.id, msg }); };
     };
@@ -105,6 +110,25 @@ export class Net extends EventTarget {
     const p = this.peers.get(id); if (!p) return;
     clearTimeout(p.deadline); try { p.pc?.close(); } catch (e) {}
     this.peers.delete(id); this.emit("peers"); this.emit("left", id);
+  }
+
+  // What ICE settled on for each link: candidate types (host = same network, srflx = through the NAT via STUN,
+  // relay = TURN), transport, and the measured round trip.
+  async linkStats() {
+    const out = {};
+    for (const p of this.peers.values()) {
+      if (!p.pc || isObserver(p)) continue;
+      const r = { ice: p.pc.iceConnectionState, connectMs: p.connectMs };
+      try {
+        const st = await p.pc.getStats(); let pair = null;
+        st.forEach((v) => { if (v.type === "transport" && v.selectedCandidatePairId) pair = st.get(v.selectedCandidatePairId); });
+        if (!pair) st.forEach((v) => { if (v.type === "candidate-pair" && v.nominated && v.state === "succeeded") pair = v; });
+        if (pair) { const l = st.get(pair.localCandidateId), rm = st.get(pair.remoteCandidateId);
+          Object.assign(r, { local: l?.candidateType, remote: rm?.candidateType, proto: l?.protocol, relayProto: l?.relayProtocol, rttMs: pair.currentRoundTripTime != null ? Math.round(pair.currentRoundTripTime * 1000) : null }); }
+      } catch (e) { r.err = String(e.message || e); }
+      out[p.id] = r;
+    }
+    return out;
   }
 
   // fast: unordered, may drop (car positions); sure: ordered and reliable (start, finish, bye)

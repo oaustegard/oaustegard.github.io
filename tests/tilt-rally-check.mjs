@@ -23,7 +23,9 @@ const srv = http.createServer((q, r) => {
 });
 await new Promise((ok) => srv.listen(0, "127.0.0.1", ok));
 const base = `http://127.0.0.1:${srv.address().port}/games/tilt-rally/`;
-const b = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-angle=swiftshader", "--use-webgpu-adapter=swiftshader", "--disable-features=WebRtcHideLocalIpsWithMdns"] });
+const b = await chromium.launch({ args: ["--enable-unsafe-webgpu", "--enable-features=Vulkan", "--use-vulkan=swiftshader", "--use-angle=swiftshader", "--use-webgpu-adapter=swiftshader", "--disable-features=WebRtcHideLocalIpsWithMdns",
+  // several pages race at once in "multi": without these, every page but one is throttled to about a frame a second
+  "--disable-background-timer-throttling", "--disable-renderer-backgrounding", "--disable-backgrounding-occluded-windows"] });
 const what = process.argv[2] || "math";
 let failed = false;
 const check = (name, ok, detail = "") => { console.log((ok ? "ok   " : "FAIL ") + name + (detail ? "  " + detail : "")); if (!ok) failed = true; };
