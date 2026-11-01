@@ -12,6 +12,7 @@
 //   node tests/tilt-rally-check.mjs circuit   the Nürburgring GP (tracks/nurburgring-gp.json) loads, is credited, and the autopilot races it
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
+//   node tests/tilt-rally-check.mjs damage  Car damage on Monaco: barrier hits raise it, it costs top speed, the car shows it; off changes nothing
 import { createRequire } from "node:module";
 const { chromium } = createRequire(import.meta.url)("playwright");
 import http from "node:http"; import fs from "node:fs"; import path from "node:path"; import { fileURLToPath } from "node:url";
@@ -409,6 +410,66 @@ if (what === "circuit") {
     check(`${track}: no page or WebGPU errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.close();
   }
+}
+
+if (what === "damage") {
+  // Monaco with Car damage on, through the start screen: the HUD shows the meter. Then, on the engine directly, the
+  // player alone on the grid weaves from barrier to barrier; the same weave with the option off must leave no trace.
+  const page = await b.newPage({ viewport: { width: 844, height: 390 } }), errors = [];
+  page.on("pageerror", (e) => errors.push(e.message)); page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+  await page.addInitScript(() => localStorage.setItem("tilt-rally-options", JSON.stringify({ damage: true, backseat: false, sound: false })));
+  await page.goto(base + "index.html?track=monaco");
+  await waitFor(page, () => /OpenStreetMap/.test(document.getElementById("status").textContent));
+  check("the Car damage option is remembered", await page.evaluate(() => document.getElementById("damage").checked));
+  await page.click("#start");
+  await waitFor(page, () => window.__game().state === "race");
+  check("the damage meter is on the HUD", await page.isVisible("#dmgChip"));
+  const run = (damage, preset = null) => page.evaluate(([damage, preset]) => { window.__hold = true; const E = window.__engine, T = E.T;
+    E.newRace({ damage, roster: [{ kind: "local", name: "You" }] }); for (let i = 0; i < 120 * 4; i++) E.tick(1 / 120);
+    const P = E.player; if (preset) Object.assign(P, preset);
+    const aim = (off) => { const sp = Math.max(0, P.speed), k = (P.idx + Math.round((9 + sp * 0.55) / T.ds)) % T.x.length, tx = T.x[k] - T.tz[k] * off, tz = T.z[k] + T.tx[k] * off;
+      const fx = Math.sin(P.h), fz = Math.cos(P.h), dx = tx - P.x, dz = tz - P.z; return Math.max(-1, Math.min(1, Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz) * 2.6)); };
+    const hits = []; let vmax = 0, was = false;
+    // weave: 30 s aimed 10 m to alternate sides of the centre line, 4 s each way (the barriers stand 5.5 m out)
+    for (let i = 0; i < 120 * 30 && !preset; i++) { E.input.steer = aim(Math.floor(i / 480) % 2 ? 10 : -10); E.input.thr = 1; const d0 = P.dmg; E.tick(1 / 120);
+      if (P.onWall && !was) hits.push([Math.round(P.speed * 3.6), 0]); if (hits.length && P.dmg > d0) hits[hits.length - 1][1] = +(hits[hits.length - 1][1] + P.dmg - d0).toFixed(3); was = P.onWall; }
+    const after = { dmg: P.dmg, zones: [P.dmgF, P.dmgB, P.dmgP, P.dmgN].map((v) => +v.toFixed(2)) };
+    // then 20 s of clean full-gas driving on the racing line from where the weave left the car, fastest speed reached
+    E.newRace({ damage, roster: [{ kind: "local", name: "You" }] }); for (let i = 0; i < 120 * 4; i++) E.tick(1 / 120);
+    // the damage is frozen at what the weave left (E.damage off), so scrapes on this drive don't add to it
+    E.damage = false; const Q = E.player; Object.assign(Q, { dmg: after.dmg, dmgF: after.zones[0], dmgB: after.zones[1], dmgP: after.zones[2], dmgN: after.zones[3] }, preset || {});
+    for (let i = 0; i < 120 * 20; i++) { const sp = Math.max(0, Q.speed), k = (Q.idx + Math.round((9 + sp * 0.55) / T.ds)) % T.x.length, fx = Math.sin(Q.h), fz = Math.cos(Q.h), dx = T.x[k] - Q.x, dz = T.z[k] - Q.z;
+      E.input.steer = Math.max(-1, Math.min(1, Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz) * 2.6)); E.input.thr = 1; E.tick(1 / 120); vmax = Math.max(vmax, Q.speed); }
+    return { ...after, hits, vmax: vmax * 3.6, x: Q.x, z: Q.z, idx: Q.idx }; }, [damage, preset]);
+  const on = await run(true), off = await run(false), clean = await run(true, { dmg: 0, dmgF: 0, dmgB: 0, dmgP: 0, dmgN: 0 }), wreck = await run(true, { dmg: 1, dmgF: 1, dmgB: 1, dmgP: 1, dmgN: 1 });
+  console.log("weave, damage on: hits [km/h, damage]", JSON.stringify(on.hits), "-> damage", on.dmg.toFixed(2), "zones F/B/+x/-x", JSON.stringify(on.zones));
+  console.log("20 s full gas, top speed: clean", clean.vmax.toFixed(1), "| after the weave", on.vmax.toFixed(1), "| wrecked", wreck.vmax.toFixed(1), "| option off", off.vmax.toFixed(1), "km/h");
+  check("barrier hits raise the damage (a weave of hard hits ends between 0.3 and 0.95)", on.dmg > 0.3 && on.dmg < 0.95, on.dmg.toFixed(2) + " from " + on.hits.length + " hits");
+  check("the damage lands on the flanks that hit", on.zones[2] + on.zones[3] > on.zones[0] + on.zones[1], JSON.stringify(on.zones));
+  check("a damaged car's top speed drops", on.vmax < clean.vmax - 1, clean.vmax.toFixed(1) + " -> " + on.vmax.toFixed(1) + " km/h");
+  check("a wrecked car loses no more than about 10% of its top speed", wreck.vmax > clean.vmax * 0.88 && wreck.vmax < clean.vmax * 0.97, (wreck.vmax / clean.vmax * 100).toFixed(1) + "%");
+  check("with the option off, the same weave leaves no damage", off.dmg === 0 && off.zones.every((v) => v === 0), JSON.stringify(off.zones));
+  check("with the option off, the car drives exactly as an undamaged one", off.vmax === clean.vmax && off.x === clean.x && off.z === clean.z, off.vmax.toFixed(2) + " vs " + clean.vmax.toFixed(2));
+  // the look: a damaged car from behind, with the engine smoking
+  await page.evaluate(() => { document.getElementById("hud").hidden = true; const G = window.__engine; G.newRace({ damage: true, roster: [{ kind: "local", name: "You" }] }); for (let i = 0; i < 120 * 4; i++) G.tick(1 / 120);
+    Object.assign(G.player, { dmg: 0.9, dmgF: 0.9, dmgB: 0.5, dmgP: 0.8, dmgN: 0.3 });
+    const P = G.player, cv = document.getElementById("view"), ctx = cv.getContext("webgpu");
+    P.autopilot = true;
+    for (let k = 0; k < 60; k++) { for (let j = 0; j < 8; j++) G.tick(1 / 120); G.render(ctx.getCurrentTexture().createView(), cv.width, cv.height, 1 / 15); }
+    const f = [Math.sin(P.h), Math.cos(P.h)], r = [-Math.cos(P.h), Math.sin(P.h)], eye = [P.x + r[0] * 2.4 - f[0] * 5.2, P.y + 1.6, P.z + r[1] * 2.4 - f[1] * 5.2];
+    G.render(ctx.getCurrentTexture().createView(), cv.width, cv.height, 0.05, { eye, look: [P.x, P.y + 0.6, P.z] }); return G.device.queue.onSubmittedWorkDone(); });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, "damage.png") });
+  await page.evaluate(() => { const G = window.__engine, P = G.player, cv = document.getElementById("view"), ctx = cv.getContext("webgpu");
+    const f = [Math.sin(P.h), Math.cos(P.h)], r = [-Math.cos(P.h), Math.sin(P.h)], eye = [P.x - r[0] * 3.4 + f[0] * 4.4, P.y + 1.3, P.z - r[1] * 3.4 + f[1] * 4.4];
+    G.render(ctx.getCurrentTexture().createView(), cv.width, cv.height, 0.01, { eye, look: [P.x, P.y + 0.6, P.z] }); return G.device.queue.onSubmittedWorkDone(); });
+  await page.waitForTimeout(400);
+  await page.screenshot({ path: path.join(OUT, "damage-front.png") });
+  const said = await page.evaluate(() => { document.getElementById("backseat").checked = true; const B = window.__backseat, P = window.__engine.player; B.log.length = 0;
+    P.dmg = 0.3; for (let i = 0; i < 300; i++) B.step(1 / 60); P.dmg = 0.6; for (let i = 0; i < 300; i++) B.step(1 / 60); P.dmg = 0.85; for (let i = 0; i < 300; i++) B.step(1 / 60);
+    return B.log.map((y) => y.kind); });
+  check("the back-seat driver speaks up past 50% and again past 80%, once each", said.filter((k) => k === "wrecked").length === 1 && said.filter((k) => k === "wreck").length === 1, JSON.stringify(said));
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
 await b.close(); srv.close();

@@ -173,13 +173,29 @@ struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n
 // One shader for everything instanced. Vertex colour alpha is the material: 1 paint (takes the instance tint),
 // 0.75 lamp, 0.5 glass, 0.25 wheel rim, 0 matte. Instance tint alpha says what the instance is: >= 1 a car body
 // (1 + race number + 0.9 x brake), 0.5..1 a wheel, below 0.5 scenery.
+// The instance matrix's bottom row is always (0, 0, 0, 1), so it is rebuilt here and a car body uses those four
+// slots for its damage by zone: front (+z), rear (-z), the +x flank and the -x flank, each 0..1.
 const MESH = COMMON + /* wgsl */`
 struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n: vec3f, @location(2) c: vec3f,
-  @location(3) @interpolate(flat) mat: f32, @location(4) @interpolate(flat) kind: f32, @location(5) op: vec3f, @location(6) @interpolate(flat) tint: vec3f };
+  @location(3) @interpolate(flat) mat: f32, @location(4) @interpolate(flat) kind: f32, @location(5) op: vec3f, @location(6) @interpolate(flat) tint: vec3f,
+  @location(7) @interpolate(flat) dz: vec4f };
+// how much of the damage reaches this point of the body: each zone fades in toward its own end or flank
+fn dmgAt(p: vec3f, dz: vec4f) -> f32 {
+  return clamp(dz.x * smoothstep(0.4, 2.1, p.z) + dz.y * smoothstep(-0.4, -2.1, p.z) + dz.z * smoothstep(0.25, 0.9, p.x) + dz.w * smoothstep(-0.25, -0.9, p.x), 0.0, 1.0); }
 @vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) c: vec4f,
               @location(3) m0: vec4f, @location(4) m1: vec4f, @location(5) m2: vec4f, @location(6) m3: vec4f, @location(7) tint: vec4f) -> VO {
-  let m = mat4x4f(m0, m1, m2, m3); let wp = m * vec4f(p, 1.0);
-  var o: VO; o.cp = u.vp * wp; o.wp = wp.xyz; o.n = (m * vec4f(n, 0.0)).xyz; o.op = p; o.tint = tint.rgb;
+  let m = mat4x4f(vec4f(m0.xyz, 0.0), vec4f(m1.xyz, 0.0), vec4f(m2.xyz, 0.0), vec4f(m3.xyz, 1.0));
+  let dz = select(vec4f(0.0), vec4f(m0.w, m1.w, m2.w, m3.w), tint.a >= 1.0);
+  // dents: a smooth field of position (so faces that share an edge stay joined), pushed in from the side that was hit
+  var q = p;
+  if (dot(dz, dz) > 0.0) {
+    let dn = 0.35 + 0.65 * vnoise(p.zy * 3.1 + p.x * 1.7);
+    q.z -= dz.x * smoothstep(0.9, 2.25, p.z) * 0.14 * dn; q.z += dz.y * smoothstep(-0.9, -2.25, p.z) * 0.12 * dn;
+    q.x -= dz.z * smoothstep(0.4, 0.95, p.x) * 0.09 * dn; q.x += dz.w * smoothstep(-0.4, -0.95, p.x) * 0.09 * dn;
+    q.y -= dmgAt(p, dz) * smoothstep(0.7, 1.25, p.y) * 0.05 * dn;
+  }
+  let wp = m * vec4f(q, 1.0);
+  var o: VO; o.cp = u.vp * wp; o.wp = wp.xyz; o.n = (m * vec4f(n, 0.0)).xyz; o.op = p; o.tint = tint.rgb; o.dz = dz;
   o.c = select(c.rgb, tint.rgb * c.rgb, c.a > 0.9); o.mat = c.a; o.kind = tint.a; return o; }
 fn seg7(p: vec2f, d: i32) -> bool {
   var masks = array<u32, 10>(0x3Fu, 0x06u, 0x5Bu, 0x4Fu, 0x66u, 0x6Du, 0x7Du, 0x07u, 0x7Fu, 0x6Fu);
@@ -208,6 +224,14 @@ fn seg7(p: vec2f, d: i32) -> bool {
     let q = vec2f(-sign(i.op.x) * (i.op.z + 0.15), i.op.y - 0.5);
     if (sx > 0.6 && length(q) < 0.22) { base = vec3f(0.96, 0.96, 0.94); if (seg7(q / vec2f(0.075, 0.12), i32(floor(i.kind)) - 1)) { base = vec3f(0.05); } }
   }
+  // damage: paint darkened with grime and dulled, scraped through to grey primer in streaks along the body
+  let dmg = select(0.0, dmgAt(i.op, i.dz), car);
+  if (dmg > 0.0 && mat > 0.9) {
+    let grime = vnoise(i.op.zy * 6.0 + i.op.x * 3.0);
+    base = mix(base, base * 0.5 + vec3f(0.05, 0.045, 0.04), dmg * (0.45 + 0.4 * grime));
+    let scr = vnoise(vec2f(i.op.z * 2.2, i.op.y * 38.0 + i.op.x * 9.0)) * vnoise(i.op.zy * vec2f(1.3, 5.0));
+    if (scr * smoothstep(0.0, 0.3, dmg) > 0.55 - dmg * 0.3) { base = mix(vec3f(0.42, 0.42, 0.4), vec3f(0.62, 0.61, 0.58), grime); }
+  }
   if (wheel && mat > 0.2 && mat < 0.3) {   // five-spoke rim: dark between the spokes, polished on them
     let r = length(i.op.yz); let ang = atan2(i.op.y, i.op.z);
     if (!(cos(ang * 5.0) > 0.35 || r < 0.06 || r > 0.205)) { base = vec3f(0.05); mat = 0.0; }
@@ -216,7 +240,8 @@ fn seg7(p: vec2f, d: i32) -> bool {
   let h = normalize(u.sun.xyz + v); let nh = max(dot(n, h), 0.0); let sunv = max(dot(n, u.sun.xyz), 0.0);
   var col: vec3f;
   if (mat > 0.9 && car) {                     // clear-coated paint
-    col = lit(n, base * 0.85) + env(r) * (0.05 + fres * 0.85) + vec3f(1.0, 0.95, 0.85) * pow(nh, 160.0) * 2.5 * step(0.0, sunv);
+    let gloss = 1.0 - 0.8 * dmg;
+    col = lit(n, base * 0.85) + env(r) * (0.05 + fres * 0.85) * gloss + vec3f(1.0, 0.95, 0.85) * pow(nh, mix(160.0, 30.0, dmg)) * 2.5 * gloss * step(0.0, sunv);
   } else if (mat > 0.6 && mat < 0.9) {        // lamps; tail lamps brighten with the brake
     let brake = fract(i.kind);
     col = base * select(1.8, 1.4 + brake * 4.0, base.r > base.g * 2.0 && car);
@@ -270,8 +295,9 @@ struct VO { @builtin(position) cp: vec4f, @location(0) q: vec2f, @location(1) li
   let wp = pl.xyz + u.right.xyz * q.x * size + u.up.xyz * q.y * size; o.wp = wp;
   o.cp = u.vp * vec4f(wp, 1.0); return o; }
 @fragment fn fs(i: VO) -> @location(0) vec4f {
-  let a = (1.0 - smoothstep(0.2, 1.0, length(i.q))) * i.life * select(0.30, 0.24, i.kind > 0.5);
-  let base = select(vec3f(0.86, 0.86, 0.86), vec3f(0.62, 0.52, 0.38), i.kind > 0.5);
+  // kind 0 tyre smoke, 1 dust, 2 smoke from a damaged engine (darker and thicker)
+  let a = (1.0 - smoothstep(0.2, 1.0, length(i.q))) * i.life * select(select(0.30, 0.24, i.kind > 0.5), 0.34, i.kind > 1.5);
+  let base = select(select(vec3f(0.86, 0.86, 0.86), vec3f(0.62, 0.52, 0.38), i.kind > 0.5), vec3f(0.24, 0.24, 0.25), i.kind > 1.5);
   return vec4f(fogged(lit(vec3f(0.0, 1.0, 0.0), base), i.wp), a); }
 `;
 const SMOKE_SIM = /* wgsl */`
@@ -638,14 +664,29 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const nx = -T.tz[idx], nz = T.tx[idx], x = T.x[idx] + nx * side * 2.6, z = T.z[idx] + nz * side * 2.6;
     return { ...spec, ai, x, z, y: T.y[idx], h: Math.atan2(T.tx[idx], T.tz[idx]), vx: 0, vz: 0, idx, lat: side * 2.6, surf: 0, lap: 0, half: false,
       steer: 0, thr: 0, yawRate: 0, slip: 0, pitch: 0, roll: 0, lean: 0, spin: 0, speed: 0, lapStart: 0, best: Infinity, lapTimes: [], done: false, finish: 0, prog: idx - M,
-      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false };
+      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false,
+      dmg: 0, dmgF: 0, dmgB: 0, dmgP: 0, dmgN: 0 };
+  }
+  // Car damage (an option): impact speed past 2 m/s, squared, so a hard barrier hit (100 km/h at 30 degrees) costs about a third and a
+  // head-on crash between two cars most of it. (dx, dz) points from the car toward what it hit; the share each zone
+  // takes is the square of that direction in the body's frame (mesh +x is the car's left, +z its nose).
+  function hurt(c, impact, dx, dz, scrape = 0) {
+    if (!E.damage || c.remote) return;
+    const amt = Math.max(0, impact - 2) ** 2 / 400 + scrape; if (amt <= 0) return;
+    const fx = Math.sin(c.h), fz = Math.cos(c.h), l = Math.hypot(dx, dz) || 1, lx = (dx * fz - dz * fx) / l, lz = (dx * fx + dz * fz) / l;
+    c.dmg = Math.min(1, c.dmg + amt);
+    const z = amt * 1.6;
+    c.dmgF = Math.min(1, c.dmgF + z * Math.max(0, lz) ** 2); c.dmgB = Math.min(1, c.dmgB + z * Math.max(0, -lz) ** 2);
+    c.dmgP = Math.min(1, c.dmgP + z * Math.max(0, lx) ** 2); c.dmgN = Math.min(1, c.dmgN + z * Math.max(0, -lx) ** 2);
   }
   function stepCar(c, dt) {
     const T = E.T;
     const fx = Math.sin(c.h), fz = Math.cos(c.h), rx = -fz, rz = fx;
     let vf = c.vx * fx + c.vz * fz, vl = c.vx * rx + c.vz * rz;
     const pr = probe(c.x, c.z, c.idx), surf = pr.surf;
-    const TU = E.tune, grip = TU.grip[surf] * c.skill, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1), roll = [0.35, 1.2, 3.2][surf];
+    // damage takes up to 10% off grip and top speed, and past half a steady pull toward the side that took the most
+    const worn = 1 - 0.1 * c.dmg, drift = c.dmg > 0.5 ? (c.dmgN >= c.dmgP ? 1 : -1) * (0.02 + 0.04 * (c.dmg - 0.5) / 0.5) : 0;
+    const TU = E.tune, grip = TU.grip[surf] * c.skill * worn, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1) * worn, roll = [0.35, 1.2, 3.2][surf];
     // Stability assist (player only): when the wheel asks for more turn than the tyres can give at this speed, ease
     // the throttle and scrub speed, so holding full gas through a fast bend runs wide less instead of off the road.
     const sp0 = Math.abs(vf), geom0 = sp0 * Math.tan(0.6) / 2.6, lim0 = grip / Math.max(sp0, 0.5);
@@ -669,7 +710,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     a -= 9.81 * (hf - hb) / 2.8;
     const nvf = vf + a * dt; vf = (c.thr === 0 && Math.sign(nvf) !== Math.sign(vf) && Math.abs(vf) < 1) ? 0 : nvf;
     const sp = Math.abs(vf), geom = sp * Math.tan(0.6) / 2.6, lim = grip / Math.max(sp, 0.5);
-    c.yawRate = lerp(c.yawRate, c.steer * Math.min(geom, lim * 1.06) * Math.sign(vf), 1 - Math.exp(-dt * 12));
+    c.yawRate = lerp(c.yawRate, clamp(c.steer + drift, -1, 1) * Math.min(geom, lim * 1.06) * Math.sign(vf), 1 - Math.exp(-dt * 12));
     c.h -= c.yawRate * dt;
     vl *= Math.exp(-dt * TU.side[surf]);
     const nfx = Math.sin(c.h), nfz = Math.cos(c.h);
@@ -681,6 +722,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
       const sg = Math.sign(p2.lat), nx = -T.tz[p2.idx], nz = T.tx[p2.idx], over = Math.abs(p2.lat) - (WALL - 1.0);
       c.x -= nx * sg * over; c.z -= nz * sg * over;
       const vn = (c.vx * nx + c.vz * nz) * sg; if (vn > 0) { c.vx -= nx * sg * vn * 1.3; c.vz -= nz * sg * vn * 1.3; }
+      hurt(c, Math.max(0, vn), nx * sg, nz * sg, dt * Math.hypot(c.vx, c.vz) * 0.0003);
       c.vx *= 1 - dt * 1.8; c.vz *= 1 - dt * 1.8;
       if (!c.onWall && c === E.player) { E.bump = 0.3; emit("wall"); }
       c.onWall = true; p2 = probe(c.x, c.z, p2.idx);
@@ -707,7 +749,8 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     if (A.remote && B.remote) continue;
     if (d > 0.01 && d < 2.4) { const nx = dx / d, nz = dz / d, wa = A.remote ? 0 : B.remote ? 2 : 1, wb = 2 - wa, push = (2.4 - d) / 2;
       A.x -= nx * push * wa; A.z -= nz * push * wa; B.x += nx * push * wb; B.z += nz * push * wb;
-      const rv = (B.vx - A.vx) * nx + (B.vz - A.vz) * nz; if (rv < 0) { const j = -rv * 0.6; A.vx -= nx * j * wa; A.vz -= nz * j * wa; B.vx += nx * j * wb; B.vz += nz * j * wb; }
+      const rv = (B.vx - A.vx) * nx + (B.vz - A.vz) * nz; if (rv < 0) { const j = -rv * 0.6; A.vx -= nx * j * wa; A.vz -= nz * j * wa; B.vx += nx * j * wb; B.vz += nz * j * wb;
+        hurt(A, -rv, nx, nz); hurt(B, -rv, -nx, -nz); }
       if (A === E.player || B === E.player) { E.bump = 0.25; emit("bump"); } } } }
   function drive(c, dt) {      // the AI: aim at a point down the road in its lane, throttle toward the speed plan
     const T = E.T, sp = Math.max(0, c.speed || 0), look = Math.round((9 + sp * 0.55) / T.ds), i = (c.idx + look) % M;
@@ -715,10 +758,10 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const tx = T.x[i] + -T.tz[i] * c.lane, tz = T.z[i] + T.tx[i] * c.lane, fx = Math.sin(c.h), fz = Math.cos(c.h);
     const dx = tx - c.x, dz = tz - c.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
     // feed-forward: the turn rate the road needs here, as a share of what the tyres allow, plus the aim correction
-    const grip = E.tune.grip[0] * c.skill, cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06);
+    const grip = E.tune.grip[0] * c.skill * (1 - 0.1 * c.dmg), cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06);
     const ff = sp * T.kap[(c.idx + Math.round(4 / T.ds)) % M] / Math.max(cap, 1e-3);
     c.steer = clamp(ff + err * 2.6, -1, 1);
-    const target = T.vlim[(c.idx + Math.round(6 / T.ds)) % M] * (c.ai ? c.skill : 0.97);
+    const target = T.vlim[(c.idx + Math.round(6 / T.ds)) % M] * (c.ai ? c.skill : 0.97) * (1 - 0.1 * c.dmg);
     c.thr = clamp((target - sp) * 0.35, -1, 1);
   }
   function onLap(c) {
@@ -728,7 +771,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     else if (c === E.player) emit("lap", { lap: c.lap, time: t });
   }
   // ---- network: a car as a compact array, and a remote car chasing the last one heard
-  const NET = ["x", "y", "z", "h", "vx", "vz", "speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear"];
+  const NET = ["x", "y", "z", "h", "vx", "vz", "speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear", "dmg", "dmgF", "dmgB", "dmgP", "dmgN"];
   E.snapshot = (c) => [c.slot, ...NET.map((k) => k === "done" ? (c.done ? 1 : 0) : k === "best" ? (c.best === Infinity ? -1 : +c.best.toFixed(3)) : typeof c[k] === "number" ? +c[k].toFixed(k === "x" || k === "z" || k === "y" ? 2 : 3) : 0)];
   E.applySnapshot = (a, age = 0) => {
     const c = E.cars?.find((q) => q.slot === a[0] && q.remote); if (!c) return;
@@ -742,6 +785,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     if (Math.hypot(tx - c.x, tz - c.z) > 25) { c.x = tx; c.z = tz; } else { c.x = lerp(c.x, tx, k); c.z = lerp(c.z, tz, k); }
     c.y = lerp(c.y, n.y, k); c.h += wrapAng(n.h - c.h) * k; c.vx = n.vx; c.vz = n.vz;
     for (const key of ["speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear"]) c[key] = n[key];
+    for (const key of ["dmg", "dmgF", "dmgB", "dmgP", "dmgN"]) c[key] = n[key] || 0;     // an older page sends none
     c.spin += c.speed * dt / 0.34; const pr = probe(c.x, c.z, c.idx); c.idx = pr.idx; c.surf = pr.surf;
   }
   E.dropCar = (slot) => { if (E.cars) E.cars = E.cars.filter((c) => c.slot !== slot); };
@@ -755,9 +799,11 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     if (dir < 0 && Math.max(0, c.speed) > GEARS[g - 1] * 1.02) return false;
     c.gear = g; c.cut = 0.12; return true;
   };
-  // roster: one entry per grid slot, front row first: { kind: "local" | "remote" | "ai", name, id }. Without one, it is you
+  // damage: cars take damage from barriers and each other (computer cars too; a remote car's comes from its own phone).
+// roster: one entry per grid slot, front row first: { kind: "local" | "remote" | "ai", name, id }. Without one, it is you
   // against three computer cars. A remote slot is a car another phone drives (or, on a guest, a computer car the host runs).
-  E.newRace = ({ autopilot = false, manual = false, roster = null } = {}) => {
+  E.newRace = ({ autopilot = false, manual = false, damage = false, roster = null } = {}) => {
+    E.damage = !!damage;
     roster = roster || [{ kind: "local", name: "You" }, { kind: "ai" }, { kind: "ai" }, { kind: "ai" }];
     E.cars = roster.map((r, k) => ({ r, k })).reverse().map(({ r, k }) => {
       const c = newCar(k, { ...CARS[k], name: r.name || CARS[k].name }, r.kind === "ai");
@@ -835,15 +881,19 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     // cars, wheels and shadows
     const ci = new Float32Array(8 * 20), wi = new Float32Array(32 * 20), bl = new Float32Array(8 * 8);
     E.cars.forEach((c, n) => { const { body, wheels } = carMatrices(c);
+      body[3] = c.dmgF || 0; body[7] = c.dmgB || 0; body[11] = c.dmgP || 0; body[15] = c.dmgN || 0;     // damage by zone in the matrix's spare row
       ci.set([...body, ...c.colour, 1 + c.number + 0.9 * clamp(-c.thr, 0, 1)], n * 20);   // tail lamps follow the brake pressure
       wheels.forEach((m, k) => wi.set([...m, 1, 1, 1, 0.6], (n * 4 + k) * 20));
       bl.set([c.x, c.y, c.z, c.h, 1.25, 2.7, 0.6, 0], n * 8); });
     res.car.k = E.cars.length; res.wheel.k = E.cars.length * 4;
     device.queue.writeBuffer(res.car.inst, 0, ci); device.queue.writeBuffer(res.wheel.inst, 0, wi); device.queue.writeBuffer(res.blob, 0, bl);
-    // smoke and dust from the rear wheels
+    // smoke and dust from the rear wheels, and smoke from a damaged engine; the player's car takes the emitters first
     const pd = new DataView(E.parts.data); let ne = 0;
     pd.setFloat32(0, dt, true); pd.setFloat32(4, E.clock, true);
-    for (const c of E.cars) { const s = Math.abs(c.speed || 0), dust = c.surf === 2 ? Math.min(1, s / 15) : c.surf === 1 ? Math.min(1, s / 25) * 0.6 : 0, smoke = c.slip > 2.5 ? Math.min(1, (c.slip - 2.5) / 4) : 0;
+    for (const c of [P, ...E.cars.filter((q) => q !== P)]) {
+      if (c.dmg > 0.2 && ne < 8) { const fx2 = Math.sin(c.h), fz2 = Math.cos(c.h), o = 16 + ne * 32;
+        [c.x + fx2 * 1.5, c.y + 0.95, c.z + fz2 * 1.5, 0.02 + 0.14 * ((c.dmg - 0.2) / 0.8) ** 1.5, c.vx, 0, c.vz, 2].forEach((v, q) => pd.setFloat32(o + q * 4, v, true)); ne++; }
+      const s = Math.abs(c.speed || 0), dust = c.surf === 2 ? Math.min(1, s / 15) : c.surf === 1 ? Math.min(1, s / 25) * 0.6 : 0, smoke = c.slip > 2.5 ? Math.min(1, (c.slip - 2.5) / 4) : 0;
       const rate = Math.max(dust * 1.6, smoke * 2.2); if (rate <= 0.01 || ne >= 8) continue;
       for (const sx of [-0.9, 0.9]) { if (ne >= 8) break; const fx2 = Math.sin(c.h), fz2 = Math.cos(c.h), o = 16 + ne * 32;
         [c.x - fx2 * 1.4 - fz2 * sx, c.y + 0.25, c.z - fz2 * 1.4 + fx2 * sx, rate, c.vx, 0, c.vz, dust > smoke ? 1 : 0].forEach((v, q) => pd.setFloat32(o + q * 4, v, true)); ne++; } }

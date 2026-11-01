@@ -54,6 +54,16 @@ Street circuits need more, because their one-way tags follow traffic and the map
 
 Six gears; the limiter cuts in at 58, 94, 130, 162, 194 and 230 km/h. Below 55% of the limit speed the engine bogs, except in first, where the clutch slips. The automatic box changes up at 93% and down when the lower gear would run under 80%, so it stays where the engine pulls. With Manual gears on, each change cuts drive for 0.12 s while the clutch works. A downshift that would push the engine past the limiter is refused, and the paddle flashes red. Past the limiter, engine braking stops the car from running away downhill. The options you pick are remembered on that device.
 
+## Car damage
+
+An option on the start screen, off by default and remembered with the others. With it on, every car takes damage from 0 to 100%: from barriers (the street circuits) and from other cars. Only the speed of the impact counts, past a light touch: a glancing scrape costs almost nothing, a hit into the Monaco barrier at 100 km/h and 30° costs about a third, and a few of those, or one big crash between two cars, leave the car at 60 to 80%. Scraping along a barrier wears it slowly too.
+
+- **Handling:** at full damage the car has 10% less grip and top speed, in proportion below that. Past 50% it pulls steadily toward the side that took the most, so the wheel needs holding off centre.
+- **Looks:** the engine smokes, thicker as damage grows; the paint darkens and dulls, scrapes through to grey primer, and dents in where the hits landed (front, rear and either flank are tracked separately). The damage by zone rides in the spare bottom row of each car's instance matrix, so the mesh shader needs no extra buffer.
+- **HUD:** a small Damage bar next to the position, red past half. The back-seat driver has something to say past 50% and again past 80%.
+- **Who:** the computer cars take damage too. In a race with friends each phone works out its own car's damage (and the host its computer cars') and sends it with the car, so everyone sees the same dents and smoke whatever their own setting.
+- Damage resets with each new race; going back to the track after leaving it doesn't repair anything.
+
 ## The back-seat driver
 
 An option on the start screen, on by default. It shouts in big text, and out loud when Sound is on. Ahead of you, it works out the hardest braking the next 2.5 seconds of road will need, using the same speed plan the computer cars drive to. Moderate braking gets "Slow down!", and anything harder than about 1.1 g gets "BRAKE!". Behind you, it reacts to leaving the road, going the wrong way, bumps, and places won or lost. If you crawl along well under what the road allows, it tells you to go. It leaves gaps between shouts and won't repeat the same complaint within six seconds, though "BRAKE!" can still interrupt.
@@ -91,6 +101,7 @@ node tests/tilt-rally-check.mjs pedals    # thumb position on a pedal sets its s
 node tests/tilt-rally-check.mjs circuit   # the Nürburgring GP and Monaco load, are credited, and the autopilot races both inside the road edges
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
+node tests/tilt-rally-check.mjs damage    # Car damage on Monaco: a barrier weave raises it, it costs top speed (about 8% at full), off changes nothing; stills of a wrecked car
 ```
 
 SwiftShader is a software stand-in for a GPU, and the tilt check uses synthetic orientation events, so these confirm the logic but not how the game feels in the hand.
