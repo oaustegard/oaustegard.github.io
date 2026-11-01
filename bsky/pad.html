@@ -204,6 +204,7 @@
     <button id="publishBtn">Publish as string…</button>
     <button id="padListBtn">Pads…</button>
   </div>
+  <p class="warn" id="connHint" hidden></p>
   <p class="warn">Content is stored only in this browser and shared only peer-to-peer, until you explicitly Publish.</p>
 </footer>
 
@@ -434,7 +435,10 @@ ymeta.observe(() => {
 
 /* ---------------- RTC wiring ---------------- */
 
-const rtc = new AtprotoRTC(); // defaults: com.austegard.rtc.signal, google STUN
+/* iceServersUrl: short-lived TURN credentials from workers/turn-creds, so
+   peers behind carrier/office NATs can still connect through a relay (which
+   only sees DTLS ciphertext). Falls back to STUN if the worker is down. */
+const rtc = new AtprotoRTC({ iceServersUrl: 'https://turn-creds.austegard.workers.dev/' });
 /* Resume a session persisted by this or any other /bsky utility (shared
    'bsky_session' localStorage convention — tokens only, never the password).
    Fire-and-forget: the UI works logged-out; this just skips the dialog. */
@@ -520,6 +524,38 @@ rtc.on('statechange', (did, peer) => {
   updateStatusUI();
 });
 
+const connHint = document.getElementById('connHint');
+function setHint(text) {
+  connHint.textContent = text || '';
+  connHint.hidden = !text;
+}
+
+/* Guest-side explanation of where the join attempt is. Without it a failed
+   or never-answered join looks exactly like an empty pad. */
+let joinStartedAt = 0;
+let joinHintTimer = null;
+function guestHint() {
+  if (!peerDid || !joinStartedAt) return;
+  const p = rtc.peers.get(peerDid);
+  if (p && p.dc && p.dc.readyState === 'open') { setHint(''); return; }
+  const waited = (Date.now() - joinStartedAt) / 1000;
+  const state = p && p.pc ? p.pc.connectionState : null;
+  if (p && p.unreadable) {
+    setHint("Can't read the host's Bluesky repo, so the connection can't be set up. Check the link.");
+  } else if (state === 'failed') {
+    setHint("Reached the host, but the network blocked a connection between you. Retrying"
+      + (rtc.relayAvailable ? ' (relay included)…' : '. No relay server was available, so networks that block direct connections can\'t be bridged.'));
+  } else if (state === 'connecting' || state === 'new') {
+    setHint(waited > 20
+      ? 'Found the host; the connection is taking a while. Mobile and office networks can be slow to connect.'
+      : 'Found the host; connecting…');
+  } else if (waited > 25) {
+    setHint("No answer from the host yet. The text lives only in the host's browser: they need this pad open, in the foreground, with Share turned on.");
+  } else {
+    setHint('Waiting for the host to answer…');
+  }
+}
+
 function updateStatusUI() {
   let openPeers = 0;
   for (const p of rtc.peers.values()) if (p.dc && p.dc.readyState === 'open') openPeers++;
@@ -528,6 +564,7 @@ function updateStatusUI() {
   statusText.textContent = base + ' · ' + openPeers + ' peer' + (openPeers === 1 ? '' : 's')
     + (rtc.me && rtc.me.handle ? ' · ' + rtc.me.handle : '');
   signOutBtn.hidden = !(rtc.me && rtc.me.did);
+  guestHint();
 }
 
 /* ---------------- login dialog (shared by share/join/publish) ---------------- */
@@ -596,6 +633,7 @@ function startSharing() {
   sharing = true;
   shareBtn.textContent = 'Stop Sharing';
   showShareLink();
+  setHint('Keep this tab open and in front: guests can only sync while it is.');
   updateStatusUI();
 }
 
@@ -605,6 +643,7 @@ async function stopSharing() {
   sharing = false;
   shareBtn.textContent = 'Share';
   hideShareLink();
+  setHint('');
   updateStatusUI();
 }
 
@@ -630,7 +669,13 @@ copyLinkBtn.addEventListener('click', async () => {
 
 /* ---------------- join (guest) flow ---------------- */
 
-if (peerDid) joinBtn.hidden = false;
+if (peerDid) {
+  joinBtn.hidden = false;
+  if (!ytext.length) {
+    textarea.placeholder = "This pad's text lives in the host's browser, not on a server. "
+      + 'Click Join (needs a Bluesky login and app password) while the host has the pad open with Share on.';
+  }
+}
 
 const signOutBtn = document.getElementById('signOutBtn');
 signOutBtn.addEventListener('click', () => {
@@ -648,6 +693,9 @@ joinBtn.addEventListener('click', async () => {
     if (!ok) return;
   }
   rtc.start();
+  joinStartedAt = Date.now();
+  if (!joinHintTimer) joinHintTimer = setInterval(guestHint, 2000);
+  guestHint();
   joinBtn.disabled = true;
   joinBtn.textContent = hasJoinedOnce ? 'Reconnecting…' : 'Joining…';
   try {

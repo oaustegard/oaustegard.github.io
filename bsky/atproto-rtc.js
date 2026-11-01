@@ -42,7 +42,15 @@
  *    and wakes back to `pollMs` when anything needs signaling.
  *
  * @license MIT
- * @version 1.3.0
+ * RELAY FALLBACK (1.4.0):
+ *  `iceServersUrl` names an endpoint returning {iceServers:[...]} (e.g. a
+ *  worker minting short-lived TURN credentials). It is fetched once, lazily,
+ *  before the first RTCPeerConnection; on any failure or timeout the static
+ *  `iceServers` are used, so a dead endpoint degrades to STUN-only rather
+ *  than blocking connections. A TURN relay forwards DTLS ciphertext it
+ *  cannot read; ICE still prefers a direct path when one exists.
+ *
+ * @version 1.4.0
  *
  * @example
  *   import { AtprotoRTC } from '/bsky/atproto-rtc.js';
@@ -182,6 +190,9 @@ export class AtprotoRTC extends Emitter {
    * @param {Object} [opts]
    * @param {string} [opts.collection='com.austegard.rtc.signal']
    * @param {Array}  [opts.iceServers] default: [{urls:'stun:stun.l.google.com:19302'}]
+   * @param {string} [opts.iceServersUrl] endpoint returning {iceServers}; when
+   *                 set, its answer replaces `iceServers` (fallback on failure)
+   * @param {number} [opts.iceServersTimeoutMs=4000] cap on that fetch
    * @param {number} [opts.pollMs=2000] interval while anything needs signaling
    * @param {number} [opts.idlePollMs=15000] interval once every trusted peer
    *                 is connected; any new work wakes the loop back to pollMs
@@ -200,6 +211,11 @@ export class AtprotoRTC extends Emitter {
     this.iceServers  = opts.iceServers !== undefined
       ? opts.iceServers
       : [{ urls: 'stun:stun.l.google.com:19302' }];
+    this.iceServersUrl = opts.iceServersUrl || null;
+    this.iceServersTimeoutMs = opts.iceServersTimeoutMs || 4000;
+    this._icePromise = null;
+    /** true once the fetched ICE config includes a turn:/turns: server */
+    this.relayAvailable = false;
     this.pollMs      = opts.pollMs      || 2000;
     this.idlePollMs  = opts.idlePollMs  || 15000;
     this.maxBackoffMs = opts.maxBackoffMs || 60000;
@@ -511,6 +527,37 @@ export class AtprotoRTC extends Emitter {
     } catch (e) { console.debug('[atproto-rtc][ice] getStats failed:', e.message); }
   }
 
+  /**
+   * Resolve the ICE server list once. With `iceServersUrl` set, fetch it
+   * (bounded by `iceServersTimeoutMs`); any failure keeps the static list.
+   * Never rejects.
+   */
+  resolveIceServers() {
+    if (this._icePromise) return this._icePromise;
+    if (!this.iceServersUrl || typeof fetch === 'undefined') {
+      this._icePromise = Promise.resolve(this.iceServers);
+      return this._icePromise;
+    }
+    const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer = setTimeout(() => { if (ctl) ctl.abort(); }, this.iceServersTimeoutMs);
+    this._icePromise = fetch(this.iceServersUrl, ctl ? { signal: ctl.signal } : {})
+      .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .then((j) => {
+        if (!Array.isArray(j.iceServers) || !j.iceServers.length) throw new Error('no iceServers');
+        this.iceServers = j.iceServers;
+        this.relayAvailable = j.iceServers.some((s) =>
+          [].concat(s.urls).some((u) => /^turns?:/.test(u)));
+        console.debug('[atproto-rtc] fetched iceServers; relay =', this.relayAvailable);
+        return this.iceServers;
+      })
+      .catch((e) => {
+        console.debug('[atproto-rtc] iceServersUrl failed, using static list:', e.message);
+        return this.iceServers;
+      })
+      .finally(() => clearTimeout(timer));
+    return this._icePromise;
+  }
+
   _waitIceComplete(pc) {
     if (pc.iceGatheringState === 'complete') return Promise.resolve();
     return new Promise((resolve) => {
@@ -581,6 +628,7 @@ export class AtprotoRTC extends Emitter {
   }
 
   async _offerTo(did) {
+    await this.resolveIceServers();   /* before the guard: no await between check and p.pc = pc */
     const p = this.peers.get(did);
     if (!p || p.pc) return;
     console.debug('[atproto-rtc] offering to', p.handle);
@@ -607,6 +655,7 @@ export class AtprotoRTC extends Emitter {
   }
 
   async _handleOffer(did, sdp) {
+    await this.resolveIceServers();
     const p = this.peers.get(did);
     if (!p) return;
     if (p.pc && p.pc.connectionState === 'connected') return;  /* already up */
@@ -824,6 +873,7 @@ export class AtprotoRTC extends Emitter {
   start() {
     if (this._running) return;
     this._running = true;
+    this.resolveIceServers();          /* warm it while signaling starts */
     this._abort = typeof AbortController !== 'undefined' ? new AbortController() : null;
     this._poll();
     const loop = async () => {
