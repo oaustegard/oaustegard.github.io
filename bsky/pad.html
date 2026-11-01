@@ -150,6 +150,7 @@
     color: var(--fg);
   }
   #shareLinkInput { width: 320px; max-width: 50vw; }
+  .warn.alert { color: var(--danger); font-weight: 600; }
   .warn {
     font-size: 11px;
     color: var(--muted);
@@ -199,7 +200,7 @@
   <div class="row" id="shareRow">
     <button id="shareBtn">Share</button>
     <button id="signOutBtn" hidden title="Forget the stored session on this browser">Sign out</button>
-    <button id="joinBtn" hidden>Join</button>
+    <button id="joinBtn" hidden>Join to send edits</button>
     <input id="shareLinkInput" type="text" readonly hidden>
     <button id="copyLinkBtn" hidden>Copy link</button>
   </div>
@@ -393,7 +394,9 @@ function diffAndApply(oldStr, newStr) {
   }, LOCAL);
 }
 
+let localOnlyEdits = false;   /* a guest typed before joining: those edits reach nobody */
 textarea.addEventListener('input', () => {
+  if (peerDid && !(outbox && outbox.publishing) && !localOnlyEdits) { localOnlyEdits = true; updateStatusUI(); }
   const newValue = textarea.value;
   diffAndApply(lastValue, newValue);
   lastValue = newValue;
@@ -578,6 +581,7 @@ rtc.on('statechange', (did, peer) => {
 
 const connHint = document.getElementById('connHint');
 function setHint(text) {
+  connHint.classList.toggle('alert', localOnlyEdits && !(outbox && outbox.publishing) && !!text);
   connHint.textContent = text || '';
   connHint.hidden = !text;
 }
@@ -594,7 +598,7 @@ function connectionHint() {
     const st = outbox.status;
     if (st.lastError) parts.push('Bluesky sync problem: ' + st.lastError + '.');
     else if (st.rootFound === false && peerDid) parts.push("The host hasn't published this pad yet.");
-    else if (peerDid && !outbox.publishing) parts.push("Showing the host's text. Join to send your edits back.");
+    else if (peerDid && !outbox.publishing && !localOnlyEdits) parts.push("Showing the host's text. To send your own edits, click Join and sign in with a Bluesky account.");
   }
   if (peerDid && joinStartedAt && !(outbox && outbox.status.rootFound)) {
     const p = rtc.peers.get(peerDid);
@@ -602,6 +606,9 @@ function connectionHint() {
     const state = p && p.pc ? p.pc.connectionState : null;
     if (!open && state === 'failed') parts.push('A live connection to the host is blocked by the network.');
     else if (!open && (Date.now() - joinStartedAt) > 25000) parts.push('No live answer from the host yet.');
+  }
+  if (localOnlyEdits && peerDid && !(outbox && outbox.publishing)) {
+    parts.unshift('Your edits are only on this device and nobody else can see them. Click "Join to send edits" and sign in with a Bluesky account (any handle, with an app password) to send them.');
   }
   return parts.join(' ');
 }
@@ -757,17 +764,16 @@ joinBtn.addEventListener('click', async () => {
   if (!joinHintTimer) joinHintTimer = setInterval(updateStatusUI, 2000);
   updateStatusUI();
   joinBtn.disabled = true;
-  joinBtn.textContent = hasJoinedOnce ? 'Reconnecting…' : 'Joining…';
+  joinBtn.textContent = 'Joined';   /* edits now go to our repo; the live channel below is a bonus */
   try {
     const conn = await rtc.connect(peerDid);
-    conn.on('open', () => { hasJoinedOnce = true; joinBtn.textContent = 'Connected'; updateStatusUI(); });
+    conn.on('open', () => { hasJoinedOnce = true; joinBtn.textContent = 'Joined · live'; updateStatusUI(); });
     /* after a drop this is a reconnect to the SAME pad/peer, not a fresh join —
        label it accordingly */
-    conn.on('close', () => { joinBtn.textContent = hasJoinedOnce ? 'Reconnect' : 'Join'; joinBtn.disabled = false; updateStatusUI(); });
+    conn.on('close', () => { joinBtn.textContent = 'Joined'; updateStatusUI(); });
   } catch (e) {
-    alert('Could not connect: ' + e.message);
-    joinBtn.disabled = false;
-    joinBtn.textContent = hasJoinedOnce ? 'Reconnect' : 'Join';
+    console.debug('[pad] live connection unavailable:', e.message);   /* Bluesky sync still works */
+    joinBtn.textContent = 'Joined';
   }
   updateStatusUI();
 });
