@@ -9,6 +9,7 @@
 //   node tests/tilt-rally-check.mjs controls  touch pedals and manual gears through the on-screen controls
 //   node tests/tilt-rally-check.mjs multi     three players on a local rally-lobby (wrangler dev): direct and relayed links, synced start, positions agree
 //   node tests/tilt-rally-check.mjs pedals    thumb position on a touch pedal sets its strength, in both layouts
+//   node tests/tilt-rally-check.mjs circuit   the Nürburgring GP (tracks/nurburgring-gp.json) loads, is credited, and the autopilot races it
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -372,6 +373,22 @@ if (what === "pedals") {
     check(`${label}: no page errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
     await page.close();
   }
+}
+
+if (what === "circuit") {
+  // A real circuit: the Nürburgring GP from tracks/nurburgring-gp.json, raced by the autopilot.
+  const { page, errors } = await open("index.html?demo&track=nurburgring-gp");
+  await waitFor(page, () => window.__game?.()?.state === "race", 120000);
+  const st = await page.evaluate(() => ({ status: document.getElementById("status").textContent, attr: document.getElementById("attr").textContent, stats: window.__game().stats, pick: document.getElementById("track").value }));
+  console.log(JSON.stringify(st));
+  check("the Nürburgring GP is loaded and credited to OpenStreetMap", /OpenStreetMap/.test(st.attr) && st.pick === "nurburgring-gp", st.attr);
+  check("the lap is about 5.1 km", Math.abs(st.stats.L - 5100) < 60, st.stats.L.toFixed(0) + " m");
+  await waitFor(page, () => window.__game().raceT > 25, 600000);
+  await page.screenshot({ path: path.join(OUT, "circuit.png") });
+  const s2 = await page.evaluate(() => window.__game());
+  for (const c of s2.cars) console.log("  ", c.name, "idx", c.idx, "v", (c.speed * 3.6).toFixed(0), "km/h lat", c.lat.toFixed(1), "surf", c.surf);
+  check("every car is moving and on the road after 25 s", s2.cars.every((c) => c.speed > 5 && Math.abs(c.lat) < 9));
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
 await b.close(); srv.close();

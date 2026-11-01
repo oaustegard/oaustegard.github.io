@@ -32,6 +32,17 @@ Hold the phone the way you want to drive when you press Start engine. That pose 
 
 `node tests/tilt-rally-check.mjs multi` runs three players against a local copy of the Worker (`wrangler dev`): one joins over WebRTC, one with WebRTC removed has to race through the room relay, and one leaves mid-race. It checks that the starts land within 0.3 s and that each phone sees the others' cars within 8 m of where those phones have them. Real phones on mobile data are untested.
 
+## Tracks
+
+**Track** on the start screen picks a generated valley (a new one each time from **New valley**) or a real circuit. `?track=nurburgring-gp` opens one directly. In a race with friends, the host's choice goes to everyone.
+
+- **Nürburgring GP** (5.1 km, 56 m of climb): the Grand Prix circuit from OpenStreetMap relation 38567, with heights from EU-DEM v1.1 (Copernicus) via OpenTopoData. The circuit itself is real; the countryside around it is generated.
+- Map data © OpenStreetMap contributors, under the ODbL. The credit shows on the start screen and under Center wheel during the race.
+
+`tracks/build_track.py` builds a track file from any circuit relation:
+`python3 games/tilt-rally/tracks/build_track.py --relation 38567 --start 50.33489,6.94496 --id nurburgring-gp --name "Nürburgring GP" --out games/tilt-rally/tracks/nurburgring-gp.json`
+It fetches the relation from the OSM API, finds the closed loop through its one-way ways (the race direction), starts the loop nearest `--start` (the start-finish line, here the middle of the pit lane's extent), converts to metres, smooths lightly, and samples the ground height every 15 m. Standard library only.
+
 ## Gears
 
 Six gears; the limiter cuts in at 58, 94, 130, 162, 194 and 230 km/h. Below 55% of the limit speed the engine bogs, except in first, where the clutch slips. The automatic box changes up at 93% and down when the lower gear would run under 80%, so it stays where the engine pulls. With Manual gears on, each change cuts drive for 0.12 s while the clutch works. A downshift that would push the engine past the limiter is refused, and the paddle flashes red. Past the limiter, engine braking stops the car from running away downhill. The options you pick are remembered on that device.
@@ -70,6 +81,7 @@ node tests/tilt-rally-check.mjs backseat  # it shouts before the corner a full-g
 node tests/tilt-rally-check.mjs permission  # the iOS motion prompt comes on the start screen, and Start engine waits for the answer
 node tests/tilt-rally-check.mjs controls  # touch pedals and paddles through the on-screen controls: limiter, upshifts, refused downshift, brake
 node tests/tilt-rally-check.mjs pedals    # thumb position on a pedal sets its strength, in landscape and turned portrait
+node tests/tilt-rally-check.mjs circuit   # the Nürburgring GP loads, is credited, and the autopilot races it on the road
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```

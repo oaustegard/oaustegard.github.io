@@ -62,6 +62,24 @@ export function buildTrack(seed) {
     x[i] = lerp(a[0], b[0], t); z[i] = lerp(a[1], b[1], t); }
   const ph = [rnd() * TAU, rnd() * TAU, rnd() * TAU];
   for (let i = 0; i < M; i++) { const th = i / M * TAU; y[i] = 9 * Math.sin(2 * th + ph[0]) + 6 * Math.sin(3 * th + ph[1]) + 3 * Math.sin(5 * th + ph[2]); }
+  return finishTrack(x, y, z, L, seed);
+}
+
+// A real circuit from tracks/*.json (built by tracks/build_track.py from OpenStreetMap and EU-DEM): points [x east,
+// z south, y up] in metres, closed, starting at the start-finish line in the race direction. Resampled to M points.
+export function buildTrackFromData(doc) {
+  const P = doc.points, n = P.length, cum = [0];
+  for (let i = 1; i <= n; i++) cum.push(cum[i - 1] + Math.hypot(P[i % n][0] - P[i - 1][0], P[i % n][1] - P[i - 1][1]));
+  const L = cum[n], ds = L / M, x = new Float32Array(M), z = new Float32Array(M), y = new Float32Array(M);
+  let j = 0;
+  for (let i = 0; i < M; i++) { const s = i * ds; while (cum[j + 1] < s) j++; const t = (s - cum[j]) / (cum[j + 1] - cum[j]), a = P[j], b = P[(j + 1) % n];
+    x[i] = lerp(a[0], b[0], t); z[i] = lerp(a[1], b[1], t); y[i] = lerp(a[2], b[2], t); }
+  const T = finishTrack(x, y, z, L, doc.id);
+  return Object.assign(T, { name: doc.name, attribution: doc.attribution });
+}
+
+function finishTrack(x, y, z, L, seed) {
+  const ds = L / M;
   const tx = new Float32Array(M), tz = new Float32Array(M), kap = new Float32Array(M), bank = new Float32Array(M);
   for (let i = 0; i < M; i++) { const a = (i + M - 1) % M, b = (i + 1) % M; const dx = x[b] - x[a], dz = z[b] - z[a], l = Math.hypot(dx, dz); tx[i] = dx / l; tz[i] = dz / l; }
   for (let i = 0; i < M; i++) { const a = (i + M - 4) % M, b = (i + 4) % M; kap[i] = (tx[a] * tz[b] - tz[a] * tx[b]) / (8 * ds); }   // >0 turns right
@@ -392,8 +410,11 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
   const E = { tune: { grip: [20, 13, 7], side: [10, 6, 3], assist: 1, scrub: 20 }, device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
   const emit = (type, data) => { try { onEvent(type, data); } catch (e) { console.error(e); } };
 
-  async function buildWorld(seed) {
-    const T = buildTrack(seed), near = trackGrid(T);
+  // spec: a number (a generated valley) or a track document (a real circuit)
+  async function buildWorld(spec) {
+    const real = typeof spec === "object";
+    const T = real ? buildTrackFromData(spec) : buildTrack(spec), near = trackGrid(T);
+    const seed = real ? [...spec.id].reduce((h, ch) => (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0, 7) % 1000003 : spec;
     E.T = T; E.near = near; E.cars = null;
     let rmax = 0; for (let i = 0; i < M; i++) rmax = Math.max(rmax, Math.hypot(T.x[i], T.z[i]));
     const N = 400, ext = rmax + 900, cell = 2 * ext / (N - 1), ox = -ext, oz = -ext;
