@@ -522,6 +522,7 @@ async function ensureOutbox() {
     if (outbox) return outbox;   /* another caller won the race */
     outbox = new PadOutbox({ Y, ydoc, docId, key, rootDid, rtc, origin: REMOTE, onStatus: updateStatusUI });
     outbox.start();
+    setInterval(updateStatusUI, 5000);   /* keeps the stall warning honest if polling stops */
   }
   if (isSharedHere() && rtc.me && rtc.me.did && !outbox.publishing) outbox.enablePublishing();
   return outbox;
@@ -596,7 +597,9 @@ function connectionHint() {
     parts.push("This link has no key (#k=…), so the host's saved text can't be read. Ask the host for a fresh share link.");
   } else if (outbox) {
     const st = outbox.status;
-    if (st.lastError) parts.push('Bluesky sync problem: ' + st.lastError + '.');
+    const stale = st.lastPoll && document.visibilityState === 'visible' && Date.now() - st.lastPoll > 30000;
+    if (stale) parts.push('Bluesky sync has stalled (last check ' + Math.round((Date.now() - st.lastPoll) / 1000) + 's ago). Reload the page.');
+    else if (st.lastError) parts.push('Bluesky sync problem: ' + st.lastError + '. Retrying.');
     else if (st.rootFound === false && peerDid) parts.push("The host hasn't published this pad yet.");
     else if (peerDid && !outbox.publishing && !localOnlyEdits) parts.push("Showing the host's text. To send your own edits, click Join and sign in with a Bluesky account.");
   }

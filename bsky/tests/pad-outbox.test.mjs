@@ -82,7 +82,9 @@ test('a guest reads the host without logging in, and the host finds the guest', 
   await guest.ob.enablePublishing();
   assert.equal(repos.get(GUEST).record.ref, `at://${HOST}/${COLLECTION}/${DOC}`);
 
-  await host.ob.pollOnce();                                  // discovers GUEST via backlink
+  await host.ob.pollOnce();                                  // discovers GUEST via backlink, in the background
+  await new Promise((r) => setTimeout(r, 0));
+  await host.ob.pollOnce();                                  // ...and reads it on the next poll
   assert.equal(host.text.toString(), 'from host + guest');
 });
 
@@ -112,4 +114,28 @@ test('unpublish deletes our record and stops writes', async () => {
   host.ob.markDirty();
   await host.ob.flush();
   assert.ok(!repos.has(HOST));
+});
+
+test('a hung discovery does not block reads, and a recovered read clears lastError', async () => {
+  const key = await importKey(newKeyString());
+  const repos = fakeNetwork();
+  const base = globalThis.fetch;
+  let fail = true;
+  globalThis.fetch = (url, opts) => {
+    if (String(url).includes('getBacklinks')) return new Promise(() => {});   // never settles
+    if (fail) return Promise.reject(new TypeError('offline'));
+    return base(url, opts);
+  };
+  const host = participant(HOST, repos, key);
+  host.text.insert(0, 'x');
+  await host.ob.enablePublishing();
+  const guest = participant(GUEST, repos, key);
+  guest.ob.rtc.me = { did: null };
+  await guest.ob.pollOnce();
+  assert.match(guest.ob.status.lastError, /offline/);
+  fail = false;
+  await guest.ob.pollOnce();                    // returns although discovery is still pending
+  assert.equal(guest.text.toString(), 'x');
+  assert.equal(guest.ob.status.lastError, null);
+  assert.ok(guest.ob.status.lastPoll);
 });

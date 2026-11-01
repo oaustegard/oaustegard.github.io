@@ -84,6 +84,26 @@ export async function unseal(key, docId, rec) {
   return pipe(plain, new DecompressionStream('deflate-raw'));
 }
 
+/* ---------- network ---------- */
+
+/* Every request is bounded and uncached. A request that never settles would
+   otherwise stall the poll loop until a reload; and the PDS sends no
+   Cache-Control, which leaves room for a browser or proxy to reuse a stale
+   getRecord. */
+const TIMEOUT_MS = 10000;
+function withTimeout(promise, ms, what) {
+  let t;
+  return Promise.race([promise, new Promise((_, rej) => { t = setTimeout(() => rej(new Error(what + ' timed out')), ms); })])
+    .finally(() => clearTimeout(t));
+}
+function getJson(url) {
+  const ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const t = setTimeout(() => ctl && ctl.abort(), TIMEOUT_MS);
+  return fetch(url, { cache: 'no-store', signal: ctl ? ctl.signal : undefined })
+    .catch((e) => { throw new Error(e.name === 'AbortError' ? 'request timed out' : e.message); })
+    .finally(() => clearTimeout(t));
+}
+
 /* ---------- the outbox ---------- */
 
 export class PadOutbox {
@@ -125,7 +145,7 @@ export class PadOutbox {
   async _pds(did) {
     const s = this.sources.get(did);
     if (s && s.pds) return s.pds;
-    const pds = await this.rtc.constructor.resolvePds(did);
+    const pds = await withTimeout(this.rtc.constructor.resolvePds(did), TIMEOUT_MS, 'PDS lookup');
     if (s) s.pds = pds;
     return pds;
   }
@@ -135,7 +155,7 @@ export class PadOutbox {
     const s = this.sources.get(did);
     const pds = await this._pds(did);
     const q = new URLSearchParams({ repo: did, collection: COLLECTION, rkey: this.docId });
-    const r = await fetch(pds + '/xrpc/com.atproto.repo.getRecord?' + q);
+    const r = await getJson(pds + '/xrpc/com.atproto.repo.getRecord?' + q);
     if (r.status === 400 || r.status === 404) {   /* RecordNotFound comes back as 400 */
       if (did === this.rootDid) this._emit({ rootFound: false });
       return false;
@@ -155,7 +175,7 @@ export class PadOutbox {
   async discover() {
     const q = 'https://constellation.microcosm.blue/xrpc/blue.microcosm.links.getBacklinks?' +
       new URLSearchParams({ subject: this.rootUri, source: COLLECTION + ':ref', limit: '100' });
-    const r = await fetch(q);
+    const r = await getJson(q);
     if (!r.ok) throw new Error('getBacklinks ' + r.status);
     const j = await r.json();
     for (const rec of (j.records || [])) {
@@ -165,29 +185,37 @@ export class PadOutbox {
   }
 
   async pollOnce() {
-    if (Date.now() - this._lastDiscover > this.discoverMs) {
+    /* discovery runs beside the reads, never in front of them */
+    if (!this._discovering && Date.now() - this._lastDiscover > this.discoverMs) {
       this._lastDiscover = Date.now();
-      try { await this.discover(); } catch (e) { console.debug('[pad-outbox] discover', e.message); }
+      this._discovering = true;
+      this.discover()
+        .catch((e) => console.debug('[pad-outbox] discover', e.message))
+        .finally(() => { this._discovering = false; });
     }
-    let readers = 0;
+    let readers = 0, failed = null;
     await Promise.all([...this.sources.keys()].map(async (did) => {
       try { await this.readSource(did); this.sources.get(did).error = null; readers++; }
       catch (e) {
         this.sources.get(did).error = e.message;
-        this._emit({ lastError: e.message });
+        failed = e.message;
         console.debug('[pad-outbox] read', did, e.message);
       }
     }));
-    this._emit({ readers });
+    /* lastError reflects the latest round, so a recovered network clears it */
+    this._emit({ readers, lastError: failed, lastPoll: Date.now() });
   }
 
   start() {
     if (this._running) return;
     this._running = true;
+    const gen = this._gen = (this._gen || 0) + 1;   /* kick() restarts; an older chain must die */
     const tick = async () => {
-      if (!this._running) return;
-      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') await this.pollOnce();
-      if (this._running) this._timer = setTimeout(tick, this.pollMs);
+      if (!this._running || gen !== this._gen) return;
+      if (typeof document === 'undefined' || document.visibilityState !== 'hidden') {
+        try { await this.pollOnce(); } catch (e) { console.debug('[pad-outbox] poll', e.message); }
+      }
+      if (this._running && gen === this._gen) this._timer = setTimeout(tick, this.pollMs);
     };
     tick();
   }
