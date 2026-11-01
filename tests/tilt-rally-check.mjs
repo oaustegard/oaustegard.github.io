@@ -365,6 +365,12 @@ if (what === "pedals") {
       const v = await thr(); await page.mouse.up(); await page.waitForTimeout(300); return v; };
     const brakeTop = await hold("brkP", 0.95, 1500), brakeLow = await hold("brkP", 0.05, 1500), brakeEarly = await hold("brkP", 0.95, 120);
     const gasTop = await hold("gasP", 0.95, 1200), gasLow = await hold("gasP", 0.05, 1200);
+    // the glow outside the pad follows the level while the thumb is down
+    const [gx, gy] = await at("brkP", 0.95); await page.mouse.move(gx, gy); await page.mouse.down();
+    { const t0 = await gameT(); while ((await gameT()) < t0 + 1) await page.waitForTimeout(30); }
+    const glow = await page.evaluate(() => ({ lvl: +getComputedStyle(document.getElementById("brkP")).getPropertyValue("--lvl"), shadow: getComputedStyle(document.getElementById("brkP")).boxShadow }));
+    await page.mouse.up();
+    check(`${label}: braking makes the pad glow beyond its edges`, glow.lvl > 0.9 && /rgba?\(255, 90, 78/.test(glow.shadow), JSON.stringify(glow).slice(0, 120));
     console.log(label, JSON.stringify({ rot, brakeTop, brakeLow, brakeEarly, gasTop, gasLow }));
     check(`${label}: top of the brake is full braking`, brakeTop < -0.9, brakeTop.toFixed(2));
     check(`${label}: bottom of the brake is light`, brakeLow > -0.35 && brakeLow < -0.1, brakeLow.toFixed(2));

@@ -738,7 +738,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     // cars, wheels and shadows
     const ci = new Float32Array(8 * 20), wi = new Float32Array(32 * 20), bl = new Float32Array(8 * 8);
     E.cars.forEach((c, n) => { const { body, wheels } = carMatrices(c);
-      ci.set([...body, ...c.colour, 1 + c.number + (c.thr < -0.05 ? 0.9 : 0)], n * 20);
+      ci.set([...body, ...c.colour, 1 + c.number + 0.9 * clamp(-c.thr, 0, 1)], n * 20);   // tail lamps follow the brake pressure
       wheels.forEach((m, k) => wi.set([...m, 1, 1, 1, 0.6], (n * 4 + k) * 20));
       bl.set([c.x, c.y, c.z, c.h, 1.25, 2.7, 0.6, 0], n * 8); });
     res.car.k = E.cars.length; res.wheel.k = E.cars.length * 4;
