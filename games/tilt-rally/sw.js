@@ -1,6 +1,6 @@
 // Tilt Rally service worker: the page is network-first, other files cache-first with a background refresh.
 // Every network fetch skips the HTTP cache (GitHub Pages sets max-age=600), so a new version is seen at once.
-const VERSION = 'tilt-rally-v10';
+const VERSION = 'tilt-rally-v11';
 const CORE = ['./', 'index.html', 'engine.js', 'net.js', 'manifest.json', 'icon.svg', 'icon-192.png', 'icon-512.png'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];
 
@@ -37,6 +37,9 @@ self.addEventListener('fetch', e => {
       const fresh = fetch(req, url.origin === location.origin ? { cache: 'no-cache' } : {})
         .then(res => { if (res.ok || res.type === 'opaque') cache.put(req, res.clone()); return res; })
         .catch(() => null);
+      // The game's own modules go network-first like the page, so a new page never runs against an old engine.js
+      // or net.js; the cache answers only offline. Fonts and icons stay cache-first.
+      if (url.origin === location.origin && /\.(js|json)$/.test(url.pathname)) { const res = await fresh; return res || hit || Response.error(); }
       if (hit) { e.waitUntil(fresh); return hit; }
       const res = await fresh;
       return res || (req.mode === 'navigate' ? cache.match('index.html') : Response.error());
