@@ -76,8 +76,10 @@ export function buildTrackFromData(doc) {
   let j = 0;
   for (let i = 0; i < M; i++) { const s = i * ds; while (cum[j + 1] < s) j++; const t = (s - cum[j]) / (cum[j + 1] - cum[j]), a = P[j], b = P[(j + 1) % n];
     x[i] = lerp(a[0], b[0], t); z[i] = lerp(a[1], b[1], t); y[i] = lerp(a[2], b[2], t); }
+  const tun = new Uint8Array(M);
+  j = 0; for (let i = 0; i < M; i++) { const s = i * ds; while (cum[j + 1] < s) j++; tun[i] = P[j][3] === 1 && P[(j + 1) % n][3] === 1 ? 1 : 0; }
   const T = finishTrack(x, y, z, L, doc.id);
-  return Object.assign(T, { name: doc.name, attribution: doc.attribution });
+  return Object.assign(T, { name: doc.name, attribution: doc.attribution, tun });
 }
 
 function finishTrack(x, y, z, L, seed) {
@@ -144,6 +146,13 @@ struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f, @location(1) n
   var c = mix(grass, rock, smoothstep(0.84, 0.66, n.y));
   let snow = smoothstep(150.0, 185.0, i.wp.y + n1 * 40.0) * smoothstep(0.5, 0.72, n.y);
   c = mix(c, vec3f(0.93, 0.95, 0.98), snow);
+  if (u.up.w > 0.5) {   // a real town (u.up.w = 1000 + sea level): paving with patches of planting, stone quays at the water
+    let pave = vec3f(0.46, 0.45, 0.43) * (0.8 + 0.25 * n2 + 0.1 * n3);
+    let green = mix(vec3f(0.24, 0.34, 0.16), vec3f(0.36, 0.42, 0.22), n2);
+    c = mix(pave, green, smoothstep(0.62, 0.72, vnoise(i.wp.xz * 0.02)) * 0.85);
+    c = mix(c, rock, smoothstep(0.8, 0.6, n.y));
+    c = mix(c, vec3f(0.72, 0.68, 0.6) * (0.85 + 0.2 * n3), 1.0 - smoothstep(u.up.w - 1000.0 + 2.0, u.up.w - 1000.0 + 3.5, i.wp.y));
+  }
   return vec4f(fogged(lit(n, c), i.wp), 1.0); }
 `;
 const ROAD = COMMON + /* wgsl */`
@@ -213,6 +222,11 @@ fn seg7(p: vec2f, d: i32) -> bool {
     col = base * select(1.8, 1.4 + brake * 4.0, base.r > base.g * 2.0 && car);
   } else if (mat > 0.4 && mat < 0.6) {        // glass
     col = base * 0.25 + env(r) * (0.1 + fres * 0.8) + vec3f(1.0) * pow(nh, 220.0) * 3.0 * step(0.0, sunv);
+  } else if (mat > 0.05 && mat < 0.15) {      // building walls: rows of windows every 3.3 m up, 3.2 m along
+    let t = normalize(vec2f(-n.z, n.x) + vec2f(1e-4, 0.0)); let u = dot(i.wp.xz, t);
+    let fu = fract(u / 3.2); let fv = fract(i.wp.y / 3.3);
+    let win = fu > 0.24 && fu < 0.76 && fv > 0.32 && fv < 0.82 && abs(n.y) < 0.5;
+    col = select(lit(n, base), vec3f(0.06, 0.08, 0.1) + env(r) * (0.12 + fres * 0.6), win);
   } else if (mat > 0.2 && mat < 0.3) {        // polished metal
     col = lit(n, base) * 0.45 + env(r) * base * 0.75 + vec3f(1.0) * pow(nh, 60.0) * 1.2;
   } else {
@@ -231,6 +245,20 @@ struct VO { @builtin(position) cp: vec4f, @location(0) q: vec2f, @location(1) a:
   let wp = pa.xyz + r * q.x * pb.x + f * q.y * pb.y + vec3f(0.0, 0.07, 0.0);
   var o: VO; o.cp = u.vp * vec4f(wp, 1.0); o.q = q; o.a = pb.z; return o; }
 @fragment fn fs(i: VO) -> @location(0) vec4f { let d = length(i.q * vec2f(1.0, 1.0)); let a = (1.0 - smoothstep(0.25, 1.0, d)) * i.a; return vec4f(0.02, 0.03, 0.04, a); }
+`;
+const WATER = COMMON + /* wgsl */`
+struct VO { @builtin(position) cp: vec4f, @location(0) wp: vec3f };
+@vertex fn vs(@location(0) p: vec3f) -> VO { var o: VO; o.cp = u.vp * vec4f(p, 1.0); o.wp = p; return o; }
+@fragment fn fs(i: VO) -> @location(0) vec4f {
+  let t = u.cam.w; let q = i.wp.xz;
+  // two drifting octaves of ripples tilt the normal; the sea reflects the sky by Fresnel and glints in the sun
+  let dx = vnoise(q * 0.18 + vec2f(t * 0.35, 0.0)) - vnoise(q * 0.18 + vec2f(t * 0.35 + 0.7, 0.0)) + 0.5 * (vnoise(q * 0.6 - vec2f(0.0, t * 0.6)) - vnoise(q * 0.6 - vec2f(0.6, t * 0.6)));
+  let dz = vnoise(q * 0.18 + vec2f(0.0, t * 0.3)) - vnoise(q * 0.18 + vec2f(0.0, t * 0.3 + 0.7)) + 0.5 * (vnoise(q * 0.6 + vec2f(t * 0.5, 0.0)) - vnoise(q * 0.6 + vec2f(t * 0.5, 0.6)));
+  let n = normalize(vec3f(dx * 0.25, 1.0, dz * 0.25)); let v = normalize(u.cam.xyz - i.wp);
+  let fres = 0.02 + 0.98 * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+  var c = mix(vec3f(0.03, 0.17, 0.27), env(reflect(-v, n)), clamp(fres * 0.9 + 0.08, 0.0, 1.0));
+  c += vec3f(1.0, 0.92, 0.75) * pow(max(dot(n, normalize(u.sun.xyz + v)), 0.0), 280.0) * 2.5;
+  return vec4f(fogged(c, i.wp), 1.0); }
 `;
 const SMOKE = COMMON + /* wgsl */`
 struct VO { @builtin(position) cp: vec4f, @location(0) q: vec2f, @location(1) life: f32, @location(2) kind: f32, @location(3) wp: vec3f };
@@ -273,10 +301,17 @@ fn rnd(a: u32, b: u32) -> f32 { return f32(pcg(a * 9781u + pcg(b))) / 4294967295
 // The valley is carved on the GPU: every terrain vertex finds its nearest track sample (coarse pass over every 8th,
 // then a fine pass around it), sinks into a ditch under the road, and blends out to rolling hills and a mountain ring.
 const CARVE = /* wgsl */`
-struct TP { a: vec4f, b: vec4f };   // a: origin x, origin z, cell, N   b: samples, half-width, ring radius, seed
+struct TP { a: vec4f, b: vec4f, c: vec4f, d: vec4f };   // a: origin x, origin z, cell, N   b: samples, half-width, ring radius, seed
+                                                        // c: ground grid x, z, cell, nx   d: grid nz, sea level, has grid, -
 @group(0) @binding(0) var<storage, read> pts: array<vec4f>;
 @group(0) @binding(1) var<storage, read_write> h: array<f32>;
 @group(0) @binding(2) var<uniform> tp: TP;
+@group(0) @binding(3) var<storage, read> dem: array<f32>;   // real ground heights (sea cells < -9000), or a stub
+fn demv(x: i32, z: i32) -> f32 { let v = dem[u32(z * i32(tp.c.w) + x)]; return select(v, tp.d.y - 6.0, v < -9000.0); }
+fn demAt(xz: vec2f) -> f32 {      // bilinear, clamped at the grid's edges; the sea floor sits 6 m under the water
+  let g = clamp((xz - tp.c.xy) / tp.c.z, vec2f(0.0), vec2f(tp.c.w - 1.001, tp.d.x - 1.001));
+  let i = vec2i(floor(g)); let f = g - vec2f(i);
+  return mix(mix(demv(i.x, i.y), demv(i.x + 1, i.y), f.x), mix(demv(i.x, i.y + 1), demv(i.x + 1, i.y + 1), f.x), f.y); }
 fn pcg(v: u32) -> u32 { let s = v * 747796405u + 2891336453u; let w = ((s >> ((s >> 28u) + 4u)) ^ s) * 277803737u; return (w >> 22u) ^ w; }
 fn h2(p: vec2i) -> f32 { return f32(pcg(bitcast<u32>(p.x) + pcg(bitcast<u32>(p.y) + u32(tp.b.w)))) / 4294967295.0; }
 fn vnoise(p: vec2f) -> f32 { let i = vec2i(floor(p)); let f = fract(p); let w = f * f * (3.0 - 2.0 * f);
@@ -293,10 +328,33 @@ fn fbm(p: vec2f) -> f32 { var s = 0.0; var a = 0.5; var q = p; for (var k = 0; k
   let hills = (fbm(xz / 300.0) - 0.5) * 90.0 + (fbm(xz / 70.0) - 0.5) * 14.0;
   let rr = length(xz) / tp.b.z;
   let ring = smoothstep(1.12, 1.75, rr) * (150.0 + 170.0 * fbm(xz / 210.0 + vec2f(5.0, 9.0)));
-  let natural = mix(ty, hills, smoothstep(18.0, 260.0, d)) + ring + (fbm(xz / 25.0) - 0.5) * 2.5 * smoothstep(hw + 4.0, hw + 30.0, d);
+  var natural = mix(ty, hills, smoothstep(18.0, 260.0, d)) + ring + (fbm(xz / 25.0) - 0.5) * 2.5 * smoothstep(hw + 4.0, hw + 30.0, d);
+  if (tp.d.z > 0.5) { natural = mix(ty, demAt(xz), smoothstep(hw + 4.0, hw + 45.0, d)); }   // real ground meets the road
   let ditch = ty - 1.4 - abs(pts[bk].w) * d;
   h[i] = mix(ditch, natural, smoothstep(hw + 2.5, hw + 26.0, d)); }
 `;
+
+// Ear clipping for building roofs: footprints are simple polygons (convex or not), a few to a few dozen corners.
+function earcut(P) {
+  const n = P.length, idx = [...Array(n).keys()], tris = [];
+  let area = 0; for (let i = 0; i < n; i++) { const a = P[i], b = P[(i + 1) % n]; area += a[0] * b[1] - b[0] * a[1]; }
+  if (area < 0) idx.reverse();
+  const cross = (a, b, c) => (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+  const inside = (p, a, b, c) => cross(a, b, p) >= 0 && cross(b, c, p) >= 0 && cross(c, a, p) >= 0;
+  let guard = 0;
+  while (idx.length > 3 && guard++ < 4 * n * n) {
+    let cut = false;
+    for (let k = 0; k < idx.length; k++) {
+      const i0 = idx[(k + idx.length - 1) % idx.length], i1 = idx[k], i2 = idx[(k + 1) % idx.length], a = P[i0], b = P[i1], c = P[i2];
+      if (cross(a, b, c) <= 0) continue;
+      if (idx.some((j) => j !== i0 && j !== i1 && j !== i2 && inside(P[j], a, b, c))) continue;
+      tris.push([i0, i1, i2]); idx.splice(k, 1); cut = true; break;
+    }
+    if (!cut) break;                      // degenerate footprint: fan what is left
+  }
+  for (let k = 1; k + 1 < idx.length; k++) tris.push([idx[0], idx[k], idx[k + 1]]);
+  return tris;
+}
 
 // ---------------------------------------------------------------- meshes: pos3 normal3 colour4 (alpha = material)
 const PAINT = 1, LAMP = 0.75, GLASS = 0.5, METAL = 0.25, MATTE = 0;
@@ -425,14 +483,18 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const ptsBuf = device.createBuffer({ size: pts.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(ptsBuf, 0, pts);
     const hBuf = device.createBuffer({ size: N * N * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const rb = device.createBuffer({ size: N * N * 4, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
-    const tpBuf = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-    device.queue.writeBuffer(tpBuf, 0, new Float32Array([ox, oz, cell, N, M, HW, rmax, seed % 9973]));
+    const sc = real ? spec.sceneryData : null, gd = sc?.grid;
+    const tpBuf = device.createBuffer({ size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    device.queue.writeBuffer(tpBuf, 0, new Float32Array([ox, oz, cell, N, M, HW, rmax, seed % 9973,
+      gd ? gd.ox : 0, gd ? gd.oz : 0, gd ? gd.cell : 1, gd ? gd.nx : 1, gd ? gd.nz : 1, sc?.seaY ?? -1e4, gd ? 1 : 0, 0]));
+    const demArr = gd ? Float32Array.from(gd.h, (v) => (v == null ? -1e4 : v)) : new Float32Array(4);
+    const demBuf = device.createBuffer({ size: demArr.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(demBuf, 0, demArr);
     const carve = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: CARVE }), entryPoint: "main" } });
     const enc = device.createCommandEncoder(), cp = enc.beginComputePass();
-    cp.setPipeline(carve); cp.setBindGroup(0, device.createBindGroup({ layout: carve.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ptsBuf } }, { binding: 1, resource: { buffer: hBuf } }, { binding: 2, resource: { buffer: tpBuf } }] }));
+    cp.setPipeline(carve); cp.setBindGroup(0, device.createBindGroup({ layout: carve.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ptsBuf } }, { binding: 1, resource: { buffer: hBuf } }, { binding: 2, resource: { buffer: tpBuf } }, { binding: 3, resource: { buffer: demBuf } }] }));
     cp.dispatchWorkgroups(Math.ceil(N * N / 64)); cp.end(); enc.copyBufferToBuffer(hBuf, 0, rb, 0, N * N * 4); device.queue.submit([enc.finish()]);
     await rb.mapAsync(GPUMapMode.READ); const H = new Float32Array(rb.getMappedRange().slice(0)); rb.unmap();
-    ptsBuf.destroy(); hBuf.destroy(); rb.destroy(); tpBuf.destroy();
+    ptsBuf.destroy(); hBuf.destroy(); rb.destroy(); tpBuf.destroy(); demBuf.destroy();
     E.H = { H, N, cell, ox, oz };
     const tv = new Float32Array(N * N * 6);
     for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) { const k = j * N + i, hx = H[j * N + Math.min(N - 1, i + 1)] - H[j * N + Math.max(0, i - 1)], hz = H[Math.min(N - 1, j + 1) * N + i] - H[Math.max(0, j - 1) * N + i];
@@ -450,7 +512,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     q = 0; for (let i = 0; i < M; i++) { const a = i * 4, b = (i + 1) * 4; for (let r = 0; r < 3; r++) { ri.set([a + r, b + r, a + r + 1, a + r + 1, b + r, b + r + 1], q); q += 6; } }
     // props
     const rnd = mulberry32(seed * 31 + 5), trees = [];
-    for (let n = 0; n < 9000 && trees.length < 2400; n++) { const x = (rnd() * 2 - 1) * (rmax + 420), z = (rnd() * 2 - 1) * (rmax + 420);
+    for (let n = 0; n < (sc ? 0 : 9000) && trees.length < 2400; n++) { const x = (rnd() * 2 - 1) * (rmax + 420), z = (rnd() * 2 - 1) * (rmax + 420);
       const k = near(x, z, HW + 11); if (k >= 0) continue; const y = heightGrid(x, z); if (y > 150 || rnd() < y / 200) continue;
       const s = 0.75 + rnd() * 0.9, g = 0.75 + rnd() * 0.4; trees.push([x, y - 0.3, z, s, 0.24 * g, 0.42 * g, 0.18 * g]); }
     const treeInst = new Float32Array(trees.length * 20);
@@ -482,6 +544,40 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
         } }
       R.walls = { vb: keep(vb(new Float32Array(bw.a))), n: bw.count, inst: keep(vb(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0]))), k: 1 };
     } else R.walls = { k: 0 };
+    // the town: each OSM footprint raised from the lowest ground under it to its height above the highest
+    if (sc?.buildings?.length) {
+      const bm = Mesh(), walls = [[0.93, 0.88, 0.76], [0.89, 0.74, 0.52], [0.91, 0.7, 0.6], [0.95, 0.94, 0.9], [0.95, 0.87, 0.63], [0.84, 0.56, 0.42]];
+      sc.buildings.forEach((b, k) => {
+        const P = b.p; if (P.length < 3) return;
+        const gs = P.map(([x, z]) => heightGrid(x, z));
+        let base = Math.min(...gs) - 0.5, top = Math.max(...gs) + b.h;
+        if (b.t) { const cx = P.reduce((a, q) => a + q[0], 0) / P.length, cz = P.reduce((a, q) => a + q[1], 0) / P.length, ry = probe(cx, cz, -1).y; base = Math.max(base, ry + 6.5); top = Math.max(top, base + b.h * 0.6); }
+        const hsh = Math.imul(k + 1, 2654435761) >>> 0, wc = walls[hsh % walls.length], wcol = [wc[0], wc[1], wc[2], 0.1];
+        const roof = b.h > 22 ? [0.55, 0.55, 0.56, MATTE] : [0.66, 0.36, 0.25, MATTE];
+        const cx = P.reduce((a, q) => a + q[0], 0) / P.length, cz = P.reduce((a, q) => a + q[1], 0) / P.length;
+        for (let i = 0; i < P.length; i++) { const A = P[i], B = P[(i + 1) % P.length];
+          let n = vnorm([B[1] - A[1], 0, -(B[0] - A[0])]); if (n[0] * ((A[0] + B[0]) / 2 - cx) + n[2] * ((A[1] + B[1]) / 2 - cz) < 0) n = vscale(n, -1);
+          bm.quad([A[0], base, A[1]], [B[0], base, B[1]], [B[0], top, B[1]], [A[0], top, A[1]], n, wcol); }
+        for (const [i, j, l] of earcut(P)) for (const q of [P[i], P[j], P[l]]) bm.v([q[0], top, q[1]], [0, 1, 0], roof);
+      });
+      R.town = { vb: keep(vb(new Float32Array(bm.a))), n: bm.count, inst: keep(vb(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0]))), k: 1 };
+    } else R.town = { k: 0 };
+    // the tunnel: a concrete roof 5.5 m over the road, walls up to it, and a line of lamps along the ceiling
+    if (T.tun?.some((v) => v)) {
+      const tm = Mesh(), conc = [0.42, 0.42, 0.44, MATTE], W = (WALL || HW) + 0.6;
+      for (let i = 0; i < M; i++) { const j = (i + 1) % M; if (!T.tun[i] || !T.tun[j]) continue;
+        const at = (k, lat, up) => { const nx = -T.tz[k], nz = T.tx[k]; return [T.x[k] + nx * lat, T.y[k] + lat * T.bank[k] + up, T.z[k] + nz * lat]; };
+        tm.quad(at(i, -W, 5.5), at(j, -W, 5.5), at(j, W, 5.5), at(i, W, 5.5), [0, -1, 0], conc);
+        tm.quad(at(i, -W, 6.4), at(j, -W, 6.4), at(j, W, 6.4), at(i, W, 6.4), [0, 1, 0], conc);
+        for (const sd of [-1, 1]) tm.quad(at(i, sd * W, 0.9), at(j, sd * W, 0.9), at(j, sd * W, 6.4), at(i, sd * W, 6.4), [T.tz[i] * sd, 0, -T.tx[i] * sd], conc);
+        if (i % 4 === 0) tm.quad(at(i, -0.4, 5.45), at(j, -0.4, 5.45), at(j, 0.4, 5.45), at(i, 0.4, 5.45), [0, -1, 0], [1, 0.86, 0.6, LAMP]); }
+      R.tunnel = { vb: keep(vb(new Float32Array(tm.a))), n: tm.count, inst: keep(vb(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0]))), k: 1 };
+    } else R.tunnel = { k: 0 };
+    // the sea: one flat sheet at sea level over the whole terrain; the ground under it is 6 m deeper
+    E.seaY = sc ? sc.seaY ?? -900 : null;
+    if (sc?.seaY != null) { const e = ext, y = sc.seaY;
+      R.sea = { vb: keep(vb(new Float32Array([-e, y, -e, e, y, -e, e, y, e, -e, y, -e, e, y, e, -e, y, e]))), n: 6 };
+    } else R.sea = null;
     R.gantry = { vb: keep(vb(new Float32Array(gantry.a))), n: gantry.count, inst: keep(vb(gantryInst)), k: 1 };
     R.blob = keep(device.createBuffer({ size: 8 * 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }));
     E.res = R;
@@ -507,6 +603,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     E.pipes = {
       sky: mk(SKY, [], { depthWrite: false, depthCompare: "always" }),
       terrain: mk(TERRAIN, [{ arrayStride: 24, attributes: [f3(0, 0), f3(1, 12)] }]),
+      water: mk(WATER, [{ arrayStride: 12, attributes: [f3(0, 0)] }]),
       road: mk(ROAD, [{ arrayStride: 32, attributes: [f3(0, 0), f3(1, 12), { shaderLocation: 2, offset: 24, format: "float32x2" }] }]),
       mesh: mk(MESH, [{ arrayStride: 40, attributes: [f3(0, 0), f3(1, 12), f4(2, 24)] }, inst]),
       blob: mk(BLOB, [{ arrayStride: 32, stepMode: "instance", attributes: [f4(0, 0), f4(1, 16)] }], { depthWrite: false, depthCompare: "less-equal", blended: true }),
@@ -733,7 +830,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const sun = vnorm([-0.45, 0.5, -0.62]);
     const U = new Float32Array(64);
     U.set(vp, 0); U.set(ivp, 16); U.set([...camPos, E.clock], 32); U.set([...sun, 0.00105], 36);
-    U.set([0.74, 0.8, 0.86, E.T.L / Math.round(E.T.L / 7)], 40); U.set([view4[0], view4[4], view4[8], E.T.L], 44); U.set([view4[1], view4[5], view4[9], 0], 48);
+    U.set([0.74, 0.8, 0.86, E.T.L / Math.round(E.T.L / 7)], 40); U.set([view4[0], view4[4], view4[8], E.T.L], 44); U.set([view4[1], view4[5], view4[9], E.seaY != null ? 1000 + E.seaY : 0], 48);
     device.queue.writeBuffer(E.ubuf, 0, U);
     // cars, wheels and shadows
     const ci = new Float32Array(8 * 20), wi = new Float32Array(32 * 20), bl = new Float32Array(8 * 8);
@@ -761,8 +858,9 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     pass.setPipeline(pipes.sky); pass.draw(3);
     pass.setPipeline(pipes.terrain); pass.setVertexBuffer(0, res.terrain.vb); pass.setIndexBuffer(res.terrain.ib, "uint32"); pass.drawIndexed(res.terrain.n);
     pass.setPipeline(pipes.road); pass.setVertexBuffer(0, res.road.vb); pass.setIndexBuffer(res.road.ib, "uint32"); pass.drawIndexed(res.road.n);
+    if (res.sea) { pass.setPipeline(pipes.water); pass.setVertexBuffer(0, res.sea.vb); pass.draw(res.sea.n); }
     pass.setPipeline(pipes.mesh);
-    for (const m of [res.tree, res.board, res.gantry, res.walls, res.car, res.wheel]) { if (!m.k) continue; pass.setVertexBuffer(0, m.vb); pass.setVertexBuffer(1, m.inst); pass.draw(m.n, m.k); }
+    for (const m of [res.tree, res.board, res.gantry, res.walls, res.town, res.tunnel, res.car, res.wheel]) { if (!m.k) continue; pass.setVertexBuffer(0, m.vb); pass.setVertexBuffer(1, m.inst); pass.draw(m.n, m.k); }
     pass.setPipeline(pipes.blob); pass.setVertexBuffer(0, res.blob); pass.draw(6, E.cars.length);
     pass.setPipeline(pipes.smoke); pass.setVertexBuffer(0, E.parts.buf); pass.draw(6, E.parts.n);
     pass.end(); device.queue.submit([enc.finish()]);

@@ -168,10 +168,12 @@ def main():
     base = min(heights)
     y = [heights[min(len(heights) - 1, round(i * len(probe) / len(pts)))] - base for i in range(len(pts))]
     for _ in range(4): y = [(y[i - 1] + 2 * v + y[(i + 1) % len(y)]) / 4 for i, v in enumerate(y)]   # DEM cells are 25 m
+    # origin and baseHeight let build_scenery.py put terrain and buildings in the same frame; a 4th value 1 marks tunnel
     doc = {"id": a.id, "name": a.name, "lengthM": round(L), "climbM": round(max(heights) - base, 1), "halfWidth": a.half_width, "barriers": a.barriers,
+           "origin": [round(lat0, 7), round(lon0, 7)], "baseHeight": round(base, 2),
            "source": f"OpenStreetMap relation {a.relation}; elevation {a.dem} via OpenTopoData",
            "attribution": "Map data © OpenStreetMap contributors (ODbL) · Elevation: EU-DEM v1.1, Copernicus",
-           "points": [[round(p[0], 1), round(p[1], 1), round(h, 1)] for p, h in zip(pts, y)]}
+           "points": [[round(p[0], 1), round(p[1], 1), round(h, 1)] + ([1] if p[2] > 0.5 else []) for p, h in zip(pts, y)]}
     with open(a.out, "w") as f: json.dump(doc, f, separators=(",", ":"))
     print(f"{a.name}: {doc['lengthM']} m, {len(pts)} points, {doc['climbM']} m of climb -> {a.out}", file=sys.stderr)
 
