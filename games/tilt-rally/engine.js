@@ -1,7 +1,9 @@
 // Tilt Rally engine: track, terrain, cars, physics and the WebGPU renderer. No DOM, so it also runs in a
 // Worker (the GPU Bridge renders frames with it on real hardware). The page in index.html owns input and HUD.
 
-export const M = 2048, HW = 7, LAPS = 3;     // samples around the loop, road half-width in metres, race length
+export const M = 2048, LAPS = 3;             // samples around the loop, race length
+export let HW = 7;                           // road half-width in metres: 7 for the valleys, per track for real circuits
+let WALL = 0;                                // street circuits: barrier offset from the centre line, 0 for none
 const D2R = Math.PI / 180, TAU = Math.PI * 2;
 export const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
 export const lerp = (a, b, t) => a + (b - a) * t;
@@ -413,6 +415,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
   // spec: a number (a generated valley) or a track document (a real circuit)
   async function buildWorld(spec) {
     const real = typeof spec === "object";
+    HW = real && spec.halfWidth ? spec.halfWidth : 7; WALL = real && spec.barriers ? HW + 0.5 : 0;
     const T = real ? buildTrackFromData(spec) : buildTrack(spec), near = trackGrid(T);
     const seed = real ? [...spec.id].reduce((h, ch) => (Math.imul(h, 31) + ch.charCodeAt(0)) >>> 0, 7) % 1000003 : spec;
     E.T = T; E.near = near; E.cars = null;
@@ -467,6 +470,18 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     R.wheel = { vb: keep(vb(new Float32Array(wheel.a))), n: wheel.count, inst: keep(device.createBuffer({ size: 32 * 80, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST })), k: 0 };
     R.tree = { vb: keep(vb(new Float32Array(tree.a))), n: tree.count, inst: keep(vb(treeInst)), k: trees.length };
     R.board = { vb: keep(vb(new Float32Array(board.a))), n: board.count, inst: keep(vb(boardInst)), k: boards.length };
+    // barriers: a steel rail on each side, with a red and white band along the top every 4 m
+    if (WALL) {
+      const bw = Mesh(), steel = [0.55, 0.57, 0.6, MATTE], dark = [0.32, 0.33, 0.35, MATTE];
+      for (let i = 0; i < M; i++) { const j = (i + 1) % M;
+        for (const side of [-1, 1]) {
+          const at = (k, up) => { const nx = -T.tz[k], nz = T.tx[k], lat = side * WALL; return [T.x[k] + nx * lat, T.y[k] + lat * T.bank[k] + up, T.z[k] + nz * lat]; };
+          const n = [T.tz[i] * side, 0, -T.tx[i] * side];          // faces the road
+          bw.quad(at(i, -0.6), at(j, -0.6), at(j, 0.55), at(i, 0.55), n, Math.floor(i * T.ds / 12) % 2 ? steel : dark);
+          bw.quad(at(i, 0.55), at(j, 0.55), at(j, 0.9), at(i, 0.9), n, Math.floor(i * T.ds / 4) % 2 ? [0.86, 0.12, 0.09, MATTE] : [0.94, 0.94, 0.92, MATTE]);
+        } }
+      R.walls = { vb: keep(vb(new Float32Array(bw.a))), n: bw.count, inst: keep(vb(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0]))), k: 1 };
+    } else R.walls = { k: 0 };
     R.gantry = { vb: keep(vb(new Float32Array(gantry.a))), n: gantry.count, inst: keep(vb(gantryInst)), k: 1 };
     R.blob = keep(device.createBuffer({ size: 8 * 32, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }));
     E.res = R;
@@ -564,7 +579,15 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     c.vx = nfx * vf + -nfz * vl; c.vz = nfz * vf + nfx * vl;
     c.slip = Math.abs(vl);
     c.x += c.vx * dt; c.z += c.vz * dt;
-    const p2 = probe(c.x, c.z, pr.idx);
+    let p2 = probe(c.x, c.z, pr.idx);
+    if (WALL && Math.abs(p2.lat) > WALL - 1.0) {      // into the barrier: back onto the road, lose the outward speed, scrape
+      const sg = Math.sign(p2.lat), nx = -T.tz[p2.idx], nz = T.tx[p2.idx], over = Math.abs(p2.lat) - (WALL - 1.0);
+      c.x -= nx * sg * over; c.z -= nz * sg * over;
+      const vn = (c.vx * nx + c.vz * nz) * sg; if (vn > 0) { c.vx -= nx * sg * vn * 1.3; c.vz -= nz * sg * vn * 1.3; }
+      c.vx *= 1 - dt * 1.8; c.vz *= 1 - dt * 1.8;
+      if (!c.onWall && c === E.player) { E.bump = 0.3; emit("wall"); }
+      c.onWall = true; p2 = probe(c.x, c.z, p2.idx);
+    } else c.onWall = false;
     c.y = lerp(c.y, p2.y, 1 - Math.exp(-dt * 30)); c.surf = p2.surf; c.lat = p2.lat;
     const hl = probe(c.x + nfz * 0.9, c.z - nfx * 0.9, p2.idx).y, hr = probe(c.x - nfz * 0.9, c.z + nfx * 0.9, p2.idx).y;
     c.pitch = Math.atan2(hf - hb, 2.8); c.roll = Math.atan2(hr - hl, 1.8);
@@ -591,7 +614,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
       if (A === E.player || B === E.player) { E.bump = 0.25; emit("bump"); } } } }
   function drive(c, dt) {      // the AI: aim at a point down the road in its lane, throttle toward the speed plan
     const T = E.T, sp = Math.max(0, c.speed || 0), look = Math.round((9 + sp * 0.55) / T.ds), i = (c.idx + look) % M;
-    c.lane = lerp(c.lane, clamp(-T.kap[(c.idx + look * 2) % M] * 260, -3.5, 3.5) + (!c.local ? (c.slot % 3 - 1) * 1.2 : 0), dt * 0.6);
+    c.lane = lerp(c.lane, (clamp(-T.kap[(c.idx + look * 2) % M] * 260, -3.5, 3.5) + (!c.local ? (c.slot % 3 - 1) * 1.2 : 0)) * HW / 7, dt * 0.6);
     const tx = T.x[i] + -T.tz[i] * c.lane, tz = T.z[i] + T.tx[i] * c.lane, fx = Math.sin(c.h), fz = Math.cos(c.h);
     const dx = tx - c.x, dz = tz - c.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
     // feed-forward: the turn rate the road needs here, as a share of what the tyres allow, plus the aim correction
@@ -739,7 +762,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     pass.setPipeline(pipes.terrain); pass.setVertexBuffer(0, res.terrain.vb); pass.setIndexBuffer(res.terrain.ib, "uint32"); pass.drawIndexed(res.terrain.n);
     pass.setPipeline(pipes.road); pass.setVertexBuffer(0, res.road.vb); pass.setIndexBuffer(res.road.ib, "uint32"); pass.drawIndexed(res.road.n);
     pass.setPipeline(pipes.mesh);
-    for (const m of [res.tree, res.board, res.gantry, res.car, res.wheel]) { if (!m.k) continue; pass.setVertexBuffer(0, m.vb); pass.setVertexBuffer(1, m.inst); pass.draw(m.n, m.k); }
+    for (const m of [res.tree, res.board, res.gantry, res.walls, res.car, res.wheel]) { if (!m.k) continue; pass.setVertexBuffer(0, m.vb); pass.setVertexBuffer(1, m.inst); pass.draw(m.n, m.k); }
     pass.setPipeline(pipes.blob); pass.setVertexBuffer(0, res.blob); pass.draw(6, E.cars.length);
     pass.setPipeline(pipes.smoke); pass.setVertexBuffer(0, E.parts.buf); pass.draw(6, E.parts.n);
     pass.end(); device.queue.submit([enc.finish()]);

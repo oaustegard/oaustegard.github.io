@@ -37,11 +37,16 @@ Hold the phone the way you want to drive when you press Start engine. That pose 
 **Track** on the start screen picks a generated valley (a new one each time from **New valley**) or a real circuit. `?track=nurburgring-gp` opens one directly. In a race with friends, the host's choice goes to everyone.
 
 - **Nürburgring GP** (5.1 km, 56 m of climb): the Grand Prix circuit from OpenStreetMap relation 38567, with heights from EU-DEM v1.1 (Copernicus) via OpenTopoData. The circuit itself is real; the countryside around it is generated.
+- **Circuit de Monaco** (3.3 km, 53 m of climb): OpenStreetMap relation 148194. It is a street circuit, so the road is narrower (5 m half-width instead of 7) and lined with barriers: steel rails with a red and white top. Touching one pushes the car back onto the road, kills its outward speed and scrapes some forward speed off. The back-seat driver notices. The tunnel's heights are bridged in a straight line between its mouths, since the elevation data gives the hill above it. The countryside is generated: there are no buildings or harbour yet.
 - Map data © OpenStreetMap contributors, under the ODbL. The credit shows on the start screen and under Center wheel during the race.
 
 `tracks/build_track.py` builds a track file from any circuit relation:
 `python3 games/tilt-rally/tracks/build_track.py --relation 38567 --start 50.33489,6.94496 --id nurburgring-gp --name "Nürburgring GP" --out games/tilt-rally/tracks/nurburgring-gp.json`
 It fetches the relation from the OSM API, finds the closed loop through its one-way ways (the race direction), starts the loop nearest `--start` (the start-finish line, here the middle of the pit lane's extent), converts to metres, smooths lightly, and samples the ground height every 15 m. Standard library only.
+
+Street circuits need more, because their one-way tags follow traffic and the mapped streets don't always meet. Monaco was built with:
+`python3 games/tilt-rally/tracks/build_track.py --relation 148194 --chain --clockwise yes --half-width 5 --barriers --start 43.7347,7.4206 --id monaco --name "Circuit de Monaco" --out games/tilt-rally/tracks/monaco.json`
+`--chain` joins the race sections end to end (pit lane excluded) instead of searching the way graph, and `--clockwise` sets the direction. Heights the elevation data lacks (sea cells along the harbour) are filled from neighbouring readings, and sections tagged `tunnel` are bridged between their mouths.
 
 ## Gears
 
@@ -81,7 +86,7 @@ node tests/tilt-rally-check.mjs backseat  # it shouts before the corner a full-g
 node tests/tilt-rally-check.mjs permission  # the iOS motion prompt comes on the start screen, and Start engine waits for the answer
 node tests/tilt-rally-check.mjs controls  # touch pedals and paddles through the on-screen controls: limiter, upshifts, refused downshift, brake
 node tests/tilt-rally-check.mjs pedals    # thumb position on a pedal sets its strength, in landscape and turned portrait
-node tests/tilt-rally-check.mjs circuit   # the Nürburgring GP loads, is credited, and the autopilot races it on the road
+node tests/tilt-rally-check.mjs circuit   # the Nürburgring GP and Monaco load, are credited, and the autopilot races both inside the road edges
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```

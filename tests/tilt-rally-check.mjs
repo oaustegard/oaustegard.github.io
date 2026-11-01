@@ -376,19 +376,22 @@ if (what === "pedals") {
 }
 
 if (what === "circuit") {
-  // A real circuit: the Nürburgring GP from tracks/nurburgring-gp.json, raced by the autopilot.
-  const { page, errors } = await open("index.html?demo&track=nurburgring-gp");
-  await waitFor(page, () => window.__game?.()?.state === "race", 120000);
-  const st = await page.evaluate(() => ({ status: document.getElementById("status").textContent, attr: document.getElementById("attr").textContent, stats: window.__game().stats, pick: document.getElementById("track").value }));
-  console.log(JSON.stringify(st));
-  check("the Nürburgring GP is loaded and credited to OpenStreetMap", /OpenStreetMap/.test(st.attr) && st.pick === "nurburgring-gp", st.attr);
-  check("the lap is about 5.1 km", Math.abs(st.stats.L - 5100) < 60, st.stats.L.toFixed(0) + " m");
-  await waitFor(page, () => window.__game().raceT > 25, 600000);
-  await page.screenshot({ path: path.join(OUT, "circuit.png") });
-  const s2 = await page.evaluate(() => window.__game());
-  for (const c of s2.cars) console.log("  ", c.name, "idx", c.idx, "v", (c.speed * 3.6).toFixed(0), "km/h lat", c.lat.toFixed(1), "surf", c.surf);
-  check("every car is moving and on the road after 25 s", s2.cars.every((c) => c.speed > 5 && Math.abs(c.lat) < 9));
-  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+  // Real circuits from tracks/*.json, raced by the autopilot: the Nürburgring GP (open, 7 m half-width) and Monaco
+  // (street circuit, 5 m half-width, barriers).
+  for (const [track, length, hw] of [["nurburgring-gp", 5100, 7], ["monaco", 3307, 5]]) {
+    const { page, errors } = await open("index.html?demo&track=" + track);
+    await waitFor(page, () => window.__game?.()?.state === "race", 120000);
+    const st = await page.evaluate(() => ({ attr: document.getElementById("attr").textContent, stats: window.__game().stats, pick: document.getElementById("track").value }));
+    check(`${track}: loaded and credited to OpenStreetMap`, /OpenStreetMap/.test(st.attr) && st.pick === track, st.attr);
+    check(`${track}: lap length about ${length} m`, Math.abs(st.stats.L - length) < 60, st.stats.L.toFixed(0) + " m");
+    await waitFor(page, () => window.__game().raceT > 25, 600000);
+    await page.screenshot({ path: path.join(OUT, `circuit-${track}.png`) });
+    const s2 = await page.evaluate(() => window.__game());
+    for (const c of s2.cars) console.log("  ", track, c.name, "idx", c.idx, "v", (c.speed * 3.6).toFixed(0), "km/h lat", c.lat.toFixed(1), "surf", c.surf);
+    check(`${track}: every car moving and inside the road edges after 25 s`, s2.cars.every((c) => c.speed > 5 && Math.abs(c.lat) < hw + 0.6));
+    check(`${track}: no page or WebGPU errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.close();
+  }
 }
 
 await b.close(); srv.close();
