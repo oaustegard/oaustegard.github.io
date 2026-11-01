@@ -140,7 +140,7 @@ if (what === "rotated") {
   const p2 = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
   await p2.addInitScript(() => { const vv = { width: 390, height: 784, addEventListener() {}, removeEventListener() {} };
     Object.defineProperty(window, "visualViewport", { get: () => vv }); });
-  await p2.goto(base + "index.html");
+  await p2.goto(base + "index.html?rotate=1");
   await p2.waitForFunction(() => document.getElementById("stage"), null, { timeout: 60000 });
   const g2 = await p2.evaluate(() => { const r = document.getElementById("stage").getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
   check("with a toolbar over the bottom 60 px, the turned stage stops above it", Math.abs(g2[3] - 784) < 1 && Math.abs(g2[1]) < 1, g2.map(Math.round).join(","));
@@ -240,10 +240,21 @@ if (what === "permission") {
   await page.waitForTimeout(500);
   let s1 = await st();
   check("Start engine waits on the start screen while the prompt is open", s1.intro && s1.state === "idle" && s1.asks === 1, JSON.stringify(s1));
-  await page.evaluate(() => { window.__answer("granted"); window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: 0, gamma: -75 })); });
+  await page.evaluate(() => { window.__answer("granted"); window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: 0, gamma: 0 })); });
+  // the start screen and the prompt are upright; the race turns, and the countdown waits for the phone to be turned clockwise
+  await page.waitForTimeout(600);
+  const held = await page.evaluate(() => ({ rot: document.documentElement.classList.contains("rot"), sub: document.getElementById("sub").textContent, t: window.__game().raceT }));
+  check("on a portrait phone the countdown waits for the turn", held.rot && /clockwise/.test(held.sub) && held.t <= -3.39, JSON.stringify(held));
+  // hold a pose: the page keeps receiving it ten times a second until the next pose (software rendering is slow)
+  const pose = (gamma) => page.evaluate((g) => { clearInterval(window.__pose); window.__pose = setInterval(() => window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: 0, gamma: g })), 100); }, gamma);
+  await pose(-75);
+  check("turned the wrong way, it says so", await waitFor(page, () => /other way/i.test(document.getElementById("sub").textContent), 20000).then(() => true, () => false));
+  await pose(75);
+  await waitFor(page, () => window.__game().raceT > -3.3, 30000).catch(() => {});
   await waitFor(page, () => window.__game().state === "countdown" || window.__game().state === "race", 10000);
   const s2 = await st();
   check("the race starts once motion is allowed", !s2.intro, JSON.stringify(s2));
+  check("turned clockwise, the lights start counting", (await page.evaluate(() => window.__game().raceT)) > -3.3);
   check("no page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 

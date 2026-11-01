@@ -2,7 +2,7 @@
 
 A racing game for a phone held sideways like a steering wheel. Turning the phone steers. Tilting its top edge away from you is the throttle, and tilting it toward you is the brake. You race three laps of a generated mountain valley against three computer cars. It's an installable PWA drawn with WebGPU.
 
-Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lock in portrait. The page then draws itself turned a quarter turn counter-clockwise, so turn the phone a quarter turn clockwise to drive. With rotation unlocked, or on a computer, it lays out landscape as usual. The start screen fits on one screen: lock rotation and turn the phone, tap Allow motion, then Start engine. iOS asks for motion access at the first tap on the start screen; if you go straight for Start engine, the race waits on the start screen until you answer. On iPhone, Safari asks for motion access at that point; if you refuse, only a keyboard can drive. `?seed=N` picks another valley.
+Live: <https://austegard.com/games/tilt-rally/>. On a phone, lock rotation in portrait. The start screen and the friends lobby stay upright, because the iOS motion prompt and the track list are drawn by the system in portrait. Tap Allow motion and choose your options, then tap Start engine and turn the phone a quarter turn clockwise (top to the right). The race screen is drawn turned for that grip. The lights wait until the phone is sideways, and the pose you hold then is straight ahead with no gas; turn it the other way and the screen says so. In a race with friends, the room's clock starts the lights, so steering stays at zero until the phone is turned. With rotation unlocked, or on a computer, everything lays out landscape as usual.
 
 ## Controls
 

@@ -199,9 +199,9 @@ html.short { #yell { font-size: 38px; -webkit-text-stroke-width: 6px; } }
     <div class="col">
       <h1>Tilt Rally</h1>
       <ol class="steps">
-        <li><span class="n">1</span><span>Lock rotation in portrait, turn the phone a quarter turn clockwise and hold it in both hands like a steering wheel.</span></li>
+        <li><span class="n">1</span><span>Lock rotation in portrait, then choose your options below.</span></li>
         <li><span class="n">2</span><span class="act"><button class="go" id="motion" type="button">Allow motion</button><span class="small" id="motionState">The phone’s motion sensor is the wheel.</span></span></li>
-        <li><span class="n">3</span><span class="act"><button class="ghost" id="start" type="button">Start engine</button><button class="ghost" id="friends" type="button">Race friends</button><span class="small">Hold it the way you’ll drive: that is straight ahead, no gas.</span></span></li>
+        <li><span class="n">3</span><span class="act"><button class="ghost" id="start" type="button">Start engine</button><button class="ghost" id="friends" type="button">Race friends</button><span class="small">Then turn the phone a quarter turn clockwise and hold it like a steering wheel. The lights go out once it’s sideways, and that pose is straight ahead, no gas.</span></span></li>
       </ol>
     </div>
     <div class="col">
@@ -386,6 +386,7 @@ function frame(now) {
   requestAnimationFrame(frame);
   if (!G?.cars || window.__hold) return;
   const dtR = Math.min(0.1, (now - (last || now)) / 1000); last = now;
+  if (turnWait) watchTurn(dtR);
   ftAvg = lerp(ftAvg, dtR * 1000, 0.05);
   if (++ftN % 90 === 0 && !DEMO) { if (ftAvg > 24 && scale > 0.55) scale *= 0.85; else if (ftAvg < 15 && scale < 1) scale = Math.min(1, scale / 0.85); }
   acc += dtR;
@@ -396,6 +397,7 @@ function frame(now) {
   }
   netFrame(dtR);
   while (acc >= 1 / 120) { acc -= 1 / 120; G.tick(1 / 120); }
+  if (turnWait && !mp && G.state === "countdown") G.raceT = -3.4;            // the lights hold until the phone is turned
   const dpr = Math.min(devicePixelRatio || 1, 2) * scale, w = Math.max(1, Math.round(canvas.clientWidth * dpr)), h = Math.max(1, Math.round(canvas.clientHeight * dpr));
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   // Counter-rotate the picture by the wheel angle: the phone turns, the horizon stays level with the real one.
@@ -446,7 +448,7 @@ function controls() {
   $("gasP").hidden = $("brkP").hidden = !pedals; $("hud").classList.toggle("pedals", pedals); $("shift").hidden = !manual;
   return manual;
 }
-function newRace() { G.newRace({ autopilot: DEMO, manual: controls() }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
+function newRace() { setRacing(true); G.newRace({ autopilot: DEMO, manual: controls() }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
 // The visible area, not the layout viewport: Chrome on iPhone counts its bottom toolbar in innerHeight, so a stage that
 // tall runs under the toolbar and loses its left edge (the screen's bottom). 100svh is the height with every browser
 // bar showing; take the smallest of the three.
@@ -457,12 +459,18 @@ function viewport() {
   const vv = window.visualViewport, h = Math.min(innerHeight, vv ? Math.round(vv.height) : Infinity, svh.offsetHeight || Infinity);
   return { w: Math.min(innerWidth, vv ? Math.round(vv.width) : Infinity), h };
 }
+// Menus stay upright: the iOS motion prompt and the track list are drawn by the system, in portrait, so the start
+// screen and the lobby are laid out for a phone held upright. Only the race itself is turned (racing = true).
+let racing = false;
+function setRacing(on) { racing = on; layout(); }
 function layout() {
   const { w, h } = viewport();
-  const forced = Q.get("rotate"), rot = forced != null ? forced === "1" : h > w && matchMedia("(pointer: coarse)").matches;
+  const forced = Q.get("rotate"), rot = forced != null ? forced === "1" : racing && h > w && matchMedia("(pointer: coarse)").matches;
   const r = document.documentElement; r.classList.toggle("rot", rot);
   // compact layouts follow the stage's own height: on a turned phone that is the window's width, which no media query sees
-  const stageH = rot ? w : h; r.classList.toggle("short", stageH <= 460); r.classList.toggle("vshort", stageH <= 400);
+  // an upright phone stacks the start screen in one column, so it needs the compact layout sooner
+  const stageH = rot ? w : h, upright1col = !rot && w < 560;
+  r.classList.toggle("short", stageH <= (upright1col ? 640 : 460)); r.classList.toggle("vshort", stageH <= (upright1col ? 580 : 400));
   r.style.setProperty("--vw", w + "px"); r.style.setProperty("--vh", h + "px");
   if (Q.has("vp")) $("status").textContent = `inner ${innerWidth}x${innerHeight} · visual ${window.visualViewport ? Math.round(visualViewport.width) + "x" + Math.round(visualViewport.height) : "none"} · svh ${svh.offsetHeight} · using ${w}x${h}`;
 }
@@ -483,8 +491,21 @@ async function prepare(button, label) {
 }
 async function start() {
   await prepare($("start"), "Start engine");
-  started = true; sensor.neutral = sensor.up ? sensor.up.slice() : null;
-  $("intro").hidden = true; newRace();
+  started = true; $("intro").hidden = true; setRacing(true);
+  newRace();                                   // the grid shows behind the prompt; the countdown holds until the turn
+  if (needsTurn()) { turnWait = { then: () => {}, since: 0 }; $("sub").textContent = "Turn the phone a quarter turn clockwise"; }
+  else sensor.neutral = sensor.up ? sensor.up.slice() : null;
+}
+// A portrait phone has to be turned before the lights can go out. Clockwise (top to the right) puts world-up along the
+// phone's -x; the turned race screen is drawn for that way round. Held there for half a second, the pose becomes the zero.
+let turnWait = null;
+function needsTurn() { return sensor.events > 0 && document.documentElement.classList.contains("rot"); }
+function watchTurn(dt) {
+  if (!turnWait || !sensor.up) return;
+  const ux = sensor.up[0];
+  if (ux < -0.8) { turnWait.since += dt;
+    if (turnWait.since > 0.5) { recenter(); const go = turnWait.then; turnWait = null; $("sub").textContent = ""; go(); } }
+  else { turnWait.since = 0; $("sub").textContent = ux > 0.8 ? "The other way: turn it clockwise, top to the right" : "Turn the phone a quarter turn clockwise"; }
 }
 $("start").addEventListener("click", start);
 $("again").addEventListener("click", () => { if (mp) { if (net?.isHost()) hostStart(mp.seed, mp.track); } else newRace(); });
@@ -544,7 +565,7 @@ async function openLobby(code) {
   clearInterval(teleTimer); teleTimer = setInterval(teleTick, 3000);
   try { await net.connect(); renderLobby(); } catch (e) { $("lbStatus").textContent = e.message + " Check the connection and try again."; }
 }
-function leaveLobby() { clearInterval(teleTimer); net?.close(); net = null; mp = null; $("lobby").hidden = true; $("hud").hidden = true; $("intro").hidden = false; }
+function leaveLobby() { clearInterval(teleTimer); net?.close(); net = null; mp = null; $("lobby").hidden = true; $("hud").hidden = true; $("intro").hidden = false; setRacing(false); }
 $("lbLeave").addEventListener("click", leaveLobby);
 addEventListener("pagehide", () => net?.close());
 $("lbName").addEventListener("change", () => { const n = $("lbName").value.trim().slice(0, 16) || "Driver"; try { localStorage.setItem("tilt-rally-name", n); } catch (e) {} net?.setName(n); });
@@ -587,8 +608,10 @@ async function beginNetRace(msg) {
   }
   mp = { ...msg };
   G.newRace({ manual: controls(), roster });
-  lastLight = 4; $("hud").hidden = false;
-  started = true; sensor.neutral = sensor.up ? sensor.up.slice() : null;     // straight ahead is the pose as the countdown starts
+  lastLight = 4; $("hud").hidden = false; setRacing(true);
+  // the race is on the room's clock, so it can't wait for the turn; steering stays at zero until the phone is sideways
+  started = true; sensor.neutral = null;
+  if (needsTurn()) turnWait = { then: () => {}, since: 0 }; else sensor.neutral = sensor.up ? sensor.up.slice() : null;
   G.raceT = (net.now() - mp.at) / 1000;
 }
 // ---- telemetry for an observer in the room (tests/rally-observer.mjs): how each link really behaves on real networks
