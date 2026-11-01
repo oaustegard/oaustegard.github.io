@@ -6,10 +6,14 @@
 <title>Pad</title>
 <!--
   PRIVACY MODEL (read before you touch this file):
-  - Document content lives ONLY in this browser's IndexedDB (per docId).
-    Nothing about the text ever touches a server, including the ATProto PDS.
-  - Peers exchange content ONLY over a direct WebRTC RTCDataChannel,
-    encrypted end-to-end by DTLS. This page never proxies or stores it.
+  - Document content lives in this browser's IndexedDB (per docId).
+  - Once shared, each participant also keeps the document in ONE record in
+    their own ATProto repo (com.austegard.pad.outbox/<docId>, see
+    pad-outbox.js), AES-GCM encrypted with a key that exists only in the
+    share link's #fragment. The PDS stores ciphertext; it never sees the key
+    or the text. This is what lets a guest read while the host is offline.
+  - Peers that can reach each other also exchange live edits over a direct
+    WebRTC RTCDataChannel, encrypted end-to-end by DTLS.
   - ATProto is used ONLY for ephemeral SDP signaling (see atproto-rtc.js):
     tiny offer/answer/knock records written to your own repo, addressed
     to a peer, deleted once the connection is up, and TTL-bounded even
@@ -205,7 +209,7 @@
     <button id="padListBtn">Pads…</button>
   </div>
   <p class="warn" id="connHint" hidden></p>
-  <p class="warn">Content is stored only in this browser and shared only peer-to-peer, until you explicitly Publish.</p>
+  <p class="warn">Shared pads sync through each participant's Bluesky repo, encrypted with a key that is only in the link. Publish is the only action that makes the text public.</p>
 </footer>
 
 <dialog id="loginDialog">
@@ -258,7 +262,9 @@
 <script type="module">
 /* ==========================================================================
  * PRIVACY MODEL (see also the HTML comment above):
- *  - Document text: Yjs CRDT, persisted ONLY in this browser's IndexedDB.
+ *  - Document text: Yjs CRDT, persisted in this browser's IndexedDB, and,
+ *    once shared, as AES-GCM ciphertext in each participant's own repo
+ *    (pad-outbox.js). The key travels only in the link's #fragment.
  *  - Transport: raw RTCDataChannel bytes over a DTLS-encrypted WebRTC
  *    connection negotiated directly between the two browsers.
  *  - ATProto involvement: identity (login to YOUR OWN PDS) + ephemeral
@@ -272,6 +278,7 @@
 import * as Y from '/bsky/yjs.vendor.mjs';
 import { IndexeddbPersistence } from '/bsky/y-indexeddb.vendor.mjs';
 import { AtprotoRTC } from '/bsky/atproto-rtc.js';
+import { PadOutbox, newKeyString, importKey } from '/bsky/pad-outbox.js';
 
 /* ---------------- doc id / URL handling ---------------- */
 
@@ -435,14 +442,17 @@ ymeta.observe(() => {
 
 /* ---------------- RTC wiring ---------------- */
 
-/* iceServersUrl: short-lived TURN credentials from workers/turn-creds, so
-   peers behind carrier/office NATs can still connect through a relay (which
-   only sees DTLS ciphertext). Falls back to STUN if the worker is down. */
-const rtc = new AtprotoRTC({ iceServersUrl: 'https://turn-creds.austegard.workers.dev/' });
+const rtc = new AtprotoRTC(); // defaults: com.austegard.rtc.signal, google STUN
 /* Resume a session persisted by this or any other /bsky utility (shared
    'bsky_session' localStorage convention — tokens only, never the password).
    Fire-and-forget: the UI works logged-out; this just skips the dialog. */
-rtc.resumeSession().then((me) => { if (me) updateStatusUI(); });
+rtc.resumeSession().then(async (me) => {
+  if (!me) return;
+  await ensureOutbox();
+  /* the owner shared this pad before: come back sharing (live channel too) */
+  if (isSharedHere() && (!peerDid || peerDid === me.did) && !sharing) startSharing();
+  updateStatusUI();
+});
 let sharing = false;
 const initedDCs = new WeakSet();
 
@@ -471,8 +481,49 @@ function sendFullState(dc) {
 }
 
 ydoc.on('update', (update, origin) => {
-  if (origin === LOCAL) broadcastUpdate(update);
+  if (origin === LOCAL) {
+    broadcastUpdate(update);
+    if (outbox) outbox.markDirty();
+  }
 });
+
+/* ---------------- ATProto content path (pad-outbox.js) ---------------- */
+
+/* The key comes from the link fragment (never sent to any server) and is
+   remembered per pad so a reload without the fragment still works. */
+const KEY_LS = 'pad-key-' + docId;
+const SHARED_LS = 'pad-shared-' + docId;   /* set by Share/Join: consent to write */
+let keyString = new URLSearchParams(location.hash.slice(1)).get('k');
+try {
+  if (keyString) localStorage.setItem(KEY_LS, keyString);
+  else keyString = localStorage.getItem(KEY_LS);
+} catch (e) { /* storage blocked: fragment-only */ }
+let outbox = null;
+
+function isSharedHere() {
+  try { return localStorage.getItem(SHARED_LS) === '1'; } catch (e) { return false; }
+}
+function setSharedHere(on) {
+  try { on ? localStorage.setItem(SHARED_LS, '1') : localStorage.removeItem(SHARED_LS); } catch (e) {}
+}
+
+/* Create the outbox once we know the key and whose pad it is: the link's
+   peer for a guest (no login needed to read), ourselves for the owner. */
+async function ensureOutbox() {
+  if (!outbox) {
+    const rootDid = peerDid || (rtc.me && rtc.me.did);
+    if (!keyString || !rootDid) return null;
+    let key;
+    try { key = await importKey(keyString); }
+    catch (e) { setHint('This link has a damaged key (#k=…). Ask for the link again.'); return null; }
+    if (outbox) return outbox;   /* another caller won the race */
+    outbox = new PadOutbox({ Y, ydoc, docId, key, rootDid, rtc, origin: REMOTE, onStatus: updateStatusUI });
+    outbox.start();
+  }
+  if (isSharedHere() && rtc.me && rtc.me.did && !outbox.publishing) outbox.enablePublishing();
+  return outbox;
+}
+ensureOutbox();
 
 rtc.on('message', (did, data) => {
   const bytes = new Uint8Array(data);
@@ -512,7 +563,8 @@ function requestSync() {
 }
 setInterval(requestSync, 10000);
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') { requestSync(); updateStatusUI(); }
+  if (document.visibilityState === 'visible') { requestSync(); if (outbox) outbox.kick(); updateStatusUI(); }
+  else if (outbox) outbox.flush();   /* write pending edits before the tab is suspended */
 });
 
 rtc.on('statechange', (did, peer) => {
@@ -530,41 +582,40 @@ function setHint(text) {
   connHint.hidden = !text;
 }
 
-/* Guest-side explanation of where the join attempt is. Without it a failed
-   or never-answered join looks exactly like an empty pad. */
+/* One line saying where content is coming from and what is blocking it.
+   Without it a failed join looks exactly like an empty pad. */
 let joinStartedAt = 0;
 let joinHintTimer = null;
-function guestHint() {
-  if (!peerDid || !joinStartedAt) return;
-  const p = rtc.peers.get(peerDid);
-  if (p && p.dc && p.dc.readyState === 'open') { setHint(''); return; }
-  const waited = (Date.now() - joinStartedAt) / 1000;
-  const state = p && p.pc ? p.pc.connectionState : null;
-  if (p && p.unreadable) {
-    setHint("Can't read the host's Bluesky repo, so the connection can't be set up. Check the link.");
-  } else if (state === 'failed') {
-    setHint("Reached the host, but the network blocked a connection between you. Retrying"
-      + (rtc.relayAvailable ? ' (relay included)…' : '. No relay server was available, so networks that block direct connections can\'t be bridged.'));
-  } else if (state === 'connecting' || state === 'new') {
-    setHint(waited > 20
-      ? 'Found the host; the connection is taking a while. Mobile and office networks can be slow to connect.'
-      : 'Found the host; connecting…');
-  } else if (waited > 25) {
-    setHint("No answer from the host yet. The text lives only in the host's browser: they need this pad open, in the foreground, with Share turned on.");
-  } else {
-    setHint('Waiting for the host to answer…');
+function connectionHint() {
+  const parts = [];
+  if (peerDid && !keyString) {
+    parts.push("This link has no key (#k=…), so the host's saved text can't be read. Ask the host for a fresh share link.");
+  } else if (outbox) {
+    const st = outbox.status;
+    if (st.lastError) parts.push('Bluesky sync problem: ' + st.lastError + '.');
+    else if (st.rootFound === false && peerDid) parts.push("The host hasn't published this pad yet.");
+    else if (peerDid && !outbox.publishing) parts.push("Showing the host's text. Join to send your edits back.");
   }
+  if (peerDid && joinStartedAt && !(outbox && outbox.status.rootFound)) {
+    const p = rtc.peers.get(peerDid);
+    const open = p && p.dc && p.dc.readyState === 'open';
+    const state = p && p.pc ? p.pc.connectionState : null;
+    if (!open && state === 'failed') parts.push('A live connection to the host is blocked by the network.');
+    else if (!open && (Date.now() - joinStartedAt) > 25000) parts.push('No live answer from the host yet.');
+  }
+  return parts.join(' ');
 }
 
 function updateStatusUI() {
   let openPeers = 0;
   for (const p of rtc.peers.values()) if (p.dc && p.dc.readyState === 'open') openPeers++;
   peerDot.classList.toggle('on', openPeers > 0);
-  let base = sharing ? 'Sharing' : (rtc.me && rtc.me.did ? 'Connected' : 'Local only');
+  let base = sharing || (outbox && outbox.publishing) ? 'Sharing' : (rtc.me && rtc.me.did ? 'Connected' : 'Local only');
   statusText.textContent = base + ' · ' + openPeers + ' peer' + (openPeers === 1 ? '' : 's')
     + (rtc.me && rtc.me.handle ? ' · ' + rtc.me.handle : '');
   signOutBtn.hidden = !(rtc.me && rtc.me.did);
-  guestHint();
+  if (outbox && (outbox.status.merged || outbox.status.lastPublish)) statusText.textContent += ' · synced via Bluesky';
+  if (!sharing) setHint(connectionHint());
 }
 
 /* ---------------- login dialog (shared by share/join/publish) ---------------- */
@@ -613,6 +664,7 @@ function openLoginDialog() {
 function showShareLink() {
   const u = new URL(location.href);
   u.searchParams.set('peer', rtc.me.did);
+  u.hash = 'k=' + keyString;
   shareLinkInput.value = u.toString();
   shareLinkInput.hidden = false;
   copyLinkBtn.hidden = false;
@@ -633,11 +685,13 @@ function startSharing() {
   sharing = true;
   shareBtn.textContent = 'Stop Sharing';
   showShareLink();
-  setHint('Keep this tab open and in front: guests can only sync while it is.');
+  setHint('Anyone with this link can read and edit; edits sync through Bluesky even while you are offline.');
   updateStatusUI();
 }
 
 async function stopSharing() {
+  setSharedHere(false);
+  if (outbox) await outbox.unpublish();   /* removes our ciphertext from the PDS */
   for (const did of Array.from(rtc.peers.keys())) rtc.disconnect(did);
   rtc.stop();
   sharing = false;
@@ -653,6 +707,13 @@ shareBtn.addEventListener('click', async () => {
     const ok = await openLoginDialog();
     if (!ok) return;
   }
+  if (!keyString) {
+    keyString = newKeyString();
+    try { localStorage.setItem(KEY_LS, keyString); } catch (e) {}
+  }
+  history.replaceState(null, '', location.pathname + location.search + '#k=' + keyString);
+  setSharedHere(true);
+  await ensureOutbox();
   startSharing();
 });
 
@@ -671,10 +732,7 @@ copyLinkBtn.addEventListener('click', async () => {
 
 if (peerDid) {
   joinBtn.hidden = false;
-  if (!ytext.length) {
-    textarea.placeholder = "This pad's text lives in the host's browser, not on a server. "
-      + 'Click Join (needs a Bluesky login and app password) while the host has the pad open with Share on.';
-  }
+  if (!ytext.length && keyString) textarea.placeholder = "Loading the host's text…";
 }
 
 const signOutBtn = document.getElementById('signOutBtn');
@@ -692,10 +750,12 @@ joinBtn.addEventListener('click', async () => {
     const ok = await openLoginDialog();
     if (!ok) return;
   }
+  setSharedHere(true);      /* consent: our edits go to our own repo, encrypted */
+  ensureOutbox();
   rtc.start();
   joinStartedAt = Date.now();
-  if (!joinHintTimer) joinHintTimer = setInterval(guestHint, 2000);
-  guestHint();
+  if (!joinHintTimer) joinHintTimer = setInterval(updateStatusUI, 2000);
+  updateStatusUI();
   joinBtn.disabled = true;
   joinBtn.textContent = hasJoinedOnce ? 'Reconnecting…' : 'Joining…';
   try {
