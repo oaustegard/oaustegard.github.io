@@ -197,4 +197,9 @@ added +37 ± 22 (no-limit Hold'em) and +14 ± 9 (Stud) while cutting the median 
 tight-aggressive style's own) with a (1+4) evolution strategy: each generation plays the incumbent and
 four perturbed candidates on the same fresh deals against a mixed field, keeps a candidate only if it wins
 by more than two paired standard errors, checkpoints every generation, and resumes from its file.
+A 50-generation run (2026-11-01, against v1, the calling station, the maniac and the default
+tight-aggressive player in no-limit and fixed-limit Hold'em and Stud Hi-Lo) accepted 5 candidates, about
+the 4–5 that chance alone would pass at that bar, and moved no constant more than about 20%. On fresh
+deals the tuned values lost to the defaults in no-limit Hold'em (−21 ± 9 bb/100) and were level elsewhere
+(fixed-limit +2 ± 1, Stud 0 ± 3, Stud Hi-Lo −4 ± 7), so the hand-set values stand.
 
