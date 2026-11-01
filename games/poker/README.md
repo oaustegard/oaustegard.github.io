@@ -22,6 +22,9 @@ lobby is reached, or only one player has chips and nobody may rebuy.
 - The **standings** (menu, and at the end) show each player's chips, what they have bought in, and the net.
   The nets always sum to zero.
 - The computer seats rebuy whenever the table allows it.
+- **Computer** in the lobby sets who the computer seats are (see below): **Easy** (calling stations, rocks
+  and maniacs), **Mixed** (one of each kind, with tight-aggressive players among them), or **Hard** (all
+  tight-aggressive and loose-aggressive). The host's table screen shows each seat's style.
 
 ## Games
 
@@ -84,8 +87,9 @@ behind strict NATs may fail to connect; the same Wi-Fi network always works.
 | **Bring in** / **Complete** | the stud bring-in |
 | tap your cards, then **Draw n** or **Stand pat** | the draw; **Suggest** picks the computer's discards |
 
-With hints on, the line above your cards shows your estimated share of the pot, the price of calling as a
-share of the pot after the call, and what the computer would do.
+With hints on, the line above your cards shows your share of the pot against the hands the other players
+are likely to hold (read from what they have done this hand), the price of calling as a share of the pot
+after the call, and what a tight-aggressive computer player would do.
 
 ## How it is built
 
@@ -94,11 +98,7 @@ share of the pot after the call, and what the computer would do.
   three combinations. `Hand` runs one deal: forced bets, streets, betting under each structure, the draw,
   side pots and the showdown. `Match` carries stacks, buy-ins, rebuys, the button, rising blinds and the
   mixed-game rotation from hand to hand. `hand.view(seat)` is the only thing the network sends.
-- `ai.js` is the computer player. It estimates its share of the pot by dealing the unseen cards at random
-  (as many deals as fit in about 60 ms) and scoring the showdowns under the game's rules; before the draw
-  it also draws every hand by its own rule of thumb. It calls when that share beats the price, discounted
-  on early streets for the betting still to come, raises its strong hands at half to full pot, and bluffs
-  now and then when few players are left. It sees only what a player in its seat would see.
+- `ai.js` is the computer player; see the next section.
 - `render.js` paints the 52 faces, the back, six chip colours and the dealer button into an atlas with
   Canvas 2D. Two WGSL pipelines draw the rest:
   - **Room**: a full-screen pass at half resolution: a panelled card room with sconces, a brass lamp that
@@ -111,5 +111,58 @@ share of the pot after the call, and what the computer would do.
   the eight qualifier, blinds and heads-up order, a three-way side pot, the fixed-limit cap, the pot-limit
   maximum, stud bring-ins, the draw, and then plays bot hands in every game and long matches with rebuys,
   checking that chips are conserved and no hidden card reaches another seat.
+- `node tests/poker-bots.mjs [deals] [game] [structure] [A] [B] [seats]` plays duplicate matches between
+  two computer players (see below).
 - `?renderer=2d` forces the Canvas 2D fallback, `?seed=N` fixes the deals, and `window.__poker` exposes
   state for tests.
+
+## Computer players
+
+A computer player sees only what a person in its seat would see, plus a table model: counts, from
+public information only, of how each seat has played in earlier hands (how often it puts money in before
+the flop, raises, folds to a bet, and shows down a weak hand after betting the last round). Each decision
+has three parts.
+
+1. **Its share of the pot.** It deals the unseen cards at random many times (as many deals as fit in about
+   60 ms) and scores the showdowns under the game's rules. Each deal is weighted by how well the
+   opponents' sampled hands fit what they did this hand: a player who raised holds the top part of the
+   hands they raise with (narrower for a re-raise or a big raise, and narrower still for players the
+   model knows raise rarely), with bluffs as a share of that range; a caller holds a wider band; a player
+   who checked is less likely to hold a monster. Before the draw, every hand draws by the same rule of
+   thumb.
+2. **The value of each action.** Checking or calling is worth its share of the pot, less the price, which
+   counts for less early in a hand (there is betting still to come) when chips remain behind, and less
+   out of position. A bet or raise is tried at half, three quarters, one and one and a half times the pot
+   (and all in, when that is not much more): it wins the pot at once when everyone folds, and otherwise
+   plays against the hands that continue. Both come from the same weighted deals. Whether a hand
+   continues depends on the price the bet offers: nearly everything continues against a tiny bet, about
+   a third of hands against a pot-sized one, a few percent against a shove twenty times the pot. Players
+   the model has seen fold a lot fold more. The share against the continuing hands is measured head-up
+   against hands drawn from the caller's range.
+3. **A style.** How tight it is (the margin a call must clear), how much it likes betting, how much it
+   believes in folds, how far it trusts the table model, whether it reads ranges at all, and how much it
+   varies close decisions. The choice is a soft maximum over the actions' values.
+
+| style | plays |
+|---|---|
+| Tight-aggressive | few hands, bet and raised hard; reads ranges and adapts to the table |
+| Loose-aggressive | more hands and more bluffs; reads ranges and adapts |
+| Rock | very tight and cautious; half-trusts the model |
+| Calling station | calls too much, rarely raises, does not read ranges |
+| Maniac | raises and bluffs a lot, never adapts |
+
+### Measuring them
+
+`tests/poker-bots.mjs` plays duplicate matches: each deal is played twice from the same deck and button,
+once with player A in the even seats and B in the odd ones and once swapped, so the luck of the cards
+cancels. Every hand starts at 100 big blinds; each pass keeps its own table model. It prints A's result in
+big blinds per 100 hands with a standard error. `v1` is the first computer player (equity against random
+hands and fixed thresholds), frozen in `tests/poker-ai-v1.mjs` as the baseline.
+
+Results on the current code (A against `v1`, 6 seats; positive means A wins):
+
+| game | A | bb/100 |
+|---|---|---|
+| Hold'em no-limit | Loose-aggressive | +294 ± 25 |
+| Five-Card Draw fixed-limit | Tight-aggressive | +47 ± 5 |
+

@@ -207,6 +207,7 @@ table.tb td.n, table.tb th.n { text-align: right; font-variant-numeric: tabular-
       <span>Blinds</span><span class="seg" id="set-rising"><button data-v="0">10/20, fixed</button><button data-v="12">Rise every 12 hands</button></span>
       <span>Length</span><span class="seg" id="set-len"><button data-v="0">Until you stop</button><button data-v="50">50 hands</button><button data-v="100">100 hands</button></span>
       <span>Hints</span><span class="seg" id="set-hint"><button data-v="on">On</button><button data-v="off">Off</button></span>
+      <span>Computer</span><span class="seg" id="set-level"><button data-v="easy">Easy</button><button data-v="normal">Mixed</button><button data-v="hard">Hard</button></span>
       <span>Pace</span><span class="seg" id="set-pace"><button data-v="calm">Calm</button><button data-v="brisk">Brisk</button></span>
     </div>
     <p class="note" id="struct-note"></p>
@@ -358,7 +359,7 @@ table.tb td.n, table.tb th.n { text-align: right; font-variant-numeric: tabular-
 
 <script type="module">
 import { Match, VARIANTS, STRUCT_NAME, cardPretty, MIXED } from './rules.js';
-import { botAct, equity, drawDiscard } from './ai.js';
+import { botAct, analyze, drawDiscard, STYLES, styleFor, TableModel } from './ai.js';
 import { buildAtlas, layoutTable, initGPU, init2D, hitCard, cardURL, clearURLs, SERIF, K_BACK } from './render.js';
 import { HostNet, GuestNet, parseLink, listenForReplies, forwardReply } from '/scripts/tabletop/net.js';
 import { renderQR, copyText, shareLink, scanQR, keepAwake, onResume, escapeHtml } from '/scripts/tabletop/pairing.js';
@@ -379,7 +380,7 @@ const BOT_NAMES = ['You', 'Ada', 'Bix', 'Cleo', 'Dash', 'Echo', 'Finn', 'Gus'];
 const settings = {
   game: store.get('game', 'holdem'), structure: store.get('structure', 'nl'), players: store.get('players', 6),
   buyIn: store.get('buyIn', 2000), rebuys: store.get('rebuys', 'unlimited'), rising: store.get('rising', 0), length: store.get('length', 0),
-  hints: store.get('hints', 'on'), pace: store.get('pace', 'calm'), sound: store.get('sound', true),
+  hints: store.get('hints', 'on'), pace: store.get('pace', 'calm'), level: store.get('level', 'normal'), sound: store.get('sound', true),
 };
 const segPainters = [];
 function bindSeg(id, key, conv = v => v, onChange) {
@@ -404,6 +405,7 @@ bindSeg('set-rising', 'rising', Number);
 bindSeg('set-len', 'length', Number);
 bindSeg('set-hint', 'hints');
 bindSeg('set-pace', 'pace');
+bindSeg('set-level', 'level', v => v, () => renderSeats());
 $('set-game').value = settings.game;
 $('set-game').onchange = () => { settings.game = $('set-game').value; store.set('game', settings.game); paintStruct(); };
 // Each game allows only some structures (Stud and Razz are fixed-limit only); grey out the rest.
@@ -466,7 +468,7 @@ function infoFor(s) {
 function botFor(seat, kind, options) {
   if (kind === 'rebuy') return true;
   const v = viewFor(seat);
-  try { return botAct(v, options); } catch (e) { console.warn('bot error', e); return options.canCheck ? { type: 'check' } : { type: 'fold' }; }
+  try { return botAct(v, options, { style: styleFor(settings.level, seat), model: H.model }); } catch (e) { console.warn('bot error', e); return options.canCheck ? { type: 'check' } : { type: 'fold' }; }
 }
 function makeTable() {
   const old = T;
@@ -489,6 +491,7 @@ async function runMatch() {
   const seed = params.has('seed') ? +params.get('seed') : undefined;
   H.match = new Match({ n: T.count, buyIn: settings.buyIn, bb: 20, rebuys: settings.rebuys, game: settings.game, structure: settings.structure,
     rising: settings.rising, maxHands: settings.length, seed, firstButton: seed != null ? seed % T.count : Math.floor(Math.random() * T.count) });
+  H.model = new TableModel(T.count);   // how each seat has played, from public information only
   const m = H.match;
   T.pushAll();
   while (H.running && !m.over) {
@@ -515,6 +518,7 @@ async function runMatch() {
     }
     if (!H.running) break;
     m.finishHand();
+    H.model.observe(h.view(-1));
     T.pushAll();
     await sleep((h.result && !h.result.uncontested ? 4800 : 2000) * pace());
   }
@@ -539,7 +543,7 @@ function applyState(view, prompt, info) {
       // Worked out after the frame, so the buttons appear first.
       setTimeout(() => {
         if (!G.prompt || G.prompt.id !== prompt.id) return;
-        try { const eq = equity(view); G.hint.eq = eq; G.hint.action = botAct(view, prompt.options, {}, eq); } catch {}
+        try { const an = analyze(view); G.hint.eq = an.eq; G.hint.action = botAct(view, prompt.options, { style: STYLES.tag, analysis: an }); } catch {}
         renderHint();
       }, 30);
     }
@@ -730,7 +734,7 @@ function renderHint() {
   const odds = o.call > 0 ? Math.round(o.call / (o.pot + o.call) * 100) : null;
   const a = G.hint.action;
   const word = a ? { fold: 'fold', check: 'check', call: 'call', raise: 'raise', bringin: 'bring in' }[a.type] : '';
-  h.innerHTML = `Share of the pot ≈ <b>${eq}%</b>` + (odds != null ? ` · price ${odds}%` : '') + (word ? ` · the computer would <b>${word}${a.type === 'raise' && a.to ? ' to ' + fmt(a.to) : ''}</b>` : '');
+  h.innerHTML = `Share of the pot against their likely hands ≈ <b>${eq}%</b>` + (odds != null ? ` · price ${odds}%` : '') + (word ? ` · the computer would <b>${word}${a.type === 'raise' && a.to ? ' to ' + fmt(a.to) : ''}</b>` : '');
 }
 
 addEventListener('keydown', e => {
@@ -837,7 +841,7 @@ function renderSeats() {
   $('seats').innerHTML = Array.from({ length: T.count }, (_, s) => {
     if (s === 0) return `<div class="seat"><div class="who">${escapeHtml(myName())}<small>You, the host</small></div></div>`;
     const remote = T.kinds[s] === 'remote';
-    return `<div class="seat"><div class="who">${escapeHtml(T.names[s])}<small>${remote ? '<span class="ok">Friend, connected</span>' : 'Computer'} · ${seatDesc(s)}</small></div>` +
+    return `<div class="seat"><div class="who">${escapeHtml(T.names[s])}<small>${remote ? '<span class="ok">Friend, connected</span>' : 'Computer, ' + styleFor(settings.level, s).name.toLowerCase()} · ${seatDesc(s)}</small></div>` +
       (remote ? `<button class="btn small" data-drop="${s}">Remove</button>` : `<button class="btn small" data-inv="${s}">Invite a friend</button>`) + '</div>';
   }).join('');
   const mi = $('m-invites');

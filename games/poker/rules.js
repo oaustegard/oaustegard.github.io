@@ -614,7 +614,7 @@ export class Hand {
       phase: this.phase, street: this.street, streetName: this.streetName(), button: this.button, toAct: this.toAct,
       sb: this.sbSeat ?? null, bb: this.bbSeat ?? null,
       board: this.board.slice(), pot: this.pot, potTotal: this.potTotal(), currentBet: this.currentBet || 0,
-      players, events: this.events.slice(-40), result: this.result,
+      players, events: this.events.slice(), result: this.result,
     };
   }
 }
