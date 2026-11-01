@@ -12,9 +12,15 @@ Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lo
 | tilt the top away 2° to 12° | throttle, full at 12° |
 | tilt it toward you 3° to 12° | brake, then reverse from a standstill |
 | double-tap the screen, or Center wheel | make the current pose straight ahead |
+| **Touch pedals** (option) | Gas and Brake pads at the bottom right replace the tilt for speed; steering stays on the wheel |
+| **Manual gears** (option) | ▲ and ▼ paddles on the left change gear, with an automatic clutch; E and Q on a keyboard |
 | arrow keys or WASD | steer, throttle and brake on a computer |
 
 Hold the phone the way you want to drive when you press Start engine. That pose becomes straight ahead with no gas, and both the wheel and the pedal are measured from it, so there is no calibration step. **Keep horizon level** (on by default) tilts the 3D picture opposite to the phone, so the road's horizon stays level with the real one while you steer.
+
+## Gears
+
+Six gears; the limiter cuts in at 58, 94, 130, 162, 194 and 230 km/h. Below 55% of the limit speed the engine bogs, except in first, where the clutch slips. The automatic box changes up at 93% and down when the lower gear would run under 80%, so it stays where the engine pulls. With Manual gears on, each change cuts drive for 0.12 s while the clutch works. A downshift that would push the engine past the limiter is refused, and the paddle flashes red. Past the limiter, engine braking stops the car from running away downhill. The options you pick are remembered on that device.
 
 ## The back-seat driver
 
@@ -48,6 +54,7 @@ node tests/tilt-rally-check.mjs cars   # close-up stills of the cars
 node tests/tilt-rally-check.mjs grip      # a full-gas driver with perfect aim stays on every bend wider than 40 m
 node tests/tilt-rally-check.mjs backseat  # it shouts before the corner a full-gas driver leaves, notices the exit, and urges a crawler on
 node tests/tilt-rally-check.mjs permission  # the iOS motion prompt comes on the start screen, and Start engine waits for the answer
+node tests/tilt-rally-check.mjs controls  # touch pedals and paddles through the on-screen controls: limiter, upshifts, refused downshift, brake
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```

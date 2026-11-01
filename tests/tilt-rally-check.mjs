@@ -6,6 +6,7 @@
 //   node tests/tilt-rally-check.mjs grip    a full-gas driver with perfect aim stays on the road (pass a JSON list of tunings to compare)
 //   node tests/tilt-rally-check.mjs backseat the back-seat driver shouts before the corner a full-gas driver leaves, and urges a crawler on
 //   node tests/tilt-rally-check.mjs permission  the iOS motion prompt comes on the start screen, before the race
+//   node tests/tilt-rally-check.mjs controls  touch pedals and manual gears through the on-screen controls
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -229,6 +230,48 @@ if (what === "permission") {
   const s2 = await st();
   check("the race starts once motion is allowed", !s2.intro, JSON.stringify(s2));
   check("no page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+if (what === "controls") {
+  // Touch pedals and manual gears, driven through the real on-screen controls with a mouse standing in for a thumb.
+  const { page, errors } = await open("index.html");
+  await waitFor(page, () => document.getElementById("status").textContent === "Ready.");
+  await page.evaluate(() => { for (const id of ["pedals", "manual"]) document.getElementById(id).checked = true; });
+  await page.click("#start");
+  await page.evaluate(() => window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: 0, gamma: -75 })));
+  await waitFor(page, () => window.__game().state === "race");
+  const vis = await page.evaluate(() => ["gasP", "brkP", "shift"].map((id) => !document.getElementById(id).hidden));
+  check("pedals and paddles are on screen", vis.every(Boolean), JSON.stringify(vis));
+  const center = async (id) => { const r = await page.locator("#" + id).boundingBox(); return [r.x + r.width / 2, r.y + r.height / 2]; };
+  // steer like the computer cars do, through the phone: their aim, sent as a wheel turn (about 31 degrees is full lock)
+  const steer = () => page.evaluate(() => { const E = window.__engine, P = E.player, T = E.T, sp = Math.max(0, P.speed), k = (P.idx + Math.round((9 + sp * 0.55) / T.ds)) % T.x.length;
+    const fx = Math.sin(P.h), fz = Math.cos(P.h), dx = T.x[k] - P.x, dz = T.z[k] - P.z, s = Math.max(-1, Math.min(1, Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz) * 2.6));
+    window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: s * 31, gamma: -75 })); });
+  const drive = async (secs) => { const t = await raceT(page); while ((await raceT(page)) < t + secs) { await steer(); await page.waitForTimeout(40); } };
+  const press = async (id, secs) => { const [x, y] = await center(id); await page.mouse.move(x, y); await page.mouse.down(); await drive(secs); await page.mouse.up(); };
+  const tap = async (id) => { const [x, y] = await center(id); await page.mouse.click(x, y); await page.waitForTimeout(80); };
+  await press("gasP", 4);
+  const a = await you(page);
+  check("gas pedal in first gear runs to the limiter and stays in first, even downhill", a.gear === 1 && a.rpm >= 0.95 && a.rpm < 1.08, (a.speed * 3.6).toFixed(0) + " km/h, gear " + a.gear + ", revs " + a.rpm.toFixed(2));
+  await tap("up");
+  check("the up paddle shifts", (await you(page)).gear === 2);
+  // hold the gas with the mouse and shift with the keyboard (E up, Q down): one mouse cannot be two thumbs
+  const [gx, gy] = await center("gasP"); await page.mouse.move(gx, gy); await page.mouse.down();
+  for (let k = 0; k < 2; k++) { await page.keyboard.press("e"); await page.waitForTimeout(80); }
+  await drive(6);
+  const b2 = await you(page);
+  check("shifting up lets the car run past 100 km/h", b2.gear === 4 && b2.speed * 3.6 > 100, (b2.speed * 3.6).toFixed(0) + " km/h, gear " + b2.gear);
+  for (let k = 0; k < 3; k++) { await page.keyboard.press("q"); await page.waitForTimeout(80); }
+  await page.mouse.up();
+  const c3 = await you(page);
+  check("a downshift that would over-rev is refused (third tops out at 130 km/h)", c3.gear === 4 && c3.speed * 3.6 > 132, "gear " + c3.gear + " at " + (c3.speed * 3.6).toFixed(0) + " km/h");
+  await tap("dn");
+  check("the down paddle refuses it too", (await you(page)).gear === 4);
+  await press("brkP", 2);
+  const d = await you(page);
+  check("brake pedal slows the car", d.speed < b2.speed - 10, (b2.speed * 3.6).toFixed(0) + " -> " + (d.speed * 3.6).toFixed(0) + " km/h");
+  await page.screenshot({ path: path.join(OUT, "controls.png") });
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
 await b.close(); srv.close();

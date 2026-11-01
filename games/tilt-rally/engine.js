@@ -375,6 +375,11 @@ function gantryMesh() { const m = Mesh(), w = HW * 1.25 + 0.8, steel = [0.32, 0.
 function basis(p, fwd, up, s = 1) { const Z = vnorm(fwd); const X = vnorm(vcross(up, Z)); const Y = vcross(Z, X);
   return [X[0] * s, X[1] * s, X[2] * s, 0, Y[0] * s, Y[1] * s, Y[2] * s, 0, Z[0] * s, Z[1] * s, Z[2] * s, 0, p[0], p[1], p[2], 1]; }
 
+// Six gears, each named by the road speed (m/s) where it hits the rev limiter. Within a gear the engine pulls fully
+// from 55% of those revs up; below that it bogs (except in first, where the clutch slips). The automatic box changes
+// up at 93% revs and down when the lower gear would sit under 80%, so it always stays in the band and drives as the
+// single-speed model did. A manual change cuts drive for 0.12 s while the automatic clutch works.
+export const GEARS = [16, 26, 36, 45, 54, 64];
 export const CARS = [
   { name: "You", colour: [1, 0.78, 0.08], number: 7 },
   { name: "Rossa", colour: [0.82, 0.08, 0.07], number: 3 },
@@ -500,7 +505,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const nx = -T.tz[idx], nz = T.tx[idx], x = T.x[idx] + nx * side * 2.6, z = T.z[idx] + nz * side * 2.6;
     return { ...spec, ai, x, z, y: T.y[idx], h: Math.atan2(T.tx[idx], T.tz[idx]), vx: 0, vz: 0, idx, lat: side * 2.6, surf: 0, lap: 0, half: false,
       steer: 0, thr: 0, yawRate: 0, slip: 0, pitch: 0, roll: 0, lean: 0, spin: 0, speed: 0, lapStart: 0, best: Infinity, lapTimes: [], done: false, finish: 0, prog: idx - M,
-      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0 };
+      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false };
   }
   function stepCar(c, dt) {
     const T = E.T;
@@ -514,9 +519,18 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     // how close to the grip limit the wheel is asking for: 0 below 75% of it, 1 at full lock on the limit
     const over = c.ai || geom0 < lim0 ? 0 : TU.assist * clamp((Math.abs(c.steer) - 0.75) / 0.25, 0, 1);
     let a = 0;
-    if (c.thr > 0) a = c.thr * 11.5 * Math.max(0, 1 - vf / vmax) * (1 - Math.min(1, over)) - (vf > vmax ? (vf - vmax) * 0.8 : 0);
+    if (!c.manual) {
+      while (c.gear < 6 && vf > GEARS[c.gear - 1] * 0.93) c.gear++;
+      while (c.gear > 1 && vf < GEARS[c.gear - 2] * 0.8) c.gear--;
+    }
+    const r = Math.max(0, vf) / GEARS[c.gear - 1];
+    c.rpm = r; c.limiter = r >= 1;
+    const pull = c.cut > 0 || r >= 1 ? 0 : c.gear === 1 || r >= 0.55 ? 1 : 0.45 + 0.55 * r / 0.55;
+    if (c.cut > 0) c.cut -= dt;
+    if (c.thr > 0) a = c.thr * 11.5 * Math.max(0, 1 - vf / vmax) * (1 - Math.min(1, over)) * pull - (vf > vmax ? (vf - vmax) * 0.8 : 0);
     else if (c.thr < 0) a = vf > 0.5 ? c.thr * 17 : c.thr * 5 * (vf > -9 ? 1 : 0);
     a -= over * TU.scrub * clamp((sp0 - 12) / 25, 0, 1) * Math.sign(vf);   // gentle in slow corners, hard in fast ones
+    if (c.limiter && vf > 0) a -= 2.5 + (r - 1) * 250;                    // engine braking on the limiter, a wall past it
     a -= Math.sign(vf) * roll + 0.00045 * vf * Math.abs(vf);
     const hf = probe(c.x + fx * 1.4, c.z + fz * 1.4, pr.idx).y, hb = probe(c.x - fx * 1.4, c.z - fz * 1.4, pr.idx).y;
     a -= 9.81 * (hf - hb) / 2.8;
@@ -572,9 +586,16 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
   const rank = () => E.cars.slice().sort((a, b) => (a.done && b.done) ? a.finish - b.finish : a.done ? -1 : b.done ? 1 : b.prog - a.prog);
   E.rank = rank;
 
-  E.newRace = ({ autopilot = false } = {}) => {
+  // Manual change for the player: refuses a downshift that would send the engine past the limiter.
+  E.shift = (dir) => {
+    const c = E.player; if (!c || !c.manual) return false;
+    const g = c.gear + dir; if (g < 1 || g > 6) return false;
+    if (dir < 0 && Math.max(0, c.speed) > GEARS[g - 1] * 1.02) return false;
+    c.gear = g; c.cut = 0.12; return true;
+  };
+  E.newRace = ({ autopilot = false, manual = false } = {}) => {
     E.cars = [3, 2, 1, 0].map((k) => newCar(k, CARS[k], k !== 0));
-    E.player = E.cars.find((c) => c.name === "You"); E.player.autopilot = autopilot;
+    E.player = E.cars.find((c) => c.name === "You"); E.player.autopilot = autopilot; E.player.manual = manual && !autopilot;
     E.cam = null; E.raceT = -3.4; E.state = "countdown"; E.input = { steer: 0, thr: 0 };
   };
   E.tick = (dt) => {

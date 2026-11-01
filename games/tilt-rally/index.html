@@ -114,6 +114,20 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
   #speed { font-size: 48px; } #minimap { width: 92px; height: 92px; } #msg { font-size: 44px; }
 }
 @media (max-width: 560px) { html:not(.rot) .card { grid-template-columns: 1fr; } }
+/* touch pedals (right) and shift paddles (left): only these take touches inside the HUD */
+.pad { pointer-events: auto; position: absolute; border-radius: 14px; background: rgba(12, 17, 23, 0.45); border: 2px solid var(--line);
+  color: var(--ink); display: grid; place-items: center; font: 700 12px var(--hud); letter-spacing: 0.14em; text-transform: uppercase;
+  touch-action: none; -webkit-user-select: none; user-select: none; }
+#gasP { right: max(16px, var(--ir)); bottom: max(10px, var(--ib)); width: 78px; height: 150px; border-color: var(--gas); }
+#brkP { right: calc(max(16px, var(--ir)) + 90px); bottom: max(10px, var(--ib)); width: 96px; height: 92px; border-color: var(--brake); }
+#gasP.down { background: rgba(82, 210, 122, 0.4); } #brkP.down { background: rgba(255, 90, 78, 0.4); }
+#hud.pedals #br { right: auto; left: 50%; transform: translateX(-50%); text-align: center; }
+#shift { position: absolute; left: max(16px, var(--il)); top: 50%; transform: translateY(-50%); display: grid; gap: 8px; justify-items: center; }
+#up, #dn { position: static; width: 76px; height: 66px; font-size: 26px; letter-spacing: 0; }
+#up.down, #dn.down { background: rgba(255, 210, 31, 0.35); } #up.no, #dn.no { border-color: var(--brake); background: rgba(255, 90, 78, 0.35); }
+#gearBig { font-size: 34px; line-height: 1; min-width: 1.2em; text-align: center; text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8); }
+#gearBig.limit { color: var(--brake); }
+@media (max-height: 460px) { #gasP { height: 128px; width: 70px; } #brkP { right: calc(max(16px, var(--ir)) + 80px); height: 80px; width: 84px; } #up, #dn { height: 58px; width: 68px; } }
 #yell { position: absolute; left: 12%; right: 12%; top: 19%; text-align: center; font-family: var(--display); font-size: 50px; line-height: 1;
   color: var(--ink); -webkit-text-stroke: 7px #11161c; paint-order: stroke fill; transform: rotate(-4deg); text-wrap: balance; }
 #yell.hot { color: var(--brake); } #yell.go { color: var(--gas); } #yell.cool { color: var(--signal); }
@@ -146,7 +160,14 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
     <div id="pedal"><i id="gas"></i><i id="brk"></i></div>
     <div class="label" id="mode" style="margin-bottom:2px">tilt</div>
   </div>
-  <div id="br"><div class="num" id="speed">0</div><div class="label">km/h</div></div>
+  <div id="br"><div class="num" id="speed">0</div><div class="label"><span id="gearLbl">1</span> · km/h</div></div>
+  <div id="shift" hidden>
+    <button class="pad" id="up" type="button" aria-label="Shift up">▲</button>
+    <div class="num" id="gearBig">1</div>
+    <button class="pad" id="dn" type="button" aria-label="Shift down">▼</button>
+  </div>
+  <button class="pad" id="brkP" type="button" hidden>Brake</button>
+  <button class="pad" id="gasP" type="button" hidden>Gas</button>
   <div id="yell" hidden></div>
   <div id="msg"></div>
   <div id="sub"></div>
@@ -173,6 +194,8 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
         <label class="opt"><input type="checkbox" id="level" checked> Keep horizon level</label>
         <label class="opt"><input type="checkbox" id="sound" checked> Sound</label>
         <label class="opt"><input type="checkbox" id="backseat" checked> Back-seat driver</label>
+        <label class="opt"><input type="checkbox" id="pedals"> Touch pedals</label>
+        <label class="opt"><input type="checkbox" id="manual"> Manual gears</label>
       </div>
       <p class="small" id="status">Checking for WebGPU…</p>
     </div>
@@ -233,8 +256,8 @@ function startAudio() { if (!audio.on || audio.ctx) return; try {
   lp.type = "lowpass"; lp.frequency.value = 900; g.gain.value = 0; lp.connect(g); g.connect(ctx.destination);
   const o1 = ctx.createOscillator(), o2 = ctx.createOscillator(); o1.type = "sawtooth"; o2.type = "square"; o1.connect(lp); o2.connect(lp); o1.start(); o2.start();
   Object.assign(audio, { ctx, g, lp, o1, o2 }); } catch (e) { audio.ctx = null; } }
-function engineSound(v, thr) { if (!audio.ctx) return; const span = 15, gear = Math.min(5, Math.floor(Math.abs(v) / span)), fr = (Math.abs(v) - gear * span) / span;
-  const rpm = 900 + (gear === 5 ? Math.abs(v) / (6 * span) : fr) * 5200 + Math.max(0, thr) * 400, t = audio.ctx.currentTime;
+function engineSound(r, thr) { if (!audio.ctx) return;
+  const rpm = 900 + clamp(r, 0, 1.05) * 6000 + Math.max(0, thr) * 300, t = audio.ctx.currentTime;
   audio.o1.frequency.setTargetAtTime(rpm / 60 * 2, t, 0.03); audio.o2.frequency.setTargetAtTime(rpm / 60 * 1.003, t, 0.03);
   audio.lp.frequency.setTargetAtTime(500 + Math.max(0, thr) * 1200 + rpm * 0.1, t, 0.05); audio.g.gain.setTargetAtTime(0.035 + Math.max(0, thr) * 0.03, t, 0.05); }
 
@@ -262,7 +285,23 @@ addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
 let lastTap = 0;
 canvas.addEventListener("pointerdown", () => { const t = performance.now(); if (t - lastTap < 320) recenter(); lastTap = t; });
 $("center").addEventListener("click", recenter);
-const inp = { steer: 0, thr: 0, wheel: 0, kSteer: 0 };
+const inp = { steer: 0, thr: 0, wheel: 0, kSteer: 0, pedal: 0 };
+// Touch pedals: each pad tracks its own finger, so gas and brake (and the paddles) work with two thumbs at once.
+const held = { gas: false, brk: false };
+for (const [id, key] of [["gasP", "gas"], ["brkP", "brk"]]) {
+  const el = $(id), up = () => { held[key] = false; el.classList.remove("down"); };
+  el.addEventListener("pointerdown", (e) => { e.preventDefault(); el.setPointerCapture?.(e.pointerId); held[key] = true; el.classList.add("down"); });
+  for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(t, up);
+}
+function shift(dir) {
+  const el = $(dir > 0 ? "up" : "dn"), ok = G?.shift(dir);
+  el.classList.add(ok ? "down" : "no"); setTimeout(() => el.classList.remove("down", "no"), 160);
+  try { navigator.vibrate?.(ok ? 8 : [20, 30, 20]); } catch (e) {}
+  if (ok) hud();
+}
+$("up").addEventListener("pointerdown", (e) => { e.preventDefault(); shift(1); });
+$("dn").addEventListener("pointerdown", (e) => { e.preventDefault(); shift(-1); });
+addEventListener("keydown", (e) => { if (e.repeat) return; const k = e.key.toLowerCase(); if (k === "e") shift(1); else if (k === "q") shift(-1); });
 function readInput(dt) {
   let steer = 0, thr = 0, wheel = 0;
   if (sensor.up && sensor.neutral) {
@@ -270,6 +309,10 @@ function readInput(dt) {
     const w = wheelFrom(sensor.up, sensor.neutral); wheel = w.wheel;
     const ad = Math.max(0, Math.abs(w.wheel) - 1.5 * D2R); steer = Math.sign(w.wheel) * Math.pow(clamp(ad / (30 * D2R), 0, 1), 1.1);   // full lock at about 32 degrees
     const p = w.pitch / D2R; thr = p > 2 ? clamp((p - 2) / 10, 0, 1) : p < -3 ? -clamp((-p - 3) / 9, 0, 1) : 0;   // full gas 12 degrees forward, full brake 12 back
+  }
+  if ($("pedals").checked) {           // pedals replace the tilt for gas and brake; they ease in over about 0.15 s
+    const want = held.brk ? -1 : held.gas ? 1 : 0;
+    inp.pedal = want === 0 ? 0 : lerp(inp.pedal, want, 1 - Math.exp(-dt * 14)); thr = inp.pedal;
   }
   const kl = keys.has("arrowleft") || keys.has("a"), kr = keys.has("arrowright") || keys.has("d"), ku = keys.has("arrowup") || keys.has("w"), kd = keys.has("arrowdown") || keys.has("s");
   if (kl || kr || ku || kd) { sensor.mode = "keys"; inp.kSteer = lerp(inp.kSteer, (kr ? 1 : 0) - (kl ? 1 : 0), 1 - Math.exp(-dt * 7)); steer = inp.kSteer; thr = (ku ? 1 : 0) - (kd ? 1 : 0); wheel = steer * 60 * D2R; }
@@ -298,7 +341,7 @@ function frame(now) {
   if (canvas.width !== w || canvas.height !== h) { canvas.width = w; canvas.height = h; }
   // Counter-rotate the picture by the wheel angle: the phone turns, the horizon stays level with the real one.
   G.render(ctx.getCurrentTexture().createView(), w, h, dtR, { roll: sensor.mode === "tilt" && $("level").checked ? inp.wheel : 0 });
-  engineSound(G.player.speed, G.state === "race" ? G.player.thr : 0);
+  engineSound(G.player.rpm || 0, G.state === "race" ? G.player.thr : 0);
   backseat(dtR);
   if ((hudT += dtR) > 1 / 15) { hudT = 0; hud(); }
   if (flashT > 0 && (flashT -= dtR) <= 0) { $("msg").textContent = ""; $("sub").textContent = ""; }
@@ -326,14 +369,23 @@ function hud() {
   $("best").textContent = "Best " + (P.best < Infinity ? fmt(P.best) : "—");
   $("wheel").style.transform = "rotate(" + (inp.wheel / D2R).toFixed(1) + "deg)";
   $("gas").style.height = (Math.max(0, inp.thr) * 50) + "%"; $("brk").style.height = (Math.max(0, -inp.thr) * 50) + "%";
-  $("mode").textContent = sensor.mode;
+  $("mode").textContent = $("pedals").checked ? "pedals" : sensor.mode;
+  $("gearLbl").textContent = (P.manual ? "" : "A") + P.gear; $("gearBig").textContent = P.gear; $("gearBig").classList.toggle("limit", !!P.limiter);
   const mm = $("minimap").getContext("2d"); mm.clearRect(0, 0, 240, 240); mm.drawImage(mini.c, 0, 0);
   for (const c of G.cars) { const p = mini.m(c.x, c.z); mm.beginPath(); mm.arc(p[0], p[1], c === P ? 11 : 8, 0, TAU);
     mm.fillStyle = "rgb(" + c.colour.map((v) => Math.round(v * 255)).join(",") + ")"; mm.fill(); mm.lineWidth = 3; mm.strokeStyle = "#11161c"; mm.stroke(); }
 }
 
 // ---------------------------------------------------------------- start
-function newRace() { G.newRace({ autopilot: DEMO }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
+const OPTS = ["level", "sound", "backseat", "pedals", "manual"];
+try { const saved = JSON.parse(localStorage.getItem("tilt-rally-options") || "{}"); for (const k of OPTS) if (k in saved) $(k).checked = !!saved[k]; } catch (e) {}
+for (const k of OPTS) $(k).addEventListener("change", () => { try { localStorage.setItem("tilt-rally-options", JSON.stringify(Object.fromEntries(OPTS.map((o) => [o, $(o).checked])))); } catch (e) {} });
+function controls() {
+  const pedals = $("pedals").checked, manual = $("manual").checked && !DEMO;
+  $("gasP").hidden = $("brkP").hidden = !pedals; $("hud").classList.toggle("pedals", pedals); $("shift").hidden = !manual;
+  return manual;
+}
+function newRace() { G.newRace({ autopilot: DEMO, manual: controls() }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
 function layout() {
   const forced = Q.get("rotate"), rot = forced != null ? forced === "1" : innerHeight > innerWidth && matchMedia("(pointer: coarse)").matches;
   const r = document.documentElement; r.classList.toggle("rot", rot);
@@ -413,7 +465,7 @@ window.__backseat = { step: backseat, log: bs.log };
 
 window.__game = () => G && { frames: G.frames, state: G.state, raceT: G.raceT, stats: G.stats, scale,
   input: { steer: inp.steer, thr: inp.thr, mode: sensor.mode, events: sensor.events },
-  cars: G.cars?.map((c) => ({ name: c.name, lap: c.lap, idx: c.idx, speed: c.speed, lat: c.lat, surf: c.surf, done: c.done, best: c.best })) };
+  cars: G.cars?.map((c) => ({ name: c.name, lap: c.lap, idx: c.idx, speed: c.speed, lat: c.lat, surf: c.surf, done: c.done, best: c.best, gear: c.gear, rpm: c.rpm, manual: c.manual })) };
 
 async function init() {
   if (!navigator.gpu) { status("This game draws with WebGPU, which this browser does not offer. Try Chrome on Android, Safari on iOS 26 or later, or desktop Chrome or Edge."); $("start").disabled = true; return false; }
