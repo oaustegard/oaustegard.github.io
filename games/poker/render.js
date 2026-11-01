@@ -224,10 +224,11 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   const sprites = [];
   const seats = [];
   const unit = Math.min(W, H);
-  const TABLE_SCALE = 1.15;   // cards on the table (board and other players), relative to the first layout
-  const smallH = Math.max(30, Math.min(unit * (portrait ? 0.085 : 0.095), 78)) * TABLE_SCALE;
+  // Cards on the table: the other players' and the board. On a phone the width limits them, so they
+  // take most of what the table offers.
+  const smallH = Math.max(36, Math.min(unit * (portrait ? 0.15 : 0.12), 104));
   // Five board cards with gaps span 5.2 card widths; keep them within 94% of the table's width.
-  const boardH = Math.max(44, Math.min(unit * (portrait ? 0.12 : 0.14) * TABLE_SCALE, rx * 2 * 0.94 / 5.2 * CARD_ASPECT, 118 * TABLE_SCALE));
+  const boardH = Math.max(50, Math.min(unit * (portrait ? 0.24 : 0.18), rx * 2 * 0.94 / 5.2 * CARD_ASPECT, 150));
   const showdown = view.result && !view.result.uncontested;
   const winners = new Set();
   const winCards = new Set();
@@ -239,6 +240,17 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   }
   const stud = view.variant && ['stud7', 'stud8', 'razz', 'stud5'].includes(view.variant);
 
+  // The board's place, worked out first: board games keep it clear from the start, so the other players'
+  // cards do not jump when the flop arrives.
+  const bw = boardH / CARD_ASPECT, bgap = bw * 1.05;
+  const nb = view.board.length;
+  const boardGame = view.variant && !stud && view.variant !== 'draw5';
+  const boardY = cy - (nb || boardGame ? boardH * 0.25 : 0);
+  const boardRect = nb || boardGame
+    ? { x0: cx - bgap * 2 - bw / 2 - 6, x1: cx + bgap * 2 + bw / 2 + 6, y0: boardY - boardH * 0.62 - 6, y1: boardY + boardH * 0.5 + 6 }
+    : { x0: cx, x1: cx, y0: cy, y1: cy };
+  const overlap = (a, b) => Math.max(0, Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0)) * Math.max(0, Math.min(a.y1, b.y1) - Math.max(a.y0, b.y0));
+
   for (let s = 0; s < n; s++) {
     const p = view.players[s];
     const rel = (s - view.seat + n) % n;
@@ -248,24 +260,16 @@ export function layoutTable(view, W, H, safe, ui = {}) {
     const seat = { seat: s, rel, x: ax, y: ay, ux, uy, present: !!p };
     seats.push(seat);
     if (!p) continue;
-    // Bets: toward the centre.
-    const bx = cx + ux * rx * 0.5, by = cy + uy * ry * 0.5;
-    seat.bet = { x: bx, y: by };
-    if (p.bet > 0) {
-      const chips = chipStack(p.bet);
-      const ch = Math.max(16, smallH * 0.36);
-      chips.forEach((ci, i) => sprites.push({ key: `bet${s}-${i}`, k: K_CHIP + ci, x: bx - ch * 0.3, y: by - i * ch * 0.14, w: ch, h: ch, rot: 0, flags: F.CHIP, lift: 0, spawn: `seat${s}` }));
-      seat.betLabel = { x: bx + ch * 0.55, y: by - ch * 0.1 };
-    }
     if (s === view.button) {
       const d = Math.max(18, smallH * 0.38);
       const bxx = cx + Math.cos(ang - 0.32) * rx * 0.78, byy = cy + Math.sin(ang - 0.32) * ry * 0.78;
       sprites.push({ key: 'button', k: K_BUTTON, x: bxx, y: byy, w: d, h: d, rot: 0, flags: F.CHIP, lift: 0 });
     }
-    if (p.folded && !(view.phase === 'over' && false)) continue;
     const isMe = s === view.seat;
     const cards = p.cards;
-    if (isMe) {
+    const side = portrait && Math.abs(ux) > 0.3;   // a side seat on a narrow table
+    let box = null;                                  // where another player's cards are, to keep chips off them
+    if (!p.folded && isMe) {
       const gap = myW * (cards.length > 5 ? 0.8 : 0.92);
       const x0 = cx - gap * (cards.length - 1) / 2;
       cards.forEach((x, i) => {
@@ -279,29 +283,52 @@ export function layoutTable(view, W, H, safe, ui = {}) {
         sprites.push({ key, k: x.c ?? K_BACK, x: x0 + i * gap, y: myY, w: myW, h: myH, rot: 0, flags, lift, spawn: 'deck', card: x.c, mine: true });
       });
       seat.cards = { x: cx, y: myY - myH * 0.5 };
-    } else {
-      // Others: a small fan just inside the rail; stud up cards larger and spread so they can be read.
-      const h = stud ? smallH * 0.95 : smallH * 0.85, w = h / CARD_ASPECT;
-      const gap = stud ? w * 0.62 : w * 0.38;
-      // On a narrow table the cards tuck under the seat's badge; on a wide one they sit inside the rail.
+    } else if (!p.folded && cards.length) {
+      // Others: a fan inside the rail; stud up cards spread so they can be read; shown hands a little larger.
+      const big = showdown && cards.some(x => x.c != null) ? 1.2 : 1;
+      const h = (stud ? smallH * 0.95 : smallH * 0.85) * big, w = h / CARD_ASPECT;
+      let gap = stud ? w * 0.62 : w * 0.38;
       let px = cx + ux * rx * 0.7, py = cy + uy * ry * 0.7;
-      if (portrait && Math.abs(ux) > 0.3) { px = ax - ux * Math.min(rx * 0.15, 30); py = ay + 10 + 22 + h * 0.62; }
-      const x0 = px - gap * (cards.length - 1) / 2;
+      if (side) {
+        // On a narrow table the fan lines up against the screen edge, squeezed if it would run past
+        // 44% of the width, under the seat's badge (above it for the lower seats).
+        const maxSpan = W * 0.44;
+        if (cards.length > 1 && (cards.length - 1) * gap + w > maxSpan) gap = (maxSpan - w) / (cards.length - 1);
+        const span = (cards.length - 1) * gap + w;
+        px = ux < 0 ? 8 + span / 2 : W - 8 - span / 2;
+        // Below the badge, or above it, whichever keeps clear of the board (lower seats prefer above).
+        const below = ay + 32 + h * 0.55, above = ay - 30 - h * 0.55;
+        const rect = y => ({ x0: px - span / 2, x1: px + span / 2, y0: y - h / 2, y1: y + h / 2 });
+        const first = uy > 0.3 ? above : below, second = uy > 0.3 ? below : above;
+        py = overlap(rect(first), boardRect) <= overlap(rect(second), boardRect) ? first : second;
+      }
+      const span = (cards.length - 1) * gap + w;
+      const x0 = px - span / 2 + w / 2;
       cards.forEach((x, i) => {
         let flags = 0, lift = 0;
         if (winCards.has(s + ':' + x.c)) { flags |= F.WIN; lift = 0.5; }
         else if (showdown && winners.size && x.c != null) flags |= winners.has(s) ? 0 : F.DIM;
-        const big = showdown && x.c != null ? 1.25 : 1;
-        sprites.push({ key: `p${s}-${i}`, k: x.c ?? K_BACK, x: x0 + i * gap * big, y: py + (stud && !x.up && x.c == null ? -h * 0.08 : 0), w: w * big, h: h * big, rot: 0, flags, lift, spawn: 'deck' });
+        sprites.push({ key: `p${s}-${i}`, k: x.c ?? K_BACK, x: x0 + i * gap, y: py + (stud && !x.up && x.c == null ? -h * 0.08 : 0), w, h, rot: 0, flags, lift, spawn: 'deck' });
       });
       seat.cards = { x: px, y: py };
+      box = { x0: px - span / 2, x1: px + span / 2, y0: py - h / 2, y1: py + h / 2 };
+    }
+    // Bets: toward the centre, and clear of that player's cards.
+    const ch = Math.max(16, smallH * 0.36);
+    let bx = cx + ux * rx * 0.5, by = cy + uy * ry * 0.5;
+    if (box && side) { bx = ux < 0 ? box.x1 + ch * 0.9 : box.x0 - ch * 2.4; by = (box.y0 + box.y1) / 2; }
+    else if (box) {
+      for (let k = 0; k < 10 && bx > box.x0 - ch * 2.4 && bx < box.x1 + ch && by > box.y0 - ch && by < box.y1 + ch; k++) { bx += (cx - bx) * 0.15; by += (cy - by) * 0.15; }
+    }
+    seat.bet = { x: bx, y: by };
+    if (p.bet > 0) {
+      const chips = chipStack(p.bet);
+      chips.forEach((ci, i) => sprites.push({ key: `bet${s}-${i}`, k: K_CHIP + ci, x: bx - ch * 0.3, y: by - i * ch * 0.14, w: ch, h: ch, rot: 0, flags: F.CHIP, lift: 0, spawn: `seat${s}` }));
+      seat.betLabel = { x: bx + ch * 0.55, y: by - ch * 0.1 };
     }
   }
 
   // Board, in the middle; the pot just under it.
-  const bw = boardH / CARD_ASPECT, bgap = bw * 1.05;
-  const nb = view.board.length;
-  const boardY = cy - (nb ? boardH * 0.25 : 0);
   if (nb) {
     const slots = Math.max(5, nb);
     const x0 = cx - bgap * (slots - 1) / 2;
