@@ -5,8 +5,9 @@
 // TableModel, so the opponent model learns over the run. Prints A's result in big blinds per 100 hands
 // with a standard error; |mean| over 2 standard errors is a real difference.
 //
-// Players: v1 (the first bot, frozen in tests/poker-ai-v1.mjs), or a style name from ai.js
-// (tag, lag, rock, station, maniac), optionally with '-norange' to turn off range reading.
+// Players: v1 (the first bot, frozen in tests/poker-ai-v1.mjs), a style name from ai.js (tag, lag, rock,
+// station, maniac) optionally with '-norange' to turn off range reading, or path/to/ai.js:style for a
+// bot from another copy of ai.js (its rules.js import must resolve; copy both files together).
 // Examples:  node tests/poker-bots.mjs 400 holdem nl tag v1
 //            node tests/poker-bots.mjs 300 omaha8 fl tag station 6
 import { Hand, stakesFor, rng, VARIANTS } from '../games/poker/rules.js';
@@ -16,7 +17,15 @@ import * as v1 from './poker-ai-v1.mjs';
 const [deals = 300, game = 'holdem', structure = 'nl', A = 'tag', B = 'v1', seatsArg = 6] = process.argv.slice(2);
 const N = +seatsArg, BB = 20, STACK = 100 * BB, ITERS = 150;
 
+// A player can also come from another copy of ai.js: path/to/ai.js:style (for comparing versions).
+const external = {};
+for (const n of [A, B]) if (n.includes('.js:')) external[n] = await import(new URL(n.slice(0, n.lastIndexOf(':')), 'file://' + process.cwd() + '/').href);
+
 function player(name) {
+  if (external[name]) {
+    const mod = external[name], style = mod.STYLES[name.slice(name.lastIndexOf(':') + 1)];
+    return { name, act: (view, o, model) => mod.botAct(view, o, { style, model, iters: ITERS }) };
+  }
   if (name === 'v1') return { name, act: (view, o) => v1.botAct(view, o, {}, o.kind === 'bet' ? v1.equity(view, ITERS) : null) };
   const [key, flag] = name.split('-');
   const style = { ...STYLES[key] };

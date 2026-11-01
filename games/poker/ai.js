@@ -14,6 +14,23 @@
 //     model. The choice is a soft maximum over the actions, so close calls vary.
 import { VARIANTS, evalHigh, evalLow, bestHands, qualifies8, fullDeck, rankOf, suitOf } from './rules.js';
 
+// ---------- tunable constants ----------
+// Every hand-set number the decisions use, in one place so tests/poker-tune.mjs can search over them.
+// A bot takes its own copy through ctx.params; omitted, it uses these.
+export const PARAMS = {
+  csFloor: 0.02, csK: 2,                 // continue share: floor, and how fast the price narrows it
+  pfrRe: 0.4, sizeOff: 0.75, sizeExp: 0.6, // re-raise narrowing; big raises narrow ranges beyond sizeOff × pot
+  betBase: 0.25, betAggr: 0.35, betRe: 0.55, // share a player bets after the first round (+ aggression), and re-raises
+  callWiden: 0.25, callFloor: 0.04,       // callers hold a wider band than bettors; weight floor for a caller
+  edgeK: 0.3, trap: 0.55,                 // softness of range edges; how much a check hides monsters
+  foldBias: 0.6,                          // how far a player's fold-to-bet rate moves their continue threshold
+  discMul: 1,                             // scale of the early-street price discount
+  oop: 0.86, studPos: 0.93,               // share realised out of position; in stud (position unknown)
+  aggrK: 0.08,                            // extra value per unit of a style's aggression
+  overbet: 2,                             // largest all-in considered, in pot-sized raises
+  minRe: 0.6,                             // smallest re-raise considered, as a share of the pot
+};
+
 // ---------- personalities ----------
 // tight: margin (share of the pot) a call must clear. aggr: extra value given to betting. bluff: how much
 // it believes in folds (1 = as the model says). adapt: how far it moves from priors to the model.
@@ -75,27 +92,29 @@ export class TableModel {
   stats(seat, adapt = 1) {
     const st = this.s[seat];
     const sm = (k, num, den, K) => PRIOR[k] + adapt * ((num + PRIOR[k] * K) / (den + K) - PRIOR[k]);
-    if (!st) return { ...PRIOR, betRange: 0.25 + 0.35 * PRIOR.aggr };
+    if (!st) return { ...PRIOR };
     const aggr = sm('aggr', st.aggr, st.aggr + st.passive, 8);
     return {
       vpip: sm('vpip', st.vpip, st.hands, 8), pfr: sm('pfr', st.pfr, st.hands, 8),
       foldToBet: sm('foldToBet', st.folded, st.faced, 8), aggr, bluff: sm('bluff', st.bluffs, st.shows, 6),
-      betRange: 0.25 + 0.35 * aggr,   // share of hands a player bets with after the first round
     };
   }
 }
 const priorStats = () => new TableModel(0).stats(-1);
 
 // ---------- quick strength scores, for reading ranges ----------
-// Two hold'em cards: high cards, pairs, suits and gaps (in the spirit of the Chen formula).
+// Two hold'em cards, by the Chen formula: the high card's points (ace 10, king 8, queen 7, jack 6, else
+// half its rank), doubled for a pair (at least 5), +2 suited, minus gap penalties, +1 for small connectors.
+const CHEN = [1, 1.5, 2, 2.5, 3, 3.5, 4, 4.5, 5, 6, 7, 8, 10];
 function pre2(a, b) {
   let hi = rankOf(a), lo = rankOf(b);
   if (lo > hi) [hi, lo] = [lo, hi];
-  let s = hi * 2 + lo;
-  if (hi === lo) return s + 24 + hi * 2;
-  if (suitOf(a) === suitOf(b)) s += 4;
+  if (hi === lo) return Math.max(5, CHEN[hi] * 2);
+  let s = CHEN[hi];
+  if (suitOf(a) === suitOf(b)) s += 2;
   const gap = hi - lo - 1;
-  s -= gap <= 0 ? 0 : gap === 1 ? 1 : gap === 2 ? 3 : gap === 3 ? 5 : 8;
+  s -= gap === 0 ? 0 : gap === 1 ? 1 : gap === 2 ? 2 : gap === 3 ? 4 : 5;
+  if (gap <= 1 && hi < 10) s += 1;
   return s;
 }
 // Hole cards before any board: hold'em directly; Omaha by its best two pairs of cards, suits, and
@@ -109,10 +128,10 @@ function preScore(V, cards) {
   const suits = [0, 0, 0, 0];
   for (const c of cards) suits[suitOf(c)]++;
   const suited = suits.filter(k => k >= 2).length;
-  s += suited === 2 ? 4 : suited ? 2 : 0;
+  s += suited === 2 ? 2 : suited ? 1 : 0;
   if (V.split === 'hilo8') {
     const lows = new Set(cards.map(c => (rankOf(c) + 1) % 13).filter(r => r <= 7));
-    s += lows.size * 3 + (lows.has(0) && lows.has(1) ? 10 : 0);
+    s += lows.size * 1.5 + (lows.has(0) && lows.has(1) ? 5 : 0);
   }
   return s;
 }
@@ -190,13 +209,13 @@ function actionsBySeat(view) {
 // The share of its hands a player continues with against a bet of `frac` times the pot, from the price
 // the bet offers (the caller needs frac / (1 + 2 frac) of the final pot): a tiny bet ≈ everything, a
 // third of the pot ≈ the top 60%, a pot-sized bet ≈ the top 34%, a 60× pot shove ≈ the top 3%.
-export const continueShare = frac => {
+export const continueShare = (frac, K = PARAMS) => {
   const need = Math.max(0, frac) / (1 + 2 * Math.max(0, frac));
-  return 0.02 + 0.98 * (1 - 2 * need);
+  return K.csFloor + (1 - K.csFloor) * Math.max(0, 1 - K.csK * need);
 };
 const sig = x => 1 / (1 + Math.exp(-x));
 // How likely a hand at strength pPre (before the board) / pNow is, given the actions.
-function rangeWeight(acts, pPre, pNow, st, curStreet) {
+function rangeWeight(acts, pPre, pNow, st, curStreet, K = PARAMS) {
   if (!acts || !acts.length) return 1;
   let w = 1;
   // Bluffs are a share of a betting range, so the narrower the value range, the fewer the bluffs.
@@ -205,20 +224,21 @@ function rangeWeight(acts, pPre, pNow, st, curStreet) {
   for (const a of acts) {
     const p = a.street === 0 ? pPre : pNow;
     // The edge of a range is soft, in proportion to its width (and softer for earlier rounds).
-    const edge = (sh, k = 0.3) => Math.max(0.012, sh * k) * (a.street === curStreet ? 1 : 1.5);
+    const edge = sh => Math.max(0.012, sh * K.edgeK) * (a.street === curStreet ? 1 : 1.5);
     if (a.t === 'raise') {
       const k = (raisesIn.get(a.street) || 0) + 1;
       raisesIn.set(a.street, k);
       if (k > 2) continue;
       // Big raises come from narrower ranges than the player's usual raise.
-      const size = Math.min(1, Math.pow(1 + Math.max(0, a.frac - 0.75) / 2, -0.6));
-      const share = (a.street === 0 ? st.pfr * (a.level >= 2 ? 0.4 : 1) : st.betRange * (a.level >= 1 ? 0.55 : 1)) * size;
+      const size = Math.min(1, Math.pow(1 + Math.max(0, a.frac - K.sizeOff) / 2, -K.sizeExp));
+      const betRange = K.betBase + K.betAggr * st.aggr;
+      const share = (a.street === 0 ? st.pfr * (a.level >= 2 ? K.pfrRe : 1) : betRange * (a.level >= 1 ? K.betRe : 1)) * size;
       const sh = Math.max(0.01, share);
       w *= sig((p - (1 - sh)) / edge(sh)) + bluffRatio * sh;
     } else if (a.t === 'call') {
-      const share = a.street === 0 ? Math.max(st.vpip, st.pfr + 0.05) : Math.min(0.85, st.betRange + 0.25);
-      w *= sig((p - (1 - share)) / edge(share)) + 0.04;
-    } else w *= 1 - 0.55 * sig((p - 0.8) / (a.street === curStreet ? 0.06 : 0.09));   // check: a monster sometimes slow-plays
+      const share = a.street === 0 ? Math.max(st.vpip, st.pfr + 0.05) : Math.min(0.85, K.betBase + K.betAggr * st.aggr + K.callWiden);
+      w *= sig((p - (1 - share)) / edge(share)) + K.callFloor;
+    } else w *= 1 - K.trap * sig((p - 0.8) / (a.street === curStreet ? 0.06 : 0.09));   // check: a monster sometimes slow-plays
   }
   return w;
 }
@@ -255,12 +275,13 @@ function share(V, ms, opp) {
   return loBest == null ? hi : (hi + lo) / 2;
 }
 
-// Returns { eq, opps, at(frac) }: the share of the pot against the opponents' likely hands, per opponent
-// what the decision needs to know, and for a bet of frac × the pot, { eqCalled, pf }: the share against
-// the hands that would continue, and the chance that every opponent folds. Both come from the same
-// weighted deals, so a player whose actions show strength folds less and is harder to beat when called.
-// ctx: { model, adapt, range (false = everyone holds random cards), iters (fixed count; default ~60 ms) }
+// Returns { eq, opps, raise(frac, P, r, add, opts) }: the share of the pot against the opponents' likely
+// hands, per opponent what the decision needs to know, and the expected chips from a bet (see raise).
+// Folds and the continuing hands come from the same weighted deals, so a player whose actions show
+// strength folds less and is harder to beat when called.
+// ctx: { model, adapt, range (false = everyone holds random cards), iters (fixed count; default ~60 ms), params }
 export function analyze(view, ctx = {}) {
+  const K = ctx.params || PARAMS;
   const V = VARIANTS[view.variant];
   const me = view.players[view.seat];
   const myCards = me.cards.map(x => x.c);
@@ -272,7 +293,7 @@ export function analyze(view, ctx = {}) {
     return { seat: p.seat, allIn: p.allIn, bet: p.bet, st, acts: mine,
       raisedNow: mine.some(a => a.t === 'raise' && a.street === view.street), raisedBefore: mine.some(a => a.t === 'raise' && a.street < view.street) };
   });
-  const flat = (e, pf) => ({ eq: e, eqCalled: e, opps, at: () => ({ eqCalled: e, pf }) });
+  const flat = (e, pf) => ({ eq: e, opps, raise: (frac, P, r, add) => ({ pf, ev: pf * P + (1 - pf) * (e * (P + r + add) - r) }) });
   if (!opps.length) return flat(1, 1);
   const known = new Set(myCards.concat(view.board));
   for (const p of view.players) if (p) for (const x of p.cards) if (x.c != null) known.add(x.c);
@@ -296,7 +317,7 @@ export function analyze(view, ctx = {}) {
   // Continue thresholds (percentiles) for a ladder of bet sizes, shifted per opponent by how often
   // they fold to bets.
   const TH = [0.3, 0.45, 0.55, 0.65, 0.75, 0.84, 0.91, 0.96, 0.985];
-  const bias = opps.map(p => (p.st.foldToBet - PRIOR.foldToBet) * 0.6);
+  const bias = opps.map(p => (p.st.foldToBet - PRIOR.foldToBet) * K.foldBias);
   const folds = opps.map(() => new Float64Array(TH.length));
 
   const drawing = V.kind === 'draw' && view.phase !== 'over' && view.street === 0;
@@ -327,7 +348,7 @@ export function analyze(view, ctx = {}) {
       pNows[o] = pNow;
       if (ranged) {
         const pPre = preCal ? pctOf(preCal, [preScore(V, h), null]) : pNow;
-        w *= rangeWeight(opps[o].acts, pPre, pNow, opps[o].st, view.street);
+        w *= rangeWeight(opps[o].acts, pPre, pNow, opps[o].st, view.street, K);
       }
       hands[o] = h;
     }
@@ -345,59 +366,69 @@ export function analyze(view, ctx = {}) {
   }
   // If no deal fits the actions at all, fall back to random hands rather than a share of zero.
   const eq = wsum > 1e-12 * it ? tot / wsum : flatTot / Math.max(1, it);
-  const pfAt = TH.map((t, j) => opps.reduce((x, p, o) => (p.allIn ? x : x * (wsum > 0 ? folds[o][j] / wsum : 0)), opps.some(p => !p.allIn) ? 1 : 0));
-
-  // Share when called: heads-up against a hand drawn from the top of the caller's strength (at least the
-  // three strongest samples), the rest of the cards dealt at random. One caller is the usual case.
-  const callers = opps.map((p, o) => o).filter(o => !opps[o].allIn);
-  // Each calibration hand's weight under that opponent's range, for drawing a caller's hand.
-  const listW = callers.map(o => cals[o].list.map(x => ranged
-    ? rangeWeight(opps[o].acts, preCal ? pctOf(preCal, [preScore(V, x.cards), null]) : x.p, x.p, opps[o].st, view.street) : 1));
-  const calledCache = new Map();
-  const calledEq = t => {
-    const key = Math.round(t * 100);
-    if (calledCache.has(key)) return calledCache.get(key);
-    if (!callers.length) return eq;
-    let sum = 0, n = 0;
-    const N = ctx.iters ? Math.max(24, ctx.iters >> 2) : 48;
-    callers.forEach((o, ci) => {
-      // The hands in the caller's range strong enough to continue (or its three strongest).
-      const list = cals[o].list, W = listW[ci];
-      let i0 = list.findIndex(x => x.p >= t + bias[o]);
-      if (i0 < 0 || i0 > list.length - 3) i0 = list.length - 3;
-      i0 = Math.max(0, i0);
-      let tw = 0;
-      for (let i = i0; i < list.length; i++) tw += W[i];
-      for (let i = 0; i < N; i++) {
-        let u = Math.random() * tw, pick = list.length - 1;
-        for (let m = i0; m < list.length; m++) { u -= W[m]; if (u <= 0) { pick = m; break; } }
-        const opp = list[pick].cards;
-        const used = new Set(opp);
-        const rest = unseen.filter(c => !used.has(c));
-        for (let k = 0; k < rest.length && k < 12; k++) { const j = k + Math.floor(Math.random() * (rest.length - k)); const x = rest[k]; rest[k] = rest[j]; rest[j] = x; }
-        let k = 0;
-        const board = view.board.slice();
-        for (let m = 0; m < boardNeed; m++) board.push(rest[k++]);
-        const mine = myCards.slice();
-        for (let m = 0; m < myNeed; m++) mine.push(rest[k++]);
-        const theirs = opp.slice();
-        for (let m = 0; m < oppNeed[o] - oppHidden[o]; m++) theirs.push(rest[k++]);
-        sum += share(V, score(mine, board), [score(theirs, board)]); n++;
+  // Per opponent, the chance it folds to a bet whose continue threshold is t (from the weighted deals).
+  const foldAt = (o, t) => {
+    if (wsum <= 0) return 0;
+    const f = j => folds[o][j] / wsum;
+    if (t <= TH[0]) return f(0);
+    for (let j = 0; j + 1 < TH.length; j++) if (t <= TH[j + 1]) { const u = (t - TH[j]) / (TH[j + 1] - TH[j]); return f(j) + (f(j + 1) - f(j)) * u; }
+    return f(TH.length - 1);
+  };
+  // Each calibration hand's weight under that opponent's range, for drawing the hands that continue.
+  const listW = opps.map((p, o) => cals[o].list.map(x => ranged
+    ? rangeWeight(p.acts, preCal ? pctOf(preCal, [preScore(V, x.cards), null]) : x.p, x.p, p.st, view.street, K) : 1));
+  const drawFrom = (o, t, u) => {
+    // A hand from opponent o's range at or above strength t (or its three strongest), by weight.
+    const list = cals[o].list, W = listW[o];
+    let i0 = t <= 0 ? 0 : list.findIndex(x => x.p >= t + bias[o]);
+    if (i0 < 0 || i0 > list.length - 3) i0 = list.length - 3;
+    i0 = Math.max(0, i0);
+    let tw = 0;
+    for (let i = i0; i < list.length; i++) tw += W[i];
+    let x = u * tw;
+    for (let m = i0; m < list.length; m++) { x -= W[m]; if (x <= 0) return list[m].cards; }
+    return list[list.length - 1].cards;
+  };
+  // The value of betting frac × the pot (r more chips from us, `add` from each caller): every
+  // opponent folds or continues by its own chance; whoever continues holds a hand from the stronger part
+  // of its range; then the cards run out and the pot (with every caller's chips) is split as the game
+  // splits it, high and low included. The same random numbers serve every size, so sizes compare fairly.
+  const NS = ctx.iters ? Math.max(32, ctx.iters >> 1) : 64;
+  const R = Array.from({ length: NS }, () => Float64Array.from({ length: 2 * opps.length + 16 }, Math.random));
+  const raise = (frac, P, r, add, { bluff = 1, realize = 1 } = {}) => {
+    const t = 1 - continueShare(frac, K);
+    const fold = opps.map((p, o) => (p.allIn ? 0 : 1 - Math.pow(1 - foldAt(o, t), bluff)));
+    const pf = fold.reduce((x, f, o) => (opps[o].allIn ? x : x * f), opps.some(p => !p.allIn) ? 1 : 0);
+    let sum = 0;
+    for (let i = 0; i < NS; i++) {
+      const u = R[i];
+      const ins = [], used = new Set();
+      for (let o = 0; o < opps.length; o++) {
+        if (!opps[o].allIn && u[2 * o] < fold[o]) continue;
+        let h = drawFrom(o, opps[o].allIn ? 0 : t, u[2 * o + 1]);
+        if (h.some(c => used.has(c))) h = drawFrom(o, opps[o].allIn ? 0 : t, (u[2 * o + 1] + 0.37) % 1);
+        if (h.some(c => used.has(c))) continue;
+        h.forEach(c => used.add(c));
+        ins.push({ o, h });
       }
-    });
-    const v = n ? sum / n : eq;
-    calledCache.set(key, v);
-    return v;
+      const callers = ins.filter(x => !opps[x.o].allIn).length;
+      if (!ins.length) { sum += P; continue; }
+      // Only all-in players left: the bet comes back and the pot goes to a showdown with them.
+      const rr = callers ? r : 0;
+      const rest = unseen.filter(c => !used.has(c));
+      let k = 0, rk = 2 * opps.length;
+      const take = () => { const j = k + Math.floor(u[rk++ % u.length] * (rest.length - k)); const c = rest[j]; rest[j] = rest[k]; rest[k] = c; return rest[k++]; };
+      const board = view.board.slice();
+      for (let m = 0; m < boardNeed; m++) board.push(take());
+      const mine = myCards.slice();
+      for (let m = 0; m < myNeed; m++) mine.push(take());
+      const theirs = ins.map(({ o, h }) => { const x = h.slice(); for (let m = 0; m < oppNeed[o] - oppHidden[o]; m++) x.push(take()); return score(x, board); });
+      const sh = share(V, score(mine, board), theirs);
+      sum += sh * (P + rr + add * callers) * realize - rr;
+    }
+    return { pf, ev: sum / NS };
   };
-  const at = frac => {
-    const t = 1 - continueShare(frac);
-    let pf = pfAt[TH.length - 1];
-    if (t <= TH[0]) pf = pfAt[0];
-    else for (let j = 0; j + 1 < TH.length; j++) if (t <= TH[j + 1]) { const u = (t - TH[j]) / (TH[j + 1] - TH[j]); pf = pfAt[j] + (pfAt[j + 1] - pfAt[j]) * u; break; }
-    // Calling hands are a stronger subset of the range, so the share against them is no higher.
-    return { pf, eqCalled: Math.min(eq, calledEq(t)) };
-  };
-  return { eq, get eqCalled() { return at(0.75).eqCalled; }, opps, at, iters: it };
+  return { eq, opps, raise, iters: it };
 }
 
 // Share of the pot against random hands (the hint line, and tests).
@@ -464,15 +495,16 @@ export function botAct(view, o, ctx = {}) {
   if (!o) return null;
   if (o.kind === 'draw') return { type: 'draw', discard: drawDiscard(o.cards) };
   const style = ctx.style || STYLES.tag;
-  const a = ctx.analysis || analyze(view, { model: ctx.model, adapt: style.adapt, range: style.range, iters: ctx.iters });
+  const K = ctx.params || PARAMS;
+  const a = ctx.analysis || analyze(view, { model: ctx.model, adapt: style.adapt, range: style.range, iters: ctx.iters, params: K });
   const V = VARIANTS[view.variant];
   const P = Math.max(o.pot, 1);
   const last = lastStreet(V, view.street);
   const pos = inPosition(view);
-  const realize = last ? 1 : pos === true ? 1 : pos === false ? 0.86 : 0.93;
+  const realize = last ? 1 : pos === true ? 1 : pos === false ? K.oop : K.studPos;
   // The implied-odds discount needs chips behind to win later; a call of most of the stack gets none.
   const behind = o.stack - o.call;
-  const disc = last || behind < P ? 1 : priceDiscount(V, view.street);
+  const disc = last || behind < P ? 1 : 1 - (1 - priceDiscount(V, view.street)) * K.discMul;
   const cands = [];
   const passive = (act, put) => cands.push({ act, ev: a.eq * (P + put) * realize - put * disc - (put > 0 ? style.tight * P : 0) });
 
@@ -491,7 +523,7 @@ export function botAct(view, o, ctx = {}) {
       for (const f of [0.5, 0.75, 1, 1.5]) sizes.add(Math.round(o.currentBet + f * base));
       sizes.add(o.raise.min);
       // All in only when it is not much more than a pot-sized raise.
-      if (o.raise.max <= o.currentBet + 2 * base) sizes.add(o.raise.max);
+      if (o.raise.max <= o.currentBet + K.overbet * base) sizes.add(o.raise.max);
     }
     const unit = view.stakes.bb >= 10 ? Math.max(1, Math.round(view.stakes.bb / 2)) : 1;
     for (let X of sizes) {
@@ -500,12 +532,9 @@ export function botAct(view, o, ctx = {}) {
       if (cands.some(c => c.act.type === 'raise' && c.act.to === X)) continue;
       const r = X - o.bet, add = X - o.currentBet;
       const frac = add / (P + o.call);
-      if (o.call > 0 && !o.raise.fixed && frac < 0.6 && X < o.raise.max) continue;   // no small re-raises
-      const at = a.at(frac);
-      const pf = 1 - Math.pow(1 - at.pf, style.bluff);
-      // A bet buys no discount: it is the price others pay that carries implied odds.
-      const called = at.eqCalled * (P + r + add) * (X >= o.raise.max ? 1 : realize) - r;
-      cands.push({ act: { type: 'raise', to: X }, ev: pf * P + (1 - pf) * called + (style.aggr - 1) * 0.08 * P });
+      if (o.call > 0 && !o.raise.fixed && frac < K.minRe && X < o.raise.max) continue;   // no small re-raises
+      const { ev } = a.raise(frac, P, r, add, { bluff: style.bluff, realize: X >= o.raise.max ? 1 : realize });
+      cands.push({ act: { type: 'raise', to: X }, ev: ev + (style.aggr - 1) * K.aggrK * P });
     }
   }
 

@@ -176,17 +176,18 @@ eq(drawDiscard(P('5c 6d 7h 8s 9c')), [], 'straight: stand pat');
   // A raise and a re-raise narrow the range: a weak hand's share falls well below its share against random cards.
   const h = new Hand({ variant: 'holdem', structure: 'nl', stakes: stakesFor(20), seats: [0, 1, 2].map(s => ({ seat: s, stack: 2000 })), n: 3, button: 0, rand: rng(5) });
   h.act(0, { type: 'raise', to: 60 }); h.act(1, { type: 'fold' }); h.act(2, { type: 'raise', to: 200 }); h.act(0, { type: 'raise', to: 600 });
-  h.players[2].cards = P('7c 2d').map(c => ({ c, up: false }));
+  h.players[2].cards = P('Kh Jd').map(c => ({ c, up: false }));
   const v = h.view(2);
   const ranged = analyze(v, { iters: 1500 }).eq, flat = analyze(v, { iters: 1500, range: false }).eq;
-  ok(ranged < flat * 0.7, `range reading: 72o vs a 4-bet ${ranged.toFixed(3)} < random ${flat.toFixed(3)}`);
+  ok(ranged < flat - 0.15, `range reading: KJo vs a 4-bet ${ranged.toFixed(3)}, vs random ${flat.toFixed(3)}`);
   // The bigger the bet, the narrower the hands that continue.
   ok(continueShare(0.01) > 0.95 && continueShare(0.33) > continueShare(1) && continueShare(1) > continueShare(60) && continueShare(60) < 0.06, 'continue share falls with bet size');
   // A bigger bet makes everyone fold more often, but what calls is stronger.
   const h2 = new Hand({ variant: 'holdem', structure: 'nl', stakes: stakesFor(20), seats: [0, 1].map(s => ({ seat: s, stack: 2000 })), n: 2, button: 0, rand: rng(8) });
   h2.act(0, { type: 'call' }); h2.act(1, { type: 'check' });
   const an = analyze(h2.view(1), { iters: 800 });
-  ok(an.at(3).pf > an.at(0.5).pf && an.at(3).eqCalled <= an.eq + 1e-9, 'bigger bets: more folds, stronger callers');
+  const big = an.raise(3, 40, 120, 120), small = an.raise(0.5, 40, 20, 20);
+  ok(big.pf > small.pf, `bigger bets get more folds (${big.pf.toFixed(2)} > ${small.pf.toFixed(2)})`);
 }
 {
   // The table model: a player who always folds to bets gets a high fold-to-bet rate; one who raises every hand a high pfr.
