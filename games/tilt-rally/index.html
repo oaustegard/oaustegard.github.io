@@ -386,12 +386,24 @@ function controls() {
   return manual;
 }
 function newRace() { G.newRace({ autopilot: DEMO, manual: controls() }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
-function layout() {
-  const forced = Q.get("rotate"), rot = forced != null ? forced === "1" : innerHeight > innerWidth && matchMedia("(pointer: coarse)").matches;
-  const r = document.documentElement; r.classList.toggle("rot", rot);
-  r.style.setProperty("--vw", innerWidth + "px"); r.style.setProperty("--vh", innerHeight + "px");
+// The visible area, not the layout viewport: Chrome on iPhone counts its bottom toolbar in innerHeight, so a stage that
+// tall runs under the toolbar and loses its left edge (the screen's bottom). 100svh is the height with every browser
+// bar showing; take the smallest of the three.
+const svh = document.createElement("div");
+svh.style.cssText = "position:fixed;left:0;top:0;width:1px;height:100svh;visibility:hidden;pointer-events:none";
+document.body.appendChild(svh);
+function viewport() {
+  const vv = window.visualViewport, h = Math.min(innerHeight, vv ? Math.round(vv.height) : Infinity, svh.offsetHeight || Infinity);
+  return { w: Math.min(innerWidth, vv ? Math.round(vv.width) : Infinity), h };
 }
-layout(); addEventListener("resize", layout); addEventListener("orientationchange", layout);
+function layout() {
+  const { w, h } = viewport();
+  const forced = Q.get("rotate"), rot = forced != null ? forced === "1" : h > w && matchMedia("(pointer: coarse)").matches;
+  const r = document.documentElement; r.classList.toggle("rot", rot);
+  r.style.setProperty("--vw", w + "px"); r.style.setProperty("--vh", h + "px");
+  if (Q.has("vp")) $("status").textContent = `inner ${innerWidth}x${innerHeight} · visual ${window.visualViewport ? Math.round(visualViewport.width) + "x" + Math.round(visualViewport.height) : "none"} · svh ${svh.offsetHeight} · using ${w}x${h}`;
+}
+layout(); addEventListener("resize", layout); addEventListener("orientationchange", layout); window.visualViewport?.addEventListener("resize", layout);
 async function start() {
   const asked = enableMotion();                       // still inside the tap, so iOS can show its prompt
   audio.on = $("sound").checked; startAudio();        // sound also needs the tap
@@ -481,7 +493,7 @@ async function init() {
   status("Carving the valley on the GPU…");
   await G.buildWorld(Number(Q.get("seed")) || 7);
   drawMinimapBase();
-  status("Ready.");
+  status("Ready."); if (Q.has("vp")) layout();
   return true;
 }
 const ok = await init().catch((e) => { status("Could not start WebGPU: " + e.message); console.error(e); return false; });

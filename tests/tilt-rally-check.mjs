@@ -131,6 +131,15 @@ if (what === "rotated") {
   // the speedometer sits bottom-right of the stage, which a quarter turn counter-clockwise puts at the screen's top right
   check("speedometer lands top right of the portrait screen", g.speed[0] > 195 && g.speed[1] < 200, g.speed.map(Math.round).join(","));
   await page.screenshot({ path: path.join(OUT, "rotated.png") });
+  // Chrome on iPhone: innerHeight includes the bottom toolbar, the visual viewport does not. The stage must use the latter.
+  const p2 = await b.newPage({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true });
+  await p2.addInitScript(() => { const vv = { width: 390, height: 784, addEventListener() {}, removeEventListener() {} };
+    Object.defineProperty(window, "visualViewport", { get: () => vv }); });
+  await p2.goto(base + "index.html");
+  await p2.waitForFunction(() => document.getElementById("stage"), null, { timeout: 60000 });
+  const g2 = await p2.evaluate(() => { const r = document.getElementById("stage").getBoundingClientRect(); return [r.left, r.top, r.width, r.height]; });
+  check("with a toolbar over the bottom 60 px, the turned stage stops above it", Math.abs(g2[3] - 784) < 1 && Math.abs(g2[1]) < 1, g2.map(Math.round).join(","));
+  await p2.close();
   check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
