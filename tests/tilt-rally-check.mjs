@@ -5,6 +5,7 @@
 //   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
 //   node tests/tilt-rally-check.mjs grip    a full-gas driver with perfect aim stays on the road (pass a JSON list of tunings to compare)
 //   node tests/tilt-rally-check.mjs backseat the back-seat driver shouts before the corner a full-gas driver leaves, and urges a crawler on
+//   node tests/tilt-rally-check.mjs permission  the iOS motion prompt comes on the start screen, before the race
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -204,6 +205,30 @@ if (what === "backseat") {
   console.log("quarter throttle:", crawl.log.map((x) => `${x.t}s ${x.kind}`).join(" | "));
   check("a crawling driver hears 'go'", crawl.log.some((y) => y.kind === "go"));
   check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
+}
+
+if (what === "permission") {
+  // iOS's prompt, stood in for: requestPermission records each call and settles only when the test answers.
+  const page = await b.newPage({ viewport: { width: 393, height: 660 }, isMobile: true, hasTouch: true }), errors = [];
+  page.on("pageerror", (e) => errors.push(e.message));
+  await page.addInitScript(() => { window.__asks = 0; let answer;
+    window.DeviceOrientationEvent.requestPermission = () => { window.__asks++; return new Promise((ok) => { answer = ok; }); };
+    window.__answer = (r) => answer(r); });
+  await page.goto(base + "index.html");
+  await waitFor(page, () => document.getElementById("status").textContent === "Ready.");
+  const st = () => page.evaluate(() => ({ asks: window.__asks, intro: !document.getElementById("intro").hidden, state: window.__game().state, start: document.getElementById("start").textContent }));
+  check("nothing is asked before a tap", (await st()).asks === 0);
+  await page.mouse.click(30, 30);                       // a tap on the start screen's background
+  check("a tap anywhere on the start screen asks for motion", (await st()).asks === 1);
+  await page.click("#start");
+  await page.waitForTimeout(500);
+  let s1 = await st();
+  check("Start engine waits on the start screen while the prompt is open", s1.intro && s1.state === "idle" && s1.asks === 1, JSON.stringify(s1));
+  await page.evaluate(() => { window.__answer("granted"); window.dispatchEvent(Object.assign(new Event("deviceorientation"), { alpha: 0, beta: 0, gamma: -75 })); });
+  await waitFor(page, () => window.__game().state === "countdown" || window.__game().state === "race", 10000);
+  const s2 = await st();
+  check("the race starts once motion is allowed", !s2.intro, JSON.stringify(s2));
+  check("no page errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
 await b.close(); srv.close();

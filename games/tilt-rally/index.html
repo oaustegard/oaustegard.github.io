@@ -158,8 +158,8 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
       <h1>Tilt Rally</h1>
       <ol class="steps">
         <li><span class="n">1</span><span>Lock rotation in portrait, turn the phone a quarter turn clockwise and hold it in both hands like a steering wheel.</span></li>
-        <li><span class="n">2</span><span class="act"><button class="ghost" id="motion" type="button">Allow motion</button><span class="small" id="motionState">The phone’s motion sensor is the wheel.</span></span></li>
-        <li><span class="n">3</span><span class="act"><button class="go" id="start" type="button">Start engine</button><span class="small">Hold it the way you’ll drive: that is straight ahead, no gas.</span></span></li>
+        <li><span class="n">2</span><span class="act"><button class="go" id="motion" type="button">Allow motion</button><span class="small" id="motionState">The phone’s motion sensor is the wheel.</span></span></li>
+        <li><span class="n">3</span><span class="act"><button class="ghost" id="start" type="button">Start engine</button><span class="small">Hold it the way you’ll drive: that is straight ahead, no gas.</span></span></li>
       </ol>
     </div>
     <div class="col">
@@ -204,18 +204,25 @@ const sensor = { up: null, neutral: null, events: 0, mode: "keys" };
 let started = false, listening = false;
 function onOrient(e) { if (e.beta == null || e.gamma == null) return; sensor.up = upFromOrientation(e.beta, e.gamma); sensor.events++;
   if (started && !sensor.neutral) recenter();
-  if (sensor.events === 1) { $("motion").classList.add("on"); $("motion").textContent = "Motion on"; $("motionState").textContent = "The sensor is working."; } }
+  if (sensor.events === 1) { $("motion").className = "ghost on"; $("motion").textContent = "Motion on"; $("motionState").textContent = "The sensor is working."; $("start").className = "go"; } }
+// iOS asks for motion access only from inside a tap, once per page load. Listen regardless of the answer: without
+// permission no events arrive, and some browsers expose requestPermission without ever settling it.
+const NEEDS_PERMISSION = typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function";
+let permission = null;
 function enableMotion() {
-  // iOS asks only from inside a tap. Listen regardless of the answer: without permission no events arrive, and some
-  // browsers expose requestPermission without ever settling it.
-  if (typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function")
-    DeviceOrientationEvent.requestPermission().then((r) => { if (r !== "granted") $("motionState").textContent = "Motion was refused. Allow Motion & Orientation Access for this site in Settings, or drive with a keyboard."; }).catch(() => {});
   if (!listening) { listening = true; addEventListener("deviceorientation", onOrient); }
-  setTimeout(() => { if (!sensor.events) $("motionState").textContent = "No motion readings yet. Steering needs a phone or tablet; on a computer, use the keyboard."; }, 2500);
+  if (NEEDS_PERMISSION && !permission) {
+    permission = DeviceOrientationEvent.requestPermission().catch(() => "denied");
+    permission.then((r) => { if (r !== "granted") $("motionState").textContent = "Motion was refused. Allow Motion & Orientation Access for this site in Settings, or drive with a keyboard."; });
+    setTimeout(() => { if (!sensor.events && permission) $("motionState").textContent = "No motion readings yet. Steering needs a phone or tablet; on a computer, use the keyboard."; }, 4000);
+  }
+  return permission || Promise.resolve("granted");
 }
 $("motion").addEventListener("click", enableMotion);
+// The first tap anywhere on the start screen asks, so the prompt comes before the race even if Allow motion is skipped.
+$("intro").addEventListener("click", (e) => { if (NEEDS_PERMISSION && !permission && !e.target.closest("button, label, input")) enableMotion(); });
 // Browsers that need no permission start sending readings as soon as someone listens.
-if (!(typeof DeviceOrientationEvent !== "undefined" && typeof DeviceOrientationEvent.requestPermission === "function")) { listening = true; addEventListener("deviceorientation", onOrient); }
+if (!NEEDS_PERMISSION) { listening = true; addEventListener("deviceorientation", onOrient); }
 function recenter() { if (sensor.up) sensor.neutral = sensor.up.slice(); }
 window.__tilt = { upFromOrientation, wheelFrom };
 
@@ -333,10 +340,16 @@ function layout() {
   r.style.setProperty("--vw", innerWidth + "px"); r.style.setProperty("--vh", innerHeight + "px");
 }
 layout(); addEventListener("resize", layout); addEventListener("orientationchange", layout);
-function start() {
-  if (!sensor.events) enableMotion();
+async function start() {
+  const asked = enableMotion();                       // still inside the tap, so iOS can show its prompt
+  audio.on = $("sound").checked; startAudio();        // sound also needs the tap
+  if (NEEDS_PERMISSION && !sensor.events) {
+    // Stay on the start screen until the prompt is answered or readings arrive, whichever comes first.
+    const b = $("start"); b.disabled = true; b.textContent = "Waiting for motion…";
+    await Promise.race([asked, new Promise((ok) => { const t = setInterval(() => { if (sensor.events) { clearInterval(t); ok(); } }, 100); })]);
+    b.disabled = false; b.textContent = "Start engine";
+  }
   started = true; sensor.neutral = sensor.up ? sensor.up.slice() : null;
-  audio.on = $("sound").checked; startAudio();
   // Fullscreen, landscape lock and wake lock are niceties that can reject or never settle: never wait on them.
   Promise.resolve().then(() => document.documentElement.requestFullscreen?.({ navigationUI: "hide" })).then(() => screen.orientation?.lock?.("landscape")).catch(() => {});
   Promise.resolve().then(() => navigator.wakeLock?.request("screen")).catch(() => {});
