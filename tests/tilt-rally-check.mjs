@@ -4,6 +4,7 @@
 //   node tests/tilt-rally-check.mjs tilt    synthetic deviceorientation events: tilt away accelerates, clockwise steers right, tilt back brakes
 //   node tests/tilt-rally-check.mjs cars    close-up stills of the cars (front three-quarter, rear, side) into OUT
 //   node tests/tilt-rally-check.mjs grip    a full-gas driver with perfect aim stays on the road (pass a JSON list of tunings to compare)
+//   node tests/tilt-rally-check.mjs feel    coast-down rate off the pedals, body pitch under gas and brake, tail lamps dark off the brake and bright on it
 //   node tests/tilt-rally-check.mjs backseat the back-seat driver shouts before the corner a full-gas driver leaves, and urges a crawler on
 //   node tests/tilt-rally-check.mjs permission  the iOS motion prompt comes on the start screen, before the race
 //   node tests/tilt-rally-check.mjs controls  touch pedals and manual gears through the on-screen controls
@@ -189,6 +190,70 @@ if (what === "grip") {
       check("full gas: under 5 s off the road in 70 s (the 30 m hairpin wants the brake)", r.off < 5, r.off.toFixed(1) + " s");
       check("full gas keeps within 15% of the fastest computer car", r.km > r.ai * 0.85, r.km.toFixed(2) + " vs " + r.ai.toFixed(2) + " km"); }
   }
+}
+
+if (what === "feel") {
+  const { page, errors } = await open("index.html?demo", { width: 960, height: 540 });
+  await waitFor(page, () => window.__game?.()?.state === "race");
+  const r = await page.evaluate(() => { window.__hold = true; const E = window.__engine, T = E.T, M = T.x.length;
+    // put the player on the road at sample i, heading down it at v m/s, settled (load and pitch at rest)
+    const place = (i, v) => { E.newRace(); E.state = "race"; E.raceT = 0; const P = E.player; for (const c of E.cars) if (c !== P) { c.x += 5000; c.z += 5000; }
+      P.idx = i; P.x = T.x[i]; P.z = T.z[i]; P.y = T.y[i]; P.h = Math.atan2(T.tx[i], T.tz[i]); P.vx = T.tx[i] * v; P.vz = T.tz[i] * v; P.lap = 1; P.gear = 6;
+      P.load = 0; P.aT = 0; P.bp = 0; P.bpv = 0; return P; };
+    const aim = (P) => { const sp = Math.max(0, P.speed), k = (P.idx + Math.round((9 + sp * 0.55) / T.ds)) % M, fx = Math.sin(P.h), fz = Math.cos(P.h);
+      const dx = T.x[k] - P.x, dz = T.z[k] - P.z; return Math.max(-1, Math.min(1, Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz) * 2.6)); };
+    // coast-down: lift off for 1 s on the straightest stretches; the slope's share (g dy/ds) is taken out
+    const flatCoast = (v) => { const out = []; const order = [...Array(M).keys()].filter((i) => i % 7 === 0).sort((a, b) => Math.abs(T.kap[a]) - Math.abs(T.kap[b])).slice(0, 8);
+      for (const i of order) { const P = place(i, v); E.input.thr = 0; E.input.steer = 0; E.tick(1 / 120);
+        const v0 = Math.hypot(P.vx, P.vz), y0 = P.y, x0 = P.x, z0 = P.z;
+        for (let n = 0; n < 120; n++) { E.input.steer = aim(P); E.tick(1 / 120); }
+        const v1 = Math.hypot(P.vx, P.vz), s = Math.hypot(P.x - x0, P.z - z0);
+        if (P.surf === 0) out.push((v0 - v1) - 9.81 * (P.y - y0) / Math.max(s, 1)); }   // dv over 1 s, less what the hill took
+      return out.reduce((a, b) => a + b, 0) / out.length; };
+    const brakeDecel = () => { const out = []; const order = [...Array(M).keys()].filter((i) => i % 7 === 0).sort((a, b) => Math.abs(T.kap[a]) - Math.abs(T.kap[b])).slice(0, 8);
+      for (const i of order) { const P = place(i, 30); E.input.thr = -1; E.tick(1 / 120); const v0 = Math.hypot(P.vx, P.vz), y0 = P.y, x0 = P.x, z0 = P.z;
+        for (let n = 0; n < 60; n++) { E.input.steer = aim(P); E.tick(1 / 120); }
+        const v1 = Math.hypot(P.vx, P.vz), s = Math.hypot(P.x - x0, P.z - z0); out.push((v0 - v1) / 0.5 - 9.81 * (P.y - y0) / Math.max(s, 1)); }
+      return out.reduce((a, b) => a + b, 0) / out.length; };
+    // body pitch: 0.4 s of full gas from 15 m/s, then 0.4 s of full brake from 30 m/s
+    const pitch = (v, thr) => { const P = place(M >> 1, v); P.gear = v < 20 ? 2 : 4; let pk = 0;
+      for (let n = 0; n < 48; n++) { E.input.thr = thr; E.input.steer = aim(P); E.tick(1 / 120); if (Math.abs(P.bp) > Math.abs(pk)) pk = P.bp; }
+      return { end: P.bp, peak: pk }; };
+    return { c150: flatCoast(150 / 3.6), c80: flatCoast(80 / 3.6), c40: flatCoast(40 / 3.6), brake: brakeDecel(), gas: pitch(15, 1), brk: pitch(30, -1) }; });
+  const deg = (x) => (x * 180 / Math.PI).toFixed(2);
+  console.log("coast-down m/s2: 150 km/h", r.c150.toFixed(2), " 80 km/h", r.c80.toFixed(2), " 40 km/h", r.c40.toFixed(2), "  full brake from 108 km/h", r.brake.toFixed(1));
+  console.log("body pitch deg: gas end", deg(r.gas.end), "peak", deg(r.gas.peak), "  brake end", deg(r.brk.end), "peak", deg(r.brk.peak));
+  check("coasting at 150 km/h loses 0.5-0.8 m/s2", r.c150 >= 0.5 && r.c150 <= 0.8, r.c150.toFixed(2));
+  check("coasting slows less at low speed", r.c40 < r.c80 && r.c80 < r.c150, [r.c40, r.c80, r.c150].map((x) => x.toFixed(2)).join(" < "));
+  check("full brake still 17 m/s2 or more", r.brake > 16.5, r.brake.toFixed(1));
+  check("nose lifts under full gas", r.gas.end > 0.005, deg(r.gas.end) + " deg");
+  check("nose dives under full brake", r.brk.end < -0.01, deg(r.brk.end) + " deg");
+  check("pitch stays moderate (under 4.5 deg)", Math.abs(r.gas.peak) < 0.08 && Math.abs(r.brk.peak) < 0.08, deg(r.gas.peak) + " / " + deg(r.brk.peak));
+  // tail lamps: render the player from just behind, brake off and on, and read the pixels that changed
+  const shot = (thr) => page.evaluate((thr) => { const E = window.__engine, P = E.player; P.thr = thr;
+    const f = [Math.sin(P.h), Math.cos(P.h)], eye = [P.x - f[0] * 5.5, P.y + 1.3, P.z - f[1] * 5.5];
+    const cv = document.getElementById("view"), ctx = cv.getContext("webgpu");
+    E.render(ctx.getCurrentTexture().createView(), cv.width, cv.height, 0, { eye, look: [P.x, P.y + 0.7, P.z] });
+    const c2 = document.createElement("canvas"); c2.width = cv.width; c2.height = cv.height; const g = c2.getContext("2d"); g.drawImage(cv, 0, 0);
+    return Array.from(g.getImageData(0, 0, cv.width, cv.height).data); }, thr);
+  const off = await shot(0), on = await shot(-1), half = await shot(-0.35);
+  let n = 0; const so = [0, 0, 0], sn = [0, 0, 0], sh = [0, 0, 0];
+  for (let i = 0; i < off.length; i += 4) { const d = Math.abs(on[i] - off[i]) + Math.abs(on[i + 1] - off[i + 1]) + Math.abs(on[i + 2] - off[i + 2]);
+    if (d > 60) { n++; for (let k = 0; k < 3; k++) { so[k] += off[i + k]; sn[k] += on[i + k]; sh[k] += half[i + k]; } } }
+  const avg = (s) => s.map((x) => Math.round(x / Math.max(n, 1))), L = (c) => 0.3 * c[0] + 0.55 * c[1] + 0.15 * c[2];
+  const ao = avg(so), an = avg(sn), ah = avg(sh);
+  console.log("tail lamp pixels", n, " rgb off", ao.join(","), " half brake", ah.join(","), " full brake", an.join(","));
+  for (const [name, bp] of [["dive", -0.06], ["squat", 0.045]]) {   // side stills at the pitch limits, to eye the wheels and body
+    await page.evaluate((bp) => { const E = window.__engine, P = E.player; P.bp = bp; P.thr = bp < 0 ? -1 : 1;
+      const r = [-Math.cos(P.h), Math.sin(P.h)], eye = [P.x + r[0] * 6, P.y + 0.9, P.z + r[1] * 6];
+      const cv = document.getElementById("view"); E.render(cv.getContext("webgpu").getCurrentTexture().createView(), cv.width, cv.height, 0, { eye, look: [P.x, P.y + 0.6, P.z] }); }, bp);
+    await page.waitForTimeout(300); await page.screenshot({ path: path.join(OUT, "feel-" + name + ".png") });
+  }
+  check("tail lamps change between brake off and on", n > 30, n + " px");
+  check("tail lamps dark off the brake", ao[0] < 110, "red " + ao[0]);
+  check("tail lamps bright on the brake (3x the light or more)", L(an) > 3 * L(ao) && an[0] > 230, L(ao).toFixed(0) + " -> " + L(an).toFixed(0));
+  check("tail lamps scale with brake pressure", L(ah) > L(ao) * 1.5 && L(ah) < L(an), L(ah).toFixed(0));
+  check("no page or WebGPU errors", errors.length === 0, errors.slice(0, 3).join(" | "));
 }
 
 if (what === "backseat") {

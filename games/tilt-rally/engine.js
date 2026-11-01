@@ -218,8 +218,11 @@ fn seg7(p: vec2f, d: i32) -> bool {
   if (mat > 0.9 && car) {                     // clear-coated paint
     col = lit(n, base * 0.85) + env(r) * (0.05 + fres * 0.85) + vec3f(1.0, 0.95, 0.85) * pow(nh, 160.0) * 2.5 * step(0.0, sunv);
   } else if (mat > 0.6 && mat < 0.9) {        // lamps; tail lamps brighten with the brake
-    let brake = fract(i.kind);
-    col = base * select(1.8, 1.4 + brake * 4.0, base.r > base.g * 2.0 && car);
+    let brake = fract(i.kind) / 0.9;
+    col = base * 1.8;
+    if (base.r > base.g * 2.0 && car) {      // tail lamps: unlit red off the brake, bright and growing with the pedal on it
+      col = select(base * 0.3, base * (1.2 + brake * 2.0) + vec3f(0.25, 0.18, 0.14) * brake, brake > 0.05);
+    }
   } else if (mat > 0.4 && mat < 0.6) {        // glass
     col = base * 0.25 + env(r) * (0.1 + fres * 0.8) + vec3f(1.0) * pow(nh, 220.0) * 3.0 * step(0.0, sunv);
   } else if (mat > 0.05 && mat < 0.15) {      // building walls: rows of windows every 3.3 m up, 3.2 m along
@@ -467,7 +470,7 @@ export const CARS = [
 
 // ---------------------------------------------------------------- engine
 export async function createEngine(device, format, { sampleCount = 4, onEvent = () => {} } = {}) {
-  const E = { tune: { grip: [20, 13, 7], side: [10, 6, 3], assist: 1, scrub: 20 }, device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
+  const E = { tune: { grip: [20, 13, 7], side: [10, 6, 3], assist: 1, scrub: 20, wtCap: 0.08, wtRot: 0.06, wtResp: 0.25, wtBite: 0.35 }, device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
   const emit = (type, data) => { try { onEvent(type, data); } catch (e) { console.error(e); } };
 
   // spec: a number (a generated valley) or a track document (a real circuit)
@@ -638,17 +641,27 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const nx = -T.tz[idx], nz = T.tx[idx], x = T.x[idx] + nx * side * 2.6, z = T.z[idx] + nz * side * 2.6;
     return { ...spec, ai, x, z, y: T.y[idx], h: Math.atan2(T.tx[idx], T.tz[idx]), vx: 0, vz: 0, idx, lat: side * 2.6, surf: 0, lap: 0, half: false,
       steer: 0, thr: 0, yawRate: 0, slip: 0, pitch: 0, roll: 0, lean: 0, spin: 0, speed: 0, lapStart: 0, best: Infinity, lapTimes: [], done: false, finish: 0, prog: idx - M,
-      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false };
+      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false, load: 0, aT: 0, bp: 0, bpv: 0 };
   }
   function stepCar(c, dt) {
     const T = E.T;
     const fx = Math.sin(c.h), fz = Math.cos(c.h), rx = -fz, rz = fx;
     let vf = c.vx * fx + c.vz * fz, vl = c.vx * rx + c.vz * rz;
     const pr = probe(c.x, c.z, c.idx), surf = pr.surf;
-    const TU = E.tune, grip = TU.grip[surf] * c.skill, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1), roll = [0.35, 1.2, 3.2][surf];
+    const TU = E.tune, grip = TU.grip[surf] * c.skill, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1);
+    // Weight transfer: gas and brake move load between the axles. On the gas the front goes light (less turn, slower to
+    // answer, more understeer); on the brake it bites (turns in sharper, a little more rotation). Smoothed like a spring.
+    // The load follows what the tyres actually push (last step's), so the assist easing the gas also eases the understeer.
+    const wantLoad = clamp(c.aT >= 0 ? c.aT / 11.5 : c.aT / 17, -1, 1);   // +1 full gas from rest, -1 full brake
+    c.load = lerp(c.load, wantLoad, 1 - Math.exp(-dt * 8));
+    const ld = c.load, gas = Math.max(0, ld), brk = Math.max(0, -ld);
+    const capK = 1 - TU.wtCap * gas + TU.wtRot * brk, respK = 1 - TU.wtResp * gas + TU.wtBite * brk;
+    // Lifting off coasts like a car on tarmac: rolling resistance and drag ease with the pedal (under 0.7 m/s2 at
+    // 150 km/h, about 0.2 at 40); on the pedal, gas or brake, the full drivetrain and tyre load comes back.
+    const ped = Math.min(1, Math.abs(c.thr)), roll = lerp([0.15, 1.0, 3.0][surf], [0.35, 1.2, 3.2][surf], ped), drag = lerp(0.00026, 0.00045, ped);
     // Stability assist (player only): when the wheel asks for more turn than the tyres can give at this speed, ease
     // the throttle and scrub speed, so holding full gas through a fast bend runs wide less instead of off the road.
-    const sp0 = Math.abs(vf), geom0 = sp0 * Math.tan(0.6) / 2.6, lim0 = grip / Math.max(sp0, 0.5);
+    const sp0 = Math.abs(vf), geom0 = sp0 * Math.tan(0.6) / 2.6, lim0 = grip / Math.max(sp0, 0.5) * capK;
     // how close to the grip limit the wheel is asking for: 0 below 75% of it, 1 at full lock on the limit
     const over = c.ai || geom0 < lim0 ? 0 : TU.assist * clamp((Math.abs(c.steer) - 0.75) / 0.25, 0, 1);
     let a = 0;
@@ -664,12 +677,13 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     else if (c.thr < 0) a = vf > 0.5 ? c.thr * 17 : c.thr * 5 * (vf > -9 ? 1 : 0);
     a -= over * TU.scrub * clamp((sp0 - 12) / 25, 0, 1) * Math.sign(vf);   // gentle in slow corners, hard in fast ones
     if (c.limiter && vf > 0) a -= 2.5 + (r - 1) * 250;                    // engine braking on the limiter, a wall past it
-    a -= Math.sign(vf) * roll + 0.00045 * vf * Math.abs(vf);
+    a -= Math.sign(vf) * roll + drag * vf * Math.abs(vf);
+    const aTyre = a;                                                       // what the tyres push: pitches the body
     const hf = probe(c.x + fx * 1.4, c.z + fz * 1.4, pr.idx).y, hb = probe(c.x - fx * 1.4, c.z - fz * 1.4, pr.idx).y;
     a -= 9.81 * (hf - hb) / 2.8;
-    const nvf = vf + a * dt; vf = (c.thr === 0 && Math.sign(nvf) !== Math.sign(vf) && Math.abs(vf) < 1) ? 0 : nvf;
+    const nvf = vf + a * dt, stop = c.thr === 0 && Math.sign(nvf) !== Math.sign(vf) && Math.abs(vf) < 1; vf = stop ? 0 : nvf;
     const sp = Math.abs(vf), geom = sp * Math.tan(0.6) / 2.6, lim = grip / Math.max(sp, 0.5);
-    c.yawRate = lerp(c.yawRate, c.steer * Math.min(geom, lim * 1.06) * Math.sign(vf), 1 - Math.exp(-dt * 12));
+    c.yawRate = lerp(c.yawRate, c.steer * Math.min(geom, lim * 1.06 * capK) * Math.sign(vf), 1 - Math.exp(-dt * 12 * respK));
     c.h -= c.yawRate * dt;
     vl *= Math.exp(-dt * TU.side[surf]);
     const nfx = Math.sin(c.h), nfz = Math.cos(c.h);
@@ -689,6 +703,10 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const hl = probe(c.x + nfz * 0.9, c.z - nfx * 0.9, p2.idx).y, hr = probe(c.x - nfz * 0.9, c.z + nfx * 0.9, p2.idx).y;
     c.pitch = Math.atan2(hf - hb, 2.8); c.roll = Math.atan2(hr - hl, 1.8);
     c.lean = lerp(c.lean, clamp(c.yawRate * vf * 0.0032, -0.07, 0.07), 1 - Math.exp(-dt * 6));
+    // body pitch: squat under power (nose up), dive under the brake; a damped spring toward the tyres' push
+    c.aT = stop || c.onWall ? 0 : clamp(aTyre, -17, 11.5);
+    const pt = clamp(c.aT * 0.0036, -0.055, 0.045);
+    c.bpv += ((pt - c.bp) * 110 - c.bpv * 11) * dt; c.bp += c.bpv * dt;
     c.spin += vf * dt / 0.34;
     // laps: the start line is sample 0; a lap counts only after passing the far side of the loop
     const prev = c.idx; c.idx = p2.idx;
@@ -715,7 +733,8 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const tx = T.x[i] + -T.tz[i] * c.lane, tz = T.z[i] + T.tx[i] * c.lane, fx = Math.sin(c.h), fz = Math.cos(c.h);
     const dx = tx - c.x, dz = tz - c.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
     // feed-forward: the turn rate the road needs here, as a share of what the tyres allow, plus the aim correction
-    const grip = E.tune.grip[0] * c.skill, cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06);
+    const TU = E.tune, gas = Math.max(0, c.load), brk = Math.max(0, -c.load);
+    const grip = TU.grip[0] * c.skill, cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06 * (1 - TU.wtCap * gas + TU.wtRot * brk));
     const ff = sp * T.kap[(c.idx + Math.round(4 / T.ds)) % M] / Math.max(cap, 1e-3);
     c.steer = clamp(ff + err * 2.6, -1, 1);
     const target = T.vlim[(c.idx + Math.round(6 / T.ds)) % M] * (c.ai ? c.skill : 0.97);
@@ -794,8 +813,9 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
   const carMatrices = (c) => {
     const f = [Math.sin(c.h) * Math.cos(c.pitch), Math.sin(c.pitch), Math.cos(c.h) * Math.cos(c.pitch)], right = [-Math.cos(c.h), 0, Math.sin(c.h)];
     const up = vnorm([-right[0] * Math.sin(c.roll), Math.cos(c.roll), -right[2] * Math.sin(c.roll)]);
-    const bodyUp = vnorm(vadd(up, vscale(right, -c.lean)));     // the body leans out of the corner; the wheels stay planted
-    const body = basis([c.x, c.y, c.z], f, bodyUp);
+    const bp = c.bp || 0, lu = vnorm(vadd(up, vscale(right, -c.lean)));   // the body leans out of the corner and pitches
+    const bodyUp = vsub(vscale(lu, Math.cos(bp)), vscale(f, Math.sin(bp)));   // with the pedal; the wheels stay planted
+    const body = basis([c.x, c.y, c.z], vadd(vscale(f, Math.cos(bp)), vscale(lu, Math.sin(bp))), bodyUp);
     const Z = vnorm(f), X = vnorm(vcross(up, Z)), Y = vcross(Z, X), wheels = [];
     for (const [ox, oz, front] of [[0.8, 1.38, 1], [-0.8, 1.38, 1], [0.8, -1.38, 0], [-0.8, -1.38, 0]]) {
       const a = front ? c.steer * 0.42 : 0, Zw = vsub(vscale(Z, Math.cos(a)), vscale(X, Math.sin(a))), Xw = vcross(Y, Zw);
