@@ -27,7 +27,7 @@ export const PARAMS = {
   discMul: 1,                             // scale of the early-street price discount
   oop: 0.86, studPos: 0.93,               // share realised out of position; in stud (position unknown)
   aggrK: 0.08,                            // extra value per unit of a style's aggression
-  overbet: 2,                             // largest all-in considered, in pot-sized raises
+  overbet: 1.3,                           // largest all-in considered, in pot-sized raises
   minRe: 0.6,                             // smallest re-raise considered, as a share of the pot
 };
 
@@ -36,11 +36,12 @@ export const PARAMS = {
 // it believes in folds (1 = as the model says). adapt: how far it moves from priors to the model.
 // range: whether it reads opponents' actions at all. temp: randomness, as a share of the pot.
 export const STYLES = {
-  tag: { key: 'tag', name: 'Tight-aggressive', tight: 0.03, aggr: 1.15, bluff: 1, adapt: 1, range: true, temp: 0.03 },
-  lag: { key: 'lag', name: 'Loose-aggressive', tight: -0.02, aggr: 1.3, bluff: 1.4, adapt: 1, range: true, temp: 0.05 },
-  rock: { key: 'rock', name: 'Rock', tight: 0.08, aggr: 0.9, bluff: 0.5, adapt: 0.5, range: true, temp: 0.03 },
-  station: { key: 'station', name: 'Calling station', tight: -0.09, aggr: 0.55, bluff: 0.3, adapt: 0, range: false, temp: 0.06 },
-  maniac: { key: 'maniac', name: 'Maniac', tight: -0.04, aggr: 1.4, bluff: 1.6, adapt: 0, range: true, temp: 0.08 },
+  // pre: first-round ranges, as multiples of a solid player's: open (raise first in), call (a raise), re (re-raise), limp.
+  tag: { key: 'tag', name: 'Tight-aggressive', tight: 0.03, aggr: 1.15, bluff: 1, adapt: 1, range: true, temp: 0.03, pre: { open: 1, call: 1, re: 1, limp: 0 } },
+  lag: { key: 'lag', name: 'Loose-aggressive', tight: -0.02, aggr: 1.3, bluff: 1.4, adapt: 1, range: true, temp: 0.05, pre: { open: 1.45, call: 1.25, re: 1.6, limp: 0 } },
+  rock: { key: 'rock', name: 'Rock', tight: 0.08, aggr: 0.9, bluff: 0.5, adapt: 0.5, range: true, temp: 0.03, pre: { open: 0.7, call: 0.75, re: 0.6, limp: 0 } },
+  station: { key: 'station', name: 'Calling station', tight: -0.09, aggr: 0.55, bluff: 0.3, adapt: 0, range: false, temp: 0.06, pre: { open: 0.7, call: 2.4, re: 0.4, limp: 0.45 } },
+  maniac: { key: 'maniac', name: 'Maniac', tight: -0.04, aggr: 1.4, bluff: 1.6, adapt: 0, range: true, temp: 0.08, pre: { open: 2.2, call: 1.5, re: 3, limp: 0 } },
 };
 // Which styles sit at the table for each lobby level, by seat (seat 1 first).
 export const LEVELS = {
@@ -489,6 +490,76 @@ function inPosition(view) {
   return last === view.seat;
 }
 
+// ---------- the first betting round ----------
+// Before the flop (or on third street, or before the draw) the bots play ranges by position, as people
+// do: raise first in with the top share of hands for their seat, call a raise with a narrower band,
+// re-raise with the top of it. Sizes are the usual ones: open to 2.5 big blinds (plus one per limper),
+// re-raise to about three times. The value model takes over from the next round, when the ranges it reads
+// have meaning.
+let holdemPct = null;
+function myPercentile(V, cards) {
+  if (V.kind === 'board' && cards.length === 2) {
+    // Exact over all 1,326 starting hands.
+    if (!holdemPct) {
+      const all = [];
+      for (let a = 0; a < 52; a++) for (let b = a + 1; b < 52; b++) all.push(pre2(a, b));
+      holdemPct = all.sort((x, y) => x - y);
+    }
+    return pct(holdemPct, pre2(cards[0], cards[1]));
+  }
+  const known = new Set(cards);
+  const pool = fullDeck().filter(c => !known.has(c));
+  const cal = calibrate(V, [], cards.length, pool, [], 300);
+  return pctOf(cal, nowScore(V, cards, []));
+}
+function firstRound(view, o, style) {
+  const V = VARIANTS[view.variant];
+  const me = view.players[view.seat];
+  const p = myPercentile(V, me.cards.map(x => x.c)) + (Math.random() - 0.5) * 0.03;
+  const pre = style.pre || STYLES.tag.pre;
+  const bb = view.stakes.bb;
+  // This round so far: raises, and calls before the first raise (limpers).
+  let raises = 0, limpers = 0, callers = 0;
+  for (const e of view.events) {
+    if (e.t === 'street' && e.street > 0) break;
+    if (e.t === 'bet' || e.t === 'raise') { raises++; callers = 0; }
+    else if (e.t === 'call') { if (raises === 0) limpers++; else callers++; }
+  }
+  // Players still to act after us this round (blinds included): fewer means a later position.
+  const n = view.players.length, live = view.players.filter(q => q && !q.folded && !q.allIn);
+  const order = live.map(q => q.seat).sort((x, y) => ((x - view.button - 1 + n) % n) - ((y - view.button - 1 + n) % n));
+  let after = 0;
+  if (V.forced === 'blinds' && raises === 0) {
+    // Before the first raise the big blind acts last.
+    const pre = order.filter(x => x !== view.bb), seq = view.bb != null && live.some(q => q.seat === view.bb) ? pre.concat(view.bb) : pre;
+    const start = seq.indexOf(view.toAct === view.seat ? view.seat : view.seat);
+    after = seq.length - 1 - start;
+  } else after = Math.max(0, live.length - 1);
+  const heads = live.length + view.players.filter(q => q && q.allIn).length === 2;
+  const openShare = (heads ? 0.75 : [0.14, 0.42, 0.3, 0.22, 0.17, 0.14][Math.min(after, 5)]) * pre.open;
+  const fixed = o.raise && o.raise.fixed;
+  const raiseTo = to => (o.raise ? { type: 'raise', to: fixed ? o.raise.min : Math.max(o.raise.min, Math.min(o.raise.max, to >= o.raise.max * 0.4 ? o.raise.max : Math.round(to / (bb / 2)) * (bb / 2))) } : null);
+  const passive = () => (o.canCheck ? { type: 'check' } : o.bringIn != null ? { type: 'bringin' } : { type: 'fold' });
+
+  if (o.bringIn != null) return p >= 1 - 0.18 * pre.open && o.raise ? raiseTo(o.raise.min) : { type: 'bringin' };
+  if (raises === 0) {
+    // Nobody has raised: open, limp along (some styles), check the big blind, or fold.
+    if (p >= 1 - Math.min(0.95, openShare)) return raiseTo(bb * 2.5 + limpers * bb) || (o.canCheck ? { type: 'check' } : { type: 'call' });
+    if (o.canCheck) return { type: 'check' };
+    const cheap = o.call <= bb / 2 && o.toCall > 0;   // the small blind completing
+    if ((pre.limp && p >= 1 - pre.limp) || (cheap && p >= 0.55) || (limpers && p >= 1 - openShare * 1.5 && o.call <= bb)) return { type: 'call' };
+    return passive();
+  }
+  // Facing raises: the opener's range sets how wide to defend; the big blind and a cheap price widen it.
+  const priceShare = o.call / (o.pot + o.call);
+  const reShare = (raises >= 2 ? 0.02 : 0.035) * pre.re * (heads ? 2.5 : 1);
+  let callShare = (raises >= 2 ? 0.045 : 0.12) * pre.call * (heads ? 2.5 : 1) * (view.seat === view.bb ? 1.5 : 1) * (priceShare < 0.25 ? 1.4 : 1) / (1 + 0.25 * callers);
+  callShare = Math.min(0.9, callShare);
+  if (p >= 1 - reShare && o.raise) return raiseTo(o.currentBet * (raises >= 2 ? 2.3 : after > 0 ? 3.5 : 3) + callers * o.currentBet);
+  if (p >= 1 - reShare - callShare) return o.call >= me.stack && p < 1 - reShare * 1.5 ? passive() : { type: 'call' };
+  return passive();
+}
+
 // The bot's action for a 'turn' question (options from hand.options(seat)).
 // ctx: { style, model, analysis (from analyze, to reuse), iters }
 export function botAct(view, o, ctx = {}) {
@@ -496,6 +567,7 @@ export function botAct(view, o, ctx = {}) {
   if (o.kind === 'draw') return { type: 'draw', discard: drawDiscard(o.cards) };
   const style = ctx.style || STYLES.tag;
   const K = ctx.params || PARAMS;
+  if (view.street === 0 && !ctx.noChart) return firstRound(view, o, style);
   const a = ctx.analysis || analyze(view, { model: ctx.model, adapt: style.adapt, range: style.range, iters: ctx.iters, params: K });
   const V = VARIANTS[view.variant];
   const P = Math.max(o.pot, 1);
@@ -520,7 +592,7 @@ export function botAct(view, o, ctx = {}) {
     if (o.raise.fixed || o.raise.min === o.raise.max) sizes.add(o.raise.min);
     else {
       const base = P + o.call;
-      for (const f of [0.5, 0.75, 1, 1.5]) sizes.add(Math.round(o.currentBet + f * base));
+      for (const f of [0.33, 0.5, 0.75, 1]) sizes.add(Math.round(o.currentBet + f * base));
       sizes.add(o.raise.min);
       // All in only when it is not much more than a pot-sized raise.
       if (o.raise.max <= o.currentBet + K.overbet * base) sizes.add(o.raise.max);

@@ -1,7 +1,7 @@
 // Poker service worker: the page is network-first, other files cache-first with a background refresh.
 // Every network fetch skips the HTTP cache (GitHub Pages sets max-age=600), so a new version is seen at once.
-const VERSION = 'poker-v1';
-const CORE = ['./', 'index.html', 'manifest.json', 'rules.js', 'ai.js', 'render.js', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png',
+const VERSION = 'poker-v2';
+const CORE = ['./', 'index.html', 'manifest.json', 'rules.js', 'ai.js', 'render.js', 'sound.js', 'icon.svg', 'icon-180.png', 'icon-192.png', 'icon-512.png',
   '/scripts/tabletop/net.js', '/scripts/tabletop/pairing.js', '/scripts/tabletop/seats.js',
   '/scripts/fd/signaling.js', '/scripts/fd/sdp-codec.js', '/scripts/vendor/qrcode-generator.js', '/scripts/vendor/jsqr.js'];
 const FONT_HOSTS = ['fonts.googleapis.com', 'fonts.gstatic.com'];

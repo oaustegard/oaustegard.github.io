@@ -99,6 +99,11 @@ after the call, and what a tight-aggressive computer player would do.
   side pots and the showdown. `Match` carries stacks, buy-ins, rebuys, the button, rising blinds and the
   mixed-game rotation from hand to hand. `hand.view(seat)` is the only thing the network sends.
 - `ai.js` is the computer player; see the next section.
+- `sound.js` synthesizes the table sounds with Web Audio, no sample files: chips are modal clacks (four
+  decaying inharmonic partials and a click per chip, a few chips per bet by its size, a cascade when a pot
+  is pushed to you), cards a swish of band-passed noise sweeping up as they slide, then a snap; a check
+  is a knuckle double-knock; your turn a quiet two-note bell. All of it runs through a gentle compressor
+  and a short synthetic room reverb.
 - `render.js` paints the 52 faces, the back, six chip colours and the dealer button into an atlas with
   Canvas 2D. Two WGSL pipelines draw the rest:
   - **Room**: a full-screen pass at half resolution: a panelled card room with sconces, a brass lamp that
@@ -120,8 +125,17 @@ after the call, and what a tight-aggressive computer player would do.
 
 A computer player sees only what a person in its seat would see, plus a table model: counts, from
 public information only, of how each seat has played in earlier hands (how often it puts money in before
-the flop, raises, folds to a bet, and shows down a weak hand after betting the last round). Each decision
-has three parts.
+the flop, raises, folds to a bet, and shows down a weak hand after betting the last round).
+
+**The first betting round** (before the flop, third street, or before the draw) follows ranges by
+position, the way people play: raise first in with the top 14% of hands from early seats up to 42% on the
+button (all hands ranked by the Chen formula in Hold'em, by sampled strength elsewhere), call a raise with
+roughly the next 12% (wider in the big blind, heads-up, or at a good price), re-raise with the top 3–4%.
+Sizes are the usual ones: open to 2.5 big blinds plus one per limper, re-raise to about three times. Each
+style scales these ranges; the calling station also limps. A tight-aggressive bot plays about a quarter of
+its hands and raises with about one in six, close to a solid human player.
+
+**After that,** each decision has three parts.
 
 1. **Its share of the pot.** It deals the unseen cards at random many times (as many deals as fit in about
    60 ms) and scores the showdowns under the game's rules. Each deal is weighted by how well the
@@ -132,13 +146,13 @@ has three parts.
    thumb.
 2. **The value of each action.** Checking or calling is worth its share of the pot, less the price, which
    counts for less early in a hand (there is betting still to come) when chips remain behind, and less
-   out of position. A bet or raise is tried at half, three quarters, one and one and a half times the pot
-   (and all in, when that is not much more): it wins the pot at once when everyone folds, and otherwise
-   plays against the hands that continue. Both come from the same weighted deals. Whether a hand
-   continues depends on the price the bet offers: nearly everything continues against a tiny bet, about
-   a third of hands against a pot-sized one, a few percent against a shove twenty times the pot. Players
-   the model has seen fold a lot fold more. The share against the continuing hands is measured head-up
-   against hands drawn from the caller's range.
+   out of position. A bet or raise is tried at a third, half, three quarters and the whole pot
+   (and all in, when that is not much more): each opponent folds or continues by its own chance, and the
+   continuing hands come from the stronger part of its range; then the cards run out and the pot, with
+   every caller's chips, is split as the game splits it, so multiway pots, scoops and quartered hi-lo
+   pots count. Whether a hand continues depends on the price the bet offers: nearly everything continues
+   against a tiny bet, about a third of hands against a pot-sized one, a few percent against a shove
+   twenty times the pot. Players the model has seen fold a lot fold more.
 3. **A style.** How tight it is (the margin a call must clear), how much it likes betting, how much it
    believes in folds, how far it trusts the table model, whether it reads ranges at all, and how much it
    varies close decisions. The choice is a soft maximum over the actions' values.
@@ -159,10 +173,27 @@ cancels. Every hand starts at 100 big blinds; each pass keeps its own table mode
 big blinds per 100 hands with a standard error. `v1` is the first computer player (equity against random
 hands and fixed thresholds), frozen in `tests/poker-ai-v1.mjs` as the baseline.
 
-Results on the current code (A against `v1`, 6 seats; positive means A wins):
+Measurements, tight-aggressive against `v1` unless noted (6 seats; positive means A wins):
 
-| game | A | bb/100 |
-|---|---|---|
-| Hold'em no-limit | Loose-aggressive | +294 ± 25 |
-| Five-Card Draw fixed-limit | Tight-aggressive | +47 ± 5 |
+| game | bb/100 |
+|---|---|
+| Hold'em no-limit | +295 ± 35 (with position ranges); +289 ± 20 before them |
+| Hold'em no-limit, loose-aggressive / rock / maniac / calling station | +294 ± 25 / +253 ± 22 / +185 ± 27 / −14 ± 25 |
+| Hold'em no-limit, range reading on against off | +183 ± 28 |
+| Hold'em fixed-limit | +25 ± 3 |
+| Five-Card Draw | +47 ± 5 |
+| Razz | +23 ± 6 |
+| Seven-Card Stud | +16 ± 7 |
+| Omaha Hi-Lo | +20 ± 8 |
+| Omaha pot-limit | +254 ± 47 |
+| Stud Hi-Lo | +3 ± 6 |
+
+Each later change was measured against the version before it: valuing bets multiway added +41 ± 21
+(no-limit Hold'em), +16 ± 3 (fixed-limit) and +13 ± 7 (Razz); playing the first round by position ranges
+added +37 ± 22 (no-limit Hold'em) and +14 ± 9 (Stud) while cutting the median pot from 74 to 15 big blinds.
+
+`tests/poker-tune.mjs <out.json> [generations]` searches the constants in `PARAMS` (and the
+tight-aggressive style's own) with a (1+4) evolution strategy: each generation plays the incumbent and
+four perturbed candidates on the same fresh deals against a mixed field, keeps a candidate only if it wins
+by more than two paired standard errors, checkpoints every generation, and resumes from its file.
 
