@@ -243,8 +243,11 @@ fn seg7(p: vec2f, d: i32) -> bool {
     let gloss = 1.0 - 0.8 * dmg;
     col = lit(n, base * 0.85) + env(r) * (0.05 + fres * 0.85) * gloss + vec3f(1.0, 0.95, 0.85) * pow(nh, mix(160.0, 30.0, dmg)) * 2.5 * gloss * step(0.0, sunv);
   } else if (mat > 0.6 && mat < 0.9) {        // lamps; tail lamps brighten with the brake
-    let brake = fract(i.kind);
-    col = base * select(1.8, 1.4 + brake * 4.0, base.r > base.g * 2.0 && car);
+    let brake = fract(i.kind) / 0.9;
+    col = base * 1.8;
+    if (base.r > base.g * 2.0 && car) {      // tail lamps: unlit red off the brake, bright and growing with the pedal on it
+      col = select(base * 0.3, base * (1.2 + brake * 2.0) + vec3f(0.25, 0.18, 0.14) * brake, brake > 0.05);
+    }
   } else if (mat > 0.4 && mat < 0.6) {        // glass
     col = base * 0.25 + env(r) * (0.1 + fres * 0.8) + vec3f(1.0) * pow(nh, 220.0) * 3.0 * step(0.0, sunv);
   } else if (mat > 0.05 && mat < 0.15) {      // building walls: rows of windows every 3.3 m up, 3.2 m along
@@ -493,7 +496,7 @@ export const CARS = [
 
 // ---------------------------------------------------------------- engine
 export async function createEngine(device, format, { sampleCount = 4, onEvent = () => {} } = {}) {
-  const E = { tune: { grip: [20, 13, 7], side: [10, 6, 3], assist: 1, scrub: 20 }, device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
+  const E = { tune: { grip: [20, 13, 7], side: [10, 6, 3], assist: 1, scrub: 20, wtCap: 0.08, wtRot: 0.06, wtResp: 0.25, wtBite: 0.35 }, device, format, frames: 0, clock: 0, state: "idle", raceT: 0, input: { steer: 0, thr: 0 }, cars: null, player: null, bump: 0 };
   const emit = (type, data) => { try { onEvent(type, data); } catch (e) { console.error(e); } };
 
   // spec: a number (a generated valley) or a track document (a real circuit)
@@ -541,6 +544,13 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     for (let n = 0; n < (sc ? 0 : 9000) && trees.length < 2400; n++) { const x = (rnd() * 2 - 1) * (rmax + 420), z = (rnd() * 2 - 1) * (rmax + 420);
       const k = near(x, z, HW + 11); if (k >= 0) continue; const y = heightGrid(x, z); if (y > 150 || rnd() < y / 200) continue;
       const s = 0.75 + rnd() * 0.9, g = 0.75 + rnd() * 0.4; trees.push([x, y - 0.3, z, s, 0.24 * g, 0.42 * g, 0.18 * g]); }
+    // a real circuit plants its trees in the OSM woods: random points over the scenery grid, kept where they fall inside one
+    const woods = (sc?.forests || []).map((p) => { let a = 1e9, b = -1e9, c = 1e9, d = -1e9; for (const [x, z] of p) { a = Math.min(a, x); b = Math.max(b, x); c = Math.min(c, z); d = Math.max(d, z); } return { p, a, b, c, d }; });
+    const inside = (P, x, z) => { let k = false; for (let i = 0, j = P.length - 1; i < P.length; j = i++) if ((P[i][1] > z) !== (P[j][1] > z) && x < (P[j][0] - P[i][0]) * (z - P[i][1]) / (P[j][1] - P[i][1]) + P[i][0]) k = !k; return k; };
+    for (let n = 0; n < (woods.length ? 140000 : 0) && trees.length < 5200; n++) {
+      const x = gd.ox + rnd() * gd.cell * (gd.nx - 1), z = gd.oz + rnd() * gd.cell * (gd.nz - 1);
+      if (!woods.some((w) => x > w.a && x < w.b && z > w.c && z < w.d && inside(w.p, x, z)) || near(x, z, HW + 9) >= 0) continue;
+      const s = 1.1 + rnd() * 1.1, g = 0.7 + rnd() * 0.35; trees.push([x, heightGrid(x, z) - 0.3, z, s, 0.2 * g, 0.36 * g, 0.16 * g]); }
     const treeInst = new Float32Array(trees.length * 20);
     trees.forEach((t, k) => { const a = rnd() * TAU; treeInst.set([...basis([t[0], t[1], t[2]], [Math.sin(a), 0, Math.cos(a)], [0, 1, 0], t[3]), t[4], t[5], t[6], 0], k * 20); });
     const boards = [];
@@ -600,7 +610,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
       R.tunnel = { vb: keep(vb(new Float32Array(tm.a))), n: tm.count, inst: keep(vb(new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0]))), k: 1 };
     } else R.tunnel = { k: 0 };
     // the sea: one flat sheet at sea level over the whole terrain; the ground under it is 6 m deeper
-    E.seaY = sc ? sc.seaY ?? -900 : null;
+    E.seaY = sc?.seaY ?? null;                     // a town by the sea gets paving and quays; inland scenery keeps the grass
     if (sc?.seaY != null) { const e = ext, y = sc.seaY;
       R.sea = { vb: keep(vb(new Float32Array([-e, y, -e, e, y, -e, e, y, e, -e, y, -e, e, y, e, -e, y, e]))), n: 6 };
     } else R.sea = null;
@@ -664,7 +674,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const nx = -T.tz[idx], nz = T.tx[idx], x = T.x[idx] + nx * side * 2.6, z = T.z[idx] + nz * side * 2.6;
     return { ...spec, ai, x, z, y: T.y[idx], h: Math.atan2(T.tx[idx], T.tz[idx]), vx: 0, vz: 0, idx, lat: side * 2.6, surf: 0, lap: 0, half: false,
       steer: 0, thr: 0, yawRate: 0, slip: 0, pitch: 0, roll: 0, lean: 0, spin: 0, speed: 0, lapStart: 0, best: Infinity, lapTimes: [], done: false, finish: 0, prog: idx - M,
-      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false,
+      lane: side * 2.2, skill: ai ? 0.9 + 0.035 * i : 1, offTime: 0, wrong: 0, gear: 1, rpm: 0, cut: 0, manual: false, limiter: false, load: 0, aT: 0, bp: 0, bpv: 0,
       dmg: 0, dmgF: 0, dmgB: 0, dmgP: 0, dmgN: 0 };
   }
   // Car damage (an option): impact speed past 2 m/s, squared, so a hard barrier hit (100 km/h at 30 degrees) costs about a third and a
@@ -686,10 +696,20 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const pr = probe(c.x, c.z, c.idx), surf = pr.surf;
     // damage takes up to 10% off grip and top speed, and past half a steady pull toward the side that took the most
     const worn = 1 - 0.1 * c.dmg, drift = c.dmg > 0.5 ? (c.dmgN >= c.dmgP ? 1 : -1) * (0.02 + 0.04 * (c.dmg - 0.5) / 0.5) : 0;
-    const TU = E.tune, grip = TU.grip[surf] * c.skill * worn, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1) * worn, roll = [0.35, 1.2, 3.2][surf];
+    const TU = E.tune, grip = TU.grip[surf] * c.skill * worn, vmax = [62, 45, 27][surf] * (c.ai ? c.skill : 1) * worn;
+    // Weight transfer: gas and brake move load between the axles. On the gas the front goes light (less turn, slower to
+    // answer, more understeer); on the brake it bites (turns in sharper, a little more rotation). Smoothed like a spring.
+    // The load follows what the tyres actually push (last step's), so the assist easing the gas also eases the understeer.
+    const wantLoad = clamp(c.aT >= 0 ? c.aT / 11.5 : c.aT / 17, -1, 1);   // +1 full gas from rest, -1 full brake
+    c.load = lerp(c.load, wantLoad, 1 - Math.exp(-dt * 8));
+    const ld = c.load, gas = Math.max(0, ld), brk = Math.max(0, -ld);
+    const capK = 1 - TU.wtCap * gas + TU.wtRot * brk, respK = 1 - TU.wtResp * gas + TU.wtBite * brk;
+    // Lifting off coasts like a car on tarmac: rolling resistance and drag ease with the pedal (under 0.7 m/s2 at
+    // 150 km/h, about 0.2 at 40); on the pedal, gas or brake, the full drivetrain and tyre load comes back.
+    const ped = Math.min(1, Math.abs(c.thr)), roll = lerp([0.15, 1.0, 3.0][surf], [0.35, 1.2, 3.2][surf], ped), drag = lerp(0.00026, 0.00045, ped);
     // Stability assist (player only): when the wheel asks for more turn than the tyres can give at this speed, ease
     // the throttle and scrub speed, so holding full gas through a fast bend runs wide less instead of off the road.
-    const sp0 = Math.abs(vf), geom0 = sp0 * Math.tan(0.6) / 2.6, lim0 = grip / Math.max(sp0, 0.5);
+    const sp0 = Math.abs(vf), geom0 = sp0 * Math.tan(0.6) / 2.6, lim0 = grip / Math.max(sp0, 0.5) * capK;
     // how close to the grip limit the wheel is asking for: 0 below 75% of it, 1 at full lock on the limit
     const over = c.ai || geom0 < lim0 ? 0 : TU.assist * clamp((Math.abs(c.steer) - 0.75) / 0.25, 0, 1);
     let a = 0;
@@ -705,12 +725,13 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     else if (c.thr < 0) a = vf > 0.5 ? c.thr * 17 : c.thr * 5 * (vf > -9 ? 1 : 0);
     a -= over * TU.scrub * clamp((sp0 - 12) / 25, 0, 1) * Math.sign(vf);   // gentle in slow corners, hard in fast ones
     if (c.limiter && vf > 0) a -= 2.5 + (r - 1) * 250;                    // engine braking on the limiter, a wall past it
-    a -= Math.sign(vf) * roll + 0.00045 * vf * Math.abs(vf);
+    a -= Math.sign(vf) * roll + drag * vf * Math.abs(vf);
+    const aTyre = a;                                                       // what the tyres push: pitches the body
     const hf = probe(c.x + fx * 1.4, c.z + fz * 1.4, pr.idx).y, hb = probe(c.x - fx * 1.4, c.z - fz * 1.4, pr.idx).y;
     a -= 9.81 * (hf - hb) / 2.8;
-    const nvf = vf + a * dt; vf = (c.thr === 0 && Math.sign(nvf) !== Math.sign(vf) && Math.abs(vf) < 1) ? 0 : nvf;
+    const nvf = vf + a * dt, stop = c.thr === 0 && Math.sign(nvf) !== Math.sign(vf) && Math.abs(vf) < 1; vf = stop ? 0 : nvf;
     const sp = Math.abs(vf), geom = sp * Math.tan(0.6) / 2.6, lim = grip / Math.max(sp, 0.5);
-    c.yawRate = lerp(c.yawRate, clamp(c.steer + drift, -1, 1) * Math.min(geom, lim * 1.06) * Math.sign(vf), 1 - Math.exp(-dt * 12));
+    c.yawRate = lerp(c.yawRate, clamp(c.steer + drift, -1, 1) * Math.min(geom, lim * 1.06 * capK) * Math.sign(vf), 1 - Math.exp(-dt * 12 * respK));
     c.h -= c.yawRate * dt;
     vl *= Math.exp(-dt * TU.side[surf]);
     const nfx = Math.sin(c.h), nfz = Math.cos(c.h);
@@ -731,6 +752,10 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const hl = probe(c.x + nfz * 0.9, c.z - nfx * 0.9, p2.idx).y, hr = probe(c.x - nfz * 0.9, c.z + nfx * 0.9, p2.idx).y;
     c.pitch = Math.atan2(hf - hb, 2.8); c.roll = Math.atan2(hr - hl, 1.8);
     c.lean = lerp(c.lean, clamp(c.yawRate * vf * 0.0032, -0.07, 0.07), 1 - Math.exp(-dt * 6));
+    // body pitch: squat under power (nose up), dive under the brake; a damped spring toward the tyres' push
+    c.aT = stop || c.onWall ? 0 : clamp(aTyre, -17, 11.5);
+    const pt = clamp(c.aT * 0.0036, -0.055, 0.045);
+    c.bpv += ((pt - c.bp) * 110 - c.bpv * 11) * dt; c.bp += c.bpv * dt;
     c.spin += vf * dt / 0.34;
     // laps: the start line is sample 0; a lap counts only after passing the far side of the loop
     const prev = c.idx; c.idx = p2.idx;
@@ -758,7 +783,8 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     const tx = T.x[i] + -T.tz[i] * c.lane, tz = T.z[i] + T.tx[i] * c.lane, fx = Math.sin(c.h), fz = Math.cos(c.h);
     const dx = tx - c.x, dz = tz - c.z, err = Math.atan2(fx * dz - fz * dx, fx * dx + fz * dz);
     // feed-forward: the turn rate the road needs here, as a share of what the tyres allow, plus the aim correction
-    const grip = E.tune.grip[0] * c.skill * (1 - 0.1 * c.dmg), cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06);
+    const TU = E.tune, gas = Math.max(0, c.load), brk = Math.max(0, -c.load);
+    const grip = TU.grip[0] * c.skill * (1 - 0.1 * c.dmg), cap = Math.min(sp * Math.tan(0.6) / 2.6, grip / Math.max(sp, 0.5) * 1.06 * (1 - TU.wtCap * gas + TU.wtRot * brk));
     const ff = sp * T.kap[(c.idx + Math.round(4 / T.ds)) % M] / Math.max(cap, 1e-3);
     c.steer = clamp(ff + err * 2.6, -1, 1);
     const target = T.vlim[(c.idx + Math.round(6 / T.ds)) % M] * (c.ai ? c.skill : 0.97) * (1 - 0.1 * c.dmg);
@@ -771,7 +797,7 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
     else if (c === E.player) emit("lap", { lap: c.lap, time: t });
   }
   // ---- network: a car as a compact array, and a remote car chasing the last one heard
-  const NET = ["x", "y", "z", "h", "vx", "vz", "speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear", "dmg", "dmgF", "dmgB", "dmgP", "dmgN"];
+  const NET = ["x", "y", "z", "h", "vx", "vz", "speed", "steer", "thr", "pitch", "roll", "lean", "lap", "prog", "done", "finish", "best", "gear", "dmg", "dmgF", "dmgB", "dmgP", "dmgN", "bp"];
   E.snapshot = (c) => [c.slot, ...NET.map((k) => k === "done" ? (c.done ? 1 : 0) : k === "best" ? (c.best === Infinity ? -1 : +c.best.toFixed(3)) : typeof c[k] === "number" ? +c[k].toFixed(k === "x" || k === "z" || k === "y" ? 2 : 3) : 0)];
   E.applySnapshot = (a, age = 0) => {
     const c = E.cars?.find((q) => q.slot === a[0] && q.remote); if (!c) return;
@@ -840,8 +866,9 @@ export async function createEngine(device, format, { sampleCount = 4, onEvent = 
   const carMatrices = (c) => {
     const f = [Math.sin(c.h) * Math.cos(c.pitch), Math.sin(c.pitch), Math.cos(c.h) * Math.cos(c.pitch)], right = [-Math.cos(c.h), 0, Math.sin(c.h)];
     const up = vnorm([-right[0] * Math.sin(c.roll), Math.cos(c.roll), -right[2] * Math.sin(c.roll)]);
-    const bodyUp = vnorm(vadd(up, vscale(right, -c.lean)));     // the body leans out of the corner; the wheels stay planted
-    const body = basis([c.x, c.y, c.z], f, bodyUp);
+    const bp = c.bp || 0, lu = vnorm(vadd(up, vscale(right, -c.lean)));   // the body leans out of the corner and pitches
+    const bodyUp = vsub(vscale(lu, Math.cos(bp)), vscale(f, Math.sin(bp)));   // with the pedal; the wheels stay planted
+    const body = basis([c.x, c.y, c.z], vadd(vscale(f, Math.cos(bp)), vscale(lu, Math.sin(bp))), bodyUp);
     const Z = vnorm(f), X = vnorm(vcross(up, Z)), Y = vcross(Z, X), wheels = [];
     for (const [ox, oz, front] of [[0.8, 1.38, 1], [-0.8, 1.38, 1], [0.8, -1.38, 0], [-0.8, -1.38, 0]]) {
       const a = front ? c.steer * 0.42 : 0, Zw = vsub(vscale(Z, Math.cos(a)), vscale(X, Math.sin(a))), Xw = vcross(Y, Zw);

@@ -89,13 +89,50 @@ def main():
         b = {"p": [list(p) for p in pts], "h": round(height or 12, 1)}
         if where == "tunnel": b["t"] = 1          # stands over the tunnel: the game lifts its base above the road
         bld.append(b)
+    # ---- forests: landuse=forest / natural=wood, closed ways and the outer rings of multipolygons, thinned to ~6 m
+    def thin(pts, tol=6.0):
+        if len(pts) < 4: return pts
+        def rdp(a, b):
+            (ax, az), (bx, bz) = pts[a], pts[b]; L = math.hypot(bx - ax, bz - az) or 1; far, k = -1, None
+            for i in range(a + 1, b):
+                d = abs((bx - ax) * (az - pts[i][1]) - (ax - pts[i][0]) * (bz - az)) / L
+                if d > far: far, k = d, i
+            return rdp(a, k) + rdp(k, b)[1:] if far > tol else [pts[a], pts[b]]
+        if pts[0] != pts[-1]: return rdp(0, len(pts) - 1)
+        # a closed ring: the chord from the start to itself has no length, so split at the farthest point first
+        k = max(range(len(pts)), key=lambda i: math.dist(pts[0], pts[i]))
+        return rdp(0, k) + rdp(k, len(pts) - 1)[1:]
+    woods = lambda tags: tags.get("landuse") == "forest" or tags.get("natural") == "wood"
+    ways = {w.get("id"): w for w in osm.iter("way")}
+    rings = []
+    for w in osm.iter("way"):
+        tags = {x.get("k"): x.get("v") for x in w.findall("tag")}
+        refs = [n.get("ref") for n in w.findall("nd")]
+        if woods(tags) and len(refs) > 3 and refs[0] == refs[-1] and all(r in nodes for r in refs): rings.append(refs[:-1])
+    for r in osm.iter("relation"):
+        tags = {x.get("k"): x.get("v") for x in r.findall("tag")}
+        if not woods(tags): continue
+        segs = [[n.get("ref") for n in ways[m.get("ref")].findall("nd")] for m in r.findall("member")
+                if m.get("type") == "way" and m.get("role") in ("outer", "") and m.get("ref") in ways]
+        while segs:                                   # join outer pieces end to end into closed rings
+            ring = segs.pop(0)
+            while ring[0] != ring[-1]:
+                nxt = next((sg for sg in segs if sg[0] == ring[-1] or sg[-1] == ring[-1]), None)
+                if nxt is None: break
+                segs.remove(nxt); ring += (nxt if nxt[0] == ring[-1] else nxt[::-1])[1:]
+            if ring[0] == ring[-1] and len(ring) > 3 and all(n in nodes for n in ring): rings.append(ring[:-1])
+    forests = []
+    for ring in rings:
+        pts = thin([tuple(round(v, 1) for v in to_xz(*nodes[n])) for n in ring] + [tuple(round(v, 1) for v in to_xz(*nodes[ring[0]]))])[:-1]
+        if len(pts) >= 3: forests.append([list(p) for p in pts])
+
     doc = {"track": track["id"], "grid": {"ox": round(x0, 1), "oz": round(z0, 1), "cell": a.cell, "nx": nx, "nz": nz, "h": h},
-           "seaY": seaY, "buildings": bld,
+           "seaY": seaY, "buildings": bld, "forests": forests,
            "attribution": "Buildings and map data © OpenStreetMap contributors (ODbL) · Elevation: EU-DEM v1.1, Copernicus"}
     Path(a.out).write_text(json.dumps(doc, separators=(",", ":")))
     track["scenery"] = Path(a.out).name
     Path(a.track).write_text(json.dumps(track, separators=(",", ":")))
-    print(f"{nx}x{nz} ground cells ({sea} sea), {len(bld)} buildings ({dropped} over the road dropped) -> {a.out}", file=sys.stderr)
+    print(f"{nx}x{nz} ground cells ({sea} sea), {len(bld)} buildings ({dropped} over the road dropped), {len(forests)} forest areas -> {a.out}", file=sys.stderr)
 
 if __name__ == "__main__":
     main()
