@@ -224,8 +224,10 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   const sprites = [];
   const seats = [];
   const unit = Math.min(W, H);
-  const smallH = Math.max(30, Math.min(unit * (portrait ? 0.085 : 0.095), 78));
-  const boardH = Math.max(44, Math.min(unit * (portrait ? 0.12 : 0.14), rx * 2 / 6.2 * CARD_ASPECT, 118));
+  const TABLE_SCALE = 1.15;   // cards on the table (board and other players), relative to the first layout
+  const smallH = Math.max(30, Math.min(unit * (portrait ? 0.085 : 0.095), 78)) * TABLE_SCALE;
+  // Five board cards with gaps span 5.2 card widths; keep them within 94% of the table's width.
+  const boardH = Math.max(44, Math.min(unit * (portrait ? 0.12 : 0.14) * TABLE_SCALE, rx * 2 * 0.94 / 5.2 * CARD_ASPECT, 118 * TABLE_SCALE));
   const showdown = view.result && !view.result.uncontested;
   const winners = new Set();
   const winCards = new Set();
@@ -297,7 +299,7 @@ export function layoutTable(view, W, H, safe, ui = {}) {
   }
 
   // Board, in the middle; the pot just under it.
-  const bw = boardH / CARD_ASPECT, bgap = bw * 1.08;
+  const bw = boardH / CARD_ASPECT, bgap = bw * 1.05;
   const nb = view.board.length;
   const boardY = cy - (nb ? boardH * 0.25 : 0);
   if (nb) {

@@ -87,9 +87,10 @@ behind strict NATs may fail to connect; the same Wi-Fi network always works.
 | **Bring in** / **Complete** | the stud bring-in |
 | tap your cards, then **Draw n** or **Stand pat** | the draw; **Suggest** picks the computer's discards |
 
-With hints on, the line above your cards shows your share of the pot against the hands the other players
-are likely to hold (read from what they have done this hand), the price of calling as a share of the pot
-after the call, and what a tight-aggressive computer player would do.
+With hints on, the line above your cards reads "Your share ≈ n% · price m% · computer: call": your share of
+the pot against the hands the other players are likely to hold (read from what they have done this hand),
+the price of calling as a share of the pot after the call, and what a tight-aggressive computer player
+would do.
 
 ## How it is built
 
