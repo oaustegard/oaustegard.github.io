@@ -8,6 +8,7 @@
 //   node tests/tilt-rally-check.mjs permission  the iOS motion prompt comes on the start screen, before the race
 //   node tests/tilt-rally-check.mjs controls  touch pedals and manual gears through the on-screen controls
 //   node tests/tilt-rally-check.mjs multi     three players on a local rally-lobby (wrangler dev): direct and relayed links, synced start, positions agree
+//   node tests/tilt-rally-check.mjs pedals    thumb position on a touch pedal sets its strength, in both layouts
 //   node tests/tilt-rally-check.mjs intro   the start screen fits one portrait phone screen, buttons included
 //   node tests/tilt-rally-check.mjs rotated a portrait phone: the landscape stage turned a quarter turn counter-clockwise fills the screen
 import { createRequire } from "node:module";
@@ -339,6 +340,38 @@ if (what === "multi") {
     await A.page.screenshot({ path: path.join(OUT, "multi-host.png") });
     for (const P of [A, B, C]) check("no page errors", P.errors.length === 0, P.errors.slice(0, 3).join(" | "));
   } finally { dev.kill(); }
+}
+
+if (what === "pedals") {
+  // Position sets strength: near the top of a pad is full, near the bottom light. Checked in both layouts, since on a
+  // portrait phone the stage is turned and "up the pad" is the screen's left.
+  for (const [label, vp] of [["landscape", { viewport: { width: 844, height: 390 } }], ["portrait, turned", { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true }]]) {
+    const page = await b.newPage(vp), errors = [];
+    page.on("pageerror", (e) => errors.push(e.message));
+    await page.addInitScript(() => localStorage.setItem("tilt-rally-options", JSON.stringify({ pedals: true, backseat: false, sound: false })));
+    await page.goto(base + "index.html?demo");
+    await waitFor(page, () => window.__game?.()?.state);
+    await waitFor(page, () => !document.getElementById("brkP").hidden, 60000);
+    const rot = await page.evaluate(() => document.documentElement.classList.contains("rot"));
+    // a point on the pad at fraction `up` from its bottom edge, in screen coordinates
+    const at = async (id, up) => { const r = await page.locator("#" + id).boundingBox();
+      return rot ? [r.x + r.width * (1 - up), r.y + r.height / 2] : [r.x + r.width / 2, r.y + r.height * (1 - up)]; };
+    const thr = () => page.evaluate(() => window.__game().input.thr);
+    // hold for `ms` of game time: software rendering runs a few frames a second, so wall time would undercount the ramp
+    const gameT = () => page.evaluate(() => window.__game().raceT);
+    const hold = async (id, up, ms) => { const [x, y] = await at(id, up); await page.mouse.move(x, y); await page.mouse.down();
+      const t0 = await gameT(); while ((await gameT()) < t0 + ms / 1000) await page.waitForTimeout(30);
+      const v = await thr(); await page.mouse.up(); await page.waitForTimeout(300); return v; };
+    const brakeTop = await hold("brkP", 0.95, 1500), brakeLow = await hold("brkP", 0.05, 1500), brakeEarly = await hold("brkP", 0.95, 120);
+    const gasTop = await hold("gasP", 0.95, 1200), gasLow = await hold("gasP", 0.05, 1200);
+    console.log(label, JSON.stringify({ rot, brakeTop, brakeLow, brakeEarly, gasTop, gasLow }));
+    check(`${label}: top of the brake is full braking`, brakeTop < -0.9, brakeTop.toFixed(2));
+    check(`${label}: bottom of the brake is light`, brakeLow > -0.35 && brakeLow < -0.1, brakeLow.toFixed(2));
+    check(`${label}: braking builds instead of slamming on`, brakeEarly > -0.6, brakeEarly.toFixed(2) + " after 0.12 s");
+    check(`${label}: gas follows the same layout`, gasTop > 0.9 && gasLow < 0.5 && gasLow > 0.2, gasTop.toFixed(2) + " / " + gasLow.toFixed(2));
+    check(`${label}: no page errors`, errors.length === 0, errors.slice(0, 3).join(" | "));
+    await page.close();
+  }
 }
 
 await b.close(); srv.close();

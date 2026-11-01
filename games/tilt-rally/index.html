@@ -120,7 +120,10 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
   touch-action: none; -webkit-user-select: none; user-select: none; }
 #gasP { right: max(16px, var(--ir)); bottom: max(10px, var(--ib)); width: 78px; height: 150px; border-color: var(--gas); }
 #brkP { right: calc(max(16px, var(--ir)) + 90px); bottom: max(10px, var(--ib)); width: 96px; height: 92px; border-color: var(--brake); }
-#gasP.down { background: rgba(82, 210, 122, 0.4); } #brkP.down { background: rgba(255, 90, 78, 0.4); }
+#gasP.down, #brkP.down { background: rgba(12, 17, 23, 0.55); }
+.pad .lvl { position: absolute; left: 0; right: 0; bottom: 0; height: 0; pointer-events: none; border-radius: 0 0 11px 11px; }
+#gasP .lvl { background: rgba(82, 210, 122, 0.45); } #brkP .lvl { background: rgba(255, 90, 78, 0.45); }
+#gasP span, #brkP span { position: relative; pointer-events: none; }
 #hud.pedals #br { right: auto; left: 50%; transform: translateX(-50%); text-align: center; }
 #shift { position: absolute; left: max(16px, var(--il)); top: 50%; transform: translateY(-50%); display: grid; gap: 8px; justify-items: center; }
 #up, #dn { position: static; width: 76px; height: 66px; font-size: 26px; letter-spacing: 0; }
@@ -176,8 +179,8 @@ label.opt input { accent-color: var(--signal); width: 18px; height: 18px; }
     <div class="num" id="gearBig">1</div>
     <button class="pad" id="dn" type="button" aria-label="Shift down">▼</button>
   </div>
-  <button class="pad" id="brkP" type="button" hidden>Brake</button>
-  <button class="pad" id="gasP" type="button" hidden>Gas</button>
+  <button class="pad" id="brkP" type="button" hidden><i class="lvl"></i><span>Brake</span></button>
+  <button class="pad" id="gasP" type="button" hidden><i class="lvl"></i><span>Gas</span></button>
   <div id="yell" hidden></div>
   <div id="msg"></div>
   <div id="sub"></div>
@@ -317,10 +320,21 @@ canvas.addEventListener("pointerdown", () => { const t = performance.now(); if (
 $("center").addEventListener("click", recenter);
 const inp = { steer: 0, thr: 0, wheel: 0, kSteer: 0, pedal: 0 };
 // Touch pedals: each pad tracks its own finger, so gas and brake (and the paddles) work with two thumbs at once.
-const held = { gas: false, brk: false };
+// A phone browser cannot feel how hard a thumb presses (experiments/force-touch: an iPhone reports pressure 0), so
+// where the thumb sits sets the strength: the bottom of a pad is a light touch, the top is full. The value is 0 while
+// the pad is free.
+const held = { gas: 0, brk: 0 };
+const FLOOR = { gas: 0.35, brk: 0.2 };
+function padLevel(el, key, e) {
+  const r = el.getBoundingClientRect(), rot = document.documentElement.classList.contains("rot");
+  // on a portrait phone the stage is turned a quarter turn counter-clockwise, so "up the pad" points to the screen's left
+  const up = rot ? (r.right - e.clientX) / r.width : (r.bottom - e.clientY) / r.height;
+  return FLOOR[key] + (1 - FLOOR[key]) * clamp((up - 0.08) / 0.8, 0, 1);    // the last tenth at either end is solid
+}
 for (const [id, key] of [["gasP", "gas"], ["brkP", "brk"]]) {
-  const el = $(id), up = () => { held[key] = false; el.classList.remove("down"); };
-  el.addEventListener("pointerdown", (e) => { e.preventDefault(); el.setPointerCapture?.(e.pointerId); held[key] = true; el.classList.add("down"); });
+  const el = $(id), up = () => { held[key] = 0; el.classList.remove("down"); };
+  el.addEventListener("pointerdown", (e) => { e.preventDefault(); el.setPointerCapture?.(e.pointerId); held[key] = padLevel(el, key, e); el.classList.add("down"); });
+  el.addEventListener("pointermove", (e) => { if (held[key]) held[key] = padLevel(el, key, e); });
   for (const t of ["pointerup", "pointercancel", "lostpointercapture"]) el.addEventListener(t, up);
 }
 function shift(dir) {
@@ -341,8 +355,10 @@ function readInput(dt) {
     const p = w.pitch / D2R; thr = p > 2 ? clamp((p - 2) / 10, 0, 1) : p < -3 ? -clamp((-p - 3) / 9, 0, 1) : 0;   // full gas 12 degrees forward, full brake 12 back
   }
   if ($("pedals").checked) {           // pedals replace the tilt for gas and brake; they ease in over about 0.15 s
-    const want = held.brk ? -1 : held.gas ? 1 : 0;
-    inp.pedal = want === 0 ? 0 : lerp(inp.pedal, want, 1 - Math.exp(-dt * 14)); thr = inp.pedal;
+    // braking builds over about half a second, gas over a quarter; letting go is instant, and the brake wins a tie
+    const want = held.brk ? -held.brk : held.gas, rate = want < inp.pedal ? 4 : 8;
+    inp.pedal = want === 0 ? 0 : Math.sign(want) !== Math.sign(inp.pedal) && inp.pedal !== 0 ? 0 : lerp(inp.pedal, want, 1 - Math.exp(-dt * rate));
+    thr = inp.pedal;
   }
   const kl = keys.has("arrowleft") || keys.has("a"), kr = keys.has("arrowright") || keys.has("d"), ku = keys.has("arrowup") || keys.has("w"), kd = keys.has("arrowdown") || keys.has("s");
   if (kl || kr || ku || kd) { sensor.mode = "keys"; inp.kSteer = lerp(inp.kSteer, (kr ? 1 : 0) - (kl ? 1 : 0), 1 - Math.exp(-dt * 7)); steer = inp.kSteer; thr = (ku ? 1 : 0) - (kd ? 1 : 0); wheel = steer * 60 * D2R; }
@@ -399,6 +415,7 @@ function hud() {
   $("time").textContent = fmt(G.state === "countdown" ? 0 : P.done ? P.finish : G.raceT);
   $("best").textContent = "Best " + (P.best < Infinity ? fmt(P.best) : "—");
   $("wheel").style.transform = "rotate(" + (inp.wheel / D2R).toFixed(1) + "deg)";
+  $("gasP").firstElementChild.style.height = (Math.max(0, inp.thr) * 100) + "%"; $("brkP").firstElementChild.style.height = (Math.max(0, -inp.thr) * 100) + "%";
   $("gas").style.height = (Math.max(0, inp.thr) * 50) + "%"; $("brk").style.height = (Math.max(0, -inp.thr) * 50) + "%";
   $("mode").textContent = $("pedals").checked ? "pedals" : sensor.mode;
   $("gearLbl").textContent = (P.manual ? "" : "A") + P.gear; $("gearBig").textContent = P.gear; $("gearBig").classList.toggle("limit", !!P.limiter);

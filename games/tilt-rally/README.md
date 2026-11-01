@@ -12,7 +12,7 @@ Live: <https://austegard.com/games/tilt-rally/>. On a phone, turn on rotation lo
 | tilt the top away 2° to 12° | throttle, full at 12° |
 | tilt it toward you 3° to 12° | brake, then reverse from a standstill |
 | double-tap the screen, or Center wheel | make the current pose straight ahead |
-| **Touch pedals** (option) | Gas and Brake pads at the bottom right replace the tilt for speed; steering stays on the wheel |
+| **Touch pedals** (option) | Gas and Brake pads at the bottom right replace the tilt for speed; steering stays on the wheel. Where the thumb sits sets the strength: the bottom of the brake is 20% braking, the top is full, and gas runs from 35% to full. Braking builds over about half a second, gas over a quarter; lifting off is instant. Each pad fills to show its level. Pressure would be better, but an iPhone browser reports none ([force-touch experiment](https://github.com/oaustegard/experiments/tree/main/force-touch)) |
 | **Manual gears** (option) | ▲ and ▼ paddles on the left change gear, with an automatic clutch; E and Q on a keyboard |
 | arrow keys or WASD | steer, throttle and brake on a computer |
 
@@ -69,6 +69,7 @@ node tests/tilt-rally-check.mjs grip      # a full-gas driver with perfect aim s
 node tests/tilt-rally-check.mjs backseat  # it shouts before the corner a full-gas driver leaves, notices the exit, and urges a crawler on
 node tests/tilt-rally-check.mjs permission  # the iOS motion prompt comes on the start screen, and Start engine waits for the answer
 node tests/tilt-rally-check.mjs controls  # touch pedals and paddles through the on-screen controls: limiter, upshifts, refused downshift, brake
+node tests/tilt-rally-check.mjs pedals    # thumb position on a pedal sets its strength, in landscape and turned portrait
 node tests/tilt-rally-check.mjs intro     # the start screen fits a portrait phone without scrolling, buttons on screen
 node tests/tilt-rally-check.mjs rotated   # a portrait phone: the turned stage fills the screen, HUD corners land where expected
 ```
