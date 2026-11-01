@@ -66,6 +66,9 @@ canvas#view { position: fixed; inset: 0; width: 100%; height: 100%; display: blo
 #tr { position: absolute; top: max(10px, var(--it)); right: max(16px, var(--ir)); display: flex; gap: 8px; align-items: flex-start; }
 #tr .num { font-size: 22px; line-height: 1; }
 #minimap { width: 120px; height: 120px; display: block; }
+.dmgbar { width: 54px; height: 8px; margin-top: 8px; border-radius: 2px; background: rgba(255,255,255,0.1); overflow: hidden; }
+.dmgbar i { display: block; height: 100%; width: 0; background: var(--signal); }
+.dmgbar i.bad { background: var(--brake); }
 #br { position: absolute; bottom: max(10px, var(--ib)); right: max(16px, var(--ir)); text-align: right; }
 #speed { font-size: 64px; line-height: 0.9; }
 #bl { position: absolute; bottom: max(10px, var(--ib)); left: max(16px, var(--il)); display: flex; gap: 10px; align-items: flex-end; }
@@ -165,6 +168,7 @@ html.short { #yell { font-size: 38px; -webkit-text-stroke-width: 6px; } }
   <div id="tl">
     <div class="chip"><div class="label">Lap</div><div class="num" id="lap">1/3</div></div>
     <div class="chip"><div class="label">Pos</div><div class="num" id="pos">4/4</div></div>
+    <div class="chip" id="dmgChip" hidden><div class="label">Damage</div><div class="dmgbar"><i id="dmgFill"></i></div></div>
   </div>
   <button class="chip" id="center" type="button">Center wheel</button>
   <div id="attr"></div>
@@ -217,6 +221,7 @@ html.short { #yell { font-size: 38px; -webkit-text-stroke-width: 6px; } }
         <label class="opt"><input type="checkbox" id="backseat" checked> Back-seat driver</label>
         <label class="opt"><input type="checkbox" id="pedals"> Touch pedals</label>
         <label class="opt"><input type="checkbox" id="manual"> Manual gears</label>
+        <label class="opt"><input type="checkbox" id="damage"> Car damage</label>
         <label class="opt" for="track">Track <select id="track"><option value="valley">Valley (generated)</option><option value="nurburgring-gp">Nürburgring GP</option><option value="monaco">Circuit de Monaco</option></select></label>
       </div>
       <p class="small" id="status">Checking for WebGPU…</p>
@@ -431,6 +436,7 @@ function hud() {
   $("gasP").firstElementChild.style.height = (Math.max(0, inp.thr) * 100) + "%"; $("brkP").firstElementChild.style.height = (Math.max(0, -inp.thr) * 100) + "%";
   $("gas").style.height = (Math.max(0, inp.thr) * 50) + "%"; $("brk").style.height = (Math.max(0, -inp.thr) * 50) + "%";
   $("mode").textContent = $("pedals").checked ? "pedals" : sensor.mode;
+  if (G.damage) { const f = $("dmgFill"); f.style.width = Math.round(P.dmg * 100) + "%"; f.classList.toggle("bad", P.dmg > 0.5); }
   $("gearLbl").textContent = (P.manual ? "" : "A") + P.gear; $("gearBig").textContent = P.gear; $("gearBig").classList.toggle("limit", !!P.limiter);
   const mm = $("minimap").getContext("2d"); mm.clearRect(0, 0, 240, 240); mm.drawImage(mini.c, 0, 0);
   for (const c of G.cars) { const p = mini.m(c.x, c.z); mm.beginPath(); mm.arc(p[0], p[1], c === P ? 11 : 8, 0, TAU);
@@ -438,15 +444,16 @@ function hud() {
 }
 
 // ---------------------------------------------------------------- start
-const OPTS = ["level", "sound", "backseat", "pedals", "manual"];
+const OPTS = ["level", "sound", "backseat", "pedals", "manual", "damage"];
 try { const saved = JSON.parse(localStorage.getItem("tilt-rally-options") || "{}"); for (const k of OPTS) if (k in saved) $(k).checked = !!saved[k]; } catch (e) {}
 for (const k of OPTS) $(k).addEventListener("change", () => { try { localStorage.setItem("tilt-rally-options", JSON.stringify(Object.fromEntries(OPTS.map((o) => [o, $(o).checked])))); } catch (e) {} });
 function controls() {
   const pedals = $("pedals").checked, manual = $("manual").checked && !DEMO;
   $("gasP").hidden = $("brkP").hidden = !pedals; $("hud").classList.toggle("pedals", pedals); $("shift").hidden = !manual;
+  $("dmgChip").hidden = !$("damage").checked; bs.dmgNext = 0.5;
   return manual;
 }
-function newRace() { G.newRace({ autopilot: DEMO, manual: controls() }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
+function newRace() { G.newRace({ autopilot: DEMO, manual: controls(), damage: $("damage").checked }); lastLight = 4; $("results").hidden = true; $("hud").hidden = false; }
 // The visible area, not the layout viewport: Chrome on iPhone counts its bottom toolbar in innerHeight, so a stage that
 // tall runs under the toolbar and loses its left edge (the screen's bottom). 100svh is the height with every browser
 // bar showing; take the smallest of the three.
@@ -582,7 +589,7 @@ async function beginNetRace(msg) {
     roster.push(r ? { kind: r.id === net.id ? "local" : "remote", name: r.name, id: r.id } : { kind: iHost ? "ai" : "remote", id: msg.host });
   }
   mp = { ...msg };
-  G.newRace({ manual: controls(), roster });
+  G.newRace({ manual: controls(), damage: $("damage").checked, roster });
   lastLight = 4; $("hud").hidden = false;
   started = true; sensor.neutral = sensor.up ? sensor.up.slice() : null;     // straight ahead is the pose as the countdown starts
   G.raceT = (net.now() - mp.at) / 1000;
@@ -648,9 +655,11 @@ const LINES = {
   pass: ["Nice pass!", "Got ’em!", "Yes!"],
   passed: ["They’re getting by!", "Don’t let them through!", "Block!"],
   best: ["Best lap! Again!", "Now THAT was a lap!"],
+  wrecked: ["Is that smoke?!", "The car’s falling apart!", "Something’s hanging off!", "We’re leaking something!"],
+  wreck: ["It’s a wreck!", "We’re driving scrap!", "Just get it home!"],
 };
-const STYLE = { wall: "hot", brake: "hot", slow: "hot", wrong: "hot", off: "hot", go: "go", pass: "go", best: "cool", bump: "", passed: "" };
-const bs = { t: 0, until: 0, last: {}, pos: 0, wasOff: false, slowFor: 0, log: [] };
+const STYLE = { wall: "hot", brake: "hot", slow: "hot", wrong: "hot", off: "hot", go: "go", pass: "go", best: "cool", bump: "", passed: "", wrecked: "hot", wreck: "hot" };
+const bs = { t: 0, until: 0, last: {}, pos: 0, wasOff: false, slowFor: 0, log: [], dmgNext: 0.5 };
 function yell(kind, urgent = false) {
   if (!G || G.state !== "race" || !$("backseat").checked) return;
   if (!urgent && bs.t < bs.until + 0.8) return;                          // let the last one land
@@ -660,6 +669,7 @@ function yell(kind, urgent = false) {
   el.textContent = text; el.className = STYLE[kind] || ""; void el.offsetWidth; el.classList.add("pop"); el.hidden = false;
   bs.log.push({ t: +bs.t.toFixed(2), kind, idx: G.player.idx, kmh: Math.round(G.player.speed * 3.6) });
   if ($("sound").checked && window.speechSynthesis) { try { speechSynthesis.cancel(); const u = new SpeechSynthesisUtterance(text.replace(/[!?…]+/g, "!")); u.rate = 1.25; u.pitch = 1.15; speechSynthesis.speak(u); } catch (e) {} }
+  return true;
 }
 function backseat(dt) {
   bs.t += dt;
@@ -682,13 +692,15 @@ function backseat(dt) {
   const pos = G.rank().indexOf(P) + 1;
   if (bs.pos && pos !== bs.pos && G.raceT > 4) yell(pos < bs.pos ? "pass" : "passed");
   bs.pos = pos;
+  // heavy damage, once past half and once past 80%: waits its turn rather than talk over the crash itself
+  if (G.damage && P.dmg >= bs.dmgNext && bs.dmgNext < 1 && yell(bs.dmgNext < 0.8 ? "wrecked" : "wreck")) bs.dmgNext = bs.dmgNext < 0.8 ? 0.8 : 1;
 }
 window.__backseat = { step: backseat, log: bs.log };
 
 window.__net = () => net;
 window.__game = () => G && { frames: G.frames, state: G.state, raceT: G.raceT, stats: G.stats, scale,
   input: { steer: inp.steer, thr: inp.thr, mode: sensor.mode, events: sensor.events },
-  cars: G.cars?.map((c) => ({ name: c.name, slot: c.slot, remote: !!c.remote, local: !!c.local, x: c.x, z: c.z, lap: c.lap, idx: c.idx, speed: c.speed, lat: c.lat, surf: c.surf, done: c.done, best: c.best, gear: c.gear, rpm: c.rpm, manual: c.manual })) };
+  cars: G.cars?.map((c) => ({ name: c.name, slot: c.slot, remote: !!c.remote, local: !!c.local, x: c.x, z: c.z, lap: c.lap, idx: c.idx, speed: c.speed, lat: c.lat, surf: c.surf, done: c.done, best: c.best, gear: c.gear, rpm: c.rpm, manual: c.manual, dmg: c.dmg })) };
 
 async function init() {
   if (!navigator.gpu) { status("This game draws with WebGPU, which this browser does not offer. Try Chrome on Android, Safari on iOS 26 or later, or desktop Chrome or Edge."); $("start").disabled = true; return false; }
