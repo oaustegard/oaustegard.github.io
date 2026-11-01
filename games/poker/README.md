@@ -100,11 +100,12 @@ would do.
   side pots and the showdown. `Match` carries stacks, buy-ins, rebuys, the button, rising blinds and the
   mixed-game rotation from hand to hand. `hand.view(seat)` is the only thing the network sends.
 - `ai.js` is the computer player; see the next section.
-- `sound.js` synthesizes the table sounds with Web Audio, no sample files: chips are modal clacks (four
-  decaying inharmonic partials and a click per chip, a few chips per bet by its size, a cascade when a pot
-  is pushed to you), cards a swish of band-passed noise sweeping up as they slide, then a snap; a check
-  is a knuckle double-knock; your turn a quiet two-note bell. All of it runs through a gentle compressor
-  and a short synthetic room reverb.
+- `sound.js` synthesizes soft table sounds with Web Audio, no sample files: clay-chip clacks (three
+  decaying partials near 1.6 kHz and a rounded tick, up to four chips by bet size, a short run when a pot
+  is pushed to you), a low card swish, a muted double tap for a check, and two soft marimba-like notes when
+  it is your turn. Each sound is panned toward the seat it comes from, and other players' small actions
+  are quieter than yours; blinds and antes are silent. The mix runs through a 5 kHz low-pass, a high shelf,
+  a gentle compressor and a little room reverb. The menu's **Sound** button cycles normal, quiet and off.
 - `render.js` paints the 52 faces, the back, six chip colours and the dealer button into an atlas with
   Canvas 2D. Two WGSL pipelines draw the rest:
   - **Room**: a full-screen pass at half resolution: a panelled card room with sconces, a brass lamp that

@@ -307,7 +307,7 @@ table.tb td.n, table.tb th.n { text-align: right; font-variant-numeric: tabular-
       <button class="btn" id="m-sitin" hidden>Buy back in</button>
       <div id="m-invites" class="stack"></div>
       <button class="btn" id="m-rules">How to play</button>
-      <button class="btn" id="m-sound">Sound: on</button>
+      <button class="btn" id="m-sound">Sound: normal</button>
       <button class="btn" id="m-end" hidden>End the game</button>
       <button class="btn" id="m-quit">Leave the table</button>
     </div>
@@ -423,12 +423,19 @@ const pace = () => (settings.pace === 'brisk' ? 0.5 : 1);
 
 // ---------- sound (sound.js) ----------
 const sound = createSound();
-sound.enabled = settings.sound;
+// Volume: 'normal', 'quiet' or 'off' (an older on/off setting maps across).
+if (typeof settings.sound === 'boolean') settings.sound = settings.sound ? 'normal' : 'off';
+const VOLUME = { normal: 1, quiet: 0.45, off: 0 };
+const VOLUME_NAME = { normal: 'Sound: normal', quiet: 'Sound: quiet', off: 'Sound: off' };
+sound.volume = VOLUME[settings.sound] ?? 1;
 // Browsers keep audio off until a gesture; open it on the first tap or key.
 for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => sound.unlock(), { once: true, capture: true });
-const snd = (kind, arg) => { sound.enabled = settings.sound; sound.play(kind, arg); };
-// How many chips a bet sounds like: one for a blind, up to seven for a big bet.
-const chipCount = (amt, v) => Math.max(1, Math.min(7, Math.round(1 + Math.log2(Math.max(1, amt / v.stakes.bb)) * 1.3)));
+const snd = (kind, ...args) => { sound.volume = VOLUME[settings.sound] ?? 1; sound.play(kind, ...args); };
+// How many chips a bet sounds like: one for a small bet, up to four for a big one.
+const chipCount = (amt, v) => Math.max(1, Math.min(4, Math.round(1 + Math.log2(Math.max(1, amt / v.stakes.bb)))));
+// Where a seat's sound comes from (left -1 .. right 1), and how loud: other players' small actions are quieter.
+const panOf = s => (layout && layout.seats[s] ? layout.seats[s].ux * 0.7 : 0);
+const voiceOf = (s, v, quiet) => ({ pan: panOf(s), vel: s === v.seat ? 1 : quiet });
 
 // ---------- screen state, shared by host and guests ----------
 const G = { role: null, view: null, prompt: null, info: null, ui: { selected: [] }, lastEvent: 0, lastHand: 0, hint: null, replyLink: '' };
@@ -549,16 +556,15 @@ function toast(html, ms = 1500) {
 }
 function onEvent(e, v) {
   switch (e.t) {
-    case 'start': snd('deal', Math.min(8, v.players.filter(Boolean).length)); break;
-    case 'street': if (e.street > 0 && VARIANTS[v.variant].kind === 'stud') snd('deal', Math.min(6, v.players.filter(p => p && !p.folded).length)); break;
-    case 'board': snd('deal', e.street === 1 ? 3 : 1); break;
-    case 'blind': case 'bringin': snd('chips', 1); break;
-    case 'ante': if (e.seat === v.seat) snd('chips', 1); break;
-    case 'call': snd('chips', chipCount(e.amount, v)); break;
-    case 'bet': case 'raise': snd('chips', chipCount(e.to, v)); break;
-    case 'check': snd('check'); break;
-    case 'fold': snd('fold'); break;
-    case 'draw': if (e.seat !== v.seat) toast(`${whoOf(e.seat, v)} ${e.count ? `draw${e.seat === v.seat ? '' : 's'} ${e.count}` : 'stand' + (e.seat === v.seat ? '' : 's') + ' pat'}`, 900); if (e.count) snd('deal', e.count); break;
+    // Blinds, antes and the bring-in are silent; the deal is a couple of soft cards, not one per player.
+    case 'start': snd('deal', 2, { vel: 0.7 }); break;
+    case 'street': if (e.street > 0 && VARIANTS[v.variant].kind === 'stud') snd('deal', 1, { vel: 0.7 }); break;
+    case 'board': snd('deal', e.street === 1 ? 3 : 1, { vel: 0.85 }); break;
+    case 'call': snd('chips', chipCount(e.amount, v), voiceOf(e.seat, v, 0.6)); break;
+    case 'bet': case 'raise': snd('chips', chipCount(e.to, v), voiceOf(e.seat, v, 0.75)); break;
+    case 'check': snd('check', voiceOf(e.seat, v, 0.45)); break;
+    case 'fold': snd('fold', voiceOf(e.seat, v, 0.4)); break;
+    case 'draw': if (e.seat !== v.seat) toast(`${whoOf(e.seat, v)} ${e.count ? `draw${e.seat === v.seat ? '' : 's'} ${e.count}` : 'stand' + (e.seat === v.seat ? '' : 's') + ' pat'}`, 900); if (e.count) snd('deal', e.count, voiceOf(e.seat, v, 0.6)); break;
     case 'end': {
       const r = v.result;
       if (!r) break;
@@ -923,7 +929,7 @@ $('rebuy-yes').onclick = () => { $('rebuy').hidden = true; act(true); };
 $('rebuy-no').onclick = () => { $('rebuy').hidden = true; act(false); };
 $('btn-menu').onclick = () => {
   renderSeats();
-  $('m-sound').textContent = 'Sound: ' + (settings.sound ? 'on' : 'off');
+  $('m-sound').textContent = VOLUME_NAME[settings.sound] || VOLUME_NAME.normal;
   const info = G.info;
   $('m-end').hidden = G.role === 'guest' || !H.running;
   $('m-sitin').hidden = !(info && info.out && info.out[info.you] && info.canRebuy[info.you] && !info.over);
@@ -938,7 +944,12 @@ $('m-sitin').onclick = () => {
   toast('You will be asked to rebuy before the next hand', 2200);
 };
 $('m-rules').onclick = () => { rulesBack = 'game'; show('rules'); };
-$('m-sound').onclick = () => { settings.sound = !settings.sound; store.set('sound', settings.sound); $('m-sound').textContent = 'Sound: ' + (settings.sound ? 'on' : 'off'); };
+$('m-sound').onclick = () => {
+  settings.sound = { normal: 'quiet', quiet: 'off', off: 'normal' }[settings.sound] || 'normal';
+  store.set('sound', settings.sound);
+  $('m-sound').textContent = VOLUME_NAME[settings.sound];
+  snd('chips', 2);   // a sample at the new level
+};
 $('m-end').onclick = () => {
   if (!confirm('End the game after this hand and show the final standings?')) return;
   show(null);
