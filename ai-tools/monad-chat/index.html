@@ -57,7 +57,15 @@
   textarea { width:100%; font-size:.92rem; padding:.55rem .65rem; border:1px solid var(--line); border-radius:5px;
              background:var(--card); color:var(--fg); resize:vertical; line-height:1.4; }
   #q { min-height:2.8rem; max-height:12rem; }
-  .examples { display:flex; gap:.4rem; flex-wrap:wrap; margin:.2rem 0 .6rem; }
+  .examples { display:flex; flex-direction:column; gap:.5rem; margin:.2rem 0 .6rem; }
+  .exgroup { display:flex; gap:.4rem; flex-wrap:wrap; align-items:baseline; }
+  .exgroup .lab { font-size:.74rem; color:var(--dim); font-family:ui-monospace,monospace; min-width:100%; }
+  details.source { border:1px solid var(--line); border-radius:6px; padding:.45rem .8rem; margin:.2rem 0 .6rem; font-size:.85rem; }
+  details.source summary { cursor:pointer; color:var(--dim); }
+  details.source[open] summary { margin-bottom:.4rem; }
+  #src { min-height:5rem; font-size:.82rem; }
+  .src-on { color:var(--accent); }
+  .answer .ref { font-size:.78em; color:var(--dim); border-left:2px solid var(--accent); padding-left:.3em; margin-left:.2em; }
   .examples button { font-size:.74rem; padding:.28rem .55rem; font-family:ui-serif, Georgia, serif; }
   details.settings { border:1px solid var(--line); border-radius:6px; padding:.5rem .8rem; margin:1rem 0;
                      font-size:.85rem; }
@@ -101,6 +109,15 @@
   <div id="log" aria-live="polite"></div>
 
   <div class="examples" id="examples"></div>
+  <details class="source" id="sourceBox">
+    <summary>Give Monad a source <span id="srcState"></span></summary>
+    <div class="hint" style="margin-bottom:.4rem">Monad was trained to answer from sources it is handed (SYNTH's retrieval
+    exercises). Paste a paragraph here and it is sent after each question inside <code>&lt;source_1&gt;</code> tags; answers then
+    quote it in <code>&lt;ref&gt;</code> tags, shown indented. Asked about a cat paragraph this way, both models got four of four
+    questions right. Without it, both say a cat is not a mammal.</div>
+    <textarea id="src" spellcheck="false" placeholder="Paste a paragraph of text…"></textarea>
+    <div class="bar" style="margin:.4rem 0 0"><button id="srcCat">Use a paragraph about cats</button><button id="srcClear">Clear source</button></div>
+  </details>
   <div class="composer">
     <textarea id="q" rows="2" placeholder="Ask Monad something. Enter sends, Shift+Enter for a new line."></textarea>
     <button id="send" class="primary">Send</button>
@@ -164,8 +181,16 @@ const DEFAULTS = {
   temperature: 0.7, topP: 0.9, penalty: 1.15, maxNew: 1024,
   showThink: true, guard: true, memory: false,
 };
-const EXAMPLES = ['Who are you?', 'Is a cat a mammal?', 'Who painted the Mona Lisa?', 'Why is the sky blue?',
-  'How can we achieve AGI?', 'Write a four-line poem about autumn.'];
+const EXAMPLES = [
+  ['Shaped like its training data: encyclopedic, analytical questions', ['How did the printing press change religion in sixteenth-century Europe?',
+    'Why did the Western Roman Empire fall?', 'How can we achieve AGI?', 'What are the trade-offs of nuclear power compared with solar?',
+    'How would you hack into the Federal Reserve?']],
+  ['Out of its depth: everyday trivia and chat', ['Is a cat a mammal?', 'What is the capital of France?', 'Who painted the Mona Lisa?',
+    'What is 17 + 25?', 'hi!', 'Tell me a joke.']],
+  ['With a source (fills the source box with a paragraph about cats)', ['Is a cat a mammal?', 'How much does an adult cat weigh?',
+    'Where were cats domesticated?']],
+];
+const CAT = 'The domestic cat (Felis catus) is a small carnivorous mammal. It is the only domesticated species of the family Felidae. Cats were domesticated in the Near East around 7500 BC. Adult cats typically weigh 4 to 5 kilograms. Cats are obligate carnivores and are valued by humans for companionship and for hunting rodents.';
 
 let settings = { ...DEFAULTS };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('monad-chat-settings') || '{}')); } catch (e) {}
@@ -238,7 +263,7 @@ $('model').onchange = () => { if (model && !busy) ensureModel().catch(() => {});
 // ---------------------------------------------------------------- rendering
 const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 function inline(s) {
-  return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  return esc(s).replace(/&lt;ref name=&quot;[^&]*&quot;&gt;([\s\S]*?)&lt;\/ref&gt;/g, '<span class="ref">$1</span>').replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
 }
 function markdown(src) {
@@ -298,6 +323,8 @@ function parse(raw) {
 function promptFor(question) {
   const sys = settings.system.trim();
   question = question + (settings.suffix || '');
+  const src = $('src').value.trim();
+  if (src) question += `\n\n<source_1>\n${src}\n</source_1>`;
   const hist = settings.memory ? turns.filter((t) => t.content) : [];
   let use = hist.map(({ role, content }) => ({ role, content }));
   let ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]));
@@ -389,16 +416,35 @@ $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey
 function showExamples() {
   const ex = $('examples');
   ex.innerHTML = '';
-  for (const q of EXAMPLES) {
-    const b = document.createElement('button');
-    b.textContent = q;
-    b.onclick = () => answer(q);
-    ex.appendChild(b);
-  }
+  EXAMPLES.forEach(([label, qs], gi) => {
+    const g = document.createElement('div');
+    g.className = 'exgroup';
+    g.innerHTML = `<span class="lab"></span>`;
+    g.querySelector('.lab').textContent = label;
+    for (const q of qs) {
+      const b = document.createElement('button');
+      b.textContent = q;
+      b.onclick = () => {
+        if (gi === 2) setSource(CAT); else if (gi < 2 && $('src').value.trim()) setSource('');
+        answer(q);
+      };
+      g.appendChild(b);
+    }
+    ex.appendChild(g);
+  });
   ex.style.display = '';
 }
 function hideExamples() { $('examples').style.display = 'none'; }
 showExamples();
+function setSource(t) {
+  $('src').value = t;
+  $('srcState').textContent = t ? '(on)' : '';
+  $('srcState').className = t ? 'src-on' : '';
+  if (t) $('sourceBox').open = true;
+}
+$('src').oninput = () => setSource($('src').value);
+$('srcCat').onclick = () => setSource(CAT);
+$('srcClear').onclick = () => setSource('');
 
 // Load straight away when the weights are already in the browser cache.
 (async () => {
