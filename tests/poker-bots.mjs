@@ -1,4 +1,4 @@
-// node tests/poker-bots.mjs [deals] [game] [structure] [A] [B] [seats]
+// node tests/poker-bots.mjs [deals] [game] [structure] [A] [B] [seats] [first deal]
 // Duplicate matches between two computer players, so luck in the cards cancels out.
 // Each deal is played twice from the same deck and button: once with A in the even seats and B in the
 // odd ones, then with the seats swapped. Every hand starts at 100 big blinds, and each pass keeps its own
@@ -6,15 +6,20 @@
 // with a standard error; |mean| over 2 standard errors is a real difference.
 //
 // Players: v1 (the first bot, frozen in tests/poker-ai-v1.mjs), a style name from ai.js (tag, lag, rock,
-// station, maniac) optionally with '-norange' to turn off range reading, or path/to/ai.js:style for a
-// bot from another copy of ai.js (its rules.js import must resolve; copy both files together).
+// station, maniac) optionally with '-norange' to turn off range reading, net (the hand-wired network in
+// net.js), caller (always checks or calls, draws by the rule of thumb), random (a uniformly random legal
+// action and size, random discards), or path/to/ai.js:style for a bot from another copy of ai.js (its
+// rules.js import must resolve; copy both files together). [first deal] offsets the deal seeds, so a run
+// can use deals that no earlier run saw. With BOTS_JSON=1 it also prints the result as one JSON line.
 // Examples:  node tests/poker-bots.mjs 400 holdem nl tag v1
 //            node tests/poker-bots.mjs 300 omaha8 fl tag station 6
 import { Hand, stakesFor, rng, VARIANTS } from '../games/poker/rules.js';
-import { botAct, analyze, STYLES, TableModel } from '../games/poker/ai.js';
+import { botAct, analyze, drawDiscard, STYLES, TableModel } from '../games/poker/ai.js';
+import { netAct } from '../games/poker/net.js';
 import * as v1 from './poker-ai-v1.mjs';
 
-const [deals = 300, game = 'holdem', structure = 'nl', A = 'tag', B = 'v1', seatsArg = 6] = process.argv.slice(2);
+const [deals = 300, game = 'holdem', structure = 'nl', A = 'tag', B = 'v1', seatsArg = 6, offsetArg = 0] = process.argv.slice(2);
+const OFFSET = +offsetArg;
 const N = +seatsArg, BB = 20, STACK = 100 * BB, ITERS = 150;
 
 // A player can also come from another copy of ai.js: path/to/ai.js:style (for comparing versions).
@@ -27,6 +32,14 @@ function player(name) {
     return { name, act: (view, o, model) => mod.botAct(view, o, { style, model, iters: ITERS }) };
   }
   if (name === 'v1') return { name, act: (view, o) => v1.botAct(view, o, {}, o.kind === 'bet' ? v1.equity(view, ITERS) : null) };
+  if (name === 'net') return { name, act: (view, o) => netAct(view, o) };
+  if (name === 'caller') return { name, act: (view, o) => (o.kind === 'draw' ? { type: 'draw', discard: drawDiscard(o.cards) } : o.canCheck ? { type: 'check' } : o.bringIn != null ? { type: 'bringin' } : { type: 'call' }) };
+  if (name === 'random') return { name, act: (view, o) => {
+    if (o.kind === 'draw') return { type: 'draw', discard: o.cards.filter(() => Math.random() < 0.5) };
+    const acts = o.bringIn != null ? [{ type: 'bringin' }] : o.canCheck ? [{ type: 'check' }] : [{ type: 'fold' }, { type: 'call' }];
+    if (o.raise) { const { min, max } = o.raise, pot = Math.min(max, Math.max(min, o.currentBet + o.pot + o.call)); acts.push({ type: 'raise', to: [min, pot, max][Math.floor(Math.random() * 3)] }); }
+    return acts[Math.floor(Math.random() * acts.length)];
+  } };
   const [key, flag] = name.split('-');
   const style = { ...STYLES[key] };
   if (!style.key) throw new Error('unknown player ' + name);
@@ -39,9 +52,9 @@ const PA = player(A), PB = player(B);
 function play(deal, assign, model) {
   // Bots draw random numbers too (Monte Carlo, mixing); seed those per deal and pass as well.
   const saved = Math.random;
-  Math.random = rng(deal * 7919 + 1);
+  Math.random = rng((deal + OFFSET) * 7919 + 1);
   try {
-    const h = new Hand({ variant: game, structure, stakes: stakesFor(BB), seats: Array.from({ length: N }, (_, s) => ({ seat: s, stack: STACK })), n: N, button: deal % N, rand: rng(1e6 + deal) });
+    const h = new Hand({ variant: game, structure, stakes: stakesFor(BB), seats: Array.from({ length: N }, (_, s) => ({ seat: s, stack: STACK })), n: N, button: deal % N, rand: rng(1e6 + deal + OFFSET) });
     let steps = 0;
     while (h.phase !== 'over') {
       const s = h.toAct, o = h.options(s);
@@ -69,3 +82,4 @@ const n = perDeal.length, mean = perDeal.reduce((x, y) => x + y, 0) / n;
 const sd = Math.sqrt(perDeal.reduce((x, y) => x + (y - mean) ** 2, 0) / (n - 1));
 const se = sd / Math.sqrt(n);
 console.log(`${VARIANTS[game].short} ${structure}, ${N} seats, ${n} deals × 2: ${A} vs ${B}: ${(mean * 100).toFixed(1)} ± ${(se * 100).toFixed(1)} bb/100 for ${A}  (${((Date.now() - t0) / 1000).toFixed(0)} s)`);
+if (process.env.BOTS_JSON) console.log(JSON.stringify({ game, structure, seats: N, deals: n, offset: OFFSET, A, B, bb100: +(mean * 100).toFixed(2), se: +(se * 100).toFixed(2), seconds: Math.round((Date.now() - t0) / 1000) }));

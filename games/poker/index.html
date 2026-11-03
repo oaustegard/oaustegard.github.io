@@ -208,10 +208,11 @@ table.tb td.n, table.tb th.n { text-align: right; font-variant-numeric: tabular-
       <span>Blinds</span><span class="seg" id="set-rising"><button data-v="0">10/20, fixed</button><button data-v="12">Rise every 12 hands</button></span>
       <span>Length</span><span class="seg" id="set-len"><button data-v="0">Until you stop</button><button data-v="50">50 hands</button><button data-v="100">100 hands</button></span>
       <span>Hints</span><span class="seg" id="set-hint"><button data-v="on">On</button><button data-v="off">Off</button></span>
-      <span>Computer</span><span class="seg" id="set-level"><button data-v="easy">Easy</button><button data-v="normal">Mixed</button><button data-v="hard">Hard</button></span>
+      <span>Computer</span><span class="seg" id="set-level"><button data-v="easy">Easy</button><button data-v="normal">Mixed</button><button data-v="hard">Hard</button><button data-v="net" title="Every computer seat plays a small neural network whose weights were all written by hand">Hand-wired</button></span>
       <span>Pace</span><span class="seg" id="set-pace"><button data-v="calm">Calm</button><button data-v="brisk">Brisk</button></span>
     </div>
     <p class="note" id="struct-note"></p>
+    <p class="note" id="level-note"></p>
     <p class="foot"><a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/games/poker/README.md">README</a> · <a href="/games/">More games</a></p>
   </div>
 </section>
@@ -362,6 +363,7 @@ table.tb td.n, table.tb th.n { text-align: right; font-variant-numeric: tabular-
 import { Match, VARIANTS, STRUCT_NAME, cardPretty, MIXED } from './rules.js';
 import { createSound } from './sound.js';
 import { botAct, analyze, drawDiscard, STYLES, styleFor, TableModel } from './ai.js';
+import { netAct, NET_STYLE } from './net.js';
 import { buildAtlas, layoutTable, initGPU, init2D, hitCard, cardURL, clearURLs, SERIF, K_BACK } from './render.js';
 import { HostNet, GuestNet, parseLink, listenForReplies, forwardReply } from '/scripts/tabletop/net.js';
 import { renderQR, copyText, shareLink, scanQR, keepAwake, onResume, escapeHtml } from '/scripts/tabletop/pairing.js';
@@ -407,7 +409,14 @@ bindSeg('set-rising', 'rising', Number);
 bindSeg('set-len', 'length', Number);
 bindSeg('set-hint', 'hints');
 bindSeg('set-pace', 'pace');
-bindSeg('set-level', 'level', v => v, () => renderSeats());
+bindSeg('set-level', 'level', v => v, () => { renderSeats(); paintLevel(); });
+// The Hand-wired level is not a difficulty step, so say what it is.
+function paintLevel() {
+  $('level-note').textContent = settings.level === 'net'
+    ? 'Hand-wired: every computer seat is a small neural network whose weights were written by hand, with no training. It breaks about even with the tight-aggressive computer players at six-handed no-limit hold\'em and loses a little to them in most other games.'
+    : '';
+}
+paintLevel();
 $('set-game').value = settings.game;
 $('set-game').onchange = () => { settings.game = $('set-game').value; store.set('game', settings.game); paintStruct(); };
 // Each game allows only some structures (Stud and Razz are fixed-limit only); grey out the rest.
@@ -453,10 +462,12 @@ function infoFor(s) {
     level: m ? m.level : 0, bb: m ? m.bb() : 20, game: m ? m.game : settings.game, canRebuy: m ? m.present.map((_, i) => m.canRebuy(i)) : [],
   };
 }
+// 'Hand-wired' seats every computer player as the network in net.js; the other levels mix ai.js styles.
+const seatStyle = seat => (settings.level === 'net' ? NET_STYLE : styleFor(settings.level, seat));
 function botFor(seat, kind, options) {
   if (kind === 'rebuy') return true;
   const v = viewFor(seat);
-  try { return botAct(v, options, { style: styleFor(settings.level, seat), model: H.model }); } catch (e) { console.warn('bot error', e); return options.canCheck ? { type: 'check' } : { type: 'fold' }; }
+  try { return settings.level === 'net' ? netAct(v, options) : botAct(v, options, { style: styleFor(settings.level, seat), model: H.model }); } catch (e) { console.warn('bot error', e); return options.canCheck ? { type: 'check' } : { type: 'fold' }; }
 }
 function makeTable() {
   const old = T;
@@ -837,7 +848,7 @@ function renderSeats() {
   $('seats').innerHTML = Array.from({ length: T.count }, (_, s) => {
     if (s === 0) return `<div class="seat"><div class="who">${escapeHtml(myName())}<small>You, the host</small></div></div>`;
     const remote = T.kinds[s] === 'remote';
-    return `<div class="seat"><div class="who">${escapeHtml(T.names[s])}<small>${remote ? '<span class="ok">Friend, connected</span>' : 'Computer, ' + styleFor(settings.level, s).name.toLowerCase()} · ${seatDesc(s)}</small></div>` +
+    return `<div class="seat"><div class="who">${escapeHtml(T.names[s])}<small>${remote ? '<span class="ok">Friend, connected</span>' : 'Computer, ' + seatStyle(s).name.toLowerCase()} · ${seatDesc(s)}</small></div>` +
       (remote ? `<button class="btn small" data-drop="${s}">Remove</button>` : `<button class="btn small" data-inv="${s}">Invite a friend</button>`) + '</div>';
   }).join('');
   const mi = $('m-invites');

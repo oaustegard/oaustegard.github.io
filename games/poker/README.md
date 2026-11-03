@@ -23,8 +23,10 @@ lobby is reached, or only one player has chips and nobody may rebuy.
   The nets always sum to zero.
 - The computer seats rebuy whenever the table allows it.
 - **Computer** in the lobby sets who the computer seats are (see below): **Easy** (calling stations, rocks
-  and maniacs), **Mixed** (one of each kind, with tight-aggressive players among them), or **Hard** (all
-  tight-aggressive and loose-aggressive). The host's table screen shows each seat's style.
+  and maniacs), **Mixed** (one of each kind, with tight-aggressive players among them), **Hard** (all
+  tight-aggressive and loose-aggressive), or **Hand-wired** (every seat a small neural network whose weights
+  were written by hand; see [The hand-wired network](#the-hand-wired-network)). The host's table screen shows
+  each seat's style.
 
 ## Games
 
@@ -98,8 +100,9 @@ would do.
   cards (no 21-combination loop), and ace-to-five lows from rank counts; Omaha enumerates its 60 two-plus-
   three combinations. `Hand` runs one deal: forced bets, streets, betting under each structure, the draw,
   side pots and the showdown. `Match` carries stacks, buy-ins, rebuys, the button, rising blinds and the
-  mixed-game rotation from hand to hand. `hand.view(seat)` is the only thing the network sends.
-- `ai.js` is the computer player; see the next section.
+  mixed-game rotation from hand to hand. `hand.view(seat)` is the only thing sent to guests over the connection.
+- `ai.js` is the Monte Carlo computer player; see the next section. `net.js` is a second computer player, a
+  neural network with hand-written weights; see [The hand-wired network](#the-hand-wired-network).
 - `sound.js` synthesizes soft table sounds with Web Audio, no sample files: clay-chip clacks (three
   decaying partials near 1.6 kHz and a rounded tick, up to four chips by bet size, a short run when a pot
   is pushed to you), a low card swish, a muted double tap for a check, and two soft marimba-like notes when
@@ -118,8 +121,12 @@ would do.
   the eight qualifier, blinds and heads-up order, a three-way side pot, the fixed-limit cap, the pot-limit
   maximum, stud bring-ins, the draw, and then plays bot hands in every game and long matches with rebuys,
   checking that chips are conserved and no hidden card reaches another seat.
-- `node tests/poker-bots.mjs [deals] [game] [structure] [A] [B] [seats]` plays duplicate matches between
-  two computer players (see below).
+- `node tests/poker-bots.mjs [deals] [game] [structure] [A] [B] [seats] [first deal]` plays duplicate matches
+  between two computer players (see below). Players are `v1`, an `ai.js` style (`tag`, `lag`, `rock`,
+  `station`, `maniac`), `net` (the hand-wired network), `caller` (always checks or calls) and `random` (a
+  uniformly random legal action); `[first deal]` offsets the deal seeds, for deals no earlier run saw.
+- `node tests/poker-net.mjs [samples]` checks the hand-wired network's hand reading against the evaluator and
+  plays it through every game; `node tests/poker-net-pct.mjs` regenerates its first-round percentile table.
 - `?renderer=2d` forces the Canvas 2D fallback, `?seed=N` fixes the deals, and `window.__poker` exposes
   state for tests.
 
@@ -204,3 +211,73 @@ the 4–5 that chance alone would pass at that bar, and moved no constant more t
 deals the tuned values lost to the defaults in no-limit Hold'em (−21 ± 9 bb/100) and were level elsewhere
 (fixed-limit +2 ± 1, Stud 0 ± 3, Stud Hi-Lo −4 ± 7), so the hand-set values stand.
 
+## The hand-wired network
+
+**Hand-wired** in the lobby seats every computer player as `net.js`: a small neural network whose weights
+were all written by hand. Nothing was trained; there is no data and no gradient descent. Each unit is placed
+by a line of code that says what it computes, in the spirit of
+[weight-space programming](https://rikiyat.github.io/blog/weight-space-programming/). It sees what the other
+computer players see (`hand.view(seat)`), but it keeps no record of how the others have played and runs no
+simulation: each decision is one pass through the network, well under a millisecond. One input is a random
+number, which it uses to mix continuation bets and semi-bluffs, so it does not always play a hand the same
+way. The hint line still shows what the tight-aggressive Monte Carlo player would do.
+
+Its inputs are the cards as one-hot vectors (its own cards, the board, each opponent's face-up cards in stud,
+and its five cards at the draw) and the betting situation as numbers: the price of calling (the call as a
+share of the pot after it), chips behind, how many opponents are left, position, who has bet or raised, and in
+the first betting round the raises so far and how many players act after it. It is a plain ReLU network of
+eleven layers, each reading the inputs and every earlier layer:
+
+| layer | units | computes |
+|---|---|---|
+| 1 count | 271 | cards per rank and per suit: all the cards it can use (its own and the board), its own alone, the board alone, each opponent's up cards, each draw slot |
+| 2 step | 504 | thresholds on the counts (a pair of kings, four hearts, a jack or better in its hand) and on the situation (a cheap price, a short stack) |
+| 3 piece | 485 | a straight in each five-rank window, a pair that uses its own card, top pair, Omaha's rule of exactly two hole cards and three board cards, eight-or-better lows, the gap terms of the Chen formula (a points rating for two hold'em cards), opponents' pairs |
+| 4 made | 202 | made-hand categories, draws and board texture; each game's first-round strength as a percentile |
+| 5 ladder | 29 | at least a pair, at least two pair, … quads |
+| 6 adjust | 64 | pair rank, top pair, high cards; draws by cards to come; dangerous boards and up cards |
+| 7 share1 | 50 | E, its share of the pot against one opponent, from hand-set values per hand and game, gated by the game played |
+| 8 knots | 23 | E as a sum of ramps at 0, 0.1, … 1, so the next layer can bend it |
+| 9 share | 27 | its share against n opponents after aggression a (0 to 2: how much they have bet and raised): E^k with k = n + 0.6a; in a hi-lo pot, one curve for each half |
+| 10 decide | 12 | call when the share beats the price; bet or raise when it clears a threshold set by n and position; bet strong draws and continue a first-round raise now and then; in the first round, raise, call or fold by position and strength |
+| 11 out | 10 | five action scores (fold, check or call, raise half the pot, raise the pot, all in) and a keep score for each card at the draw |
+
+That is 1,677 units and 21,003 nonzero weights and biases (2.4 million counting the zeros of the dense
+layout). `encode` turns a seat's view into the input vector. `decode` plays the highest-scoring legal action:
+fixed-limit raises are the fixed amount, the first round opens to 2.5 big blinds and re-raises to about three
+times, and later raises are half the pot or the pot. Neither makes a poker judgement.
+
+`node tests/poker-net.mjs 20000` checks the hand reading against `rules.js`. Counting a straight flush as a
+flush, the made-hand ladder gives the same category as `evalHigh` on 20,000 of 20,000 random five-card and
+seven-card hands. Omaha's ladder matches `bestHands` on every unpaired board; on a paired board it leaves out
+the pair that every player shares, by design. The eight-or-better low matches `evalLow` and `qualifies8` on
+20,000 of 20,000 seven-card hands, and Omaha's low matches `bestHands` on 20,000 of 20,000 deals. The hold'em
+first-round score equals the Chen formula on all 1,326 starting hands. `node tests/poker-net-pct.mjs` prints the
+table that maps each game's first-round score to a percentile of all starting hands; rerun it and paste the
+output over `PCT` in `net.js` after changing a score.
+
+Results from `tests/poker-bots.mjs`, on deals that were not used while the network was being written (seed
+offset 100,000), in big blinds per 100 hands for the network, ± the 95% interval. `tag` is the
+tight-aggressive style of `ai.js`, `v1` the first computer player, `caller` always checks or calls, and
+`random` picks a legal action at random:
+
+| game | vs tag | vs v1 | vs caller | vs random |
+|---|---|---|---|---|
+| Hold'em no-limit, 6 seats | +1.7 ± 10.1 | +171.6 ± 26.7 | +725.0 ± 59.8 | +109.2 ± 31.9 |
+| Hold'em no-limit, heads-up | −28.4 ± 16.9 | +247.2 ± 46.3 | +513.2 ± 39.4 | +157.8 ± 54.3 |
+| Hold'em fixed-limit | −6.0 ± 2.5 | +10.3 ± 5.2 | +50.1 ± 6.1 | +0.9 ± 5.1 |
+| Omaha pot-limit | −28.7 ± 32.8 | +155.7 ± 68.8 | +846.0 ± 85.4 | +110.2 ± 36.4 |
+| Omaha Hi-Lo | −8.7 ± 5.8 | −3.3 ± 8.7 | +40.2 ± 6.3 | −4.0 ± 4.8 |
+| Seven-Card Stud | −5.3 ± 2.4 | +10.4 ± 5.3 | +81.1 ± 7.8 | +9.8 ± 4.9 |
+| Stud Hi-Lo | −18.8 ± 3.3 | −3.4 ± 3.5 | +62.4 ± 6.1 | −9.1 ± 3.8 |
+| Razz | −9.2 ± 3.0 | +6.2 ± 4.9 | +56.5 ± 5.4 | +37.7 ± 5.9 |
+| Five-Card Stud | −6.4 ± 2.5 | +6.5 ± 4.4 | +83.4 ± 6.3 | +30.8 ± 5.4 |
+| Five-Card Draw | +2.8 ± 2.1 | +40.4 ± 5.0 | +76.9 ± 5.5 | +83.1 ± 6.2 |
+
+It is level with `tag` at six-handed no-limit hold'em and ahead at draw; it loses to `tag` heads-up and in the other games,
+most in Stud Hi-Lo. It keeps no model of how each opponent plays and reads every bet as strength, the likeliest reason a
+player who bets at random beats it at Stud Hi-Lo and holds it level at Omaha Hi-Lo and fixed-limit hold'em.
+
+The write-up, with how the weights were written and revised, and the existing players' results against the same
+baselines, is
+[`poker-hand-weights/` in oaustegard/experiments](https://github.com/oaustegard/experiments/tree/main/poker-hand-weights).
