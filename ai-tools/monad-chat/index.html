@@ -149,6 +149,13 @@
       <div><input type="text" id="suffix" spellcheck="false" placeholder="e.g.  Answer in at most three sentences.">
         <div class="hint">Instructions inside the question are the form Monad was trained on. " Answer in at most three
         sentences." cut the median answer from 148 words to 62, though now and then the instruction becomes the topic.</div></div>
+      <label for="prefill">Start Monad's reply with</label>
+      <div><input type="text" id="prefill" spellcheck="false" placeholder="e.g.  Cats are mammals ●.">
+        <label style="display:block;margin-top:.3rem;font-size:.78rem"><input type="checkbox" id="noThink"> skip the thinking
+          (the text then starts the answer)</label>
+        <div class="hint">Written into Monad's own turn, so it continues from it. Inside the thinking it steers the
+        reasoning: planted "Cats are mammals ●." and both models reasoned to yes. With thinking skipped, Monad tends to
+        fall into a multiple-choice format, and a planted "Yes," can be contradicted by the next words.</div></div>
       <label for="temp">Temperature</label>
       <div><input type="range" id="temp" min="0" max="1.5" step="0.05"><span class="val" id="tempV"></span></div>
       <label for="topp">Top-p</label>
@@ -194,7 +201,7 @@ import { loadTokenizer } from './bpe.js';
 
 const $ = (id) => document.getElementById(id);
 const DEFAULTS = {
-  system: '', suffix: '',
+  system: '', suffix: '', prefill: '', noThink: false,
   temperature: 0.7, topP: 0.9, penalty: 1.15, maxNew: 1024,
   showThink: true, guard: true, memory: false,
 };
@@ -232,6 +239,10 @@ function bindSettings() {
   $('sys').oninput = () => { settings.system = $('sys').value; save(); };
   $('suffix').value = settings.suffix;
   $('suffix').oninput = () => { settings.suffix = $('suffix').value; save(); };
+  $('prefill').value = settings.prefill;
+  $('prefill').oninput = () => { settings.prefill = $('prefill').value; save(); updateCount?.(); };
+  $('noThink').checked = settings.noThink;
+  $('noThink').onchange = () => { settings.noThink = $('noThink').checked; save(); };
 }
 $('reset').onclick = () => { settings = { ...DEFAULTS }; save(); bindSettings(); };
 const newChat = () => { if (busy) stopFlag = true; turns.length = 0; $('log').innerHTML = ''; showExamples(); $('q').focus(); };
@@ -348,10 +359,11 @@ function promptFor(question) {
   if (parts.length) question += '\n\n' + parts.map((x, i) => `<source_${i + 1}>\n${x}\n</source_${i + 1}>`).join('\n\n');
   const hist = settings.memory ? turns.filter((t) => t.content) : [];
   let use = hist.map(({ role, content }) => ({ role, content }));
-  let ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]));
+  const lead = (settings.noThink ? '</think>\n\n' : '') + (settings.prefill || '');
+  let ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]) + lead);
   while (ids.length > CONTEXT - 256 && use.length) {   // drop the oldest exchange until it fits
     use = use.slice(2);
-    ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]));
+    ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]) + lead);
   }
   return ids;
 }
@@ -372,7 +384,7 @@ async function answer(question, { retry = false } = {}) {
   const room = Math.min(settings.maxNew, CONTEXT - ids.length);
   const pick = makeSampler({ temperature: settings.temperature, topP: settings.topP, penalty: settings.penalty, window: 64 });
   const dec = tok.stream();
-  let raw = '', n = 0, decodeMs = 0, prefillMs = 0, why = 'limit', thinkTokens = 0;
+  let raw = (settings.noThink ? '</think>\n\n' : '') + (settings.prefill || ''), n = 0, decodeMs = 0, prefillMs = 0, why = 'limit', thinkTokens = 0;
   let pending = false;
   let finished = false;
   const paint = (final) => {
