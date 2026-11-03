@@ -20,7 +20,7 @@ a public R2 bucket and stay in the browser's Cache API; a SHA-256 check guards t
 
 ## Settings
 
-- **System prompt.** Empty by default. Monad was trained on single questions with no system turn; in dry runs a system prompt describing Monad made it talk about itself in 40 to 90% of answers to unrelated questions, and style instructions changed little. Instructions appended to the question (a separate field) are the form it was trained on: " Answer in at most three sentences." cut the median answer from 148 words to 62.
+- **System prompt.** Empty by default. Monad was trained on single questions with no system turn; in dry runs a system prompt describing Monad made it talk about itself in 30 to 90% of answers to unrelated questions, and style instructions changed little. Instructions appended to the question (a separate field) are the form it was trained on: " Answer in at most three sentences." cut the median answer from 148 words to 62.
 - **Sampling.** Temperature 0.7, top-p 0.9 and a repetition penalty of 1.15 on the last 64
   generated tokens (never the prompt). On 40 everyday questions, neither model looped at these settings; greedy, the original looped on 20% and the loop-fixed model on 5%.
 - **Stop on repetition.** On by default: generation stops when the last 32 or more tokens are one

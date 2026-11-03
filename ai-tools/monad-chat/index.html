@@ -16,6 +16,14 @@
   body { margin:0; background:var(--bg); color:var(--fg);
          font:16px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
   main { max-width: 780px; margin: 0 auto; padding: 1.6rem 1rem 3rem; }
+  @media (min-width: 1100px) {
+    main { max-width: 1320px; }
+    .layout { display:grid; grid-template-columns: minmax(0, 1fr) 400px; gap: 1.6rem; align-items:start; }
+    .side { position:sticky; top:1rem; max-height:calc(100vh - 2rem); overflow:auto; }
+    .side details.source, .side details.settings { margin-top:0; }
+    .side .grid { grid-template-columns: 1fr; }
+    .side #src { min-height:14rem; }
+  }
   h1 { font-size: 1.55rem; margin: 0 0 .25rem; font-weight: 600; }
   p.sub { color: var(--dim); margin: 0 0 1rem; font-size: .95rem; }
   a { color: inherit; }
@@ -106,30 +114,33 @@
   </div>
   <div class="prog"><div id="bar"></div></div>
 
+  <div class="layout">
+  <section class="chat">
   <div id="log" aria-live="polite"></div>
 
   <div class="examples" id="examples"></div>
+  <div class="composer">
+    <textarea id="q" rows="2" placeholder="Ask Monad something. Enter sends, Shift+Enter for a new line."></textarea>
+    <button id="send" class="primary">Send</button>
+  </div>
+  </section>
+  <aside class="side">
   <details class="source" id="sourceBox" open>
     <summary>Source for Monad to answer from (optional, kept for every question until cleared) <span id="srcState"></span></summary>
     <div class="hint" style="margin-bottom:.4rem">Monad was trained to answer from sources it is handed (SYNTH's retrieval
-    exercises). Paste a paragraph here and it is sent after each question inside <code>&lt;source_1&gt;</code> tags; answers then
+    exercises). Paste text here and it is sent after each question, each paragraph in its own numbered <code>&lt;source_n&gt;</code> block as in SYNTH (up to ten); answers then
     quote it in <code>&lt;ref&gt;</code> tags, shown indented. Asked about a cat paragraph this way, both models got four of four
     questions right. Without it, both say a cat is not a mammal.</div>
     <textarea id="src" spellcheck="false" placeholder="Paste a paragraph of text…"></textarea>
     <div class="bar" style="margin:.4rem 0 0"><button id="srcCat">Use a paragraph about cats</button><button id="srcClear">Clear source</button></div>
   </details>
-  <div class="composer">
-    <textarea id="q" rows="2" placeholder="Ask Monad something. Enter sends, Shift+Enter for a new line."></textarea>
-    <button id="send" class="primary">Send</button>
-  </div>
-
   <details class="settings">
     <summary>Settings: system prompt and sampling</summary>
     <div class="grid">
       <label for="sys">System prompt</label>
       <div><textarea id="sys" spellcheck="false" placeholder="(empty: recommended)"></textarea>
         <div class="hint">Monad was trained on single questions with no system turn. In dry runs, a system prompt
-        that described Monad made it talk about itself in 40 to 90% of answers to unrelated questions, and plain
+        that described Monad made it talk about itself in 30 to 90% of answers to unrelated questions, and plain
         style instructions changed little. Without one it already says it is Monad.</div></div>
       <label for="suffix">Append to each question</label>
       <div><input type="text" id="suffix" spellcheck="false" placeholder="e.g.  Answer in at most three sentences.">
@@ -156,6 +167,8 @@
       <button id="clearCache">Delete cached weights</button>
     </div>
   </details>
+  </aside>
+  </div>
 
   <footer>
     <p>About this page: <a href="https://muninn.austegard.com/blog/monad-bullshitter.html">Monad Bullshitter: a 56M reasoning model in the browser</a>.</p>
@@ -223,6 +236,7 @@ $('clearChat').onclick = newChat;
 $('newChat').onclick = newChat;
 $('clearCache').onclick = async () => { const ok = await clearCache(); status(ok ? 'Cached weights deleted.' : 'Nothing cached.'); };
 bindSettings();
+if (matchMedia('(min-width: 1100px)').matches) document.querySelector('details.settings').open = true;
 
 // ---------------------------------------------------------------- loading
 function status(s, frac) {
@@ -324,8 +338,11 @@ function parse(raw) {
 function promptFor(question) {
   const sys = settings.system.trim();
   question = question + (settings.suffix || '');
-  const src = $('src').value.trim();
-  if (src) question += `\n\n<source_1>\n${src}\n</source_1>`;
+  // SYNTH's retrieval exercises number each source and separate them with a blank line, up to ten;
+  // a pasted text is split on blank lines the same way (paragraphs past the tenth join the last).
+  const parts = $('src').value.split(/\n\s*\n/).map((x) => x.trim()).filter(Boolean);
+  while (parts.length > 10) parts.splice(9, 2, parts[9] + '\n' + parts[10]);
+  if (parts.length) question += '\n\n' + parts.map((x, i) => `<source_${i + 1}>\n${x}\n</source_${i + 1}>`).join('\n\n');
   const hist = settings.memory ? turns.filter((t) => t.content) : [];
   let use = hist.map(({ role, content }) => ({ role, content }));
   let ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]));
