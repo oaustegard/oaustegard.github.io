@@ -1,0 +1,407 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Monad Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Chat with Pleias Monad, a 56-million-parameter reasoning model, running on your own GPU in the browser tab. Loop-fixed weights, with the original one click away.">
+<meta name="ai-disclosure" content="ai-assisted">
+<style>
+  :root { color-scheme: light dark; --fg:#151515; --dim:#686660; --bg:#fbfbf9; --line:#d8d6d0;
+          --card:#fff; --soft:#f2f1ec; --accent:#2d5b8a; --warn:#9a5b00; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e6e1; --dim:#9a978f; --bg:#16171a; --line:#33353a; --card:#1d1f23;
+            --soft:#23252a; --accent:#8db6e0; --warn:#e0a54a; --bad:#f2836b; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:16px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 780px; margin: 0 auto; padding: 1.6rem 1rem 3rem; }
+  h1 { font-size: 1.55rem; margin: 0 0 .25rem; font-weight: 600; }
+  p.sub { color: var(--dim); margin: 0 0 1rem; font-size: .95rem; }
+  a { color: inherit; }
+  code, .mono, button, select, input, textarea, .badge, .stats, .think { font-family: ui-monospace,
+    SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .bar { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-bottom:.8rem; }
+  .badge { font-size:.74rem; padding:.18rem .5rem; border:1px solid var(--line); border-radius:3px;
+           color:var(--dim); white-space:nowrap; }
+  select, button { font-size:.82rem; padding:.42rem .7rem; border:1px solid var(--line);
+           border-radius:4px; background:var(--card); color:var(--fg); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  #status { flex:1 1 220px; font-size:.78rem; color:var(--dim); }
+  .prog { height:3px; background:var(--soft); border-radius:2px; overflow:hidden; margin:.15rem 0 .8rem; }
+  .prog > div { height:100%; width:0; background:var(--accent); transition:width .15s; }
+  #log { display:flex; flex-direction:column; gap:1rem; margin:.4rem 0 1rem; }
+  .msg { border:1px solid var(--line); border-radius:6px; padding:.7rem .9rem; background:var(--card); }
+  .msg.user { background:var(--soft); border-color:transparent; margin-left:12%; }
+  .who { font-size:.72rem; color:var(--dim); font-family:ui-monospace,monospace; margin-bottom:.25rem;
+         letter-spacing:.02em; }
+  .msg.user .body { white-space:pre-wrap; }
+  details.think { margin:.15rem 0 .5rem; font-size:.78rem; color:var(--dim); }
+  details.think summary { cursor:pointer; user-select:none; }
+  details.think .trace { white-space:pre-wrap; margin-top:.35rem; padding:.5rem .6rem; border-left:2px solid var(--line);
+         max-height:22rem; overflow:auto; line-height:1.45; }
+  .answer p { margin:.35rem 0; } .answer ul, .answer ol { margin:.35rem 0; padding-left:1.4rem; }
+  .answer h3, .answer h4 { margin:.6rem 0 .2rem; font-size:1rem; }
+  .answer code { font-size:.88em; background:var(--soft); padding:0 .2em; border-radius:2px; }
+  .answer .cursor::after { content:"▍"; color:var(--dim); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  .stats { font-size:.72rem; color:var(--dim); margin-top:.45rem; display:flex; gap:.7rem; flex-wrap:wrap;
+           align-items:center; }
+  .stats .warn { color:var(--warn); }
+  .stats button { font-size:.7rem; padding:.12rem .45rem; }
+  .composer { display:flex; gap:.5rem; align-items:flex-end; position:sticky; bottom:0; background:var(--bg);
+              padding:.6rem 0 .8rem; }
+  textarea { width:100%; font-size:.92rem; padding:.55rem .65rem; border:1px solid var(--line); border-radius:5px;
+             background:var(--card); color:var(--fg); resize:vertical; line-height:1.4; }
+  #q { min-height:2.8rem; max-height:12rem; }
+  .examples { display:flex; gap:.4rem; flex-wrap:wrap; margin:.2rem 0 .6rem; }
+  .examples button { font-size:.74rem; padding:.28rem .55rem; font-family:ui-serif, Georgia, serif; }
+  details.settings { border:1px solid var(--line); border-radius:6px; padding:.5rem .8rem; margin:1rem 0;
+                     font-size:.85rem; }
+  details.settings summary { cursor:pointer; color:var(--dim); }
+  .grid { display:grid; grid-template-columns: 11rem 1fr; gap:.5rem .8rem; align-items:center; margin-top:.7rem; }
+  .grid label { color:var(--dim); font-size:.8rem; }
+  .grid input[type=range] { width:100%; }
+  .grid .val { font-family:ui-monospace,monospace; font-size:.78rem; color:var(--dim); margin-left:.4rem; }
+  #sys { min-height:4rem; font-size:.82rem; }
+  #suffix { width:100%; font-size:.82rem; padding:.4rem .55rem; border:1px solid var(--line); border-radius:5px;
+            background:var(--card); color:var(--fg); }
+  .hint { font-size:.74rem; color:var(--dim); margin-top:.25rem; line-height:1.4; }
+  .checks { display:flex; flex-direction:column; gap:.35rem; margin-top:.7rem; font-size:.82rem; }
+  footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
+  footer p { margin:.35rem 0; }
+  @media (max-width: 560px) { .msg.user { margin-left:0; } .grid { grid-template-columns: 1fr; } }
+</style>
+
+<main>
+  <h1>Monad Chat</h1>
+  <p class="sub">Pleias' <a href="https://huggingface.co/PleIAs/Monad">Monad</a> has 56 million parameters,
+  less than half of GPT-2, and it thinks before it answers. Here it runs on your own GPU, in this tab,
+  with 8-bit weights. The default weights carry a training-free edit that stops most of the
+  repetition loops the original falls into; switch to the original to compare.</p>
+
+  <div class="bar">
+    <select id="model" aria-label="model">
+      <option value="fixed">Loop-fixed Monad</option>
+      <option value="original">Original Monad</option>
+    </select>
+    <span id="backend" class="badge">backend …</span>
+    <span id="status">Weights are 65 MB, downloaded once and kept in your browser cache.</span>
+    <button id="load" class="primary">Load model</button>
+  </div>
+  <div class="prog"><div id="bar"></div></div>
+
+  <div id="log" aria-live="polite"></div>
+
+  <div class="examples" id="examples"></div>
+  <div class="composer">
+    <textarea id="q" rows="2" placeholder="Ask Monad something. Enter sends, Shift+Enter for a new line."></textarea>
+    <button id="send" class="primary">Send</button>
+  </div>
+
+  <details class="settings">
+    <summary>Settings: system prompt and sampling</summary>
+    <div class="grid">
+      <label for="sys">System prompt</label>
+      <div><textarea id="sys" spellcheck="false" placeholder="(empty: recommended)"></textarea>
+        <div class="hint">Monad was trained on single questions with no system turn. In dry runs, a system prompt
+        that described Monad made it talk about itself in 40 to 90% of answers to unrelated questions, and plain
+        style instructions changed little. Without one it already says it is Monad.</div></div>
+      <label for="suffix">Append to each question</label>
+      <div><input type="text" id="suffix" spellcheck="false" placeholder="e.g.  Answer in at most three sentences.">
+        <div class="hint">Instructions inside the question are the form Monad was trained on. " Answer in at most three
+        sentences." cut the median answer from 148 words to 62, though now and then the instruction becomes the topic.</div></div>
+      <label for="temp">Temperature</label>
+      <div><input type="range" id="temp" min="0" max="1.5" step="0.05"><span class="val" id="tempV"></span></div>
+      <label for="topp">Top-p</label>
+      <div><input type="range" id="topp" min="0.5" max="1" step="0.01"><span class="val" id="toppV"></span></div>
+      <label for="pen">Repetition penalty</label>
+      <div><input type="range" id="pen" min="1" max="1.5" step="0.01"><span class="val" id="penV"></span></div>
+      <label for="maxnew">Max new tokens</label>
+      <div><input type="range" id="maxnew" min="128" max="1536" step="64"><span class="val" id="maxnewV"></span></div>
+    </div>
+    <div class="checks">
+      <label><input type="checkbox" id="showThink"> Show the thinking trace while it streams</label>
+      <label><input type="checkbox" id="guard"> Stop when Monad starts repeating itself</label>
+      <label><input type="checkbox" id="memory"> Send earlier turns with each question. Monad was trained on single
+        questions; given an earlier exchange, it tends to answer the earlier question again.</label>
+    </div>
+    <div class="bar" style="margin-top:.8rem">
+      <button id="reset">Restore defaults</button>
+      <button id="clearChat">Clear chat</button>
+      <button id="clearCache">Delete cached weights</button>
+    </div>
+  </details>
+
+  <footer>
+    <p>How the loop fix was found: <a href="https://muninn.austegard.com/blog/editing-monad-weights-to-stop-loops.html">Editing Monad's
+    weights to stop its loops</a>; the experiments are
+    <a href="https://github.com/oaustegard/experiments/tree/main/monad-weight-edit">monad-weight-edit</a> and
+    <a href="https://github.com/oaustegard/experiments/tree/main/monad-layer-parallel">monad-layer-parallel</a>
+    (the 8-bit build), and the system prompt was chosen in
+    <a href="https://github.com/oaustegard/experiments/tree/main/monad-chat">monad-chat</a>.</p>
+    <p>Model: <a href="https://huggingface.co/PleIAs/Monad">PleIAs/Monad</a>, Apache-2.0, trained on
+    <a href="https://huggingface.co/datasets/PleIAs/SYNTH">SYNTH</a>. Runs on
+    <a href="https://onnxruntime.ai/">onnxruntime-web</a> 1.30 with WebGPU, or on the CPU where WebGPU is missing.
+    Nothing you type leaves the tab. At this size Monad makes things up often; do not rely on what it says.</p>
+  </footer>
+</main>
+
+<script type="module">
+import { Monad, MODELS, BASE, CONTEXT, EOS, END, pickBackend, renderPrompt, makeSampler, looping, clearCache } from './monad.js';
+import { loadTokenizer } from './bpe.js';
+
+const $ = (id) => document.getElementById(id);
+const DEFAULTS = {
+  system: '', suffix: '',
+  temperature: 0.7, topP: 0.9, penalty: 1.15, maxNew: 1024,
+  showThink: true, guard: true, memory: false,
+};
+const EXAMPLES = ['Who are you?', 'Why is the sky blue?', 'Write a haiku about the sea.',
+  'What is 17 + 25?', 'Give me three tips for sleeping better.', 'Who was the first person to walk on the Moon?'];
+
+let settings = { ...DEFAULTS };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('monad-chat-settings') || '{}')); } catch (e) {}
+const save = () => { try { localStorage.setItem('monad-chat-settings', JSON.stringify(settings)); } catch (e) {} };
+
+let tok = null, model = null, backend = null, loading = null, busy = false, stopFlag = false;
+const turns = [];   // {role, content, model}
+
+// ---------------------------------------------------------------- settings UI
+function bindSettings() {
+  $('sys').value = settings.system;
+  const sliders = [['temp', 'temperature'], ['topp', 'topP'], ['pen', 'penalty'], ['maxnew', 'maxNew']];
+  for (const [id, key] of sliders) {
+    $(id).value = settings[key];
+    $(id + 'V').textContent = settings[key];
+    $(id).oninput = () => { settings[key] = +$(id).value; $(id + 'V').textContent = settings[key]; save(); };
+  }
+  for (const key of ['showThink', 'guard', 'memory']) {
+    $(key).checked = settings[key];
+    $(key).onchange = () => { settings[key] = $(key).checked; save(); };
+  }
+  $('sys').oninput = () => { settings.system = $('sys').value; save(); };
+  $('suffix').value = settings.suffix;
+  $('suffix').oninput = () => { settings.suffix = $('suffix').value; save(); };
+}
+$('reset').onclick = () => { settings = { ...DEFAULTS }; save(); bindSettings(); };
+$('clearChat').onclick = () => { if (!busy) { turns.length = 0; $('log').innerHTML = ''; showExamples(); } };
+$('clearCache').onclick = async () => { const ok = await clearCache(); status(ok ? 'Cached weights deleted.' : 'Nothing cached.'); };
+bindSettings();
+
+// ---------------------------------------------------------------- loading
+function status(s, frac) {
+  $('status').textContent = s;
+  if (frac !== undefined) $('bar').style.width = `${Math.round(Math.min(1, frac) * 100)}%`;
+}
+
+async function ensureModel() {
+  const key = $('model').value;
+  if (model && model.key === key) return model;
+  if (loading) return loading;
+  loading = (async () => {
+    $('load').disabled = true; $('model').disabled = true;
+    try {
+      backend = backend || await pickBackend();
+      $('backend').textContent = backend === 'webgpu' ? 'WebGPU' : 'CPU (WASM)';
+      if (!tok) { status('fetching tokenizer'); tok = await loadTokenizer(BASE + 'tokenizer.json'); }
+      if (model) { await model.release(); model = null; }
+      const t0 = performance.now();
+      model = await Monad.load(key, backend, status);
+      status(`${MODELS[key].label} ready (${((performance.now() - t0) / 1000).toFixed(1)} s)` +
+        (backend === 'wasm' ? '. No WebGPU here, so it runs on the CPU, slowly.' : '.'), 1);
+      $('load').style.display = 'none';
+      return model;
+    } catch (e) {
+      status('Could not load: ' + (e.message || e), 0);
+      $('load').disabled = false;
+      throw e;
+    } finally {
+      $('model').disabled = false;
+      loading = null;
+    }
+  })();
+  return loading;
+}
+$('load').onclick = () => ensureModel().catch(() => {});
+$('model').onchange = () => { if (model && !busy) ensureModel().catch(() => {}); else if (!model) status(`${MODELS[$('model').value].label} selected.`); };
+
+// ---------------------------------------------------------------- rendering
+const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+function inline(s) {
+  return esc(s).replace(/`([^`]+)`/g, '<code>$1</code>').replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<em>$2</em>');
+}
+function markdown(src) {
+  const out = [];
+  let list = null;
+  const close = () => { if (list) { out.push(`</${list}>`); list = null; } };
+  for (const raw of src.split('\n')) {
+    const line = raw.trimEnd();
+    let m;
+    if (!line.trim()) { close(); continue; }
+    if ((m = line.match(/^#{1,6}\s+(.*)/))) { close(); out.push(`<h4>${inline(m[1])}</h4>`); continue; }
+    if ((m = line.match(/^\s*[-*•]\s+(.*)/))) { if (list !== 'ul') { close(); out.push('<ul>'); list = 'ul'; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+    if ((m = line.match(/^\s*\d+[.)]\s+(.*)/))) { if (list !== 'ol') { close(); out.push('<ol>'); list = 'ol'; } out.push(`<li>${inline(m[1])}</li>`); continue; }
+    close();
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  close();
+  return out.join('');
+}
+
+function addUser(text) {
+  const d = document.createElement('div');
+  d.className = 'msg user';
+  d.innerHTML = `<div class="who">you</div><div class="body"></div>`;
+  d.querySelector('.body').textContent = text;
+  $('log').appendChild(d);
+}
+
+function addAssistant(key) {
+  const d = document.createElement('div');
+  d.className = 'msg';
+  d.innerHTML = `<div class="who">${esc(MODELS[key].label)}</div>
+    <details class="think"><summary>thinking…</summary><div class="trace"></div></details>
+    <div class="answer"><p class="cursor"></p></div><div class="stats"></div>`;
+  d.querySelector('details').open = settings.showThink;
+  $('log').appendChild(d);
+  return d;
+}
+
+// Split the raw text into trace and answer, hiding a partial end marker at the tail.
+function parse(raw) {
+  let text = raw;
+  const e = text.indexOf(END);
+  let ended = false;
+  if (e >= 0) { text = text.slice(0, e); ended = true; }
+  else for (let k = END.length - 1; k > 0; k--) if (text.endsWith(END.slice(0, k))) { text = text.slice(0, -k); break; }
+  const c = text.indexOf('</think>');
+  if (c < 0) {
+    let t = text;
+    for (let k = 7; k > 0; k--) if (t.endsWith('</think>'.slice(0, k))) { t = t.slice(0, -k); break; }
+    return { think: t, answer: null, ended };
+  }
+  return { think: text.slice(0, c), answer: text.slice(c + 8).replace(/^\s+/, ''), ended };
+}
+
+// ---------------------------------------------------------------- one turn
+function promptFor(question) {
+  const sys = settings.system.trim();
+  question = question + (settings.suffix || '');
+  const hist = settings.memory ? turns.filter((t) => t.content) : [];
+  let use = hist.map(({ role, content }) => ({ role, content }));
+  let ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]));
+  while (ids.length > CONTEXT - 256 && use.length) {   // drop the oldest exchange until it fits
+    use = use.slice(2);
+    ids = tok.encode(renderPrompt(sys, [...use, { role: 'user', content: question }]));
+  }
+  return ids;
+}
+
+async function answer(question, { retry = false } = {}) {
+  if (busy) return;
+  busy = true; stopFlag = false;
+  $('send').textContent = 'Stop'; $('send').classList.remove('primary');
+  hideExamples();
+  if (!retry) addUser(question);
+  let m;
+  try { m = await ensureModel(); } catch (e) { busy = false; $('send').textContent = 'Send'; $('send').classList.add('primary'); return; }
+  const box = addAssistant(m.key);
+  const trace = box.querySelector('.trace'), sum = box.querySelector('summary'), ans = box.querySelector('.answer');
+  const stats = box.querySelector('.stats');
+  box.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  const ids = promptFor(question);
+  const room = Math.min(settings.maxNew, CONTEXT - ids.length);
+  const pick = makeSampler({ temperature: settings.temperature, topP: settings.topP, penalty: settings.penalty, window: 64 });
+  const dec = tok.stream();
+  let raw = '', n = 0, decodeMs = 0, prefillMs = 0, why = 'limit', thinkTokens = 0;
+  let pending = false;
+  const paint = (final) => {
+    pending = false;
+    const p = parse(raw);
+    trace.textContent = p.think.trim();
+    if (p.answer === null) { sum.textContent = `thinking… ${n} tokens`; }
+    else {
+      sum.textContent = `thought for ${thinkTokens} tokens`;
+      ans.innerHTML = markdown(p.answer) || '<p></p>';
+      if (!final) ans.lastElementChild?.classList.add('cursor');
+    }
+    if (final && p.answer === null) ans.innerHTML = '<p><em>(no answer: it did not finish thinking)</em></p>';
+  };
+  const gen = [];
+  try {
+    for await (const { id, ms, prefill } of m.generate(ids, { maxNew: room, pick })) {
+      if (prefill) prefillMs = ms; else decodeMs += ms;
+      if (id === EOS) { why = 'end'; break; }
+      gen.push(id); n++;
+      raw += dec.push(id);
+      if (!raw.includes('</think>')) thinkTokens = n;
+      if (raw.includes(END)) { why = 'end'; break; }
+      if (settings.guard && looping(gen)) { why = 'loop'; break; }
+      if (stopFlag) { why = 'stopped'; break; }
+      if (!pending) { pending = true; requestAnimationFrame(() => paint(false)); }
+    }
+  } catch (e) {
+    why = 'error'; stats.textContent = 'error: ' + (e.message || e);
+  }
+  raw += dec.flush();
+  paint(true);
+  if (!settings.showThink) box.querySelector('details').open = false;
+  const p = parse(raw);
+  turns.push({ role: 'user', content: question }, { role: 'assistant', content: p.answer || '', model: m.key });
+  const tps = n > 1 ? (n - 1) / (decodeMs / 1000) : 0;
+  const notes = { loop: '<span class="warn">stopped: it started repeating itself</span>',
+    limit: '<span class="warn">hit the token limit</span>', stopped: 'stopped', end: '', error: '' };
+  if (why !== 'error') {
+    stats.innerHTML = `<span>${n} tokens</span><span>${tps.toFixed(0)} tok/s</span><span>prompt ${ids.length} tokens, ${prefillMs.toFixed(0)} ms</span>` +
+      `<span>${m.backend === 'webgpu' ? 'WebGPU' : 'CPU'}</span>${notes[why] ? `<span>${notes[why]}</span>` : ''}`;
+    const again = document.createElement('button');
+    again.textContent = 'retry';
+    again.title = 'Ask the same question again, with the model selected above';
+    again.onclick = () => { if (!busy) answer(question, { retry: true }); };
+    stats.appendChild(again);
+  }
+  busy = false;
+  $('send').textContent = 'Send'; $('send').classList.add('primary');
+}
+
+// ---------------------------------------------------------------- composer
+function send() {
+  if (busy) { stopFlag = true; return; }
+  const q = $('q').value.trim();
+  if (!q) return;
+  $('q').value = '';
+  answer(q);
+}
+$('send').onclick = send;
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
+
+function showExamples() {
+  const ex = $('examples');
+  ex.innerHTML = '';
+  for (const q of EXAMPLES) {
+    const b = document.createElement('button');
+    b.textContent = q;
+    b.onclick = () => answer(q);
+    ex.appendChild(b);
+  }
+  ex.style.display = '';
+}
+function hideExamples() { $('examples').style.display = 'none'; }
+showExamples();
+
+// Load straight away when the weights are already in the browser cache.
+(async () => {
+  backend = await pickBackend();
+  $('backend').textContent = backend === 'webgpu' ? 'WebGPU' : 'CPU (WASM)';
+  try {
+    const c = await caches.open('monad-chat-v1');
+    if (await c.match(BASE + MODELS[$('model').value].dir + '/model.packed')) ensureModel().catch(() => {});
+  } catch (e) { /* no Cache API */ }
+})();
+window.__monad = { ensureModel, answer, get turns() { return turns; }, get model() { return model; }, settings: () => settings };
+</script>
