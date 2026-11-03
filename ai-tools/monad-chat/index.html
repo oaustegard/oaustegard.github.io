@@ -86,6 +86,8 @@
   #suffix { width:100%; font-size:.82rem; padding:.4rem .55rem; border:1px solid var(--line); border-radius:5px;
             background:var(--card); color:var(--fg); }
   .hint { font-size:.74rem; color:var(--dim); margin-top:.25rem; line-height:1.4; }
+  .tokcount { font-family:ui-monospace,monospace; font-size:.74rem; color:var(--dim); margin-top:.3rem; }
+  .tokcount.warn { color:var(--warn); } .tokcount.bad { color:var(--bad); }
   .checks { display:flex; flex-direction:column; gap:.35rem; margin-top:.7rem; font-size:.82rem; }
   footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
   footer p { margin:.35rem 0; }
@@ -132,6 +134,7 @@
     quote it in <code>&lt;ref&gt;</code> tags, shown indented. Asked about a cat paragraph this way, both models got four of four
     questions right. Without it, both say a cat is not a mammal.</div>
     <textarea id="src" spellcheck="false" placeholder="Paste a paragraph of text…"></textarea>
+    <div class="tokcount" id="tokcount"></div>
     <div class="bar" style="margin:.4rem 0 0"><button id="srcCat">Use a paragraph about cats</button><button id="srcClear">Clear source</button></div>
   </details>
   <details class="settings">
@@ -432,6 +435,27 @@ function send() {
   answer(q);
 }
 $('send').onclick = send;
+// Live token count: system prompt + question + sources (+ earlier turns when sent), against the
+// 2,048-token window that the thinking trace and the answer also have to fit in.
+let countTimer = null;
+function updateCount() {
+  clearTimeout(countTimer);
+  countTimer = setTimeout(() => {
+    const el = $('tokcount');
+    if (!tok) { el.textContent = 'token count: loading tokenizer…'; return; }
+    const n = promptFor($('q').value.trim() || ' ').length;
+    const room = CONTEXT - n, reply = Math.min(settings.maxNew, room);
+    el.className = 'tokcount' + (room < 300 ? ' bad' : room < 800 ? ' warn' : '');
+    el.textContent = `prompt ${n} tokens of ${CONTEXT}; room for thinking + answer: ${Math.max(0, room)}` +
+      (room < 300 ? ' (too little: shorten the source)' : room < 800 ? ' (tight: the answer may not finish)' : '') +
+      (reply < room ? `, capped at ${reply} by max new tokens` : '');
+  }, 120);
+}
+for (const id of ['q', 'src', 'sys', 'suffix']) $(id).addEventListener('input', updateCount);
+for (const id of ['maxnew']) $(id).addEventListener('input', updateCount);
+$('memory').addEventListener('change', updateCount);
+loadTokenizer(BASE + 'tokenizer.json').then((t) => { if (!tok) tok = t; updateCount(); }).catch(() => {});
+
 $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
 
 function showExamples() {
@@ -459,6 +483,7 @@ function hideExamples() { $('examples').style.display = 'none'; }
 showExamples();
 function setSource(t) {
   if ($('src').value !== t) $('src').value = t;
+  updateCount();
   try { localStorage.setItem('monad-chat-source', t); } catch (e) {}
   $('srcState').textContent = t ? '(on)' : '';
   $('srcState').className = t ? 'src-on' : '';
