@@ -83,9 +83,11 @@
   .grid input[type=range] { width:100%; }
   .grid .val { font-family:ui-monospace,monospace; font-size:.78rem; color:var(--dim); margin-left:.4rem; }
   #sys { min-height:4rem; font-size:.82rem; }
-  #suffix { width:100%; font-size:.82rem; padding:.4rem .55rem; border:1px solid var(--line); border-radius:5px;
+  #suffix, #prefill { width:100%; font-size:.82rem; padding:.4rem .55rem; border:1px solid var(--line); border-radius:5px;
             background:var(--card); color:var(--fg); }
   .hint { font-size:.74rem; color:var(--dim); margin-top:.25rem; line-height:1.4; }
+  .presets { display:flex; gap:.3rem; flex-wrap:wrap; margin-top:.3rem; }
+  .presets button { font-size:.7rem; padding:.15rem .45rem; }
   .tokcount { font-family:ui-monospace,monospace; font-size:.74rem; color:var(--dim); margin-top:.3rem; }
   .tokcount.warn { color:var(--warn); } .tokcount.bad { color:var(--bad); }
   .checks { display:flex; flex-direction:column; gap:.35rem; margin-top:.7rem; font-size:.82rem; }
@@ -151,11 +153,14 @@
         sentences." cut the median answer from 148 words to 62, though now and then the instruction becomes the topic.</div></div>
       <label for="prefill">Start Monad's reply with</label>
       <div><input type="text" id="prefill" spellcheck="false" placeholder="e.g.  Cats are mammals ●.">
+        <div class="presets"><button type="button" data-pre="I’m unsure about the specific details">I’m unsure about the specific details</button><button type="button" data-pre="Query: &quot;">Query: "</button><button type="button" data-pre="">(none)</button></div>
         <label style="display:block;margin-top:.3rem;font-size:.78rem"><input type="checkbox" id="noThink"> skip the thinking
           (the text then starts the answer)</label>
         <div class="hint">Written into Monad's own turn, so it continues from it. Inside the thinking it steers the
         reasoning: planted "Cats are mammals ●." and both models reasoned to yes. With thinking skipped, Monad tends to
-        fall into a multiple-choice format, and a planted "Yes," can be contradicted by the next words.</div></div>
+        fall into a multiple-choice format, and a planted "Yes," can be contradicted by the next words. "I’m unsure about the
+        specific details" (a phrase from SYNTH's hedged answers) makes it decline and end the turn, on questions it would
+        have got right as well as wrong ones.</div></div>
       <label for="temp">Temperature</label>
       <div><input type="range" id="temp" min="0" max="1.5" step="0.05"><span class="val" id="tempV"></span></div>
       <label for="topp">Top-p</label>
@@ -241,6 +246,7 @@ function bindSettings() {
   $('suffix').oninput = () => { settings.suffix = $('suffix').value; save(); };
   $('prefill').value = settings.prefill;
   $('prefill').oninput = () => { settings.prefill = $('prefill').value; save(); updateCount?.(); };
+  for (const b of document.querySelectorAll('.presets button')) b.onclick = () => { $('prefill').value = b.dataset.pre; $('prefill').oninput(); };
   $('noThink').checked = settings.noThink;
   $('noThink').onchange = () => { settings.noThink = $('noThink').checked; save(); };
 }
@@ -399,7 +405,11 @@ async function answer(question, { retry = false } = {}) {
       ans.innerHTML = markdown(p.answer) || '<p></p>';
       if (!final) ans.lastElementChild?.classList.add('cursor');
     }
-    if (final && p.answer === null) ans.innerHTML = '<p><em>(no answer: it did not finish thinking)</em></p>';
+    if (final && p.answer === null) {
+      // The turn ended (or was cut off) without closing the think block: show what it wrote as the reply.
+      ans.innerHTML = (p.ended || why === 'end') && p.think.trim() ? markdown(p.think.trim()) + '<p class="hint">(it ended the turn without closing its thinking)</p>'
+        : '<p><em>(no answer: it did not finish thinking)</em></p>';
+    }
   };
   const gen = [];
   try {
