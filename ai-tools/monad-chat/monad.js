@@ -18,6 +18,7 @@ export const BASE = (() => {
 export const MODELS = {
   fixed: { dir: 'A8p_q8', label: 'Loop-fixed Monad', short: 'loop-fixed' },
   original: { dir: 'base_q8', label: 'Original Monad', short: 'original' },
+  papers: { dir: 'skygest_q8', label: 'Paper-tuned Monad', short: 'paper-tuned' },
 };
 
 export const EOS = 2;
