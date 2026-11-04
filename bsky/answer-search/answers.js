@@ -32,9 +32,8 @@ const LIVE_CAP = 20000;                   // room for posts added after the snap
 const OVERLAP_S = 3600;                   // page an hour past the newest known post, for posts indexed late
 const POLL_MS = 60000;
 let TOTAL_BYTES = 40e6;                   // replaced by 12.5 MB of model + the snapshot's own size once its download starts
-const EXAMPLES = ['How much do people spend on Claude Code?', 'Do LLMs actually reason?',
-  'What are people saying about copyright lawsuits against AI labs?', 'Which local model runs well on a laptop?',
-  'Why are data centers raising electricity bills?', 'How do Bluesky custom feeds work?'];
+const EXAMPLES = ['claude code pricing', 'LLM reasoning', 'AI copyright lawsuits', 'local models on a laptop',
+  'data center electricity bills', 'bluesky custom feeds'];
 
 const $ = (id) => document.getElementById(id);
 const now = () => performance.now();
