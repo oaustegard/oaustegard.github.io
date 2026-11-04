@@ -33,12 +33,14 @@ The code for steps 3 to 5 is `mix-core.js`; the page and `build/tune.mjs` share 
 
 | service | what the page does | needs |
 |---|---|---|
-| Spotify | searches each song by ISRC, creates a private playlist, plays it in the Spotify embed | a Spotify app client ID (PKCE, no secret) with the page URL as redirect URI; in development mode each listener's account must be allowlisted |
+| Spotify | searches each song by ISRC; ▶ plays full songs through Spotify's Web Playback SDK in desktop browsers, or on the listener's open Spotify app (Spotify Connect) on phones; saves a private playlist | the app's client ID (PKCE, no secret) with the page URL as redirect URI; Premium for full songs; in development mode each listener's account must be allowlisted |
 | YouTube Music | searches each song, plays the list in the YouTube player, saves a private playlist | a Google OAuth web client ID with YouTube Data API v3; each search costs 100 of 10,000 daily quota units |
 | Apple Music | 30-second previews in the page; each song opens an Apple Music search | nothing. Creating Apple Music playlists needs a MusicKit developer token, which a static page cannot sign |
 | Amazon Music | 30-second previews in the page; each song opens an Amazon Music search | nothing. Amazon has no public playlist API |
 
-Previews come from Deezer's track API by JSONP, because Deezer sends no CORS headers. The iTunes Search
+Spotify's embed was the first player, and it played only previews: it needs the open.spotify.com cookie,
+which Safari and most phone browsers block inside another site. It is now the fallback for accounts
+without Premium. Previews for the other services come from Deezer's track API by JSONP, because Deezer sends no CORS headers. The iTunes Search
 API allows CORS but returned 403 on 15 of 25 rapid requests, too few for a 25-song mix.
 
 `DEFAULT_SPOTIFY_CLIENT_ID` at the top of the page script holds austegard.com's Spotify app (redirect URI

@@ -152,7 +152,7 @@
   <section id="service">
     <h2>3. Where to listen</h2>
     <div class="svc" role="group" aria-label="Music service">
-      <button data-svc="spotify">Spotify<small id="spNote">saves a playlist to your account</small></button>
+      <button data-svc="spotify">Spotify<small id="spNote">full songs with Premium, saves a playlist</small></button>
       <button data-svc="youtube">YouTube Music<small id="ytNote">saves a playlist to your account</small></button>
       <button data-svc="apple">Apple Music<small>previews here, songs open in Apple Music</small></button>
       <button data-svc="amazon">Amazon Music<small>previews here, songs open in Amazon Music</small></button>
@@ -207,7 +207,7 @@
 </main>
 
 <script type="module">
-const V = '2026-11-04b';
+const V = '2026-11-04c';
 const core = await import(`./mix-core.js?v=${V}`);
 
 const NS = 'com.austegard.mixtape';
@@ -734,6 +734,7 @@ let audio = null;
 function stopPlayback() {
   if (audio) { audio.pause(); audio = null; }
   if (ytPlayer?.stopVideo) try { ytPlayer.stopVideo(); } catch {}
+  clearInterval(spPoll);
   state.playing = -1;
   $('player').innerHTML = ''; $('nowPlaying').textContent = '';
   ytPlayer = null;
@@ -781,6 +782,7 @@ async function playPreview(i, tries = 0) {
 
 function play(i) {
   if (state.svc === 'spotify' && state.sp) return playSpotify(i);
+  if (state.svc === 'spotify' && spClientId()) { status('Connecting Spotify for full-length songs…'); return spotifyConnect('play:' + i); }
   if (state.svc === 'youtube' && state.yt) return playYouTube(i);
   return playPreview(i);
 }
@@ -798,7 +800,7 @@ async function spotifyConnect(after) {
   const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
   location.href = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({
     response_type: 'code', client_id: id, redirect_uri: REDIRECT, state: st,
-    scope: 'playlist-modify-private playlist-modify-public user-read-private',
+    scope: 'playlist-modify-private playlist-modify-public user-read-private user-read-email streaming user-modify-playback-state user-read-playback-state',
     code_challenge_method: 'S256', code_challenge: challenge,
   });
 }
@@ -818,7 +820,7 @@ async function spotifyCallback() {
   });
   const d = await r.json();
   if (!r.ok) { status(`Spotify token exchange failed: ${d.error_description || d.error}`, { err: true }); return null; }
-  state.sp = { access: d.access_token, refresh: d.refresh_token, exp: Date.now() + (d.expires_in - 60) * 1000 };
+  state.sp = { access: d.access_token, refresh: d.refresh_token, scope: d.scope || '', exp: Date.now() + (d.expires_in - 60) * 1000 };
   LS.set('sp', state.sp);
   return pk.after || null;
 }
@@ -832,7 +834,7 @@ async function spToken() {
   });
   const d = await r.json();
   if (!r.ok) { state.sp = null; LS.del('sp'); throw new Error('Spotify session expired; connect again'); }
-  state.sp = { access: d.access_token, refresh: d.refresh_token || state.sp.refresh, exp: Date.now() + (d.expires_in - 60) * 1000 };
+  state.sp = { access: d.access_token, refresh: d.refresh_token || state.sp.refresh, scope: d.scope || state.sp.scope, exp: Date.now() + (d.expires_in - 60) * 1000 };
   LS.set('sp', state.sp);
   return state.sp.access;
 }
@@ -899,13 +901,104 @@ function showSpotifyEmbed(path) {
   $('player').innerHTML = `<iframe src="https://open.spotify.com/embed/${path}?utm_source=austegard" height="${path.startsWith('playlist') ? 380 : 152}" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`;
 }
 
+// Full-length playback. The embed only plays full songs when it can read the listener's
+// open.spotify.com cookie, which Safari and most phone browsers block inside another site, so
+// the page drives Spotify itself: on desktop browsers the Web Playback SDK makes this tab a
+// Spotify device; elsewhere it plays on the listener's open Spotify app (Spotify Connect).
+// Both need Premium; without it the page falls back to the embed.
+let spPlayer = null, spSdk = null, spPoll = null;
+function spHasScope(s) { return (state.sp?.scope || '').split(' ').includes(s); }
+
+function spSdkDevice() {
+  return spSdk ??= new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Web Playback SDK did not start')), 10000);
+    window.onSpotifyWebPlaybackSDKReady = () => {
+      spPlayer = new Spotify.Player({ name: 'Sky Mixtape', volume: 0.8, getOAuthToken: cb => spToken().then(cb) });
+      const fail = ({ message }) => { clearTimeout(timer); reject(new Error(message)); };
+      spPlayer.addListener('initialization_error', fail);
+      spPlayer.addListener('authentication_error', fail);
+      spPlayer.addListener('account_error', fail);
+      spPlayer.addListener('ready', ({ device_id }) => { clearTimeout(timer); resolve(device_id); });
+      spPlayer.connect();
+    };
+    loadScript('https://sdk.scdn.co/spotify-player.js').catch(reject);
+  }).catch(e => { console.info('Spotify SDK unavailable:', e.message); spSdk = Promise.resolve(null); return null; });
+}
+
+async function spDevice() {
+  const sdk = await spSdkDevice();
+  if (sdk) return { id: sdk, name: 'this tab' };
+  const r = await sp('/me/player/devices');
+  if (!r.ok) return null;
+  const ds = ((await r.json()).devices || []).filter(d => !d.is_restricted);
+  const d = ds.find(x => x.is_active) || ds[0];
+  return d ? { id: d.id, name: d.name } : null;
+}
+
+function spControls(deviceName) {
+  if (audio) { audio.pause(); audio = null; }
+  $('player').innerHTML = `<div class="bar" style="margin:0"><button data-sp="previous">⏮</button><button data-sp="toggle">⏯</button><button data-sp="next">⏭</button>
+    <span class="hint" style="margin:0;align-self:center">Full songs on Spotify (${esc(deviceName)})</span></div>`;
+}
+
+async function spCommand(cmd) {
+  if (cmd === 'toggle') {
+    const s = await sp('/me/player');
+    const playing = s.status === 200 && (await s.json()).is_playing;
+    return sp(`/me/player/${playing ? 'pause' : 'play'}`, { method: 'PUT' });
+  }
+  return sp(`/me/player/${cmd}`, { method: 'POST' });
+}
+
+function spWatch() {
+  clearInterval(spPoll);
+  const tick = async () => {
+    try {
+      const r = await sp('/me/player/currently-playing');
+      if (r.status !== 200) return;
+      const id = (await r.json()).item?.id;
+      const i = state.mix.picks.findIndex(p => state.ids[state.catalog.tracks[p.index].key]?.sp === id);
+      if (i >= 0 && i !== state.playing) markPlaying(i);
+    } catch {}
+  };
+  spPoll = setInterval(tick, 4000);
+  setTimeout(tick, 1500);
+}
+
 async function playSpotify(i) {
-  const t = state.catalog.tracks[state.mix.picks[i].index];
+  spPlayer?.activateElement?.(); // must run inside the click for browsers that gate audio
+  if (!spHasScope('streaming')) {
+    status('Reconnecting Spotify to allow full-length playback…');
+    return spotifyConnect('play:' + i);
+  }
   markPlaying(i);
   try {
-    const id = await spResolve(t);
-    if (id) { showSpotifyEmbed(`track/${id}`); renderTracks(); }
-    else playPreview(i);
+    const picks = state.mix.picks.map(p => state.catalog.tracks[p.index]);
+    const uris = [];
+    for (let k = 0; k < picks.length; k++) {
+      if (!state.ids[picks[k].key]?.sp) status(`Finding songs on Spotify… ${k + 1} of ${picks.length}`, { progress: (k + 1) / picks.length });
+      uris.push(await spResolve(picks[k]));
+    }
+    status('');
+    const from = uris.findIndex((u, k) => k >= i && u);
+    if (from < 0) return playPreview(i);
+    const device = await spDevice();
+    if (!device) {
+      status('No Spotify player found. Open the Spotify app on this device, then press ▶ again. Showing Spotify\'s preview player meanwhile.', { err: true });
+      return showSpotifyEmbed(`track/${uris[from]}`);
+    }
+    const list = uris.filter(Boolean).map(id => `spotify:track:${id}`);
+    const r = await sp(`/me/player/play?device_id=${encodeURIComponent(device.id)}`, {
+      method: 'PUT', body: JSON.stringify({ uris: list, offset: { uri: `spotify:track:${uris[from]}` } }) });
+    if (!r.ok) {
+      const d = await r.json().catch(() => ({}));
+      const reason = d.error?.reason || d.error?.message || r.status;
+      status(reason === 'PREMIUM_REQUIRED' ? 'Full-length playback needs Spotify Premium; showing Spotify\'s player instead.' : `Spotify would not play: ${reason}`, { err: true });
+      return showSpotifyEmbed(`track/${uris[from]}`);
+    }
+    spControls(device.name);
+    markPlaying(from);
+    spWatch();
   } catch (e) { status(`Spotify: ${e.message}`, { err: true }); playPreview(i); }
 }
 
@@ -1056,7 +1149,7 @@ function setSvc(s) {
   state.svc = s; LS.set('svc', s);
   document.querySelectorAll('.svc button').forEach(b => b.setAttribute('aria-pressed', b.dataset.svc === s));
   const hints = {
-    spotify: spClientId() ? (state.sp ? 'Spotify is connected. The mix is saved as a private playlist.' : 'You will be sent to Spotify to allow playlist creation.') : 'Spotify needs a client ID: open Settings below. Until then, previews play here.',
+    spotify: spClientId() ? (state.sp ? 'Spotify is connected: ▶ plays full songs (Premium) in this tab or your Spotify app, and the mix can be saved as a private playlist.' : 'Press ▶ or Save to sign in to Spotify. Full songs need Spotify Premium; the app is in development mode, so your account must be on its allowlist.') : 'Spotify needs a client ID: open Settings below. Until then, previews play here.',
     youtube: ytClientId() ? 'A Google window asks to manage your YouTube playlists. Playback uses the YouTube player.' : 'YouTube needs a Google client ID: open Settings below. Until then, previews play here.',
     apple: 'Apple only lets registered apps create playlists, so 30-second previews play here and every song opens in Apple Music.',
     amazon: 'Amazon Music has no public API, so 30-second previews play here and every song opens a search in Amazon Music.',
@@ -1094,6 +1187,10 @@ $('tracks').addEventListener('click', e => {
   else if (b.dataset.up) rate(+b.dataset.up, 1);
   else if (b.dataset.down) rate(+b.dataset.down, -1);
 });
+$('player').addEventListener('click', e => {
+  const b = e.target.closest('[data-sp]');
+  if (b) spCommand(b.dataset.sp).catch(err => status(`Spotify: ${err.message}`, { err: true }));
+});
 $('mixActions').addEventListener('click', e => {
   const b = e.target.closest('button');
   if (!b) return;
@@ -1125,6 +1222,7 @@ if (state.mix) {
 }
 await initAuth();
 if (spAfter === 'save' && state.mix) { setSvc('spotify'); saveSpotify(); }
+else if (spAfter?.startsWith('play:') && state.mix) { setSvc('spotify'); status('Spotify is connected. Press ▶ on a song to play it in full.'); }
 </script>
 </body>
 </html>
