@@ -16,7 +16,7 @@ Two sets of weights, both 8-bit, both 65 MB:
 
 Everything runs client-side in onnxruntime-web 1.30: WebGPU where the browser has it (about 150
 tokens a second on an M-series Mac), single-threaded WASM otherwise. Weights download once from
-a public R2 bucket and stay in the browser's Cache API; a SHA-256 check guards the rebuilt file.
+a public R2 bucket and stay in the browser's Cache API; a SHA-256 check guards the rebuilt file. On WebGPU the attention's key/value cache is one fixed-size block per layer, bound as both input and output so each token is written in place; the per-token growing cache (`?kv=growing`) allocates a longer copy for all 64 layers at every step, which is the suspected cause of crashes on iPhones.
 
 ## Settings
 

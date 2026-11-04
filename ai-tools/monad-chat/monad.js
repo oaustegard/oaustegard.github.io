@@ -190,11 +190,67 @@ export class Monad {
   constructor(ort, sess, meta, key, backend) {
     Object.assign(this, { ort, sess, meta, key, backend });
     this.kv = meta.kv_heads || 4;
+    this.noSharedKv = Q.get('kv') === 'growing';   // ?kv=growing: the per-step growing cache, for comparison
     this.hd = meta.head_dim || 64;
   }
 
   async release() {
+    this.dropKv();
     try { await this.sess.release(); } catch (e) { /* already gone */ }
+  }
+
+  dropKv() {
+    if (this.kvBufs) for (const b of this.kvBufs) { try { b.destroy(); } catch (e) { /* gone */ } }
+    this.kvBufs = this.kvTensors = null;
+    this.kvLen = 0;
+  }
+
+  // Fixed-size KV cache on the GPU: one buffer per layer for keys and one for values, each holding `len`
+  // positions, bound as both the past input and the present output. GroupQueryAttention sees the same buffer
+  // on both sides and writes the new position in place, so nothing is allocated per token and the shapes stay
+  // fixed. The growing alternative allocates a cache one token longer for all 64 layers at every step.
+  // Identical logits to the growing cache on onnxruntime CPU (experiments/monad-chat, shared-KV check).
+  ensureKv(len) {
+    if (this.kvBufs && this.kvLen >= len) return;
+    this.dropKv();
+    const dev = this.ort.env.webgpu.device;
+    const bytes = 4 * this.kv * len * this.hd;
+    this.kvBufs = [];
+    this.kvTensors = [];
+    for (let i = 0; i < 2 * this.meta.layers; i++) {
+      const buf = dev.createBuffer({ size: bytes, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+      this.kvBufs.push(buf);
+      this.kvTensors.push(this.ort.Tensor.fromGpuBuffer(buf, { dataType: 'float32', dims: [1, this.kv, len, this.hd] }));
+    }
+    this.kvLen = len;
+  }
+
+  get sharedKv() { return this.backend === 'webgpu' && !this.noSharedKv; }
+
+  async *generateShared(promptIds, { maxNew, pick }) {
+    const L = this.meta.layers, T = promptIds.length;
+    const need = Math.min(CONTEXT, Math.ceil((T + maxNew + 1) / 128) * 128);
+    this.ensureKv(need);
+    const kvFeeds = {}, kvFetches = {};
+    for (let l = 0; l < L; l++) {
+      kvFeeds[`past_key_values.${l}.key`] = this.kvTensors[2 * l];
+      kvFeeds[`past_key_values.${l}.value`] = this.kvTensors[2 * l + 1];
+      kvFetches[`present.${l}.key`] = this.kvTensors[2 * l];
+      kvFetches[`present.${l}.value`] = this.kvTensors[2 * l + 1];
+    }
+    const out = [];
+    let ids = promptIds, total = T;
+    for (let step = 0; step < maxNew && total < this.kvLen; step++) {
+      const t0 = performance.now();
+      const feeds = { input_ids: this.i64(ids, [1, ids.length]), attention_mask: this.i64(new Array(total).fill(1), [1, total]),
+        logits_index: this.i64([ids.length - 1], [1]), ...kvFeeds };
+      const res = await this.sess.run(feeds, { logits: null, ...kvFetches });
+      const id = pick(res.logits.data, out);
+      out.push(id);
+      yield { id, ms: performance.now() - t0, prefill: step === 0 };
+      ids = [id];
+      total += 1;
+    }
   }
 
   i64(arr, dims) {
@@ -203,7 +259,12 @@ export class Monad {
 
   // Yields {id, ms} per generated token. pick(logits, generatedIds) chooses the next id.
   // The caller stops by breaking out of the loop; cached GPU tensors are released either way.
-  async *generate(promptIds, { maxNew, pick }) {
+  async *generate(promptIds, opts) {
+    if (this.sharedKv) { yield* this.generateShared(promptIds, opts); return; }
+    yield* this.generateGrowing(promptIds, opts);
+  }
+
+  async *generateGrowing(promptIds, { maxNew, pick }) {
     const L = this.meta.layers, T = promptIds.length;
     let feeds = {
       input_ids: this.i64(promptIds, [1, T]),
