@@ -14,7 +14,8 @@ them, drops the oldest beyond N and writes OUT again:
                   posts (gzip JSON {"authors": [[handle, did]], "posts": [[author, rkey, t]], "texts": [...]})
   index.json      the header alone, for people and tools: n, mu, newest post, build time, counts
 
-Rows are oldest first. New posts come from the list feed, which Bluesky serves only about a week back;
+Rows are oldest first. Posts by accounts no longer on the list are dropped on every run. New posts come
+from the list feed, which Bluesky serves only about a week back;
 for anything older (the bootstrap, or a gap of more than a week between runs) it reads every member's own
 feed (posts and replies, no reposts) back to the time needed.
 
@@ -249,6 +250,14 @@ def main():
         rows, codes, aux, newest = [], np.zeros((0, 96 * a.bits), np.uint8), np.zeros((0, 2), "<f4"), None
         print(f"bootstrap: paging back for {a.n} posts")
 
+    if rows:
+        # members taken off the list leave the index on the next run, not 57 days later
+        current = set(members())
+        keep = np.array([r["did"] in current for r in rows])
+        if not keep.all():
+            print(f"dropping {int((~keep).sum())} posts by {len({r['did'] for r, k in zip(rows, keep) if not k})} former members")
+            rows = [r for r, k in zip(rows, keep) if k]
+            codes, aux = codes[keep], aux[keep]
     known = {r["uri"] for r in rows}
     if newest is not None:
         new, reached = fetch_list(known, newest - OVERLAP_S, None)
