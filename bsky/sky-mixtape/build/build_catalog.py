@@ -45,7 +45,7 @@ for k, e in sorted(by_key.items(), key=lambda kv: -kv[1]['rank']):
                    'r': e['rank'], 'd': e['dur'], 'c': m.group(1) if m else None, 'x': 1 if e['explicit'] else 0,
                    't': sorted(e['tags'])})
 per_tag = collections.Counter(j for t in tracks for j in t['t'])
-cat = {'version': 1, 'model': emb['model'], 'dtype': emb['dtype'], 'dim': emb['dim'],
+cat = {'version': 2, 'model': emb['model'], 'dtype': emb['dtype'], 'dim': emb['dim'], 'postPrompt': emb.get('postPrompt', ''),
        'tags': [{'id': t['id'], 'label': t['label'], 'kind': t['kind'], 'desc': t['desc']} for t in tags],
        'tagVec': emb['vec'], 'tagStats': [[round(m, 5), round(s, 5)] for m, s in emb['stats']],
        'maxRank': max(t['r'] for t in tracks), 'coverBase': 'https://cdn-images.dzcdn.net/images/cover/',

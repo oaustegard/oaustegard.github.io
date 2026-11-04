@@ -199,7 +199,7 @@
 
   <footer>
     Previews from Deezer. Song catalog: 2,700 songs chosen per tag by a language model and checked against Deezer's catalog.
-    Embeddings: all-MiniLM-L6-v2 running in your browser; your posts are not sent anywhere except to Bluesky's public API to read them.
+    Embeddings: <a href="/bsky/embedders/">Ettin-17m</a> running in your browser, on the GPU with WebGPU or on the CPU with onnxruntime-web; your posts are not sent anywhere except to Bluesky's public API to read them.
     Records: <code>com.austegard.mixtape.rating</code> and <code>com.austegard.mixtape.playlist</code>.
     <a href="https://github.com/oaustegard/oaustegard.github.io/tree/main/bsky/sky-mixtape">Source</a> ·
     <a href="/bsky/">More Bluesky tools</a> · <a href="/">austegard.com</a>
@@ -207,16 +207,21 @@
 </main>
 
 <script type="module">
-const V = '2026-11-04a';
+const V = '2026-11-04b';
 const core = await import(`./mix-core.js?v=${V}`);
 
 const NS = 'com.austegard.mixtape';
 const SCOPE = `atproto repo:${NS}.rating repo:${NS}.playlist`;
 const PUBLIC_API = 'https://public.api.bsky.app/xrpc/';
 const OAUTH_LIB = 'https://cdn.jsdelivr.net/npm/@atproto/oauth-client-browser@0.5.11/+esm';
-const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2';
+const EMB = new URL('../embedders/models/ettin/', location.href).href;
+const ETTIN = { manifest: EMB + 'manifest.json', tokenizer: EMB + 'tokenizer.json', model: EMB + 'model.onnx' };
+const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
+const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+const CACHE = 'sky-mixtape-v1';
+const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32;
 // Default app IDs for austegard.com. Empty means "bring your own" via Settings.
-const DEFAULT_SPOTIFY_CLIENT_ID = '';
+const DEFAULT_SPOTIFY_CLIENT_ID = '07b43155ca414ceda7d1d3815f6662bd';
 const DEFAULT_GOOGLE_CLIENT_ID = '';
 
 const $ = id => document.getElementById(id);
@@ -456,34 +461,100 @@ async function fetchPosts(actor, n) {
   return out.slice(0, n);
 }
 
+// The weights file is shared with /bsky/answer-search/ and /bsky/embedders/; caches.match looks in
+// every cache on this origin, so a visitor who used either page does not download it again.
+async function fetchCached(url, onProgress) {
+  try { const hit = await caches.match(url); if (hit) return new Uint8Array(await hit.arrayBuffer()); } catch {}
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
+  const total = +r.headers.get('content-length') || 0;
+  const reader = r.body.getReader(), chunks = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); got += value.length;
+    if (total) onProgress?.(got / total, total);
+  }
+  const out = new Uint8Array(got);
+  let o = 0;
+  for (const c of chunks) { out.set(c, o); o += c.length; }
+  try { await (await caches.open(CACHE)).put(url, new Response(out.slice())); } catch {}
+  return out;
+}
+
+const unit = v => { let n = 0; for (const x of v) n += x * x; n = Math.sqrt(n) || 1; return v.map(x => x / n); };
+
+// Ettin-17m: the hand-written WebGPU engine when the browser has WebGPU, otherwise the same
+// model.onnx on onnxruntime-web's WASM (CPU) backend. ?engine=cpu forces the CPU path.
 let embedder = null;
 async function getEmbedder() {
   if (embedder) return embedder;
-  const { pipeline, env } = await import(TRANSFORMERS);
-  env.allowLocalModels = false;
-  const seen = {};
-  embedder = await pipeline('feature-extraction', state.catalog.model, {
-    dtype: state.catalog.dtype, device: 'wasm',
-    progress_callback: p => {
-      if (p.status === 'progress' && p.total) {
-        seen[p.file] = [p.loaded, p.total];
-        const [l, t] = Object.values(seen).reduce((a, [x, y]) => [a[0] + x, a[1] + y], [0, 0]);
-        status(`Loading the language model (${(t / 1e6).toFixed(0)} MB, cached after the first time)…`, { progress: 0.2 + 0.3 * l / t });
-      }
-    },
-  });
+  const loadMsg = 'Loading Ettin-17m, the language model (12 MB, cached after the first time)…';
+  status(loadMsg, { progress: 0.2 });
+  const [manifest, tj, bytes, tokMod] = await Promise.all([
+    fetch(ETTIN.manifest).then(r => r.json()), fetch(ETTIN.tokenizer).then(r => r.json()),
+    fetchCached(ETTIN.model, f => status(loadMsg, { progress: 0.2 + 0.25 * f })), import(TOKENIZERS)]);
+  const tok = new tokMod.Tokenizer(tj, {});
+  const ids = text => { const x = tok.encode(text).ids; return x.length > MAX_SEQ ? x.slice(0, MAX_SEQ - 1).concat(x[x.length - 1]) : x; };
+  let backend = null;
+  if (new URLSearchParams(location.search).get('engine') !== 'cpu') {
+    try {
+      const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
+      if (!adapter) throw new Error('no WebGPU adapter');
+      const device = await adapter.requestDevice({ requiredLimits: {
+        maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
+      const { SmallEngine } = await import(`../embedders/engine.js?v=${V}`);
+      const engine = await SmallEngine.create(device, manifest, bytes, { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
+      await engine.embed([ids('warm up')]);
+      backend = { name: 'your GPU', embed: batch => engine.embed(batch) };
+    } catch (e) { console.info('WebGPU engine unavailable, using onnxruntime-web on the CPU:', e.message || e); }
+  }
+  if (!backend) {
+    status('Starting Ettin-17m on the CPU…', { progress: 0.47 });
+    const ort = await import(ORT + 'ort.wasm.min.mjs');
+    ort.env.wasm.wasmPaths = ORT;
+    const session = await ort.InferenceSession.create(bytes, { executionProviders: ['wasm'] });
+    const outName = session.outputNames[0];
+    backend = {
+      name: 'your CPU',
+      embed: async batch => {
+        const S = Math.max(...batch.map(b => b.length));
+        const idT = new BigInt64Array(batch.length * S), att = new BigInt64Array(batch.length * S);
+        batch.forEach((b, r) => b.forEach((t, k) => { idT[r * S + k] = BigInt(t); att[r * S + k] = 1n; }));
+        const res = await session.run({
+          input_ids: new ort.Tensor('int64', idT, [batch.length, S]),
+          attention_mask: new ort.Tensor('int64', att, [batch.length, S]) });
+        const v = res[outName].data, d = v.length / batch.length, out = new Float32Array(v.length);
+        for (let r = 0; r < batch.length; r++) out.set(unit(v.subarray(r * d, (r + 1) * d)), r * d);
+        return out;
+      },
+    };
+  }
+  embedder = { ...backend, ids };
   return embedder;
 }
 
+// Unit vectors for many texts, in batches of similar length that the GPU engine accepts.
 async function embedTexts(texts) {
-  const model = await getEmbedder();
-  const out = [];
-  for (let i = 0; i < texts.length; i += 16) {
-    const t = await model(texts.slice(i, i + 16), { pooling: 'mean', normalize: true });
-    const d = t.dims[1];
-    for (let j = 0; j < t.dims[0]; j++) out.push(t.data.slice(j * d, (j + 1) * d));
-    status(`Listening to your posts… ${Math.min(i + 16, texts.length)} of ${texts.length}`, { progress: 0.5 + 0.45 * Math.min(i + 16, texts.length) / texts.length });
+  const m = await getEmbedder();
+  const prompt = state.catalog.postPrompt || '';
+  const enc = texts.map(t => m.ids(prompt + t));
+  const order = enc.map((e, i) => i).sort((a, b) => enc[a].length - enc[b].length);
+  const out = new Array(texts.length);
+  let batch = [], rows = [], toks = 0, done = 0;
+  const flush = async () => {
+    if (!batch.length) return;
+    const v = await m.embed(batch), d = v.length / batch.length;
+    rows.forEach((r, k) => { out[r] = v.slice(k * d, (k + 1) * d); });
+    done += batch.length; batch = []; rows = []; toks = 0;
+    status(`Listening to your posts on ${m.name}… ${done} of ${texts.length}`, { progress: 0.5 + 0.45 * done / texts.length });
+  };
+  for (const i of order) {
+    if (batch.length === BATCH_SEQS || toks + enc[i].length > BATCH_TOKENS) await flush();
+    batch.push(enc[i]); rows.push(i); toks += enc[i].length;
   }
+  await flush();
   return out;
 }
 

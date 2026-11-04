@@ -10,7 +10,10 @@ repo as `com.austegard.mixtape.rating` records, and every later mix reads them b
 
 1. The page reads the posts from Bluesky's public API, skipping reposts. Each post contributes its text,
    image alt text, and link card title and description.
-2. all-MiniLM-L6-v2 (q8, transformers.js on WASM) embeds each post in the browser.
+2. Ettin-17m, the model in `../embedders/models/ettin/` that Answer Search also uses, embeds each post in
+   the browser with its query prompt. With WebGPU it runs on the page's hand-written engine
+   (`../embedders/engine.js`); without it, onnxruntime-web runs the same `model.onnx` on the CPU (WASM).
+   `?engine=cpu` forces the CPU path. A visitor who has used Answer Search already has the 12 MB file cached.
 3. `catalog.json` holds 247 tags: moods, genres, themes, settings and textures. Each tag has a
    description written in the words posts use ("code, bug, debugging, deploy, refactor…" for
    Programming), embedded with the same model and stored as int8. Each post-to-tag cosine is z-scored
@@ -38,8 +41,10 @@ The code for steps 3 to 5 is `mix-core.js`; the page and `build/tune.mjs` share 
 Previews come from Deezer's track API by JSONP, because Deezer sends no CORS headers. The iTunes Search
 API allows CORS but returned 403 on 15 of 25 rapid requests, too few for a 25-song mix.
 
-`DEFAULT_SPOTIFY_CLIENT_ID` and `DEFAULT_GOOGLE_CLIENT_ID` at the top of the page script are empty.
-Until they are filled in, a listener can paste their own IDs under Settings; they stay in localStorage.
+`DEFAULT_SPOTIFY_CLIENT_ID` at the top of the page script holds austegard.com's Spotify app (redirect URI
+`https://austegard.com/bsky/sky-mixtape/`; in development mode only allowlisted accounts can sign in).
+`DEFAULT_GOOGLE_CLIENT_ID` is still empty. A listener can paste their own IDs under Settings instead;
+they stay in localStorage.
 
 ## Records
 
@@ -64,8 +69,7 @@ Ratings made before sign-in stay in localStorage and are uploaded at the next si
 
 ## Rebuilding the catalog
 
-Everything is in `build/`. Node scripts need `npm install @huggingface/transformers@4.3.2` in a scratch
-directory.
+Everything is in `build/`. Python scripts need numpy, onnxruntime and tokenizers; `jet.mjs` needs Node 22.
 
 1. `tags.json`: the tag vocabulary, generated from `taxonomy_prompt.txt` by Claude Sonnet and kept as is.
 2. `python3 gen_tracks.py`: asks Claude Sonnet (`claude -p`) for 18 songs per tag, 12 tags per call,
@@ -75,9 +79,12 @@ directory.
    candidates matched. Classical works are credited to performers on Deezer, so those were matched on
    title and composer surname in a separate pass.
 4. `node jet.mjs`: samples 1,500 English posts from Jetstream into `background.json` (not committed).
-5. `node embed_tags.mjs tags.json background.json tag_emb.json`: tag vectors and per-tag background
-   mean and spread.
+5. `python3 embed_tags.py background.json tag_emb.json --post-prompt query`: Ettin tag vectors (CPU
+   onnxruntime, as `scripts/answer-search/refresh.py` does) and per-tag background mean and spread. The
+   query prompt for posts gave better tags than no prompt: "heartbroken, missing her, lonely winter nights"
+   maps to heartbreak, snow and winter, and lonely with it, and to female vocals without it.
 6. `python3 build_catalog.py tag_emb.json`: writes `../catalog.json`. Live recordings are dropped.
-7. `node tune.mjs <handle> <n>` prints the profile and a 25-song mix for any handle, to check changes.
+7. `python3 tune.py tag_emb.json [...] --actor <handle> --n 100` (or `--words "..."`) prints the tag
+   profile for each embedding file, to compare variants.
 
 Bump `V` in `index.html` after changing `catalog.json` or `mix-core.js`; it versions both requests.
