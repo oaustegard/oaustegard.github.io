@@ -4,8 +4,8 @@ https://austegard.com/bsky/answer-search/
 
 Answers questions with sentences quoted word for word from the last 100,000 posts of the
 "Artificial (and real) Intelligence" Bluesky list. Ettin-17m embeds the question, a WebGPU scan over
-2-bit codes finds the 20 closest posts, and Ettin then scores every sentence of those posts against the
-question; the best sentence of each top post is shown with its author and a link. Needs WebGPU.
+2-bit codes finds the 40 closest posts, and Ettin then scores every sentence of those posts against the
+question; the 10 best-matching sentences, at most one per post, are shown with author and link. Needs WebGPU.
 
 ## How the index stays current
 

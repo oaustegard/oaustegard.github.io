@@ -39,9 +39,9 @@ const EXAMPLES = ['How much do people spend on Claude Code?', 'Do LLMs actually 
 const $ = (id) => document.getElementById(id);
 const now = () => performance.now();
 const Q = new URLSearchParams(location.search);
-const settings = { posts: 20, sentences: 4 };
-try { Object.assign(settings, JSON.parse(localStorage.getItem('answer-search-settings') || '{}')); } catch (e) { /* no storage */ }
-const save = () => { try { localStorage.setItem('answer-search-settings', JSON.stringify(settings)); } catch (e) { /* no storage */ } };
+const settings = { posts: 40, sentences: 10 };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('answer-search-settings-v2') || '{}')); } catch (e) { /* no storage */ }
+const save = () => { try { localStorage.setItem('answer-search-settings-v2', JSON.stringify(settings)); } catch (e) { /* no storage */ } };
 
 // ---------------------------------------------------------------- fetching
 
