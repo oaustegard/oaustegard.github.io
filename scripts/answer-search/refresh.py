@@ -3,13 +3,14 @@
 Reads the previous snapshot from OUT (if any), fetches the list feed from the newest post back to the
 newest post it already has, embeds the new posts with Ettin-17m (the same ONNX model and doc prompt the
 page and bsky/embedders use), quantizes them exactly as the embedders index was built (remex 2.1.0,
-Quantizer(768, bits=2, seed=42, mean=mu), mu fixed from that index so codes stay comparable), appends
+Quantizer(768, bits=BITS, seed=42, mean=mu), mu fixed from that index so codes stay comparable), appends
 them, drops the oldest beyond N and writes OUT again:
 
   snapshot.bin    the whole snapshot in one file, so a CDN can never pair parts of two builds:
                   b"ASNP", uint32 LE header length, the header (UTF-8 JSON, the same as index.json), then
                   the sections the header's "sections" names as [offset, length] after the header:
-                  codes (n x 192 bytes, packed 2-bit codes), aux (n x 2 float32 LE: scale, bias),
+                  codes (n x 96 bytes at 1 bit, 192 at 2; remex pack, MSB first), aux (n x 2 float32 LE:
+                  scale, bias),
                   posts (gzip JSON {"authors": [[handle, did]], "posts": [[author, rkey, t]], "texts": [...]})
   index.json      the header alone, for people and tools: n, mu, newest post, build time, counts
 
@@ -216,7 +217,7 @@ def load(out):
     else:
         return None
     c = json.loads(gzip.decompress(posts_b))
-    codes = np.frombuffer(codes_b, np.uint8).reshape(idx["n"], 192)
+    codes = np.frombuffer(codes_b, np.uint8).reshape(idx["n"], 96 * idx.get("bits", 2))
     aux = np.frombuffer(aux_b, "<f4").reshape(idx["n"], 2)
     assert len(c["posts"]) == len(c["texts"]) == idx["n"]
     rows = [{"did": c["authors"][a][1], "handle": c["authors"][a][0], "rkey": rk, "t": t, "text": tx}
@@ -232,6 +233,7 @@ def main():
     ap.add_argument("--n", type=int, default=100_000)
     ap.add_argument("--model", type=Path, default=Path("bsky/embedders/models/ettin"))
     ap.add_argument("--mu", type=Path, default=Path("bsky/embedders/index/ettin/index.json"))
+    ap.add_argument("--bits", type=int, default=1, choices=(1, 2))
     a = ap.parse_args()
     assert remex.__version__ == "2.1.0", f"remex {remex.__version__}: the index was built with 2.1.0"
     t0 = time.time()
@@ -244,7 +246,7 @@ def main():
         print(f"snapshot: {len(rows)} posts, newest {datetime.fromtimestamp(newest, timezone.utc):%Y-%m-%d %H:%M} UTC")
     else:
         mu = np.array(json.loads(a.mu.read_text())["mu"], np.float32)
-        rows, codes, aux, newest = [], np.zeros((0, 192), np.uint8), np.zeros((0, 2), "<f4"), None
+        rows, codes, aux, newest = [], np.zeros((0, 96 * a.bits), np.uint8), np.zeros((0, 2), "<f4"), None
         print(f"bootstrap: paging back for {a.n} posts")
 
     known = {r["uri"] for r in rows}
@@ -261,12 +263,17 @@ def main():
             new += fetch_authors(known, since)
             new = sorted(new, key=lambda r: r["t"])[-a.n:]
     new.sort(key=lambda r: r["t"])                       # oldest first, like the snapshot
+    qz = remex.Quantizer(768, bits=a.bits, seed=42, mean=mu)
     t1 = time.time()
+    if prev and prev[0].get("bits", 2) != a.bits:
+        # a new code width: the snapshot keeps no fp32 vectors, so every stored post is embedded again
+        print(f"re-encoding {len(rows)} stored posts at {a.bits} bit(s)", flush=True)
+        new = rows + new
+        rows, codes, aux = [], np.zeros((0, 96 * a.bits), np.uint8), np.zeros((0, 2), "<f4")
     if new:
         X = Ettin(a.model).embed([r["text"] for r in new])
-        qz = remex.Quantizer(768, bits=2, seed=42, mean=mu)
         cv = qz.encode(X)
-        nc = pack(cv.indices.astype(np.uint8), 2).reshape(len(X), 192)
+        nc = pack(cv.indices.astype(np.uint8), a.bits).reshape(len(X), 96 * a.bits)
         na = np.stack([qz._score_norms(cv), qz._row_bias(cv)], 1).astype("<f4")
         rows, codes, aux = rows + new, np.concatenate([codes, nc]), np.concatenate([aux, na])
     embed_s = time.time() - t1
@@ -291,7 +298,10 @@ def main():
         off += len(b)
     last = max(rows, key=lambda r: r["t"])
     header = json.dumps({
-        "n": len(rows), "d": 768, "bits": 2, "seed": 42, "rotation": "rht", "remex_version": remex.__version__,
+        "n": len(rows), "d": 768, "bits": a.bits, "seed": 42, "rotation": "rht", "remex_version": remex.__version__,
+        # what a scorer needs besides the rotation: remex's boundaries, centroids and cosine factor at this width
+        "boundaries": [float(v) for v in qz.boundaries], "centroids": [float(v) for v in qz.centroids],
+        "kappa": float(qz._cosine_factor()),
         "model": "bsky/embedders/models/ettin/model.onnx", "doc_prompt": "", "max_tokens": MAX_SEQ, "list": LIST,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "newest": {"uri": last["uri"], "t": last["t"]}, "oldest_t": min(r["t"] for r in rows),
