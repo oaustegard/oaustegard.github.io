@@ -1,0 +1,1059 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sky Mixtape</title>
+<meta name="description" content="Turn your recent Bluesky posts, or a few keywords, into a playlist for Spotify, YouTube Music, Apple Music or Amazon Music. Thumbs up and down are saved to your own Bluesky repo and steer the next mix.">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta property="og:title" content="Sky Mixtape">
+<meta property="og:description" content="Your Bluesky posts, translated into a playlist. Rate the songs and the next mix leans your way.">
+<meta property="og:image" content="https://austegard.com/images/og/bsky-sky-mixtape.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --ink: #14171a; --muted: #5b6672;
+    --line: #dde2e8; --accent: #1083fe; --accent-ink: #ffffff; --soft: #eef3f8;
+    --bad: #c62828; --ok: #2e7d32; --bar: #cfe3ff; --chip: #e8eef5;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f1419; --panel: #161e27; --ink: #e7ecf0; --muted: #94a3b3;
+      --line: #2b3946; --accent: #3b9bff; --accent-ink: #0b1016; --soft: #1c2631;
+      --bad: #ff7b72; --ok: #7ee787; --bar: #1d3b5e; --chip: #22303d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 16px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 24px 16px 64px; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; }
+  h2 { font-size: 1.05rem; margin: 0 0 12px; }
+  p.lede { color: var(--muted); margin: 0 0 20px; }
+  section, details.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; margin-bottom: 16px; }
+  label.f { display: block; font-weight: 600; margin: 12px 0 4px; }
+  input[type=text], input[type=search], select {
+    padding: 9px 11px; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--bg); color: var(--ink); font: inherit; }
+  input[type=text], input[type=search] { width: 100%; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  .row > input[type=text] { flex: 1 1 220px; width: auto; }
+  .hint { color: var(--muted); font-size: 0.875rem; margin: 6px 0 0; }
+  a { color: var(--accent); }
+  button { font: inherit; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button:disabled { opacity: .55; cursor: default; }
+  button.link { border: 0; background: none; padding: 0; color: var(--accent); text-decoration: underline; }
+  .tabs { display: flex; gap: 6px; margin-bottom: 10px; }
+  .tabs button[aria-pressed=true], .svc button[aria-pressed=true] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .svc { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+  .svc button { text-align: left; padding: 10px 12px; }
+  .svc small { display: block; font-size: .78rem; opacity: .8; }
+  .opts { display: flex; gap: 18px; flex-wrap: wrap; align-items: center; margin-top: 12px; }
+  .opts label { display: flex; gap: 6px; align-items: center; font-size: .92rem; }
+  #status { min-height: 1.4em; color: var(--muted); font-size: .92rem; margin-top: 10px; }
+  #status.err { color: var(--bad); }
+  .prog { height: 3px; background: var(--soft); border-radius: 2px; overflow: hidden; margin-top: 8px; }
+  .prog > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag { display: inline-flex; align-items: center; gap: 6px; border-radius: 999px; padding: 4px 10px;
+    background: linear-gradient(90deg, var(--bar) var(--w, 0%), var(--chip) var(--w, 0%)); font-size: .88rem;
+    border: 1px solid var(--line); cursor: pointer; }
+  .tag.muted { opacity: .4; text-decoration: line-through; }
+  .tag .k { font-size: .7rem; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .tag .x { border: 0; background: none; padding: 0 0 0 2px; color: var(--muted); cursor: pointer; font-size: .95rem; }
+  #evidence { margin-top: 10px; font-size: .88rem; color: var(--muted); }
+  #evidence blockquote { margin: 6px 0; padding: 6px 10px; border-left: 3px solid var(--bar); background: var(--soft); border-radius: 0 6px 6px 0; color: var(--ink); }
+  #player { margin: 4px 0 12px; }
+  #player iframe { width: 100%; border: 0; border-radius: 12px; }
+  #player audio { width: 100%; }
+  #nowPlaying { font-size: .9rem; color: var(--muted); margin-bottom: 6px; }
+  ol#tracks { list-style: none; margin: 0; padding: 0; }
+  ol#tracks li { display: grid; grid-template-columns: 48px 1fr auto; gap: 10px; align-items: center;
+    padding: 8px 4px; border-top: 1px solid var(--line); }
+  ol#tracks li.playing { background: var(--soft); }
+  ol#tracks img, .noart { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; background: var(--chip); }
+  .tt { min-width: 0; }
+  .tt b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; }
+  .tt span { display: block; font-size: .88rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .why { font-size: .78rem; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .why em { font-style: normal; background: var(--chip); border-radius: 4px; padding: 0 5px; }
+  .acts { display: flex; gap: 4px; align-items: center; }
+  .acts button, .acts a { padding: 5px 8px; font-size: 1rem; line-height: 1; border-radius: 8px; text-decoration: none;
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+  .acts button.on-up { background: #d8f0dc; border-color: var(--ok); }
+  .acts button.on-down { background: #fadcdc; border-color: var(--bad); }
+  @media (prefers-color-scheme: dark) {
+    .acts button.on-up { background: #1d3a24; } .acts button.on-down { background: #43201f; }
+  }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0 4px; }
+  .who { display: flex; align-items: center; gap: 10px; }
+  .who img { width: 36px; height: 36px; border-radius: 50%; }
+  details.panel summary { cursor: pointer; font-weight: 600; }
+  code { font-size: .85em; background: var(--soft); padding: 1px 4px; border-radius: 4px; word-break: break-all; }
+  footer { color: var(--muted); font-size: .85rem; margin-top: 24px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 520px) {
+    ol#tracks li { grid-template-columns: 40px 1fr; }
+    ol#tracks img, .noart { width: 40px; height: 40px; }
+    .acts { grid-column: 1 / -1; justify-content: flex-end; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Sky Mixtape</h1>
+  <p class="lede">Turns your last Bluesky posts, or a few keywords, into a playlist. A small language model reads the posts in your browser and matches them against 247 moods, genres, themes and settings; the strongest matches pick the songs. Thumbs up and down are saved as records in your own Bluesky repo and steer every later mix.</p>
+
+  <section id="acct">
+    <h2>1. Bluesky</h2>
+    <div id="signedOut">
+      <div class="row">
+        <input type="text" id="handle" placeholder="you.bsky.social" autocomplete="username" autocapitalize="off" spellcheck="false">
+        <button class="primary" id="signInBtn">Sign in</button>
+      </div>
+      <p class="hint">Sign-in uses Bluesky OAuth and asks only to write Sky Mixtape records (ratings and saved mixes). You can make a mix without signing in; ratings then stay in this browser.</p>
+    </div>
+    <div id="signedIn" hidden>
+      <div class="row">
+        <div class="who"><img id="avatar" alt=""><div><b id="whoName"></b><div class="hint" id="whoHandle" style="margin:0"></div></div></div>
+        <span style="flex:1"></span>
+        <button id="signOutBtn">Sign out</button>
+      </div>
+      <p class="hint" id="recStats"></p>
+    </div>
+  </section>
+
+  <section id="seed">
+    <h2>2. What the mix is made from</h2>
+    <div class="tabs" role="group" aria-label="Seed">
+      <button id="tabPosts" aria-pressed="true">My recent posts</button>
+      <button id="tabWords" aria-pressed="false">Keywords</button>
+    </div>
+    <div id="seedPosts">
+      <div class="row">
+        <input type="text" id="seedHandle" placeholder="handle whose posts to read" autocapitalize="off" spellcheck="false">
+        <select id="postCount" aria-label="How many posts">
+          <option value="50">last 50 posts</option>
+          <option value="100" selected>last 100 posts</option>
+          <option value="200">last 200 posts</option>
+        </select>
+      </div>
+      <p class="hint">Reads public posts, including image alt text and link titles; reposts are skipped.</p>
+    </div>
+    <div id="seedWords" hidden>
+      <input type="search" id="keywords" placeholder="rainy ferry crossing, coffee, old maps, quiet optimism">
+      <p class="hint">Anything goes: a mood, a place, a topic, a scene.</p>
+    </div>
+  </section>
+
+  <section id="service">
+    <h2>3. Where to listen</h2>
+    <div class="svc" role="group" aria-label="Music service">
+      <button data-svc="spotify">Spotify<small id="spNote">saves a playlist to your account</small></button>
+      <button data-svc="youtube">YouTube Music<small id="ytNote">saves a playlist to your account</small></button>
+      <button data-svc="apple">Apple Music<small>previews here, songs open in Apple Music</small></button>
+      <button data-svc="amazon">Amazon Music<small>previews here, songs open in Amazon Music</small></button>
+    </div>
+    <p class="hint" id="svcHint"></p>
+    <div class="opts">
+      <label>Songs <select id="nTracks"><option>15</option><option selected>25</option><option>40</option></select></label>
+      <label title="Low: familiar songs that fit tightly. High: looser fits and deeper cuts.">Familiar <input type="range" id="adventure" min="0" max="1" step="0.05" value="0.35"> Adventurous</label>
+      <label><input type="checkbox" id="noExplicit"> No explicit lyrics</label>
+    </div>
+    <div class="bar"><button class="primary" id="goBtn">Make the mix</button></div>
+    <div id="status" role="status"></div>
+    <div class="prog" id="prog" hidden><div></div></div>
+  </section>
+
+  <section id="out" hidden>
+    <h2 id="mixTitle">Your mix</h2>
+    <p class="hint" id="mixSub" style="margin-top:-6px"></p>
+    <h3 style="font-size:.95rem;margin:14px 0 8px">What your posts sound like</h3>
+    <div class="tags" id="tagChips"></div>
+    <div id="evidence"></div>
+    <div class="bar" id="mixActions"></div>
+    <div id="nowPlaying"></div>
+    <div id="player"></div>
+    <ol id="tracks"></ol>
+    <div class="bar">
+      <button id="retuneBtn">Retune with my ratings</button>
+      <button id="reshuffleBtn">Different songs, same mood</button>
+    </div>
+    <p class="hint" id="rateHint"></p>
+  </section>
+
+  <details class="panel" id="settings">
+    <summary>Settings: Spotify and YouTube app IDs</summary>
+    <p class="hint">Spotify and Google only let a page create playlists through an app registered with them. Paste a client ID here (stored in this browser only) and register this redirect address with it: <code id="redirectUri"></code></p>
+    <label class="f" for="spClient">Spotify client ID</label>
+    <input type="text" id="spClient" placeholder="from developer.spotify.com/dashboard" spellcheck="false">
+    <p class="hint">Create an app with the Web API, add the redirect address above, and add each listener's Spotify account under User Management while the app is in development mode.</p>
+    <label class="f" for="ytClient">Google OAuth client ID</label>
+    <input type="text" id="ytClient" placeholder="…apps.googleusercontent.com" spellcheck="false">
+    <p class="hint">In Google Cloud: enable YouTube Data API v3, create an OAuth client of type Web application, and add <code id="originUri"></code> as an authorized JavaScript origin. Each search costs 100 of the project's 10,000 daily quota units, so a 25-song mix uses about a quarter of a day.</p>
+    <div class="bar"><button id="saveSettings">Save</button><button id="forgetServices">Disconnect Spotify and Google</button></div>
+  </details>
+
+  <footer>
+    Previews from Deezer. Song catalog: 2,700 songs chosen per tag by a language model and checked against Deezer's catalog.
+    Embeddings: all-MiniLM-L6-v2 running in your browser; your posts are not sent anywhere except to Bluesky's public API to read them.
+    Records: <code>com.austegard.mixtape.rating</code> and <code>com.austegard.mixtape.playlist</code>.
+    <a href="https://github.com/oaustegard/oaustegard.github.io/tree/main/bsky/sky-mixtape">Source</a> ·
+    <a href="/bsky/">More Bluesky tools</a> · <a href="/">austegard.com</a>
+  </footer>
+</main>
+
+<script type="module">
+const V = '2026-11-04a';
+const core = await import(`./mix-core.js?v=${V}`);
+
+const NS = 'com.austegard.mixtape';
+const SCOPE = `atproto repo:${NS}.rating repo:${NS}.playlist`;
+const PUBLIC_API = 'https://public.api.bsky.app/xrpc/';
+const OAUTH_LIB = 'https://cdn.jsdelivr.net/npm/@atproto/oauth-client-browser@0.5.11/+esm';
+const TRANSFORMERS = 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.2';
+// Default app IDs for austegard.com. Empty means "bring your own" via Settings.
+const DEFAULT_SPOTIFY_CLIENT_ID = '';
+const DEFAULT_GOOGLE_CLIENT_ID = '';
+
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const LS = {
+  get(k, d = null) { try { const v = localStorage.getItem('mx.' + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('mx.' + k, JSON.stringify(v)); } catch {} },
+  del(k) { try { localStorage.removeItem('mx.' + k); } catch {} },
+};
+const REDIRECT = location.origin + location.pathname.replace(/index\.html$/, '');
+const isLoopback = ['127.0.0.1', 'localhost', '[::1]'].includes(location.hostname);
+
+function status(msg, { err = false, progress = null } = {}) {
+  $('status').textContent = msg || '';
+  $('status').classList.toggle('err', err);
+  $('prog').hidden = progress == null;
+  if (progress != null) $('prog').firstElementChild.style.width = `${Math.round(progress * 100)}%`;
+}
+
+// ---------- state ----------
+const state = {
+  svc: LS.get('svc', 'apple'),
+  seedKind: LS.get('seedKind', 'posts'),
+  mix: LS.get('lastMix', null), // { source, base (weights array), evidence, muted, picks, seed, title, uri, external }
+  ratings: new Map(Object.entries(LS.get('ratings', {}))), // key -> rating entry
+  session: null, did: null, profile: null,
+  catalog: null, tagVecs: null, tagIndex: null,
+  sp: LS.get('sp', null),   // { access, refresh, exp }
+  yt: null,                 // { access, exp } (memory only)
+  ids: LS.get('ids', {}),   // song key -> { sp, yt }
+  playing: -1,
+};
+const saveRatingsLocal = () => LS.set('ratings', Object.fromEntries(state.ratings));
+const spClientId = () => LS.get('spClient', '') || DEFAULT_SPOTIFY_CLIENT_ID;
+const ytClientId = () => LS.get('ytClient', '') || DEFAULT_GOOGLE_CLIENT_ID;
+
+async function loadCatalog() {
+  if (state.catalog) return state.catalog;
+  const cat = await (await fetch(`./catalog.json?v=${V}`)).json();
+  cat.tracks.forEach(t => { t.key = core.songKey(t.a, t.ti); t.ak = t.key.split('|')[0]; });
+  state.catalog = cat;
+  state.tagVecs = core.decodeTagVectors(cat);
+  state.tagIndex = new Map(cat.tags.map((t, j) => [t.id, j]));
+  return cat;
+}
+
+// ---------- Bluesky OAuth ----------
+let oauthClient = null;
+async function getOAuth() {
+  if (oauthClient) return oauthClient;
+  const { BrowserOAuthClient } = await import(OAUTH_LIB);
+  const clientId = isLoopback
+    ? `http://localhost?redirect_uri=${encodeURIComponent(REDIRECT.replace('localhost', '127.0.0.1'))}&scope=${encodeURIComponent(SCOPE + " transition:generic")}`
+    : `${location.origin}/bsky/sky-mixtape/client-metadata.json`;
+  oauthClient = await BrowserOAuthClient.load({ clientId, handleResolver: 'https://bsky.social' });
+  oauthClient.addEventListener?.('deleted', () => { state.session = null; renderAccount(); });
+  return oauthClient;
+}
+
+async function xrpc(nsid, { params, body } = {}) {
+  if (!state.session) throw new Error('not signed in');
+  const qs = params ? '?' + new URLSearchParams(params) : '';
+  const init = body ? { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) } : {};
+  const r = await state.session.fetchHandler(`/xrpc/${nsid}${qs}`, init);
+  if (!r.ok) throw new Error(`${nsid}: ${r.status} ${await r.text().catch(() => '')}`.slice(0, 300));
+  return r.status === 204 ? null : r.json().catch(() => null);
+}
+
+async function publicGet(nsid, params) {
+  const r = await fetch(PUBLIC_API + nsid + '?' + new URLSearchParams(params));
+  if (!r.ok) throw new Error(`${nsid}: ${r.status}`);
+  return r.json();
+}
+
+async function initAuth() {
+  try {
+    if (isLoopback && location.hostname === 'localhost') {
+      location.replace(location.href.replace('//localhost', '//127.0.0.1'));
+      return;
+    }
+    const client = await getOAuth();
+    const res = await client.init();
+    if (res?.session) await onSession(res.session);
+  } catch (e) {
+    console.warn('oauth init', e);
+    const h = LS.get('lastHandle');
+    if (/scope/i.test(String(e)) && h && !LS.get('scopeFallback')) {
+      // A PDS without granular scopes: ask again for the broad legacy permission.
+      LS.set('scopeFallback', true);
+      status('Your Bluesky server does not support narrow permissions; asking for general access instead…');
+      return signIn(h);
+    }
+    if (/callback|state|code|scope|denied/i.test(String(e))) status(`Bluesky sign-in failed: ${e.message || e}`, { err: true });
+  }
+  renderAccount();
+}
+
+async function onSession(session) {
+  state.session = session;
+  state.did = session.did;
+  try { state.profile = await publicGet('app.bsky.actor.getProfile', { actor: session.did }); } catch { state.profile = { handle: session.did }; }
+  if (!$('seedHandle').value) $('seedHandle').value = state.profile.handle;
+  await syncRatings();
+}
+
+async function signIn(handle) {
+  const h = (typeof handle === 'string' ? handle : $('handle').value).trim().replace(/^@/, '');
+  if (!h) { $('handle').focus(); return; }
+  status('Opening Bluesky sign-in…');
+  LS.set('lastHandle', h);
+  LS.set('lastMix', state.mix);
+  try {
+    const client = await getOAuth();
+    await client.signInRedirect(h, { scope: LS.get('scopeFallback') ? 'atproto transition:generic' : SCOPE, state: 'bsky' });
+  } catch (e) {
+    status(`Sign-in failed: ${e.message || e}`, { err: true });
+  }
+}
+
+async function signOut() {
+  try { await state.session?.signOut?.(); } catch {}
+  state.session = null; state.did = null; state.profile = null;
+  renderAccount();
+}
+
+function renderAccount() {
+  const on = !!state.session;
+  $('signedOut').hidden = on;
+  $('signedIn').hidden = !on;
+  if (on) {
+    const p = state.profile || {};
+    $('avatar').src = p.avatar || '';
+    $('avatar').hidden = !p.avatar;
+    $('whoName').textContent = p.displayName || p.handle || state.did;
+    $('whoHandle').textContent = '@' + (p.handle || state.did);
+  }
+  renderRecStats();
+}
+
+function renderRecStats() {
+  const n = state.ratings.size;
+  const up = [...state.ratings.values()].filter(r => r.rating > 0).length;
+  const where = state.session
+    ? `saved in your repo (<a href="https://pdsls.dev/at://${esc(state.did)}/${NS}.rating" target="_blank" rel="noopener">view records</a>)`
+    : 'kept in this browser until you sign in';
+  const txt = n ? `${n} rated songs, ${up} liked and ${n - up} disliked, ${where}.` : 'No ratings yet.';
+  $('recStats').innerHTML = txt;
+  $('rateHint').innerHTML = n ? txt + ' Every new mix uses them.' : 'Rate a few songs with 👍 or 👎, then retune.';
+}
+
+// ---------- ratings as atproto records ----------
+async function rkeyFor(key) {
+  const h = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(key)));
+  return 's' + Array.from(h.slice(0, 10), b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function ratingRecord(entry) {
+  const subject = { artist: entry.artist, title: entry.title };
+  if (entry.isrc) subject.isrc = entry.isrc;
+  const ids = state.ids[entry.key] || {};
+  if (ids.sp) subject.spotify = `spotify:track:${ids.sp}`;
+  if (ids.yt) subject.youtube = ids.yt;
+  if (entry.dz) subject.deezer = String(entry.dz);
+  const rec = { $type: `${NS}.rating`, subject, rating: entry.rating, tags: entry.tags, createdAt: entry.at };
+  if (entry.mix) rec.mix = entry.mix;
+  return rec;
+}
+
+async function putRating(entry) {
+  if (!state.session) return;
+  await xrpc('com.atproto.repo.putRecord', { body: { repo: state.did, collection: `${NS}.rating`, rkey: await rkeyFor(entry.key), record: ratingRecord(entry) } });
+}
+async function deleteRating(key) {
+  if (!state.session) return;
+  await xrpc('com.atproto.repo.deleteRecord', { body: { repo: state.did, collection: `${NS}.rating`, rkey: await rkeyFor(key) } });
+}
+
+async function syncRatings() {
+  // Repo records win; local-only ratings (made before sign-in) are uploaded.
+  const remote = new Map();
+  let cursor;
+  try {
+    do {
+      const params = { repo: state.did, collection: `${NS}.rating`, limit: 100 };
+      if (cursor) params.cursor = cursor;
+      const d = await xrpc('com.atproto.repo.listRecords', { params });
+      for (const { value: v } of d.records || []) {
+        const key = core.songKey(v.subject?.artist, v.subject?.title);
+        remote.set(key, { key, ak: core.songKey(v.subject?.artist, '').split('|')[0], artist: v.subject?.artist, title: v.subject?.title,
+          isrc: v.subject?.isrc, dz: v.subject?.deezer ? +v.subject.deezer : undefined, rating: v.rating > 0 ? 1 : -1, tags: v.tags || [], at: v.createdAt, mix: v.mix });
+      }
+      cursor = d.cursor;
+    } while (cursor);
+  } catch (e) { console.warn('listRecords', e); return; }
+  const localOnly = [...state.ratings.values()].filter(r => !remote.has(r.key));
+  state.ratings = new Map([...remote, ...localOnly.map(r => [r.key, r])]);
+  saveRatingsLocal();
+  renderRecStats();
+  for (const r of localOnly) { try { await putRating(r); } catch (e) { console.warn(e); } }
+}
+
+async function rate(i, value) {
+  const tr = state.catalog.tracks[state.mix.picks[i].index];
+  const prev = state.ratings.get(tr.key);
+  const tags = tr.t.map(j => state.catalog.tags[j].id);
+  if (prev && prev.rating === value) {
+    state.ratings.delete(tr.key);
+    saveRatingsLocal(); renderTracks(); renderRecStats();
+    try { await deleteRating(tr.key); } catch (e) { status(`Could not remove the rating: ${e.message}`, { err: true }); }
+    return;
+  }
+  const entry = { key: tr.key, ak: tr.ak, artist: tr.a, title: tr.ti, isrc: tr.isrc, dz: tr.dz, rating: value, tags, at: new Date().toISOString() };
+  if (state.mix.uri) entry.mix = state.mix.uri;
+  state.ratings.set(tr.key, entry);
+  saveRatingsLocal(); renderTracks(); renderRecStats();
+  try { await putRating(entry); } catch (e) { status(`Could not save the rating to Bluesky: ${e.message}`, { err: true }); }
+}
+
+// ---------- reading posts and embedding ----------
+async function fetchPosts(actor, n) {
+  const out = [];
+  let cursor;
+  const did = actor.startsWith('did:') ? actor : (await publicGet('com.atproto.identity.resolveHandle', { handle: actor })).did;
+  while (out.length < n) {
+    const params = { actor: did, limit: 100, filter: 'posts_with_replies' };
+    if (cursor) params.cursor = cursor;
+    const d = await publicGet('app.bsky.feed.getAuthorFeed', params);
+    for (const it of d.feed || []) {
+      if (it.reason || it.post.author.did !== did) continue;
+      const text = core.postText(it.post);
+      if (text.length >= 12) out.push({ text, uri: it.post.uri });
+    }
+    status(`Reading posts… ${Math.min(out.length, n)} of ${n}`, { progress: Math.min(out.length, n) / n * 0.2 });
+    cursor = d.cursor;
+    if (!cursor || !(d.feed || []).length) break;
+  }
+  return out.slice(0, n);
+}
+
+let embedder = null;
+async function getEmbedder() {
+  if (embedder) return embedder;
+  const { pipeline, env } = await import(TRANSFORMERS);
+  env.allowLocalModels = false;
+  const seen = {};
+  embedder = await pipeline('feature-extraction', state.catalog.model, {
+    dtype: state.catalog.dtype, device: 'wasm',
+    progress_callback: p => {
+      if (p.status === 'progress' && p.total) {
+        seen[p.file] = [p.loaded, p.total];
+        const [l, t] = Object.values(seen).reduce((a, [x, y]) => [a[0] + x, a[1] + y], [0, 0]);
+        status(`Loading the language model (${(t / 1e6).toFixed(0)} MB, cached after the first time)…`, { progress: 0.2 + 0.3 * l / t });
+      }
+    },
+  });
+  return embedder;
+}
+
+async function embedTexts(texts) {
+  const model = await getEmbedder();
+  const out = [];
+  for (let i = 0; i < texts.length; i += 16) {
+    const t = await model(texts.slice(i, i + 16), { pooling: 'mean', normalize: true });
+    const d = t.dims[1];
+    for (let j = 0; j < t.dims[0]; j++) out.push(t.data.slice(j * d, (j + 1) * d));
+    status(`Listening to your posts… ${Math.min(i + 16, texts.length)} of ${texts.length}`, { progress: 0.5 + 0.45 * Math.min(i + 16, texts.length) / texts.length });
+  }
+  return out;
+}
+
+// ---------- making the mix ----------
+function ratingsList() { return [...state.ratings.values()]; }
+
+function effectiveWeights(mix) {
+  const base = Float64Array.from(mix.base);
+  for (const id of mix.muted || []) { const j = state.tagIndex.get(id); if (j !== undefined) base[j] = 0; }
+  const fb = core.applyFeedback(base, ratingsList(), state.tagIndex);
+  for (const id of mix.muted || []) { const j = state.tagIndex.get(id); if (j !== undefined) fb.weights[j] = 0; }
+  return fb;
+}
+
+function pickTracks(mix) {
+  const cat = state.catalog;
+  const fb = effectiveWeights(mix);
+  const view = $('noExplicit').checked ? { ...cat, tracks: cat.tracks.map(t => t.x ? { ...t, t: [] } : t) } : cat;
+  mix.picks = core.selectTracks(view, fb.weights, {
+    n: +$('nTracks').value, adventure: +$('adventure').value, seed: mix.seed, feedback: fb,
+  }).map(p => ({ index: p.index, why: cat.tags[p.why]?.id }));
+  mix.weightsShown = Array.from(fb.weights);
+  mix.uri = null; mix.external = null;
+}
+
+async function makeMix() {
+  $('goBtn').disabled = true;
+  try {
+    status('Loading the song catalog…', { progress: 0.02 });
+    const cat = await loadCatalog();
+    let items, source;
+    if (state.seedKind === 'words') {
+      const q = $('keywords').value.trim();
+      if (!q) { status('Type a few keywords first.', { err: true }); return; }
+      items = q.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).map(text => ({ text }));
+      if (items.length > 1) items.push({ text: q });
+      source = { kind: 'keywords', query: q };
+    } else {
+      const actor = ($('seedHandle').value.trim() || state.profile?.handle || '').replace(/^@/, '');
+      if (!actor) { status('Enter a handle, or sign in.', { err: true }); $('seedHandle').focus(); return; }
+      const n = +$('postCount').value;
+      items = await fetchPosts(actor, n);
+      if (!items.length) { status(`No posts found for @${actor}.`, { err: true }); return; }
+      source = { kind: 'posts', handle: actor, count: items.length };
+    }
+    const vecs = await embedTexts(items.map(x => x.text));
+    const prof = core.tagProfile(vecs, state.tagVecs, cat.tagStats,
+      source.kind === 'keywords' ? { zMin: 0.5, perPost: 6 } : {});
+    if (!prof.weights.some(w => w > 0)) { status('Nothing in that text matched a mood or genre strongly. Try more words or more posts.', { err: true }); return; }
+    const evidence = {};
+    for (const { j } of core.topTags(prof.weights, 48)) {
+      evidence[cat.tags[j].id] = prof.evidence[j].slice(0, 3).map(([i, z]) => ({ text: items[i].text.slice(0, 280), uri: items[i].uri, z: +z.toFixed(2) }));
+    }
+    const top = core.topTags(prof.weights, 3).map(({ j }) => cat.tags[j].label.toLowerCase());
+    state.mix = {
+      source, base: Array.from(prof.weights), evidence, muted: [], seed: (Math.random() * 2 ** 31) | 0,
+      title: `Sky Mixtape: ${top.join(', ')}`, createdAt: new Date().toISOString(),
+    };
+    pickTracks(state.mix);
+    LS.set('lastMix', state.mix);
+    status(source.kind === 'posts' ? `Read ${items.length} posts from @${source.handle}.` : '');
+    renderMix();
+    $('out').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    onMixReady();
+  } catch (e) {
+    console.error(e);
+    status(`Something went wrong: ${e.message || e}`, { err: true });
+  } finally {
+    $('goBtn').disabled = false;
+  }
+}
+
+function retune(reshuffle) {
+  if (!state.mix) return;
+  if (reshuffle) state.mix.seed = (Math.random() * 2 ** 31) | 0;
+  else state.mix.seed = (state.mix.seed + 1) | 0;
+  pickTracks(state.mix);
+  LS.set('lastMix', state.mix);
+  stopPlayback();
+  renderMix();
+  onMixReady();
+  status(reshuffle ? 'New songs for the same mood.' : `Retuned with ${state.ratings.size} ratings.`);
+}
+
+// ---------- rendering ----------
+const coverUrl = t => t.c ? `${state.catalog.coverBase}${t.c}/250x250-000000-80-0-0.jpg` : '';
+
+function renderMix() {
+  const cat = state.catalog, mix = state.mix;
+  $('out').hidden = false;
+  $('mixTitle').textContent = mix.title;
+  const src = mix.source.kind === 'posts' ? `from @${mix.source.handle}'s last ${mix.source.count} posts` : `from “${mix.source.query}”`;
+  $('mixSub').textContent = `${mix.picks.length} songs ${src} · ${svcLabel()}`;
+  const w = mix.weightsShown || mix.base;
+  const shown = core.topTags(Float64Array.from(mix.base), 12);
+  const maxW = Math.max(...shown.map(x => x.w), 1e-9);
+  $('tagChips').innerHTML = shown.map(({ j, w: bw }) => {
+    const t = cat.tags[j];
+    const muted = (mix.muted || []).includes(t.id);
+    const pct = Math.round(100 * bw / maxW);
+    const tuned = w[j] > bw * 1.15 ? ' ↑' : w[j] < bw * 0.85 && !muted ? ' ↓' : '';
+    return `<span class="tag${muted ? ' muted' : ''}" style="--w:${pct}%" data-tag="${esc(t.id)}" title="${esc(t.desc)}"><span class="k">${esc(t.kind)}</span>${esc(t.label)}${tuned}<button class="x" data-mute="${esc(t.id)}" aria-label="${muted ? 'Restore' : 'Drop'} ${esc(t.label)}">${muted ? '↺' : '×'}</button></span>`;
+  }).join('');
+  $('evidence').innerHTML = '';
+  renderActions();
+  renderTracks();
+}
+
+function renderEvidence(tagId) {
+  const t = state.catalog.tags[state.tagIndex.get(tagId)];
+  const ev = state.mix.evidence[tagId] || [];
+  const link = uri => {
+    const m = (uri || '').match(/^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/(.+)$/);
+    return m ? ` <a href="https://bsky.app/profile/${esc(m[1])}/post/${esc(m[2])}" target="_blank" rel="noopener">post</a>` : '';
+  };
+  $('evidence').innerHTML = `<b>${esc(t.label)}</b>: ${esc(t.desc)}` +
+    (ev.length ? ev.map(e => `<blockquote>${esc(e.text)}${link(e.uri)}</blockquote>`).join('') : '<p>Pulled in by your ratings rather than your posts.</p>');
+}
+
+function renderTracks() {
+  const cat = state.catalog, mix = state.mix;
+  $('tracks').innerHTML = mix.picks.map((p, i) => {
+    const t = cat.tracks[p.index];
+    const r = state.ratings.get(t.key)?.rating || 0;
+    const tag = cat.tags[state.tagIndex.get(p.why)];
+    const ev = mix.evidence[p.why]?.[0];
+    const why = tag ? `<div class="why">for <em>${esc(tag.label)}</em>${ev ? ' · “' + esc(ev.text.slice(0, 90)) + '”' : ''}</div>` : '';
+    const art = t.c ? `<img src="${esc(coverUrl(t))}" alt="" loading="lazy">` : '<div class="noart"></div>';
+    return `<li data-i="${i}" class="${i === state.playing ? 'playing' : ''}">${art}
+      <div class="tt"><b>${esc(t.ti)}</b><span>${esc(t.a)} · ${esc(t.al || '')}</span>${why}</div>
+      <div class="acts">
+        <button data-play="${i}" aria-label="Play ${esc(t.ti)}">▶</button>
+        <a href="${esc(openUrl(t))}" target="_blank" rel="noopener" data-open="${i}" aria-label="Open in ${esc(svcLabel())}">↗</a>
+        <button data-up="${i}" class="${r > 0 ? 'on-up' : ''}" aria-label="Thumbs up" aria-pressed="${r > 0}">👍</button>
+        <button data-down="${i}" class="${r < 0 ? 'on-down' : ''}" aria-label="Thumbs down" aria-pressed="${r < 0}">👎</button>
+      </div></li>`;
+  }).join('');
+}
+
+function svcLabel(s = state.svc) {
+  return { spotify: 'Spotify', youtube: 'YouTube Music', apple: 'Apple Music', amazon: 'Amazon Music' }[s];
+}
+
+function openUrl(t) {
+  const q = encodeURIComponent(`${t.a} ${t.ti}`);
+  const ids = state.ids[t.key] || {};
+  switch (state.svc) {
+    case 'spotify': return ids.sp ? `https://open.spotify.com/track/${ids.sp}` : `https://open.spotify.com/search/${q}`;
+    case 'youtube': return ids.yt ? `https://music.youtube.com/watch?v=${ids.yt}` : `https://music.youtube.com/search?q=${q}`;
+    case 'apple': return `https://music.apple.com/us/search?term=${q}`;
+    case 'amazon': return `https://music.amazon.com/search/${q}`;
+  }
+}
+
+function renderActions() {
+  const box = $('mixActions');
+  const mix = state.mix;
+  const parts = [];
+  if (state.svc === 'spotify') {
+    parts.push(mix.external?.spotify
+      ? `<a class="button" href="${esc(mix.external.spotify)}" target="_blank" rel="noopener">Open the playlist in Spotify ↗</a>`
+      : `<button class="primary" id="saveSp">${state.sp ? 'Save to Spotify' : 'Connect Spotify and save'}</button>`);
+  } else if (state.svc === 'youtube') {
+    parts.push(mix.external?.youtube
+      ? `<a href="${esc(mix.external.youtube)}" target="_blank" rel="noopener">Open the playlist in YouTube Music ↗</a>`
+      : `<button class="primary" id="saveYt">${state.yt ? 'Save to YouTube Music' : 'Connect YouTube and save'}</button>`);
+  }
+  parts.push(`<button id="playAll">▶ Play from the top</button>`);
+  if (state.session) parts.push(mix.uri
+    ? `<a href="https://pdsls.dev/${esc(mix.uri)}" target="_blank" rel="noopener">Mix saved on Bluesky ↗</a>`
+    : `<button id="saveMixRec">Save this mix to Bluesky</button>`);
+  box.innerHTML = parts.join('');
+}
+
+// ---------- playback ----------
+let audio = null;
+function stopPlayback() {
+  if (audio) { audio.pause(); audio = null; }
+  if (ytPlayer?.stopVideo) try { ytPlayer.stopVideo(); } catch {}
+  state.playing = -1;
+  $('player').innerHTML = ''; $('nowPlaying').textContent = '';
+  ytPlayer = null;
+}
+
+function markPlaying(i) {
+  state.playing = i;
+  document.querySelectorAll('#tracks li').forEach(li => li.classList.toggle('playing', +li.dataset.i === i));
+  const t = state.catalog.tracks[state.mix.picks[i]?.index];
+  if (t) $('nowPlaying').textContent = `Now playing: ${t.ti} · ${t.a}`;
+}
+
+function jsonp(url) {
+  return new Promise((resolve, reject) => {
+    const cb = 'dz' + Math.random().toString(36).slice(2);
+    const s = document.createElement('script');
+    const done = () => { delete window[cb]; s.remove(); };
+    window[cb] = d => { done(); resolve(d); };
+    s.onerror = () => { done(); reject(new Error('preview lookup failed')); };
+    s.src = `${url}${url.includes('?') ? '&' : '?'}output=jsonp&callback=${cb}`;
+    document.head.appendChild(s);
+    setTimeout(() => { if (window[cb]) { done(); reject(new Error('preview lookup timed out')); } }, 12000);
+  });
+}
+
+async function playPreview(i, tries = 0) {
+  const t = state.catalog.tracks[state.mix.picks[i].index];
+  markPlaying(i);
+  let src = null;
+  try { src = (await jsonp(`https://api.deezer.com/track/${t.dz}`)).preview; } catch {}
+  if (state.playing !== i) return;
+  if (!src) {
+    if (tries < 3 && i + 1 < state.mix.picks.length) return playPreview(i + 1, tries + 1);
+    $('nowPlaying').textContent = `No preview for ${t.ti}.`; return;
+  }
+  if (!audio) {
+    $('player').innerHTML = '<audio controls preload="none"></audio>';
+    audio = $('player').querySelector('audio');
+    audio.addEventListener('ended', () => { const n = state.playing + 1; if (n < state.mix.picks.length) playPreview(n); });
+  }
+  audio.src = src;
+  $('nowPlaying').textContent = `Now playing (30-second preview): ${t.ti} · ${t.a}`;
+  audio.play().catch(() => {});
+}
+
+function play(i) {
+  if (state.svc === 'spotify' && state.sp) return playSpotify(i);
+  if (state.svc === 'youtube' && state.yt) return playYouTube(i);
+  return playPreview(i);
+}
+
+// ---------- Spotify (PKCE) ----------
+const b64url = buf => btoa(String.fromCharCode(...new Uint8Array(buf))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+const randStr = n => b64url(crypto.getRandomValues(new Uint8Array(n)));
+
+async function spotifyConnect(after) {
+  const id = spClientId();
+  if (!id) { $('settings').open = true; $('spClient').focus(); status('Spotify needs a client ID first: see Settings below.', { err: true }); return; }
+  const verifier = randStr(48), st = 'sp-' + randStr(12);
+  LS.set('spPkce', { verifier, state: st, after });
+  LS.set('lastMix', state.mix);
+  const challenge = b64url(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier)));
+  location.href = 'https://accounts.spotify.com/authorize?' + new URLSearchParams({
+    response_type: 'code', client_id: id, redirect_uri: REDIRECT, state: st,
+    scope: 'playlist-modify-private playlist-modify-public user-read-private',
+    code_challenge_method: 'S256', code_challenge: challenge,
+  });
+}
+
+async function spotifyCallback() {
+  const q = new URLSearchParams(location.search);
+  const st = q.get('state');
+  if (!st?.startsWith('sp-')) return null;
+  history.replaceState(null, '', REDIRECT);
+  const pk = LS.get('spPkce');
+  LS.del('spPkce');
+  if (!pk || pk.state !== st) { status('Spotify sign-in did not match this browser session. Try again.', { err: true }); return null; }
+  if (q.get('error')) { status(`Spotify said: ${q.get('error')}`, { err: true }); return null; }
+  const r = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'authorization_code', code: q.get('code'), redirect_uri: REDIRECT, client_id: spClientId(), code_verifier: pk.verifier }),
+  });
+  const d = await r.json();
+  if (!r.ok) { status(`Spotify token exchange failed: ${d.error_description || d.error}`, { err: true }); return null; }
+  state.sp = { access: d.access_token, refresh: d.refresh_token, exp: Date.now() + (d.expires_in - 60) * 1000 };
+  LS.set('sp', state.sp);
+  return pk.after || null;
+}
+
+async function spToken() {
+  if (!state.sp) throw new Error('Spotify is not connected');
+  if (Date.now() < state.sp.exp) return state.sp.access;
+  const r = await fetch('https://accounts.spotify.com/api/token', {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'refresh_token', refresh_token: state.sp.refresh, client_id: spClientId() }),
+  });
+  const d = await r.json();
+  if (!r.ok) { state.sp = null; LS.del('sp'); throw new Error('Spotify session expired; connect again'); }
+  state.sp = { access: d.access_token, refresh: d.refresh_token || state.sp.refresh, exp: Date.now() + (d.expires_in - 60) * 1000 };
+  LS.set('sp', state.sp);
+  return state.sp.access;
+}
+
+async function sp(path, init = {}) {
+  const r = await fetch('https://api.spotify.com/v1' + path, {
+    ...init, headers: { Authorization: 'Bearer ' + await spToken(), 'content-type': 'application/json', ...(init.headers || {}) },
+  });
+  if (r.status === 429) { await new Promise(res => setTimeout(res, 1000 * (+r.headers.get('retry-after') || 2))); return sp(path, init); }
+  return r;
+}
+
+async function spResolve(t) {
+  const ids = state.ids[t.key] ||= {};
+  if (ids.sp) return ids.sp;
+  const qs = [];
+  if (t.isrc) qs.push(`isrc:${t.isrc}`);
+  qs.push(`track:"${t.ti.replace(/"/g, '')}" artist:"${t.a.replace(/"/g, '')}"`);
+  for (const q of qs) {
+    const r = await sp(`/search?type=track&limit=1&q=${encodeURIComponent(q)}`);
+    if (!r.ok) { if (r.status === 403) throw new Error('Spotify refused the search (403). In development mode the app owner must add your account under User Management.'); continue; }
+    const it = (await r.json()).tracks?.items?.[0];
+    if (it) { ids.sp = it.id; LS.set('ids', state.ids); return it.id; }
+  }
+  return null;
+}
+
+async function saveSpotify() {
+  if (!state.sp) return spotifyConnect('save');
+  try {
+    const picks = state.mix.picks.map(p => state.catalog.tracks[p.index]);
+    const uris = [];
+    for (let k = 0; k < picks.length; k++) {
+      status(`Finding songs on Spotify… ${k + 1} of ${picks.length}`, { progress: (k + 1) / picks.length });
+      const id = await spResolve(picks[k]);
+      if (id) uris.push(`spotify:track:${id}`);
+    }
+    status('Creating the playlist…');
+    const body = JSON.stringify({ name: state.mix.title, description: mixDescription(), public: false });
+    let r = await sp('/me/playlists', { method: 'POST', body });
+    if (!r.ok) {
+      const me = await (await sp('/me')).json();
+      r = await sp(`/users/${encodeURIComponent(me.id)}/playlists`, { method: 'POST', body });
+    }
+    if (!r.ok) throw new Error(`could not create the playlist (${r.status})`);
+    const pl = await r.json();
+    for (let k = 0; k < uris.length; k += 100) {
+      const chunk = JSON.stringify({ uris: uris.slice(k, k + 100) });
+      let a = await sp(`/playlists/${pl.id}/items`, { method: 'POST', body: chunk });
+      if (!a.ok) a = await sp(`/playlists/${pl.id}/tracks`, { method: 'POST', body: chunk });
+      if (!a.ok) throw new Error(`could not add songs (${a.status})`);
+    }
+    state.mix.external = { ...(state.mix.external || {}), spotify: pl.external_urls?.spotify || `https://open.spotify.com/playlist/${pl.id}`, spotifyId: pl.id };
+    LS.set('lastMix', state.mix);
+    status(`Saved ${uris.length} of ${picks.length} songs to Spotify.`);
+    renderActions(); renderTracks();
+    showSpotifyEmbed(`playlist/${pl.id}`);
+    await saveMixRecord();
+  } catch (e) { status(`Spotify: ${e.message}`, { err: true }); }
+}
+
+function showSpotifyEmbed(path) {
+  if (audio) { audio.pause(); audio = null; }
+  $('player').innerHTML = `<iframe src="https://open.spotify.com/embed/${path}?utm_source=austegard" height="${path.startsWith('playlist') ? 380 : 152}" allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture" loading="lazy"></iframe>`;
+}
+
+async function playSpotify(i) {
+  const t = state.catalog.tracks[state.mix.picks[i].index];
+  markPlaying(i);
+  try {
+    const id = await spResolve(t);
+    if (id) { showSpotifyEmbed(`track/${id}`); renderTracks(); }
+    else playPreview(i);
+  } catch (e) { status(`Spotify: ${e.message}`, { err: true }); playPreview(i); }
+}
+
+// ---------- YouTube (Google Identity Services + IFrame API) ----------
+const loadScript = src => new Promise((res, rej) => {
+  if (document.querySelector(`script[src="${src}"]`)) return res();
+  const s = document.createElement('script'); s.src = src; s.onload = res; s.onerror = () => rej(new Error(`could not load ${src}`));
+  document.head.appendChild(s);
+});
+
+async function youtubeConnect() {
+  const id = ytClientId();
+  if (!id) { $('settings').open = true; $('ytClient').focus(); status('YouTube needs a Google client ID first: see Settings below.', { err: true }); return false; }
+  await loadScript('https://accounts.google.com/gsi/client');
+  return new Promise(resolve => {
+    const client = google.accounts.oauth2.initTokenClient({
+      client_id: id, scope: 'https://www.googleapis.com/auth/youtube',
+      callback: r => {
+        if (r.error) { status(`Google said: ${r.error}`, { err: true }); return resolve(false); }
+        state.yt = { access: r.access_token, exp: Date.now() + (r.expires_in - 60) * 1000 };
+        resolve(true);
+      },
+      error_callback: e => { status(`Google sign-in closed: ${e.type || e}`, { err: true }); resolve(false); },
+    });
+    client.requestAccessToken();
+  });
+}
+
+async function yt(path, init = {}) {
+  if (!state.yt || Date.now() > state.yt.exp) { if (!await youtubeConnect()) throw new Error('not connected'); }
+  const r = await fetch('https://www.googleapis.com/youtube/v3' + path, {
+    ...init, headers: { Authorization: 'Bearer ' + state.yt.access, 'content-type': 'application/json', ...(init.headers || {}) },
+  });
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    const reason = d.error?.errors?.[0]?.reason || d.error?.message || r.status;
+    throw new Error(reason === 'quotaExceeded' ? 'the YouTube API quota for today is used up' : `YouTube API: ${reason}`);
+  }
+  return r.json();
+}
+
+async function ytResolve(t) {
+  const ids = state.ids[t.key] ||= {};
+  if (ids.yt) return ids.yt;
+  const d = await yt(`/search?part=snippet&type=video&maxResults=1&videoCategoryId=10&q=${encodeURIComponent(`${t.a} - ${t.ti}`)}`);
+  const v = d.items?.[0]?.id?.videoId;
+  if (v) { ids.yt = v; LS.set('ids', state.ids); }
+  return v || null;
+}
+
+async function ytResolveAll() {
+  const picks = state.mix.picks.map(p => state.catalog.tracks[p.index]);
+  const out = [];
+  for (let k = 0; k < picks.length; k++) {
+    status(`Finding songs on YouTube… ${k + 1} of ${picks.length}`, { progress: (k + 1) / picks.length });
+    out.push(await ytResolve(picks[k]));
+  }
+  status('');
+  return out;
+}
+
+async function saveYouTube() {
+  try {
+    if (!state.yt && !await youtubeConnect()) return;
+    const vids = (await ytResolveAll()).filter(Boolean);
+    status('Creating the playlist…');
+    const pl = await yt('/playlists?part=snippet,status', { method: 'POST', body: JSON.stringify({
+      snippet: { title: state.mix.title.slice(0, 150), description: mixDescription() }, status: { privacyStatus: 'private' } }) });
+    for (let k = 0; k < vids.length; k++) {
+      status(`Adding songs… ${k + 1} of ${vids.length}`, { progress: (k + 1) / vids.length });
+      await yt('/playlistItems?part=snippet', { method: 'POST', body: JSON.stringify({ snippet: { playlistId: pl.id, resourceId: { kind: 'youtube#video', videoId: vids[k] } } }) });
+    }
+    state.mix.external = { ...(state.mix.external || {}), youtube: `https://music.youtube.com/playlist?list=${pl.id}`, youtubeId: pl.id };
+    LS.set('lastMix', state.mix);
+    status(`Saved ${vids.length} songs to YouTube Music.`);
+    renderActions(); renderTracks();
+    await saveMixRecord();
+  } catch (e) { status(`YouTube: ${e.message}`, { err: true }); }
+}
+
+let ytPlayer = null, ytIds = [];
+async function playYouTube(i) {
+  try {
+    ytIds = await ytResolveAll();
+    renderTracks();
+    const list = ytIds.map((v, k) => [v, k]).filter(([v]) => v);
+    const start = Math.max(0, list.findIndex(([, k]) => k === i));
+    if (!list.length) return playPreview(i);
+    if (!window.YT?.Player) {
+      await new Promise(res => { window.onYouTubeIframeAPIReady = res; loadScript('https://www.youtube.com/iframe_api'); });
+    }
+    if (audio) { audio.pause(); audio = null; }
+    $('player').innerHTML = '<div id="ytFrame"></div>';
+    ytPlayer = new YT.Player('ytFrame', {
+      width: '100%', height: 300, playerVars: { playsinline: 1 },
+      events: {
+        onReady: e => e.target.loadPlaylist(list.map(([v]) => v), start),
+        onStateChange: e => { if (e.data === YT.PlayerState.PLAYING) markPlaying(list[e.target.getPlaylistIndex()]?.[1] ?? i); },
+      },
+    });
+    $('player').querySelector('iframe')?.style && ($('player').querySelector('iframe').style.borderRadius = '12px');
+  } catch (e) { status(`YouTube: ${e.message}`, { err: true }); playPreview(i); }
+}
+
+// ---------- mix records ----------
+function mixDescription() {
+  const src = state.mix.source.kind === 'posts' ? `the last ${state.mix.source.count} Bluesky posts of @${state.mix.source.handle}` : `the words “${state.mix.source.query}”`;
+  return `Made by Sky Mixtape (austegard.com/bsky/sky-mixtape) from ${src}.`.slice(0, 300);
+}
+
+async function saveMixRecord() {
+  if (!state.session || state.mix.uri) return;
+  const cat = state.catalog;
+  const w = state.mix.weightsShown || state.mix.base;
+  const record = {
+    $type: `${NS}.playlist`,
+    name: state.mix.title,
+    service: state.svc,
+    source: state.mix.source,
+    tags: core.topTags(Float64Array.from(w), 12).map(({ j, w }) => ({ tag: cat.tags[j].id, weight: Math.round(w * 1000) })),
+    tracks: state.mix.picks.map(p => { const t = cat.tracks[p.index]; const x = { artist: t.a, title: t.ti }; if (t.isrc) x.isrc = t.isrc; return x; }),
+    createdAt: new Date().toISOString(),
+  };
+  const url = state.mix.external?.[state.svc];
+  if (url) record.url = url;
+  try {
+    const d = await xrpc('com.atproto.repo.createRecord', { body: { repo: state.did, collection: `${NS}.playlist`, record } });
+    state.mix.uri = d.uri;
+    LS.set('lastMix', state.mix);
+    renderActions();
+  } catch (e) { status(`Could not save the mix to Bluesky: ${e.message}`, { err: true }); }
+}
+
+function onMixReady() {
+  renderActions();
+}
+
+// ---------- wiring ----------
+function setSeedKind(k) {
+  state.seedKind = k; LS.set('seedKind', k);
+  $('tabPosts').setAttribute('aria-pressed', k === 'posts');
+  $('tabWords').setAttribute('aria-pressed', k === 'words');
+  $('seedPosts').hidden = k !== 'posts';
+  $('seedWords').hidden = k !== 'words';
+}
+
+function setSvc(s) {
+  state.svc = s; LS.set('svc', s);
+  document.querySelectorAll('.svc button').forEach(b => b.setAttribute('aria-pressed', b.dataset.svc === s));
+  const hints = {
+    spotify: spClientId() ? (state.sp ? 'Spotify is connected. The mix is saved as a private playlist.' : 'You will be sent to Spotify to allow playlist creation.') : 'Spotify needs a client ID: open Settings below. Until then, previews play here.',
+    youtube: ytClientId() ? 'A Google window asks to manage your YouTube playlists. Playback uses the YouTube player.' : 'YouTube needs a Google client ID: open Settings below. Until then, previews play here.',
+    apple: 'Apple only lets registered apps create playlists, so 30-second previews play here and every song opens in Apple Music.',
+    amazon: 'Amazon Music has no public API, so 30-second previews play here and every song opens a search in Amazon Music.',
+  };
+  $('svcHint').textContent = hints[s];
+  if (state.mix && state.catalog) { stopPlayback(); renderMix(); $('mixSub').textContent = $('mixSub').textContent.replace(/· .*$/, '· ' + svcLabel()); }
+}
+
+$('tabPosts').onclick = () => setSeedKind('posts');
+$('tabWords').onclick = () => setSeedKind('words');
+document.querySelectorAll('.svc button').forEach(b => b.onclick = () => setSvc(b.dataset.svc));
+$('signInBtn').onclick = signIn;
+$('handle').addEventListener('keydown', e => { if (e.key === 'Enter') signIn(); });
+$('keywords').addEventListener('keydown', e => { if (e.key === 'Enter') makeMix(); });
+$('signOutBtn').onclick = signOut;
+$('goBtn').onclick = makeMix;
+$('retuneBtn').onclick = () => retune(false);
+$('reshuffleBtn').onclick = () => retune(true);
+$('tagChips').addEventListener('click', e => {
+  const m = e.target.closest('[data-mute]');
+  if (m) {
+    e.stopPropagation();
+    const id = m.dataset.mute, mu = state.mix.muted ||= [];
+    const k = mu.indexOf(id); k >= 0 ? mu.splice(k, 1) : mu.push(id);
+    retune(false);
+    return;
+  }
+  const t = e.target.closest('[data-tag]');
+  if (t) renderEvidence(t.dataset.tag);
+});
+$('tracks').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.dataset.play) play(+b.dataset.play);
+  else if (b.dataset.up) rate(+b.dataset.up, 1);
+  else if (b.dataset.down) rate(+b.dataset.down, -1);
+});
+$('mixActions').addEventListener('click', e => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  if (b.id === 'saveSp') saveSpotify();
+  else if (b.id === 'saveYt') saveYouTube();
+  else if (b.id === 'playAll') play(0);
+  else if (b.id === 'saveMixRec') saveMixRecord();
+});
+$('redirectUri').textContent = REDIRECT;
+$('originUri').textContent = location.origin;
+$('spClient').value = LS.get('spClient', '');
+$('ytClient').value = LS.get('ytClient', '');
+$('saveSettings').onclick = () => {
+  LS.set('spClient', $('spClient').value.trim());
+  LS.set('ytClient', $('ytClient').value.trim());
+  setSvc(state.svc);
+  status('Settings saved in this browser.');
+};
+$('forgetServices').onclick = () => { state.sp = null; state.yt = null; LS.del('sp'); LS.del('ids'); state.ids = {}; setSvc(state.svc); status('Disconnected.'); };
+
+setSeedKind(state.seedKind);
+setSvc(state.svc);
+renderAccount();
+
+// Coming back from Spotify: restore the mix and continue what was asked.
+const spAfter = await spotifyCallback().catch(e => { status(`Spotify: ${e.message}`, { err: true }); return null; });
+if (state.mix) {
+  try { await loadCatalog(); renderMix(); } catch (e) { console.warn(e); }
+}
+await initAuth();
+if (spAfter === 'save' && state.mix) { setSvc('spotify'); saveSpotify(); }
+</script>
+</body>
+</html>
