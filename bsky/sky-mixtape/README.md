@@ -45,7 +45,8 @@ API allows CORS but returned 403 on 15 of 25 rapid requests, too few for a 25-so
 
 `DEFAULT_SPOTIFY_CLIENT_ID` at the top of the page script holds austegard.com's Spotify app (redirect URI
 `https://austegard.com/bsky/sky-mixtape/`; in development mode only allowlisted accounts can sign in).
-`DEFAULT_GOOGLE_CLIENT_ID` is still empty. A listener can paste their own IDs under Settings instead;
+`DEFAULT_GOOGLE_CLIENT_ID` holds its Google OAuth client (same redirect URI; while the consent screen is in
+Testing, only listed test users can sign in). A listener can paste their own IDs under Settings instead;
 they stay in localStorage.
 
 ## Records
