@@ -37,9 +37,25 @@ function loadOrt() {
   return ortPromise;
 }
 
+export const IS_IOS = /iPhone|iPad|iPod/.test(navigator.userAgent) ||
+  (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+
+// Breadcrumbs: the stage the page is in, written before each heavy step. A tab the OS kills for memory
+// leaves its last stage behind, and the next visit reads it (see index.html).
+export const CRUMB = 'monad-chat-crumb';
+export function crumb(stage, extra = {}) {
+  try { localStorage.setItem(CRUMB, JSON.stringify({ stage, ...extra, t: Date.now() })); } catch (e) { /* no storage */ }
+}
+export function lastCrumb() {
+  try { return JSON.parse(localStorage.getItem(CRUMB) || 'null'); } catch (e) { return null; }
+}
+
 export async function pickBackend() {
   const forced = Q.get('backend');
   if (forced === 'wasm' || forced === 'webgpu') return forced;
+  let pref = null;
+  try { pref = localStorage.getItem('monad-chat-backend'); } catch (e) { /* no storage */ }
+  if (pref === 'wasm') return 'wasm';
   try {
     if (navigator.gpu) {
       const a = await navigator.gpu.requestAdapter();
@@ -49,8 +65,9 @@ export async function pickBackend() {
   return 'wasm';
 }
 
-// Fetch with the Cache API in front. onProgress(bytesSoFar, totalBytes).
-async function fetchBytes(url, onProgress) {
+// Fetch with the Cache API in front. onProgress(bytesSoFar, totalBytes). The body streams straight into
+// one buffer of the expected size; collecting chunks and concatenating them would hold the file twice.
+async function fetchBytes(url, onProgress, size = 0) {
   let cache = null;
   try { cache = await caches.open(CACHE); } catch (e) { /* private mode, file:// */ }
   if (cache) {
@@ -65,20 +82,29 @@ async function fetchBytes(url, onProgress) {
   }
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${url}: HTTP ${r.status}`);
-  const total = +r.headers.get('content-length') || 0;
+  const total = +r.headers.get('content-length') || size || 0;
   const reader = r.body.getReader();
+  let buf = total ? new Uint8Array(total) : null;
   const chunks = [];
   let got = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
-    chunks.push(value);
+    if (buf && got + value.length <= buf.length) buf.set(value, got);
+    else {   // larger than announced (compressed transfer): fall back to chunks
+      if (buf) { chunks.push(buf.subarray(0, got)); buf = null; }
+      chunks.push(value);
+    }
     got += value.length;
     onProgress?.(got, total, false);
   }
-  const out = new Uint8Array(got);
-  let o = 0;
-  for (const c of chunks) { out.set(c, o); o += c.length; }
+  let out;
+  if (buf) out = got === buf.length ? buf : buf.slice(0, got);
+  else {
+    out = new Uint8Array(got);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+  }
   if (cache) {
     try { await cache.put(url, new Response(out)); } catch (e) { /* quota: run uncached */ }
   }
@@ -90,6 +116,18 @@ export async function clearCache() {
 }
 
 const hex = (buf) => [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, '0')).join('');
+
+// CRC32 in place: unlike crypto.subtle.digest, which copies its input, this needs no second 73 MB buffer.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(u8) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < u8.length; i++) c = CRC_TABLE[(c ^ u8[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
 
 // model.packed stores the fp32 tensors that are exactly bf16 (embeddings, norms, scales) as bf16;
 // meta.regions says where. Rebuild model.onnx.data and check its sha256 against the export.
@@ -110,23 +148,31 @@ export class Monad {
     const m = MODELS[key];
     const say = (s, frac) => onStatus?.(s, frac);
     say('fetching graph and metadata', 0);
+    crumb('download', { model: key, backend });
     const [graph, metaBytes] = await Promise.all([
       fetchBytes(BASE + 'model.onnx'),
       fetchBytes(BASE + m.dir + '/meta.json'),
     ]);
     const meta = JSON.parse(new TextDecoder().decode(metaBytes));
-    const packed = await fetchBytes(BASE + m.dir + '/model.packed', (got, total, cached) => {
+    let packed = await fetchBytes(BASE + m.dir + '/model.packed', (got, total, cached) => {
       const t = total || meta.packed_bytes;
       say(cached ? 'weights from browser cache' : `downloading weights ${(got / 1e6).toFixed(1)} / ${(t / 1e6).toFixed(1)} MB`, got / t);
-    });
+    }, meta.packed_bytes);
     say('unpacking weights', 1);
+    crumb('unpack', { model: key, backend });
     const data = unpack(packed, meta);
-    const sha = hex(await crypto.subtle.digest('SHA-256', data));
-    if (sha !== meta.data_sha256) {
+    packed = null;   // the packed copy is no longer needed; let it go before the session copies the weights
+    crumb('checksum', { model: key, backend });
+    let ok;
+    if (meta.data_crc32 !== undefined) ok = crc32(data) === meta.data_crc32;
+    else if (IS_IOS) ok = true;   // older cached meta without a CRC: skip the copying SHA-256 on phones
+    else ok = hex(await crypto.subtle.digest('SHA-256', data)) === meta.data_sha256;
+    if (!ok) {
       await clearCache();
       throw new Error('weights failed their checksum; the browser cache was cleared, reload to try again');
     }
     say(`compiling for ${backend === 'webgpu' ? 'WebGPU' : 'CPU (WASM)'}`, 1);
+    crumb('compile', { model: key, backend });
     const names = [];
     for (let l = 0; l < meta.layers; l++) names.push(`present.${l}.key`, `present.${l}.value`);
     const loc = Object.fromEntries(names.map((n) => [n, backend === 'webgpu' ? 'gpu-buffer' : 'cpu']));
@@ -137,6 +183,7 @@ export class Monad {
       preferredOutputLocation: loc,
       graphOptimizationLevel: 'all',
     });
+    crumb('ready', { model: key, backend });
     return new Monad(ort, sess, meta, key, backend);
   }
 

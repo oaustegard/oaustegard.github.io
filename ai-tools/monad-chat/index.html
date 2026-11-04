@@ -194,6 +194,10 @@
       <label><input type="checkbox" id="memory"> Send earlier turns with each question. Monad was trained on single
         questions; given an earlier exchange, it tends to answer the earlier question again.</label>
     </div>
+    <div class="grid" style="margin-top:.6rem">
+      <label for="backendPref">Run on</label>
+      <select id="backendPref"><option value="auto">GPU if available (WebGPU)</option><option value="wasm">CPU (WASM): slower, uses less memory</option></select>
+    </div>
     <div class="bar" style="margin-top:.8rem">
       <button id="reset">Restore defaults</button>
       <button id="clearChat">Clear chat</button>
@@ -219,7 +223,7 @@
 </main>
 
 <script type="module">
-import { Monad, MODELS, BASE, CONTEXT, EOS, END, pickBackend, renderPrompt, makeSampler, looping, clearCache } from './monad.js';
+import { Monad, MODELS, BASE, CONTEXT, EOS, END, pickBackend, renderPrompt, makeSampler, looping, clearCache, IS_IOS, crumb, lastCrumb } from './monad.js';
 import { loadTokenizer } from './bpe.js';
 
 const $ = (id) => document.getElementById(id);
@@ -302,6 +306,7 @@ async function ensureModel() {
       return model;
     } catch (e) {
       status('Could not load: ' + (e.message || e), 0);
+      crumb('idle', {});
       $('load').disabled = false;
       throw e;
     } finally {
@@ -434,6 +439,7 @@ async function answer(question, { retry = false } = {}) {
   try {
     for await (const { id, ms, prefill } of m.generate(ids, { maxNew: room, pick })) {
       if (prefill) prefillMs = ms; else decodeMs += ms;
+      if (n % 64 === 0) crumb('generating', { model: m.key, backend: m.backend, tokens: n, prompt: ids.length });
       if (id === EOS) { why = 'end'; break; }
       gen.push(id); n++;
       raw += dec.push(id);
@@ -464,6 +470,7 @@ async function answer(question, { retry = false } = {}) {
     again.onclick = () => { if (!busy) answer(question, { retry: true }); };
     stats.appendChild(again);
   }
+  crumb('idle', { model: m.key, backend: m.backend });
   busy = false;
   $('send').textContent = 'Send'; $('send').classList.add('primary');
 }
@@ -536,14 +543,37 @@ $('srcCat').onclick = () => setSource(CAT);
 $('srcClear').onclick = () => setSource('');
 try { const saved = localStorage.getItem('monad-chat-source'); if (saved) setSource(saved); } catch (e) {}
 
-// Load straight away when the weights are already in the browser cache.
-(async () => {
+// Backend preference: auto (WebGPU where available) or CPU, kept in localStorage, applied on the next load.
+try { $('backendPref').value = localStorage.getItem('monad-chat-backend') === 'wasm' ? 'wasm' : 'auto'; } catch (e) {}
+$('backendPref').onchange = async () => {
+  try { localStorage.setItem('monad-chat-backend', $('backendPref').value); } catch (e) {}
   backend = await pickBackend();
   $('backend').textContent = backend === 'webgpu' ? 'WebGPU' : 'CPU (WASM)';
+  if (model && !busy) { await model.release(); model = null; ensureModel().catch(() => {}); }
+};
+
+// On open: if the last visit died mid-stage (a phone killing the tab for memory leaves its breadcrumb
+// behind), say where and do not load automatically. Otherwise load straight away when the weights are
+// cached, except on iOS, where loading waits for the button.
+(async () => {
+  const last = lastCrumb();
+  const died = last && !['ready', 'idle'].includes(last.stage);
+  backend = await pickBackend();
+  $('backend').textContent = backend === 'webgpu' ? 'WebGPU' : 'CPU (WASM)';
+  if (died) {
+    const where = { download: 'downloading the weights', unpack: 'unpacking the weights', checksum: 'checking the weights',
+      compile: 'setting up the model', generating: `generating (about ${last.tokens || 0} tokens in, prompt ${last.prompt || '?'} tokens)` }[last.stage] || last.stage;
+    status(`The last visit ended while ${where} on ${last.backend === 'wasm' ? 'the CPU' : 'WebGPU'}. If the page crashed then, the browser probably ran out of memory.` +
+      (last.backend !== 'wasm' ? ' Running on the CPU (Settings, "Run on") uses less memory.' : ''));
+    crumb('idle', {});
+    return;
+  }
+  if (IS_IOS) return;
   try {
     const c = await caches.open('monad-chat-v1');
     if (await c.match(BASE + MODELS[$('model').value].dir + '/model.packed')) ensureModel().catch(() => {});
   } catch (e) { /* no Cache API */ }
 })();
+window.addEventListener('pagehide', () => crumb('idle', {}));   // a normal close is not a crash
 window.__monad = { ensureModel, answer, get turns() { return turns; }, get model() { return model; }, settings: () => settings };
 </script>
