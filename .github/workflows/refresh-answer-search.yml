@@ -1,0 +1,53 @@
+# Daily refresh of the bsky/answer-search index: the last 100,000 posts of the "Artificial (and real)
+# Intelligence" list, embedded with Ettin-17m and quantized to 2-bit codes (scripts/answer-search/refresh.py).
+# The snapshot lives on the orphan branch bsky-answer-search-data as one commit, replaced on every run, so
+# the repository does not grow by a copy of the index a day. The page reads it from raw.githubusercontent.com
+# and adds the posts written since on the reader's GPU.
+name: Refresh answer-search index
+
+on:
+  schedule:
+    - cron: "41 5 * * *"   # daily 05:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-answer-search
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the site (model and builder)
+        uses: actions/checkout@v5
+        with:
+          sparse-checkout: |
+            bsky/embedders/models/ettin
+            bsky/embedders/index/ettin
+            scripts/answer-search
+
+      - name: Checkout the current snapshot
+        uses: actions/checkout@v5
+        with:
+          ref: bsky-answer-search-data
+          path: snap
+
+      - name: Install the embedding runtime
+        run: pip install --quiet numpy onnxruntime tokenizers remex==2.1.0
+
+      - name: Fetch, embed and append new posts
+        run: python3 scripts/answer-search/refresh.py snap
+
+      - name: Replace the snapshot commit
+        working-directory: snap
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git checkout --orphan next
+          git add -A
+          git commit -q -m "answer-search snapshot $(python3 -c 'import json;d=json.load(open("index.json"));print(d["built"], d["n"], "posts, +%d" % d["added"])')"
+          git push -f origin HEAD:bsky-answer-search-data
