@@ -306,19 +306,29 @@ function sentences(text) {
   return out;
 }
 
-// Every sentence of the retrieved posts, scored by cosine with the question; the best one from each post,
-// best first, `count` of them.
+// Every sentence of the retrieved posts, scored by cosine with the query; the best one from each post, best
+// first, `count` of them. Sentence vectors are kept per post, so the next keystroke's search, which mostly finds
+// the same posts, embeds only the posts it has not seen.
+const sentCache = new Map();          // post row -> { sents, V }
+const SENT_CACHE_MAX = 4000;
 async function extract(posts, qv, count) {
+  const t0 = now(), d = retrieval.d;
+  const todo = posts.filter((p) => !sentCache.has(p.i));
+  const texts = [], owner = [];
+  for (const p of todo) for (const s of sentences(p.text)) { texts.push(s); owner.push(p.i); }
+  const V = texts.length ? await retrieval.embedMany(texts) : new Float32Array(0);
+  for (const p of todo) sentCache.set(p.i, { sents: [], V: [] });
+  texts.forEach((s, j) => { const e = sentCache.get(owner[j]); e.sents.push(s); e.V.push(V.subarray(j * d, (j + 1) * d)); });
+  while (sentCache.size > SENT_CACHE_MAX) sentCache.delete(sentCache.keys().next().value);
   const cands = [];
-  for (const p of posts) for (const s of sentences(p.text)) cands.push({ post: p, s });
-  if (!cands.length) return { picks: [], n: 0, ms: 0 };
-  const t0 = now();
-  const V = await retrieval.embedMany(cands.map((c) => c.s));
-  const d = retrieval.d;
-  for (let j = 0; j < cands.length; j++) {
-    let dot = 0;
-    for (let k = 0; k < d; k++) dot += V[j * d + k] * qv[k];
-    cands[j].score = dot;
+  for (const p of posts) {
+    const e = sentCache.get(p.i);
+    e.sents.forEach((s, j) => {
+      const v = e.V[j];
+      let dot = 0;
+      for (let k = 0; k < d; k++) dot += v[k] * qv[k];
+      cands.push({ post: p, s, score: dot });
+    });
   }
   cands.sort((a, b) => b.score - a.score);
   const seen = new Set(), picks = [];
@@ -327,7 +337,7 @@ async function extract(posts, qv, count) {
     seen.add(c.post.i); picks.push(c);
     if (picks.length === count) break;
   }
-  return { picks, n: cands.length, ms: now() - t0 };
+  return { picks, n: cands.length, embedded: texts.length, ms: now() - t0 };
 }
 
 // ---------------------------------------------------------------- rendering
@@ -373,37 +383,57 @@ function renderPosts(ol, posts, used) {
   }
 }
 
-// ---------------------------------------------------------------- one question
+// ---------------------------------------------------------------- searching as you type
 
-let busy = false;
-async function ask(question) {
-  question = question.trim();
-  if (!question || busy) return;
-  busy = true; $('ask').disabled = true;
+// One result area, replaced by each search; nothing is kept. Typing searches at once when a word ends (space
+// or punctuation) and otherwise after a 300 ms pause; only the newest pending query runs, and a search whose
+// query has been overtaken stops before ranking sentences.
+let busy = false, queued = null, shown = null, typingTimer = null;
+function run(text) {
+  text = text.trim();
+  const u = new URL(location.href);
+  if (text) u.searchParams.set('q', text); else u.searchParams.delete('q');
+  history.replaceState(null, '', u);
+  if (!text) { $('log').textContent = ''; shown = null; $('examples').hidden = false; return; }
+  queued = text;
+  if (!busy) drain();
+}
+async function drain() {
+  busy = true;
+  try {
+    while (queued !== null) {
+      const text = queued;
+      queued = null;
+      if (text !== shown) await search(text);
+    }
+  } finally { busy = false; }
+}
+
+async function search(text) {
   $('examples').hidden = true;
-  const u = new URL(location.href); u.searchParams.set('q', question); history.replaceState(null, '', u);
-  const card = document.createElement('article');
-  card.className = 'turn';
-  card.innerHTML = `<div class="question"></div><div class="extract"><p class="cursor">searching…</p></div><div class="stats"></div>
-    <details class="posts"><summary>Posts found</summary><ol></ol></details>`;
-  card.querySelector('.question').textContent = question;
-  $('log').prepend(card);
-  const ex = card.querySelector('.extract');
+  if (!retrieval) $('log').innerHTML = '<div class="turn"><p class="cursor">loading the index…</p></div>';
   try {
     await load();
-    const r = await retrieval.search(question, settings.posts);
+    if (queued !== null) return;                     // overtaken while loading
+    const r = await retrieval.search(text, settings.posts);
+    if (queued !== null) return;
     const x = await extract(r.posts, r.qv, settings.sentences);
-    renderPicks(ex, x.picks);
+    if (queued !== null) return;
+    const card = document.createElement('article');
+    card.className = 'turn';
+    card.innerHTML = `<div class="extract"></div><div class="stats"></div>
+      <details class="posts"><summary></summary><ol></ol></details>`;
+    renderPicks(card.querySelector('.extract'), x.picks);
     renderPosts(card.querySelector('details.posts ol'), r.posts, new Set(x.picks.map((c) => c.post.rank)));
     card.querySelector('details.posts summary').textContent = `${r.posts.length} posts found among ${retrieval.n.toLocaleString()}`;
     card.querySelector('.stats').innerHTML = `<span>search: embed ${r.embedMs.toFixed(0)} ms, scan ${r.scanMs.toFixed(0)} ms</span>` +
-      `<span>${x.n} sentences ranked in ${x.ms.toFixed(0)} ms</span>`;
-    window.answers.last = { question, posts: r.posts, picks: x.picks };
+      `<span>· sentences: ${x.embedded} new of ${x.n}, ${x.ms.toFixed(0)} ms</span>`;
+    $('log').replaceChildren(card);
+    shown = text;
+    window.answers.last = { query: text, posts: r.posts, picks: x.picks };
   } catch (e) {
     console.error(e);
-    ex.innerHTML = `<p class="bad">${esc(e.message || String(e))}</p>`;
-  } finally {
-    busy = false; $('ask').disabled = false;
+    $('log').innerHTML = `<div class="turn"><p class="bad">${esc(e.message || String(e))}</p></div>`;
   }
 }
 
@@ -412,10 +442,15 @@ async function ask(question) {
 for (const [id, key] of [['posts', 'posts'], ['sents', 'sentences']]) {
   $(id).value = settings[key];
   $(id + 'V').textContent = settings[key];
-  $(id).oninput = () => { settings[key] = +$(id).value; $(id + 'V').textContent = settings[key]; save(); };
+  $(id).oninput = () => { settings[key] = +$(id).value; $(id + 'V').textContent = settings[key]; save(); shown = null; run($('q').value); };
 }
-$('ask').onclick = () => ask($('q').value);
-$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); ask($('q').value); } });
+$('q').addEventListener('input', (e) => {
+  clearTimeout(typingTimer);
+  const v = $('q').value;
+  if (e.data && /[\s\p{P}]/u.test(e.data)) run(v);
+  else typingTimer = setTimeout(() => run(v), 300);
+});
+$('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) { clearTimeout(typingTimer); shown = null; run($('q').value); } });
 $('load').onclick = () => load().catch(() => {});
 $('clearCache').onclick = async () => {
   let a = false; try { a = await caches.delete(CACHE); } catch (e) { /* none */ }
@@ -433,8 +468,8 @@ $('log').addEventListener('click', (e) => {
 for (const q of EXAMPLES) {
   const b = document.createElement('button');
   b.textContent = q;
-  b.onclick = () => { $('q').value = q; ask(q); };
+  b.onclick = () => { $('q').value = q; clearTimeout(typingTimer); run(q); };
   $('examples').append(b);
 }
-window.answers = { ask, sentences, get retrieval() { return retrieval; } };
-if (Q.get('q')) { $('q').value = Q.get('q'); ask(Q.get('q')); }
+window.answers = { run, sentences, get retrieval() { return retrieval; }, get busy() { return busy; }, sentCache };
+if (Q.get('q')) { $('q').value = Q.get('q'); run(Q.get('q')); }
