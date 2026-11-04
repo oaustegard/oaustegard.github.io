@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Bluesky List Scout</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Find Bluesky accounts that post about AI and are not on your list yet: search posts, sample each author's recent posts, classify them on your GPU, review, and add the ones you pick to a list.">
+<meta name="ai-disclosure" content="ai-assisted">
+<style>
+  :root { color-scheme: light dark; --fg:#151515; --dim:#686660; --bg:#fbfbf9; --line:#d8d6d0;
+          --card:#fff; --soft:#f2f1ec; --accent:#2d5b8a; --ok:#1a7f4b; --warn:#9a5b00; --bad:#b3261e; --on:#eef4fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e6e1; --dim:#9a978f; --bg:#16171a; --line:#33353a; --card:#1d1f23;
+            --soft:#23252a; --accent:#8db6e0; --ok:#4fbf87; --warn:#e0a54a; --bad:#f2836b; --on:#1f2a36; }
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 1.6rem 1rem 3rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; font-weight: 600; }
+  h2 { font-size: 1.05rem; margin: 0 0 .5rem; font-weight: 600; }
+  p.sub { color: var(--dim); margin: 0 0 1rem; font-size: .95rem; }
+  a { color: inherit; }
+  code, button, select, input, textarea, table, .mono, #log, #stage { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .card { border:1px solid var(--line); border-radius:6px; padding:.9rem 1rem; background:var(--card); margin:0 0 1rem; }
+  label { font-size:.8rem; color:var(--dim); display:block; margin:.4rem 0 .15rem; }
+  input, select, textarea { font-size:.85rem; padding:.4rem .55rem; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--fg); }
+  input[type=text], input[type=password] { width:100%; max-width:22rem; }
+  input[type=number] { width:5.5rem; }
+  textarea { width:100%; min-height:7rem; resize:vertical; }
+  select[multiple] { width:100%; max-width:30rem; min-height:4.5rem; }
+  button { font-size:.82rem; padding:.42rem .75rem; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--fg); cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  .row { display:flex; gap:1rem; flex-wrap:wrap; align-items:flex-end; }
+  .hint { font-size:.76rem; color:var(--dim); line-height:1.45; margin:.3rem 0 0; }
+  .grid { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:1rem; }
+  .prog { height:3px; background:var(--soft); border-radius:2px; overflow:hidden; margin:.6rem 0 .3rem; }
+  .prog > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  #stage { font-size:.78rem; color:var(--dim); }
+  #log { font-size:.74rem; color:var(--dim); max-height:8rem; overflow:auto; margin-top:.3rem; }
+  .bad { color:var(--bad); } .warn { color:var(--warn); }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.76rem; }
+  th, td { text-align:left; padding:.45rem .45rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-weight:600; color:var(--dim); white-space:nowrap; }
+  th[data-k] { cursor:pointer; } th.sorted { color:var(--fg); text-decoration:underline; }
+  td.n, th.n { text-align:right; white-space:nowrap; }
+  tr.on { background:var(--on); }
+  td.who { font-family: ui-serif, Georgia, serif; font-size:.88rem; min-width:16rem; }
+  td.who a { font-family: ui-monospace, monospace; font-size:.8rem; }
+  .name { font-weight:600; } .bio { color:var(--dim); font-size:.8rem; }
+  .flags span { display:inline-block; font:.68rem ui-monospace, monospace; color:var(--warn); border:1px solid var(--warn); border-radius:3px; padding:0 .3rem; margin:.15rem .25rem 0 0; }
+  details summary { cursor:pointer; color:var(--dim); font-size:.76rem; margin-top:.2rem; }
+  details ul { margin:.3rem 0 0; padding-left:1rem; font-size:.8rem; }
+  details li { margin:.15rem 0; } details .p { font:.7rem ui-monospace, monospace; color:var(--dim); }
+  .bar { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; margin:.2rem 0 .6rem; }
+  #count { font-size:.78rem; color:var(--dim); margin-left:auto; }
+  #made { font-size:.85rem; margin-top:.5rem; }
+  footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
+  @media (max-width: 760px) {
+    main { padding:1rem 16px 2rem; }
+    .grid { grid-template-columns: 1fr; }
+    input, select, textarea { font-size:16px; }   /* below 16px iOS zooms on focus */
+  }
+</style>
+<main>
+  <h1>Bluesky List Scout</h1>
+  <p class="sub">Find accounts that post about AI and are not on your list yet. It searches Bluesky posts, reads each
+  author's last 100 posts, measures on your GPU how much of it is about AI, and lets you pick who goes on a list.</p>
+
+  <section class="card" id="authCard">
+    <h2>Sign in</h2>
+    <p class="hint" style="margin:0 0 .4rem">Bluesky only answers post searches for signed-in accounts. Use an
+    <a href="https://bsky.app/settings/app-passwords" target="_blank" rel="noopener">app password</a>, not your main one;
+    the session is kept in this browser, as on the site's other list tools.</p>
+    <label for="handle">Handle</label><input type="text" id="handle" placeholder="you.bsky.social" autocomplete="username">
+    <label for="apppw">App password</label><input type="password" id="apppw" placeholder="xxxx-xxxx-xxxx-xxxx" autocomplete="current-password">
+    <div class="row" style="margin-top:.6rem"><button id="loginBtn" class="primary">Sign in</button><span id="authMsg" class="bad"></span></div>
+  </section>
+
+  <section class="card" id="scoutCard" hidden>
+    <div class="row" style="justify-content:space-between;align-items:center"><h2 style="margin:0">Scout</h2>
+      <span class="hint" style="margin:0">signed in as <span id="who"></span> · <button id="logout">sign out</button></span></div>
+    <div class="grid">
+      <div>
+        <label for="terms">Search terms, one per line (each is searched as a phrase)</label>
+        <textarea id="terms" spellcheck="false"></textarea>
+        <button id="resetTerms" style="margin-top:.3rem">default AI terms</button>
+      </div>
+      <div>
+        <label for="exclude">Skip people already on (ctrl/cmd-click for several)</label>
+        <select id="exclude" multiple></select>
+        <div class="row">
+          <div><label for="days">Days back</label><input type="number" id="days" min="1" max="60"></div>
+          <div><label for="pages">Pages per term</label><input type="number" id="pages" min="1" max="10"></div>
+          <div><label for="minHits">Min. hits</label><input type="number" id="minHits" min="1" max="50"></div>
+          <div><label for="maxCands">Max. accounts</label><input type="number" id="maxCands" min="10" max="1000"></div>
+        </div>
+        <div class="row">
+          <div><label for="minShare">Pre-tick at AI share ≥ %</label><input type="number" id="minShare" min="0" max="100"></div>
+          <div><label for="maxPpd">and posts/day ≤</label><input type="number" id="maxPpd" min="1" max="1000"></div>
+          <div><label for="minReplies">and replies ≥ %</label><input type="number" id="minReplies" min="0" max="100"></div>
+        </div>
+        <p class="hint">A page of search results is 100 posts. Each sampled account costs one request and about 100
+        posts to classify. Bots, feeds and marketers post a lot about AI too; they rarely reply, so the reply
+        threshold and the bot/feed words in names and bios do most of the screening. You make the final call.</p>
+      </div>
+    </div>
+    <div class="row" style="margin-top:.8rem"><button id="run" class="primary">Scout</button></div>
+    <div class="prog"><div id="bar"></div></div>
+    <div id="stage"></div>
+    <div id="log" aria-live="polite"></div>
+  </section>
+
+  <section class="card" id="results" hidden>
+    <div class="bar"><h2 style="margin:0">Review</h2>
+      <button id="tickSuggested">tick suggested</button><button id="tickAll">all</button><button id="tickNone">none</button>
+      <span id="count"></span></div>
+    <div class="tablewrap"><table>
+      <thead><tr><th></th><th>account</th>
+        <th class="n" data-k="share" title="mean P(about AI) over the sampled posts">AI share</th>
+        <th class="n" data-k="aiPerDay" title="AI share × posts per day">AI/day</th>
+        <th class="n" data-k="ppd">posts/day</th>
+        <th class="n" data-k="replyFrac">replies</th>
+        <th class="n" data-k="followers">followers</th>
+        <th class="n" data-k="hits" title="search results by this account">hits</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table></div>
+  </section>
+
+  <section class="card" id="listCard" hidden>
+    <h2>Add the ticked accounts to</h2>
+    <select id="target"></select>
+    <div id="newList">
+      <label for="listName">List name</label><input type="text" id="listName" maxlength="64">
+      <label for="listDesc">Description</label><input type="text" id="listDesc" maxlength="300" style="max-width:100%">
+    </div>
+    <div class="row" style="margin-top:.6rem"><button id="make" class="primary">Add to list</button></div>
+    <div id="made"></div>
+  </section>
+
+  <section class="card">
+    <h2>How it works</h2>
+    <p class="hint">Search terms are searched as phrases over the last N days, newest first. Authors who are not on the
+    lists you skip, and who turn up at least the minimum number of times, are sampled: their last 100 posts and replies,
+    without reposts. <a href="../embedders/">Ettin-17m</a> embeds every sampled post on your GPU, and a logistic
+    regression trained on 600 Bluesky posts labelled about AI or not (cross-validated AUC 0.88) scores each one. An
+    account's AI share is the mean of its posts' scores, the same measure used to decide who to remove from the list
+    it was built for. The classifier only knows "about AI"; other search terms still find people, but the share
+    column will not measure their topic. Nothing leaves this tab except the requests to Bluesky.</p>
+  </section>
+
+  <footer>
+    <p>Method and the measurement behind it: <a href="https://github.com/oaustegard/experiments/tree/main/bsky-list-ai-share">bsky-list-ai-share</a>.
+    Model and WebGPU engine shared with <a href="../embedders/">Three query embedders</a> and <a href="../answer-search/">Bluesky Answer Search</a>.
+    Needs WebGPU (Chrome, Edge, Safari 26+).</p>
+  </footer>
+</main>
+<script type="module" src="scout.js"></script>
