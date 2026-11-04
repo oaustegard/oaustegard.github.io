@@ -1,16 +1,16 @@
-// Bluesky RAG in one tab: Ettin-17m embeds the question, a GPU scan over 2-bit codes finds the closest
-// of 61,686 posts, and loop-fixed Monad (56M, 8-bit) answers from them in SYNTH's <source_n> format.
+// Bluesky answers in one tab, 28 MB: Ettin-17m embeds the question, a GPU scan over 2-bit codes finds the
+// closest of 61,686 posts, then Ettin embeds every sentence of those posts and the best-matching sentences
+// are the answer, each quoted from its post. Nothing is generated, so nothing can be misquoted.
 //
-// Nothing here is a copy. The retrieval half is the published files of /bsky/embedders/ (engine.js,
-// tail.js, Ettin's model and index, the post texts) plus /bsky/image-search/params.json; the generation
-// half is /ai-tools/monad-chat/ (monad.js, bpe.js, weights on R2). If either page is republished with
-// a different build, this one follows it: Ettin's model and index are published together, so they stay
-// matched. A model added to monad.js's MODELS (the Paper Skygest fine-tune) appears in the menu here.
-// Every <ref> quote Monad writes is checked against the post it names (verifyRef).
+// Optional: loop-fixed Monad (56M, 8-bit, +66 MB) writes an answer from the top posts in SYNTH's
+// <source_n> format, and every <ref> quote it writes is checked against the posts (verifyRef). In tests
+// almost none were word for word, which is why it is off by default.
+//
+// Nothing here is a copy. Retrieval uses the published files of /bsky/embedders/ (engine.js, tail.js,
+// Ettin's model and index, the post texts) plus /bsky/image-search/params.json; Monad is
+// /ai-tools/monad-chat/ (monad.js, bpe.js, weights on R2), loaded only when it is switched on. A model
+// added to monad.js's MODELS appears in the menu here.
 
-import { Monad, MODELS, BASE, CONTEXT, EOS, END, pickBackend, renderPrompt, makeSampler, looping,
-  clearCache as clearMonadCache } from '../monad-chat/monad.js';
-import { loadTokenizer } from '../monad-chat/bpe.js';
 import { SmallEngine } from '../../bsky/embedders/engine.js';
 import { RemexTail } from '../../bsky/embedders/tail.js';
 
@@ -23,8 +23,9 @@ const F = {
 };
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
 const CACHE = 'monad-rag-v1';
-const MAX_Q = 128;          // Ettin's query length cap, as on the embedders page
-const MIN_ROOM = 640;       // tokens kept free for thinking + answer; sources are dropped from the end to keep it
+const MAX_SEQ = 128;                      // Ettin's sequence cap, as on the embedders page
+const BATCH_TOKENS = 2048, BATCH_SEQS = 32;
+const MONAD_POSTS = 5, MIN_ROOM = 640;    // Monad gets the top 5 posts; dropped from the end to leave 640 tokens to write
 const EXAMPLES = ['How much do people spend on Claude Code?', 'Do LLMs actually reason?',
   'What are people saying about copyright lawsuits against AI labs?', 'Which local model runs well on a laptop?',
   'Why are data centers raising electricity bills?', 'How do Bluesky custom feeds work?'];
@@ -32,9 +33,10 @@ const EXAMPLES = ['How much do people spend on Claude Code?', 'Do LLMs actually 
 const $ = (id) => document.getElementById(id);
 const now = () => performance.now();
 const Q = new URLSearchParams(location.search);
-const settings = { k: 5, temperature: 0.7, topP: 0.9, penalty: 1.15, maxNew: 1024, showThink: false };
-try { Object.assign(settings, JSON.parse(localStorage.getItem('monad-rag-settings') || '{}')); } catch (e) { /* no storage */ }
-const save = () => { try { localStorage.setItem('monad-rag-settings', JSON.stringify(settings)); } catch (e) { /* no storage */ } };
+const settings = { posts: 20, sentences: 4, monad: false, temperature: 0.7, topP: 0.9, penalty: 1.15, maxNew: 1024 };
+try { Object.assign(settings, JSON.parse(localStorage.getItem('monad-rag-settings-v2') || '{}')); } catch (e) { /* no storage */ }
+if (Q.has('monad')) settings.monad = Q.get('monad') !== '0';
+const save = () => { try { localStorage.setItem('monad-rag-settings-v2', JSON.stringify(settings)); } catch (e) { /* no storage */ } };
 
 // ---------------------------------------------------------------- fetching
 
@@ -82,7 +84,7 @@ function ensureRetrieval() {
   if (retrieval) return Promise.resolve(retrieval);
   return retrievalLoading ??= (async () => {
     const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
-    if (!adapter) throw new Error('This page needs WebGPU (Chrome, Edge, or Safari 26+): the post search runs on the GPU.');
+    if (!adapter) throw new Error('This page needs WebGPU (Chrome, Edge, or Safari 26+): the search runs on the GPU.');
     const device = await adapter.requestDevice({ requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
     const [manifest, meta, tj, model, idx, codes, aux, corpusBuf, params, tokMod] = await Promise.all([
@@ -90,70 +92,143 @@ function ensureRetrieval() {
       fetchCached(F.codes), fetchCached(F.aux), fetchCached(F.corpus), json(F.params), import(TOKENIZERS)]);
     const corpus = await gunzipJson(corpusBuf);
     const tok = new tokMod.Tokenizer(tj, {});
-    const qp = idx.query_prompt ?? (meta.prompts || {}).query ?? '';
-    const engine = await SmallEngine.create(device, manifest, model, { maxTokens: MAX_Q, maxSeqs: 1 });
+    const qp = idx.query_prompt ?? (meta.prompts || {}).query ?? '', dp = idx.doc_prompt ?? (meta.prompts || {}).document ?? '';
+    const engine = await SmallEngine.create(device, manifest, model, { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
     const tail = await RemexTail.create(device, { rht: params.rht, mu: new Float32Array(idx.mu), boundaries: params.boundaries,
       centroids: params.centroids, kappa: params.kappa });
     const docs = tail.allocCorpus(idx.n);
     tail.loadCodes(docs, new Uint8Array(codes), new Float32Array(aux), 0);
     const qbuf = device.createBuffer({ size: idx.d * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     await device.queue.onSubmittedWorkDone();
+    const ids = (text) => {
+      const x = tok.encode(text).ids;
+      return x.length > MAX_SEQ ? x.slice(0, MAX_SEQ - 1).concat(x[x.length - 1]) : x;
+    };
+    // Unit vectors for many texts, in batches the engine accepts.
+    const embedMany = async (texts) => {
+      const out = new Float32Array(texts.length * idx.d);
+      let batch = [], start = 0, toks = 0;
+      const flush = async () => {
+        if (!batch.length) return;
+        out.set(await engine.embed(batch), start * idx.d);
+        start += batch.length; batch = []; toks = 0;
+      };
+      for (const t of texts) {
+        const x = ids(dp + t);
+        if (batch.length === BATCH_SEQS || toks + x.length > BATCH_TOKENS) await flush();
+        batch.push(x); toks += x.length;
+      }
+      await flush();
+      return out;
+    };
     const search = async (text, k) => {
-      let ids = tok.encode(qp + text).ids;
-      if (ids.length > MAX_Q) ids = ids.slice(0, MAX_Q - 1).concat(ids[ids.length - 1]);
       const t0 = now();
-      const v = await engine.embed([ids]);
+      const qv = await engine.embed([ids(qp + text)]);
       const t1 = now();
-      device.queue.writeBuffer(qbuf, 0, v);
+      device.queue.writeBuffer(qbuf, 0, qv);
       const [top] = await tail.topk(qbuf, 1, docs, idx.n, k);
       const t2 = now();
       const posts = Array.from(top.idx, (i, j) => {
         const [a, rkey] = corpus.posts[i];
-        return { i, score: top.score[j], text: corpus.texts[i], handle: corpus.authors[a][0], rkey };
+        return { i, rank: j + 1, score: top.score[j], text: corpus.texts[i], handle: corpus.authors[a][0], rkey };
       });
-      return { posts, embedMs: t1 - t0, scanMs: t2 - t1 };
+      return { posts, qv, embedMs: t1 - t0, scanMs: t2 - t1 };
     };
-    retrieval = { search, n: idx.n };
+    retrieval = { search, embedMany, n: idx.n, d: idx.d };
     return retrieval;
   })().finally(() => { retrievalLoading = null; });
 }
 
-// ---------------------------------------------------------------- generation (Monad)
+// ---------------------------------------------------------------- the extractive answer
 
-let tok = null, model = null, backend = null, modelLoading = null, monadStatus = { s: '', frac: 0 };
+// Post text -> sentences worth showing: split at sentence ends and line breaks, keep pieces with at
+// least four words, drop bare links.
+function sentences(text) {
+  const out = [];
+  for (let s of text.split(/(?<=[.!?…])\s+|\n+/)) {
+    s = s.trim();
+    if ((s.match(/\p{L}{2,}/gu) || []).length >= 4 && !/^\S+\.\S+\/\S*$/.test(s)) out.push(s);
+  }
+  return out;
+}
+
+// Every sentence of the retrieved posts, scored by cosine with the question; the best one from each post,
+// best first, `count` of them.
+async function extract(posts, qv, count) {
+  const cands = [];
+  for (const p of posts) for (const s of sentences(p.text)) cands.push({ post: p, s });
+  if (!cands.length) return { picks: [], n: 0, ms: 0 };
+  const t0 = now();
+  const V = await retrieval.embedMany(cands.map((c) => c.s));
+  const d = retrieval.d;
+  for (let j = 0; j < cands.length; j++) {
+    let dot = 0;
+    for (let k = 0; k < d; k++) dot += V[j * d + k] * qv[k];
+    cands[j].score = dot;
+  }
+  cands.sort((a, b) => b.score - a.score);
+  const seen = new Set(), picks = [];
+  for (const c of cands) {
+    if (seen.has(c.post.i)) continue;
+    seen.add(c.post.i); picks.push(c);
+    if (picks.length === count) break;
+  }
+  return { picks, n: cands.length, ms: now() - t0 };
+}
+
+// ---------------------------------------------------------------- Monad (optional)
+
+let M = null, tok = null, model = null, backend = null, modelLoading = null, monadStatus = { s: '', frac: 0 };
+const loadMonadModule = async () => {
+  if (!M) {
+    [M, { loadTokenizer: M_loadTok }] = await Promise.all([import('../monad-chat/monad.js'), import('../monad-chat/bpe.js')]);
+    for (const [key, m] of Object.entries(M.MODELS)) {
+      if ([...$('model').options].some((o) => o.value === key)) continue;
+      const o = document.createElement('option'); o.value = key; o.textContent = m.label; $('model').append(o);
+    }
+    if (M.MODELS[Q.get('model')]) $('model').value = Q.get('model');
+  }
+  return M;
+};
+let M_loadTok = null;
 function ensureModel() {
-  const key = $('model').value;
-  if (model && model.key === key) return Promise.resolve(model);
   return modelLoading ??= (async () => {
-    backend ??= await pickBackend();
-    tok ??= await loadTokenizer(BASE + 'tokenizer.json');
+    await loadMonadModule();
+    const key = $('model').value;
+    if (model && model.key === key) return model;
+    backend ??= await M.pickBackend();
+    tok ??= await M_loadTok(M.BASE + 'tokenizer.json');
     if (model) { await model.release(); model = null; }
-    model = await Monad.load(key, backend, (s, frac) => { monadStatus = { s, frac }; });
+    model = await M.Monad.load(key, backend, (s, frac) => { monadStatus = { s, frac }; });
     return model;
   })().finally(() => { modelLoading = null; });
 }
 
-// One progress line for both halves while they download side by side.
-const PACKED = 64946688, RETRIEVAL_BYTES = 31.2e6;
-function paintLoad() {
-  const r = retrieval ? 'posts ready' : bytes.got ? `posts ${(bytes.got / 1e6).toFixed(1)} MB` : 'posts …';
-  const m = model && model.key === $('model').value ? 'Monad ready' : 'Monad: ' + (monadStatus.s || '…');
-  const frac = ((retrieval ? RETRIEVAL_BYTES : Math.min(bytes.got, RETRIEVAL_BYTES)) + (model ? PACKED : (monadStatus.frac || 0) * PACKED))
-    / (RETRIEVAL_BYTES + PACKED);
-  status(`${r} · ${m}`, frac);
+// ---------------------------------------------------------------- loading
+
+const RETRIEVAL_BYTES = 27.9e6, PACKED = 64946688;
+function paintLoad(withMonad) {
+  const r = retrieval ? 'posts ready' : bytes.got ? `posts ${(bytes.got / 1e6).toFixed(1)} of ${(RETRIEVAL_BYTES / 1e6).toFixed(0)} MB` : 'posts …';
+  let frac = (retrieval ? RETRIEVAL_BYTES : Math.min(bytes.got, RETRIEVAL_BYTES)) / RETRIEVAL_BYTES, m = '';
+  if (withMonad) {
+    m = ' · ' + (model ? 'Monad ready' : 'Monad: ' + (monadStatus.s || '…'));
+    frac = (frac * RETRIEVAL_BYTES + (model ? PACKED : (monadStatus.frac || 0) * PACKED)) / (RETRIEVAL_BYTES + PACKED);
+  }
+  status(r + m, frac);
 }
 
-async function loadAll() {
+async function loadAll(withMonad) {
+  if (retrieval && !(withMonad && !(model && model.key === $('model').value))) return;   // all loaded already
   $('load').disabled = true;
-  const timer = setInterval(paintLoad, 200);
+  const timer = setInterval(() => paintLoad(withMonad), 200);
   const t0 = now();
   try {
-    await Promise.all([ensureRetrieval(), ensureModel()]);
+    const needModel = withMonad && !(model && model.key === $('model').value);
+    await Promise.all([ensureRetrieval(), needModel ? ensureModel() : null]);
     clearInterval(timer);
-    status(`Ready in ${((now() - t0) / 1000).toFixed(1)} s: ${retrieval.n.toLocaleString()} posts indexed on the GPU, ` +
-      `${MODELS[model.key].label} on ${backend === 'webgpu' ? 'WebGPU' : 'the CPU (slow)'}.`, 1);
+    status(`Ready in ${((now() - t0) / 1000).toFixed(1)} s: ${retrieval.n.toLocaleString()} posts indexed on the GPU` +
+      (withMonad ? `, ${M.MODELS[model.key].label} on ${backend === 'webgpu' ? 'WebGPU' : 'the CPU (slow)'}.` : '.'), 1);
     $('load').style.display = 'none';
-    $('backend').textContent = backend === 'webgpu' ? 'WebGPU' : 'CPU (WASM)';
   } catch (e) {
     clearInterval(timer);
     console.error(e);
@@ -163,7 +238,7 @@ async function loadAll() {
   }
 }
 
-// ---------------------------------------------------------------- quote checking
+// ---------------------------------------------------------------- quote checking (Monad's answers)
 
 const norm = (s) => s.toLowerCase().normalize('NFKC').replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 const has = (hay, needle) => (' ' + hay + ' ').includes(' ' + needle + ' ');
@@ -202,9 +277,18 @@ function tidDate(rkey) {   // a Bluesky record key is a TID: microseconds since 
   for (const ch of rkey) v = v * 32n + BigInt(B32.indexOf(ch));
   return new Date(Number((v >> 10n) / 1000n)).toISOString().slice(0, 10);
 }
+const postUrl = (p) => `https://bsky.app/profile/${p.handle}/post/${p.rkey}`;
 
-// Answer text -> HTML. Complete <ref name="source_n">…</ref> pairs become checked quotes; an unclosed
-// one (mid-stream) shows as plain text until it closes.
+function renderPicks(el, picks) {
+  if (!picks.length) { el.innerHTML = '<p><em>No sentences to quote in the posts found.</em></p>'; return; }
+  el.innerHTML = '<ol class="picks">' + picks.map((c) =>
+    `<li><blockquote>${esc(c.s)}</blockquote><div class="pmeta"><a href="${esc(postUrl(c.post))}" target="_blank" rel="noopener">@${esc(c.post.handle)}</a>` +
+    `<span>${tidDate(c.post.rkey)}</span><button class="chip" data-n="${c.post.rank}" title="show the whole post">post ${c.post.rank}</button>` +
+    `<span>match ${c.score.toFixed(2)}</span></div></li>`).join('') + '</ol>';
+}
+
+// Monad's answer text -> HTML. Complete <ref name="source_n">…</ref> pairs become checked quotes; an
+// unclosed one (mid-stream) shows as plain text until it closes.
 function renderAnswer(text, posts, refs) {
   const marks = [];
   let s = text.replace(/<ref name="([^"]*)">([\s\S]*?)<\/ref>/g, (_, name, quote) => {
@@ -238,31 +322,30 @@ function renderAnswer(text, posts, refs) {
 
 function renderPosts(ol, posts) {
   ol.textContent = '';
-  posts.forEach((p, j) => {
+  for (const p of posts) {
     const li = document.createElement('li');
-    li.dataset.n = j + 1;
+    li.dataset.n = p.rank;
     const meta = document.createElement('div');
     meta.className = 'pmeta';
-    const num = document.createElement('b'); num.textContent = `source ${j + 1}`;
+    const num = document.createElement('b'); num.textContent = `post ${p.rank}`;
     const who = document.createElement('a');
-    who.href = `https://bsky.app/profile/${p.handle}/post/${p.rkey}`;
-    who.target = '_blank'; who.rel = 'noopener';
+    who.href = postUrl(p); who.target = '_blank'; who.rel = 'noopener';
     who.textContent = '@' + p.handle;
     const when = document.createElement('span'); when.textContent = tidDate(p.rkey);
     const sc = document.createElement('span'); sc.textContent = 'score ' + p.score.toFixed(3);
-    const cited = document.createElement('span'); cited.className = 'cited';
-    meta.append(num, who, when, sc, cited);
+    const used = document.createElement('span'); used.className = 'cited';
+    meta.append(num, who, when, sc, used);
     const tx = document.createElement('div'); tx.className = 'ptext'; tx.textContent = p.text;
     li.append(meta, tx);
     ol.append(li);
-  });
+  }
 }
 
-function parse(raw) {   // raw = everything after the prompt's opening <think>
+function parse(raw) {   // raw = everything Monad wrote after the prompt's opening <think>
   let text = raw;
-  const e = text.indexOf(END);
+  const e = text.indexOf(M.END);
   if (e >= 0) text = text.slice(0, e);
-  else for (let k = END.length - 1; k > 0; k--) if (text.endsWith(END.slice(0, k))) { text = text.slice(0, -k); break; }
+  else for (let k = M.END.length - 1; k > 0; k--) if (text.endsWith(M.END.slice(0, k))) { text = text.slice(0, -k); break; }
   const c = text.indexOf('</think>');
   if (c < 0) return { think: text, answer: null };
   return { think: text.slice(0, c), answer: text.slice(c + 8).replace(/^\s+/, '') };
@@ -283,42 +366,53 @@ async function ask(question) {
   setBusy(true); stopFlag = false;
   $('examples').hidden = true;
   const u = new URL(location.href); u.searchParams.set('q', question); history.replaceState(null, '', u);
+  const withMonad = settings.monad;
   const card = document.createElement('article');
   card.className = 'turn';
-  card.innerHTML = `<div class="question"></div>
-    <details class="think"><summary>thinking…</summary><div class="trace"></div></details>
-    <div class="answer"><p class="cursor">finding posts…</p></div><div class="verdict"></div><div class="stats"></div>
-    <details class="posts" open><summary>Retrieved posts</summary><ol></ol></details>`;
+  card.innerHTML = `<div class="question"></div><div class="extract"><p class="cursor">searching…</p></div><div class="stats ex"></div>
+    <section class="monad" hidden><h3>Monad's answer from the top ${MONAD_POSTS} posts</h3>
+      <details class="think"><summary>thinking…</summary><div class="trace"></div></details>
+      <div class="answer"><p class="cursor"></p></div><div class="verdict"></div><div class="stats mo"></div></section>
+    <details class="posts"><summary>Posts found</summary><ol></ol></details>`;
   card.querySelector('.question').textContent = question;
   $('log').prepend(card);
-  const ans = card.querySelector('.answer'), trace = card.querySelector('.trace'), sum = card.querySelector('details.think summary');
-  const stats = card.querySelector('.stats'), verdict = card.querySelector('.verdict'), ol = card.querySelector('ol');
-  card.querySelector('details.think').open = settings.showThink;
-  try {
-    if (!retrieval || !model || model.key !== $('model').value) await loadAll();
-  } catch (e) { ans.innerHTML = `<p class="bad">${esc(e.message || String(e))}</p>`; setBusy(false); return; }
+  const ex = card.querySelector('.extract'), ol = card.querySelector('ol');
+  const fail = (e) => { ex.innerHTML = `<p class="bad">${esc(e.message || String(e))}</p>`; setBusy(false); };
+  try { await loadAll(withMonad); } catch (e) { fail(e); return; }
 
-  // retrieve; the prompt is the question, then each post as a numbered source (SYNTH's format). The
-  // lowest-ranked posts are dropped until thinking + answer have MIN_ROOM of the 2,048 tokens.
-  const r = await retrieval.search(question, settings.k);
-  let posts = r.posts;
+  // search, then quote the best sentence of each of the best-matching posts
+  let r, x;
+  try {
+    r = await retrieval.search(question, settings.posts);
+    x = await extract(r.posts, r.qv, settings.sentences);
+  } catch (e) { console.error(e); fail(e); return; }
+  renderPicks(ex, x.picks);
+  renderPosts(ol, r.posts);
+  const usedIn = new Set(x.picks.map((c) => c.post.rank));
+  for (const li of ol.children) if (usedIn.has(+li.dataset.n)) { li.classList.add('was-cited'); li.querySelector('.cited').textContent = 'quoted above'; }
+  card.querySelector('details.posts summary').textContent = `${r.posts.length} posts found among ${retrieval.n.toLocaleString()}`;
+  card.querySelector('.stats.ex').innerHTML = `<span>search: embed ${r.embedMs.toFixed(0)} ms, scan ${r.scanMs.toFixed(0)} ms</span>` +
+    `<span>· ${x.n} sentences ranked in ${x.ms.toFixed(0)} ms</span>`;
+  window.rag.last = { question, posts: r.posts, picks: x.picks };
+  if (withMonad) await monadAnswer(question, r.posts.slice(0, MONAD_POSTS), card);
+  setBusy(false);
+}
+
+async function monadAnswer(question, posts, card) {
+  const sec = card.querySelector('.monad');
+  sec.hidden = false;
+  const ans = sec.querySelector('.answer'), trace = sec.querySelector('.trace'), sum = sec.querySelector('summary');
+  const stats = sec.querySelector('.stats'), verdict = sec.querySelector('.verdict');
   const build = (ps) => question + '\n\n' + ps.map((p, j) =>
     `<source_${j + 1}>\n${p.text.replace(/\s*\n\s*/g, '\n').trim()}\n</source_${j + 1}>`).join('\n\n');
-  let ids = tok.encode(renderPrompt('', [{ role: 'user', content: build(posts) }]));
-  while (ids.length > CONTEXT - MIN_ROOM && posts.length > 1) {
+  let ids = tok.encode(M.renderPrompt('', [{ role: 'user', content: build(posts) }]));
+  while (ids.length > M.CONTEXT - MIN_ROOM && posts.length > 1) {
     posts = posts.slice(0, -1);
-    ids = tok.encode(renderPrompt('', [{ role: 'user', content: build(posts) }]));
+    ids = tok.encode(M.renderPrompt('', [{ role: 'user', content: build(posts) }]));
   }
-  renderPosts(ol, posts);
-  card.querySelector('details.posts summary').textContent =
-    `${posts.length} posts found among ${retrieval.n.toLocaleString()} (embed ${r.embedMs.toFixed(0)} ms, scan ${r.scanMs.toFixed(0)} ms)` +
-    (posts.length < r.posts.length ? `; ${r.posts.length - posts.length} dropped to fit the context` : '');
-  ans.innerHTML = '<p class="cursor"></p>';
-
-  // generate
-  const pick = makeSampler({ temperature: settings.temperature, topP: settings.topP, penalty: settings.penalty, window: 64 });
+  const pick = M.makeSampler({ temperature: settings.temperature, topP: settings.topP, penalty: settings.penalty, window: 64 });
   const dec = tok.stream();
-  const room = Math.min(settings.maxNew, CONTEXT - ids.length);
+  const room = Math.min(settings.maxNew, M.CONTEXT - ids.length);
   let raw = '', n = 0, decodeMs = 0, prefillMs = 0, why = 'limit', thinkN = 0, pending = false, finished = false, refs = [];
   const paint = (final) => {
     pending = false;
@@ -339,12 +433,12 @@ async function ask(question) {
   try {
     for await (const { id, ms, prefill } of model.generate(ids, { maxNew: room, pick })) {
       if (prefill) prefillMs = ms; else decodeMs += ms;
-      if (id === EOS) { why = 'end'; break; }
+      if (id === M.EOS) { why = 'end'; break; }
       gen.push(id); n++;
       raw += dec.push(id);
       if (!raw.includes('</think>')) thinkN = n;
-      if (raw.includes(END)) { why = 'end'; break; }
-      if (looping(gen)) { why = 'loop'; break; }
+      if (raw.includes(M.END)) { why = 'end'; break; }
+      if (M.looping(gen)) { why = 'loop'; break; }
       if (stopFlag) { why = 'stopped'; break; }
       if (!pending) { pending = true; requestAnimationFrame(() => paint(false)); }
     }
@@ -352,8 +446,6 @@ async function ask(question) {
   raw += dec.flush();
   finished = true;
   paint(true);
-
-  // verdict on the quotes, and which posts Monad cited
   const c = { exact: 0, moved: 0, pieced: 0, absent: 0 };
   for (const x of refs) c[x.kind]++;
   verdict.innerHTML = refs.length
@@ -361,52 +453,40 @@ async function ask(question) {
       (c.moved ? `, <b class="k-moved">${c.moved} from a different post than cited</b>` : '') +
       `, <b class="k-pieced">${c.pieced} stitched from pieces</b>, <b class="k-absent">${c.absent} not in any post</b>.`
     : 'No quotes: the answer cites none of the posts.';
-  const citedBy = new Map();
-  for (const x of refs) citedBy.set(x.n, (citedBy.get(x.n) || 0) + 1);   // what Monad cites, not where the words are
-  for (const li of ol.children) {
-    const k = +li.dataset.n;
-    if (citedBy.has(k)) { li.classList.add('was-cited'); li.querySelector('.cited').textContent = `cited ${citedBy.get(k)}×`; }
-  }
   const tps = n > 1 ? (n - 1) / (decodeMs / 1000) : 0;
   const notes = { loop: 'stopped: it started repeating itself', limit: 'hit the token limit', stopped: 'stopped', end: '', error: '' };
   if (why !== 'error') {
-    stats.innerHTML = `<span>${esc(MODELS[model.key].label)}</span><span>${n} tokens, ${tps.toFixed(0)} tok/s</span>` +
+    stats.innerHTML = `<span>${esc(M.MODELS[model.key].label)}</span><span>${n} tokens, ${tps.toFixed(0)} tok/s</span>` +
       `<span>prompt ${ids.length} tokens, ${prefillMs.toFixed(0)} ms</span>${notes[why] ? `<span class="warn">${notes[why]}</span>` : ''}`;
   }
-  window.rag.last = { question, posts, refs, raw, why, n };
-  setBusy(false);
+  Object.assign(window.rag.last, { monad: { refs, raw, why, n } });
 }
 
 // ---------------------------------------------------------------- wiring
 
-for (const [key, m] of Object.entries(MODELS)) {
-  const o = document.createElement('option');
-  o.value = key; o.textContent = m.label;
-  $('model').append(o);
-}
-$('model').value = MODELS[Q.get('model')] ? Q.get('model') : 'fixed';
-$('model').onchange = () => { if (!busy) status(`${MODELS[$('model').value].label} selected; it loads with the next question.`); };
-
-for (const [id, key] of [['k', 'k'], ['temp', 'temperature'], ['maxnew', 'maxNew']]) {
+for (const [id, key] of [['posts', 'posts'], ['sents', 'sentences'], ['temp', 'temperature'], ['maxnew', 'maxNew']]) {
   $(id).value = settings[key];
   $(id + 'V').textContent = settings[key];
   $(id).oninput = () => { settings[key] = +$(id).value; $(id + 'V').textContent = settings[key]; save(); };
 }
-$('showThink').checked = settings.showThink;
-$('showThink').onchange = () => { settings.showThink = $('showThink').checked; save(); };
+const syncMonad = () => { document.body.classList.toggle('with-monad', settings.monad); if (settings.monad) loadMonadModule().catch(() => {}); };
+$('monad').checked = settings.monad;
+$('monad').onchange = () => { settings.monad = $('monad').checked; save(); syncMonad(); $('load').style.display = ''; $('load').disabled = false; };
+syncMonad();
 
 const send = () => { if (busy) { stopFlag = true; return; } ask($('q').value); };
 $('ask').onclick = send;
 $('q').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); send(); } });
-$('load').onclick = () => loadAll().catch(() => {});
+$('load').onclick = () => loadAll(settings.monad).catch(() => {});
 $('clearCache').onclick = async () => {
   let a = false; try { a = await caches.delete(CACHE); } catch (e) { /* none */ }
-  const b = await clearMonadCache();
+  let b = false; if (settings.monad || M) { await loadMonadModule(); b = await M.clearCache(); }
   status(a || b ? 'Cached files deleted.' : 'Nothing cached.');
 };
 $('log').addEventListener('click', (e) => {
   const b = e.target.closest('button.chip');
   if (!b) return;
+  // a chip names a post by rank; Monad's source n is post n, since it gets the top posts in order
   const li = b.closest('.turn').querySelector(`ol > li[data-n="${b.dataset.n}"]`);
   if (!li) return;
   li.closest('details').open = true;
@@ -419,5 +499,5 @@ for (const q of EXAMPLES) {
   b.onclick = () => { $('q').value = q; ask(q); };
   $('examples').append(b);
 }
-window.rag = { ask, verifyRef, get retrieval() { return retrieval; }, get model() { return model; } };
+window.rag = { ask, verifyRef, sentences, get retrieval() { return retrieval; }, get model() { return model; } };
 if (Q.get('q')) { $('q').value = Q.get('q'); ask(Q.get('q')); }
