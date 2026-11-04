@@ -6,10 +6,12 @@ page and bsky/embedders use), quantizes them exactly as the embedders index was 
 Quantizer(768, bits=2, seed=42, mean=mu), mu fixed from that index so codes stay comparable), appends
 them, drops the oldest beyond N and writes OUT again:
 
-  index.json      n, mu, the newest post (uri, indexedAt), build time and counts
-  codes.u8.bin    n x 192 bytes: packed 2-bit codes
-  aux.f32.bin     n x 2 float32: (scale, bias) per post
-  posts.json.gz   {"authors": [[handle, did]], "posts": [[author, rkey, indexedAt]], "texts": [...]}
+  snapshot.bin    the whole snapshot in one file, so a CDN can never pair parts of two builds:
+                  b"ASNP", uint32 LE header length, the header (UTF-8 JSON, the same as index.json), then
+                  the sections the header's "sections" names as [offset, length] after the header:
+                  codes (n x 192 bytes, packed 2-bit codes), aux (n x 2 float32 LE: scale, bias),
+                  posts (gzip JSON {"authors": [[handle, did]], "posts": [[author, rkey, t]], "texts": [...]})
+  index.json      the header alone, for people and tools: n, mu, newest post, build time, counts
 
 Rows are oldest first. New posts come from the list feed, which Bluesky serves only about a week back;
 for anything older (the bootstrap, or a gap of more than a week between runs) it reads every member's own
@@ -196,13 +198,26 @@ class Ettin:
         return X
 
 
+MAGIC = b"ASNP"
+
+
 def load(out):
-    if not (out / "index.json").exists():
+    """The previous snapshot: snapshot.bin, or the first layout's four files (read once, to migrate)."""
+    if (out / "snapshot.bin").exists():
+        buf = (out / "snapshot.bin").read_bytes()
+        assert buf[:4] == MAGIC, "not a snapshot.bin"
+        hl = int.from_bytes(buf[4:8], "little")
+        idx = json.loads(buf[8:8 + hl])
+        sec = lambda k: buf[8 + hl + idx["sections"][k][0]: 8 + hl + idx["sections"][k][0] + idx["sections"][k][1]]
+        codes_b, aux_b, posts_b = sec("codes"), sec("aux"), sec("posts")
+    elif (out / "codes.u8.bin").exists():
+        idx = json.loads((out / "index.json").read_text())
+        codes_b, aux_b, posts_b = [(out / f).read_bytes() for f in ("codes.u8.bin", "aux.f32.bin", "posts.json.gz")]
+    else:
         return None
-    idx = json.loads((out / "index.json").read_text())
-    c = json.loads(gzip.decompress((out / "posts.json.gz").read_bytes()))
-    codes = np.frombuffer((out / "codes.u8.bin").read_bytes(), np.uint8).reshape(idx["n"], 192)
-    aux = np.frombuffer((out / "aux.f32.bin").read_bytes(), "<f4").reshape(idx["n"], 2)
+    c = json.loads(gzip.decompress(posts_b))
+    codes = np.frombuffer(codes_b, np.uint8).reshape(idx["n"], 192)
+    aux = np.frombuffer(aux_b, "<f4").reshape(idx["n"], 2)
     assert len(c["posts"]) == len(c["texts"]) == idx["n"]
     rows = [{"did": c["authors"][a][1], "handle": c["authors"][a][0], "rkey": rk, "t": t, "text": tx}
             for (a, rk, t), tx in zip(c["posts"], c["texts"])]
@@ -268,20 +283,28 @@ def main():
             authors[aidx[r["did"]]][0] = r["handle"]
     a.out.mkdir(parents=True, exist_ok=True)
     corpus = {"authors": authors, "posts": [[aidx[r["did"]], r["rkey"], r["t"]] for r in rows], "texts": [r["text"] for r in rows]}
-    (a.out / "posts.json.gz").write_bytes(gzip.compress(json.dumps(corpus, ensure_ascii=False, separators=(",", ":")).encode(), 9, mtime=0))
-    (a.out / "codes.u8.bin").write_bytes(np.ascontiguousarray(codes).tobytes())
-    (a.out / "aux.f32.bin").write_bytes(np.ascontiguousarray(aux, "<f4").tobytes())
+    parts = {"codes": np.ascontiguousarray(codes).tobytes(), "aux": np.ascontiguousarray(aux, "<f4").tobytes(),
+             "posts": gzip.compress(json.dumps(corpus, ensure_ascii=False, separators=(",", ":")).encode(), 9, mtime=0)}
+    sections, off = {}, 0
+    for k, b in parts.items():
+        sections[k] = [off, len(b)]
+        off += len(b)
     last = max(rows, key=lambda r: r["t"])
-    (a.out / "index.json").write_text(json.dumps({
+    header = json.dumps({
         "n": len(rows), "d": 768, "bits": 2, "seed": 42, "rotation": "rht", "remex_version": remex.__version__,
         "model": "bsky/embedders/models/ettin/model.onnx", "doc_prompt": "", "max_tokens": MAX_SEQ, "list": LIST,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "newest": {"uri": last["uri"], "t": last["t"]}, "oldest_t": min(r["t"] for r in rows),
-        "added": len(new), "embed_s": round(embed_s, 1),
-        "files": {f"{k}_bytes": (a.out / f).stat().st_size for k, f in
-                  (("codes", "codes.u8.bin"), ("aux", "aux.f32.bin"), ("posts", "posts.json.gz"))},
+        "added": len(new), "embed_s": round(embed_s, 1), "sections": sections,
         "mu": [float(v) for v in mu],
-    }, separators=(",", ":")))
+    }, separators=(",", ":")).encode()
+    with open(a.out / "snapshot.bin", "wb") as f:
+        f.write(MAGIC + len(header).to_bytes(4, "little") + header)
+        for b in parts.values():
+            f.write(b)
+    (a.out / "index.json").write_bytes(header)
+    for old in ("codes.u8.bin", "aux.f32.bin", "posts.json.gz"):    # the first layout, if migrating
+        (a.out / old).unlink(missing_ok=True)
     print(f"wrote {len(rows)} posts (+{len(new)}), embed {embed_s:.0f} s, total {time.time() - t0:.0f} s")
 
 

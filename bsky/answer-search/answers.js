@@ -4,7 +4,7 @@
 // Nothing is generated, so nothing can be misquoted.
 //
 // The index is live. A daily GitHub Action (scripts/answer-search/refresh.py) publishes a snapshot of the
-// last 100,000 posts to the bsky-answer-search-data branch; the page loads it, then asks Bluesky for the
+// last 100,000 posts to the bsky-answer-search-data branch (snapshot.bin); the page loads it, then asks Bluesky for the
 // posts written since, embeds them on the GPU, quantizes them into the same index (RemexTail.encode) and
 // keeps doing that every minute while the tab is visible.
 //
@@ -31,7 +31,7 @@ const BATCH_TOKENS = 2048, BATCH_SEQS = 32;
 const LIVE_CAP = 20000;                   // room for posts added after the snapshot (about 11 days of the list)
 const OVERLAP_S = 3600;                   // page an hour past the newest known post, for posts indexed late
 const POLL_MS = 60000;
-let TOTAL_BYTES = 40e6;                   // replaced by the snapshot's own sizes once index.json is read
+let TOTAL_BYTES = 40e6;                   // replaced by 12.5 MB of model + the snapshot's own size once its download starts
 const EXAMPLES = ['How much do people spend on Claude Code?', 'Do LLMs actually reason?',
   'What are people saying about copyright lawsuits against AI labs?', 'Which local model runs well on a laptop?',
   'Why are data centers raising electricity bills?', 'How do Bluesky custom feeds work?'];
@@ -198,60 +198,57 @@ function ensureRetrieval() {
   })().finally(() => { loading = null; });
 }
 
-// The snapshot to search. A cached one is kept until it is KEEP_S old: the list feed can fill in about a week
-// of newer posts, but each one has to be embedded here, so two days (~3,000 posts) bounds that work while a
-// daily visitor downloads the index every other day instead of every day.
-// Snapshot files are fetched as file?v=<build>, which raw.githubusercontent.com's CDN treats as a new URL,
-// so they come from the same commit as the index.json read with a cache-busting query. Sizes are checked
-// against index.json anyway, and a mismatch falls back to a fresh download.
+// The snapshot to search: one file, snapshot.bin (b"ASNP", uint32 header length, JSON header, then the codes,
+// aux and posts sections the header locates), so a CDN can never pair parts of two builds; raw.githubusercontent.com
+// ignores query strings and caches each file for up to five minutes. A cached snapshot is kept until it is
+// KEEP_S old: the list feed can fill in about a week of newer posts, but each one has to be embedded here, so two
+// days (~3,000 posts) bounds that work while a daily visitor downloads the snapshot every other day.
 const KEEP_S = 2 * 86400;
-const SNAP_FILES = ['codes.u8.bin', 'aux.f32.bin', 'posts.json.gz'];
+function parseSnapshot(buf) {
+  const u8 = new Uint8Array(buf);
+  if (String.fromCharCode(...u8.subarray(0, 4)) !== 'ASNP') throw new Error('not an answer-search snapshot');
+  const hl = new DataView(buf).getUint32(4, true);
+  const idx = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl)));
+  const sec = (k) => buf.slice(8 + hl + idx.sections[k][0], 8 + hl + idx.sections[k][0] + idx.sections[k][1]);
+  const codes = sec('codes'), aux = sec('aux');
+  if (codes.byteLength !== idx.n * 192 || aux.byteLength !== idx.n * 8) throw new Error('snapshot sections do not match its header');
+  return { idx, codes, aux, gz: sec('posts') };
+}
 async function loadSnapshot() {
   let cache = null;
-  try { cache = await caches.open(CACHE); } catch (e) { /* private mode */ }
-  const read = async (idx, net) => {
-    const v = '?v=' + encodeURIComponent(idx.built);
-    const bufs = [];
-    for (const f of SNAP_FILES) {
-      const hit = cache && await cache.match(SNAP + f + v);
-      if (hit) bufs.push(await hit.arrayBuffer());
-      else if (net) bufs.push(await fetchCached(SNAP + f + v));
-      else return null;
-    }
-    const [codes, aux, gz] = bufs;
-    if (codes.byteLength !== idx.n * 192 || aux.byteLength !== idx.n * 8) return null;
-    const corpus = await gunzipJson(gz);
-    if (corpus.posts.length !== idx.n || corpus.texts.length !== idx.n) return null;
-    return { idx, codes, aux, corpus };
-  };
-  const keep = async (s) => {
-    if (!cache) return s;
-    const v = '?v=' + encodeURIComponent(s.idx.built);
-    try {
-      await cache.put(SNAP + 'index.json?cached', new Response(JSON.stringify(s.idx)));
-      for (const req of await cache.keys()) {
-        if (req.url.startsWith(SNAP) && !req.url.endsWith(v) && !req.url.endsWith('index.json?cached')) await cache.delete(req);
-      }
-    } catch (e) { /* quota */ }
-    return s;
-  };
+  try { cache = await caches.open(CACHE); caches.delete('answer-search-v1'); } catch (e) { /* private mode */ }
+  const key = SNAP + 'snapshot.bin';
+  let buf = null;
   try {
-    const hit = cache && await cache.match(SNAP + 'index.json?cached');
+    const hit = cache && await cache.match(key);
     if (hit) {
-      const idx = await hit.json();
-      if (Date.now() / 1000 - idx.newest.t < KEEP_S) {
-        const s = await read(idx, false);
-        if (s) return s;
-      }
+      const b = await hit.arrayBuffer();
+      if (Date.now() / 1000 - parseSnapshot(b).idx.newest.t < KEEP_S) buf = b;
     }
   } catch (e) { /* a broken entry: download */ }
-  const r = await fetch(SNAP + 'index.json?t=' + Date.now(), { cache: 'no-store' });
-  if (!r.ok) throw new Error(`index snapshot: HTTP ${r.status}`);
-  const idx = await r.json();
-  TOTAL_BYTES = 12.5e6 + (idx.files ? idx.files.codes_bytes + idx.files.aux_bytes + idx.files.posts_bytes : idx.n * 275);
-  const s = await read(idx, true);
-  if (!s) throw new Error('the index snapshot changed during the download; reload the page');
-  return keep(s);
+  if (!buf) {
+    const r = await fetch(key, { cache: 'no-cache' });
+    if (!r.ok) throw new Error(`index snapshot: HTTP ${r.status}`);
+    const len = +r.headers.get('content-length');
+    if (len) TOTAL_BYTES = 12.5e6 + len;
+    const reader = r.body.getReader(), chunks = [];
+    let got = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value); got += value.length; bytesGot += value.length;
+    }
+    const out = new Uint8Array(got);
+    let o = 0;
+    for (const c of chunks) { out.set(c, o); o += c.length; }
+    buf = out.buffer;
+    parseSnapshot(buf);   // throws before a bad download is cached
+    if (cache) { try { await cache.put(key, new Response(out)); } catch (e) { /* quota */ } }
+  }
+  const { idx, codes, aux, gz } = parseSnapshot(buf);
+  const corpus = await gunzipJson(gz);
+  if (corpus.posts.length !== idx.n || corpus.texts.length !== idx.n) throw new Error('snapshot posts do not match its header');
+  return { idx, codes, aux, corpus };
 }
 
 const ago = (t) => {
