@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <title>Bluesky Answer Search</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Ask what AI Bluesky is saying and get answers quoted from real posts, found and ranked on your GPU in one 28 MB tab: Ettin-17m searches 61,686 posts, then picks the best sentences. Optionally, the 56M-parameter Monad writes an answer, with every quote it makes checked.">
+<meta name="description" content="Ask what AI Bluesky is saying and get answers quoted word for word from real posts, found and ranked on your GPU in one 28 MB tab: Ettin-17m searches 61,686 posts, then picks the best sentences.">
 <meta name="ai-disclosure" content="ai-assisted">
 <style>
   :root { color-scheme: light dark; --fg:#151515; --dim:#686660; --bg:#fbfbf9; --line:#d8d6d0;
@@ -49,19 +49,7 @@
   #log { display:flex; flex-direction:column; gap:1.2rem; margin:1rem 0; }
   .turn { border:1px solid var(--line); border-radius:6px; padding:.8rem .95rem; background:var(--card); overflow-wrap:anywhere; }
   .question { font-weight:600; margin-bottom:.3rem; white-space:pre-wrap; }
-  details.think { margin:.15rem 0 .5rem; font-size:.78rem; color:var(--dim); }
-  details.think summary { cursor:pointer; user-select:none; }
-  details.think .trace { white-space:pre-wrap; margin-top:.35rem; padding:.5rem .6rem; border-left:2px solid var(--line); max-height:20rem; overflow:auto; }
-  .answer p { margin:.35rem 0; } .answer ul, .answer ol { margin:.35rem 0; padding-left:1.4rem; }
-  .answer h4 { margin:.6rem 0 .2rem; font-size:1rem; }
-  .answer .cursor::after { content:"▍"; color:var(--dim); animation: blink 1s steps(2) infinite; }
-  @keyframes blink { 50% { opacity:0; } }
-  q.ref { font-style:italic; quotes:"“" "”"; padding:0 .1em; border-bottom:2px solid; }
-  q.k-exact { border-color:var(--ok); } q.k-moved, q.k-pieced { border-color:var(--warn); } q.k-absent { border-color:var(--bad); }
   button.chip { font-size:.66rem; padding:.02rem .3rem; margin-left:.2rem; vertical-align:.12em; border-radius:3px; }
-  .k-exact { color:var(--ok); } .k-moved, .k-pieced { color:var(--warn); } .k-absent { color:var(--bad); }
-  button.chip.k-exact { border-color:var(--ok); } button.chip.k-moved, button.chip.k-pieced { border-color:var(--warn); } button.chip.k-absent { border-color:var(--bad); }
-  .verdict { font-size:.74rem; color:var(--dim); margin-top:.5rem; }
   .stats { font-size:.72rem; color:var(--dim); margin-top:.35rem; display:flex; gap:.7rem; flex-wrap:wrap; }
   .warn { color:var(--warn); } .bad { color:var(--bad); }
   details.posts { margin-top:.6rem; font-size:.84rem; }
@@ -77,10 +65,6 @@
   ol.picks { list-style:none; padding:0; margin:.4rem 0 0; display:flex; flex-direction:column; gap:.7rem; }
   ol.picks blockquote { margin:0; padding-left:.7rem; border-left:3px solid var(--accent); }
   ol.picks .pmeta { margin:.15rem 0 0 .85rem; align-items:center; }
-  section.monad { margin-top:1rem; padding-top:.6rem; border-top:1px dashed var(--line); }
-  section.monad h3 { font-size:.95rem; margin:0 0 .2rem; font-weight:600; }
-  .monad-only { display:none !important; }
-  body.with-monad .monad-only { display:revert !important; }
   footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
   footer p { margin:.35rem 0; }
   @media (max-width: 700px) {
@@ -94,13 +78,12 @@
 <main>
   <h1>Bluesky Answer Search</h1>
   <p class="sub">Ask a question and get answers quoted from Bluesky posts about AI, word for word, each with its
-  author and a link. Everything runs in this tab from a 28 MB download. <a href="../../bsky/embedders/">Ettin-17m</a>
+  author and a link. Everything runs in this tab from a 28 MB download. <a href="../embedders/">Ettin-17m</a>
   turns your question into a vector and your GPU searches 61,686 posts for the closest ones. Then Ettin scores every
   sentence of those posts against the question, and the best sentence from each of the top posts is the answer.
   Nothing is generated, so nothing can be misquoted.</p>
   <div class="bar">
-    <select id="model" aria-label="Monad model" class="monad-only"></select>
-    <span id="status">Nothing downloaded yet. The first question fetches 28 MB, which the browser then keeps.</span>
+        <span id="status">Nothing downloaded yet. The first question fetches 28 MB, which the browser then keeps.</span>
     <button id="load">Load now</button>
   </div>
   <div class="prog"><div id="bar"></div></div>
@@ -112,26 +95,13 @@
   <div id="log" aria-live="polite"></div>
 
   <details class="box">
-    <summary>Settings, and the generator experiment</summary>
+    <summary>Settings</summary>
     <div class="grid">
       <label for="posts">Posts searched</label>
       <div><input type="range" id="posts" min="5" max="50" step="5"><span class="val" id="postsV"></span></div>
       <label for="sents">Sentences in the answer</label>
       <div><input type="range" id="sents" min="1" max="10" step="1"><span class="val" id="sentsV"></span>
         <div class="hint">At most one sentence per post, best match first.</div></div>
-      <label for="monad">Monad</label>
-      <div><label><input type="checkbox" id="monad"> Also let Monad write an answer (66 MB more)</label>
-        <div class="hint"><a href="../monad-chat/">Monad</a> is a 56-million-parameter reasoning model trained to answer from
-        numbered sources and quote them. It gets the top five posts, and each quote it writes is checked against them:
-        <span class="k-exact">✓</span> word for word in the post it cites, <span class="k-moved">↷</span> in a different post,
-        <span class="k-pieced">≈</span> stitched from runs of words in the posts, <span class="k-absent">✗</span> in no post.
-        In tests, 1 of 18 quotes was word for word. A stitched quote can reverse the post: "I think it's dumb to blame data
-        centers for hogging electricity" came back as support for "data centers are energy-efficient infrastructure". That is
-        why the answer above is extracted rather than written. With Monad on, the whole system is 98 MB.</div></div>
-      <label for="temp" class="monad-only">Monad's temperature</label>
-      <div class="monad-only"><input type="range" id="temp" min="0" max="1.5" step="0.05"><span class="val" id="tempV"></span></div>
-      <label for="maxnew" class="monad-only">Monad's max new tokens</label>
-      <div class="monad-only"><input type="range" id="maxnew" min="256" max="1536" step="64"><span class="val" id="maxnewV"></span></div>
     </div>
     <div class="bar" style="margin-top:.8rem"><button id="clearCache">Delete cached files</button></div>
   </details>
@@ -145,7 +115,6 @@
       <tr><td>The posts' text, gzipped</td><td class="n">5.4</td></tr>
       <tr><td>The tokenizer library and the WebGPU engines for Ettin and the scan</td><td class="n">0.2</td></tr>
       <tr><th>total</th><th class="n">27.9</th></tr>
-      <tr><td>With Monad: its 8-bit weights, graph and tokenizer, and onnxruntime-web to run it</td><td class="n">+70.7</td></tr>
     </table>
     <div class="hint">Measured 2026-11-03 with compression on. Ettin's model alone is 10 MB; the index and the post texts are
     what it searches. After the download nothing is sent anywhere: your question, the search and the answer stay in this tab.
@@ -155,11 +124,10 @@
   <footer>
     <p>Ettin-17m distilled for Bluesky search (<a href="https://github.com/oaustegard/experiments/tree/main/ettin-native">ettin-native</a>),
     a hand-written WGSL engine, and a GPU scan over <a href="https://github.com/oaustegard/remex">remex</a> 2-bit codes, all shared with
-    <a href="../../bsky/embedders/">Three query embedders</a>. Monad: <a href="https://huggingface.co/PleIAs/Monad">PleIAs/Monad</a>
-    (Apache-2.0) with the loop fix from <a href="https://muninn.austegard.com/blog/editing-monad-weights-to-stop-loops.html">Editing
-    Monad's weights to stop its loops</a>, on <a href="https://onnxruntime.ai/">onnxruntime-web</a> 1.30, shared with
-    <a href="../monad-chat/">Monad Bullshitter</a>. Needs WebGPU (Chrome, Edge, Safari 26+).</p>
+    <a href="../embedders/">Three query embedders</a>. Needs WebGPU (Chrome, Edge, Safari 26+).</p>
+    <p>An earlier version also had <a href="../../ai-tools/monad-chat/">Monad</a>, a 56-million-parameter model, write an answer from
+    the top posts. 1 of its 18 quotes was word for word; the rest were stitched from pieces or made up, so it was dropped.</p>
     <p>Bluesky posts belong to their authors; each quote links back to the original.</p>
   </footer>
 </main>
-<script type="module" src="rag.js"></script>
+<script type="module" src="answers.js"></script>
