@@ -360,7 +360,9 @@ fillSettings();
 const listDate = new Date().toISOString().slice(0, 10);
 $('listName').value = `List Scout candidates ${listDate}`;
 $('listDesc').value = 'Accounts that posted about AI in Bluesky search and whose recent posts are mostly about it (List Scout). To review.';
-window.scout = { get candidates() { return candidates; }, ensureClassifier, run };
+// show(rows): render a review table from saved rows without a run (for screenshots and tests)
+const show = (rows) => { candidates = rows; $('authCard').hidden = true; render(); $('results').hidden = false; };
+window.scout = { get candidates() { return candidates; }, ensureClassifier, run, show };
 (async () => {
   await initializeLib();
   if (await checkStoredSession()) await signedIn();
