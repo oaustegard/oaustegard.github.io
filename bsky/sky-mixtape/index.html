@@ -193,7 +193,7 @@
     <p class="hint">Create an app with the Web API, add the redirect address above, and add each listener's Spotify account under User Management while the app is in development mode.</p>
     <label class="f" for="ytClient">Google OAuth client ID</label>
     <input type="text" id="ytClient" placeholder="…apps.googleusercontent.com" spellcheck="false">
-    <p class="hint">In Google Cloud: enable YouTube Data API v3, create an OAuth client of type Web application, and add <code id="originUri"></code> as an authorized JavaScript origin. Each search costs 100 of the project's 10,000 daily quota units, so a 25-song mix uses about a quarter of a day.</p>
+    <p class="hint">In Google Cloud: enable YouTube Data API v3, create an OAuth client of type Web application, and add <code id="originUri"></code> as an authorized JavaScript origin and the redirect address above as an authorized redirect URI. Each search costs 100 of the project's 10,000 daily quota units, so a 25-song mix uses about a quarter of a day.</p>
     <div class="bar"><button id="saveSettings">Save</button><button id="forgetServices">Disconnect Spotify and Google</button></div>
   </details>
 
@@ -207,7 +207,7 @@
 </main>
 
 <script type="module">
-const V = '2026-11-04c';
+const V = '2026-11-04d';
 const core = await import(`./mix-core.js?v=${V}`);
 
 const NS = 'com.austegard.mixtape';
@@ -250,7 +250,7 @@ const state = {
   session: null, did: null, profile: null,
   catalog: null, tagVecs: null, tagIndex: null,
   sp: LS.get('sp', null),   // { access, refresh, exp }
-  yt: null,                 // { access, exp } (memory only)
+  yt: (t => t && Date.now() < t.exp ? t : null)(LS.get('yt', null)), // { access, exp }, one hour
   ids: LS.get('ids', {}),   // song key -> { sp, yt }
   playing: -1,
 };
@@ -783,6 +783,7 @@ async function playPreview(i, tries = 0) {
 function play(i) {
   if (state.svc === 'spotify' && state.sp) return playSpotify(i);
   if (state.svc === 'spotify' && spClientId()) { status('Connecting Spotify for full-length songs…'); return spotifyConnect('play:' + i); }
+  if (state.svc === 'youtube' && ytClientId()) { status('Signing in to Google to find the videos…'); return youtubeConnect('play:' + i); }
   if (state.svc === 'youtube' && state.yt) return playYouTube(i);
   return playPreview(i);
 }
@@ -1009,26 +1010,40 @@ const loadScript = src => new Promise((res, rej) => {
   document.head.appendChild(s);
 });
 
-async function youtubeConnect() {
+// Google sign-in by full-page redirect (OAuth token response in the URL fragment). The code flow
+// would need the client secret for a Web-application client, which a static page cannot hold, and
+// a popup is easy for phone browsers to block. The mix is saved first, so the round trip loses nothing.
+function youtubeConnect(after) {
   const id = ytClientId();
-  if (!id) { $('settings').open = true; $('ytClient').focus(); status('YouTube needs a Google client ID first: see Settings below.', { err: true }); return false; }
-  await loadScript('https://accounts.google.com/gsi/client');
-  return new Promise(resolve => {
-    const client = google.accounts.oauth2.initTokenClient({
-      client_id: id, scope: 'https://www.googleapis.com/auth/youtube',
-      callback: r => {
-        if (r.error) { status(`Google said: ${r.error}`, { err: true }); return resolve(false); }
-        state.yt = { access: r.access_token, exp: Date.now() + (r.expires_in - 60) * 1000 };
-        resolve(true);
-      },
-      error_callback: e => { status(`Google sign-in closed: ${e.type || e}`, { err: true }); resolve(false); },
-    });
-    client.requestAccessToken();
-  });
+  if (!id) { $('settings').open = true; $('ytClient').focus(); status('YouTube needs a Google client ID first: see Settings below.', { err: true }); return; }
+  const st = 'yt-' + randStr(12);
+  LS.set('ytPending', { state: st, after });
+  LS.set('lastMix', state.mix);
+  location.href = 'https://accounts.google.com/o/oauth2/v2/auth?' + new URLSearchParams({
+    client_id: id, redirect_uri: REDIRECT, response_type: 'token', state: st,
+    scope: 'https://www.googleapis.com/auth/youtube', include_granted_scopes: 'true' });
+}
+
+function youtubeCallback() {
+  const h = new URLSearchParams(location.hash.slice(1));
+  const st = h.get('state');
+  if (!st?.startsWith('yt-')) return null;
+  history.replaceState(null, '', REDIRECT); // before the Bluesky client reads the fragment
+  const pend = LS.get('ytPending');
+  LS.del('ytPending');
+  if (!pend || pend.state !== st) { status('Google sign-in did not match this browser session. Try again.', { err: true }); return null; }
+  if (h.get('error')) { status(`Google said: ${h.get('error')}`, { err: true }); return null; }
+  state.yt = { access: h.get('access_token'), exp: Date.now() + ((+h.get('expires_in') || 3600) - 60) * 1000 };
+  LS.set('yt', state.yt);
+  return pend.after || null;
 }
 
 async function yt(path, init = {}) {
-  if (!state.yt || Date.now() > state.yt.exp) { if (!await youtubeConnect()) throw new Error('not connected'); }
+  if (!state.yt || Date.now() > state.yt.exp) {
+    state.yt = null; LS.del('yt');
+    youtubeConnect(state.svc === 'youtube' ? 'resume' : null);
+    throw new Error('signing in to Google again');
+  }
   const r = await fetch('https://www.googleapis.com/youtube/v3' + path, {
     ...init, headers: { Authorization: 'Bearer ' + state.yt.access, 'content-type': 'application/json', ...(init.headers || {}) },
   });
@@ -1062,7 +1077,7 @@ async function ytResolveAll() {
 
 async function saveYouTube() {
   try {
-    if (!state.yt && !await youtubeConnect()) return;
+    if (!state.yt) return youtubeConnect('save');
     const vids = (await ytResolveAll()).filter(Boolean);
     status('Creating the playlist…');
     const pl = await yt('/playlists?part=snippet,status', { method: 'POST', body: JSON.stringify({
@@ -1150,7 +1165,7 @@ function setSvc(s) {
   document.querySelectorAll('.svc button').forEach(b => b.setAttribute('aria-pressed', b.dataset.svc === s));
   const hints = {
     spotify: spClientId() ? (state.sp ? 'Spotify is connected: ▶ plays full songs (Premium) in this tab or your Spotify app, and the mix can be saved as a private playlist.' : 'Press ▶ or Save to sign in to Spotify. Full songs need Spotify Premium; the app is in development mode, so your account must be on its allowlist.') : 'Spotify needs a client ID: open Settings below. Until then, previews play here.',
-    youtube: ytClientId() ? 'A Google window asks to manage your YouTube playlists. Playback uses the YouTube player.' : 'YouTube needs a Google client ID: open Settings below. Until then, previews play here.',
+    youtube: ytClientId() ? 'Press ▶ or Save to sign in to Google, which asks to manage your YouTube playlists. Songs play in full in the YouTube player.' : 'YouTube needs a Google client ID: open Settings below. Until then, previews play here.',
     apple: 'Apple only lets registered apps create playlists, so 30-second previews play here and every song opens in Apple Music.',
     amazon: 'Amazon Music has no public API, so 30-second previews play here and every song opens a search in Amazon Music.',
   };
@@ -1217,12 +1232,15 @@ renderAccount();
 
 // Coming back from Spotify: restore the mix and continue what was asked.
 const spAfter = await spotifyCallback().catch(e => { status(`Spotify: ${e.message}`, { err: true }); return null; });
+const ytAfter = youtubeCallback();
 if (state.mix) {
   try { await loadCatalog(); renderMix(); } catch (e) { console.warn(e); }
 }
 await initAuth();
 if (spAfter === 'save' && state.mix) { setSvc('spotify'); saveSpotify(); }
 else if (spAfter?.startsWith('play:') && state.mix) { setSvc('spotify'); status('Spotify is connected. Press ▶ on a song to play it in full.'); }
+if (ytAfter === 'save' && state.mix) { setSvc('youtube'); saveYouTube(); }
+else if (ytAfter && state.mix) { setSvc('youtube'); status('YouTube is connected. Press ▶ on a song to play it.'); }
 </script>
 </body>
 </html>

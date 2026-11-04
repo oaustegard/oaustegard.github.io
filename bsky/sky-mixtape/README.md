@@ -34,7 +34,7 @@ The code for steps 3 to 5 is `mix-core.js`; the page and `build/tune.mjs` share 
 | service | what the page does | needs |
 |---|---|---|
 | Spotify | searches each song by ISRC; ▶ plays full songs through Spotify's Web Playback SDK in desktop browsers, or on the listener's open Spotify app (Spotify Connect) on phones; saves a private playlist | the app's client ID (PKCE, no secret) with the page URL as redirect URI; Premium for full songs; in development mode each listener's account must be allowlisted |
-| YouTube Music | searches each song, plays the list in the YouTube player, saves a private playlist | a Google OAuth web client ID with YouTube Data API v3; each search costs 100 of 10,000 daily quota units |
+| YouTube Music | searches each song, plays the list in full in the YouTube player, saves a private playlist | a Google OAuth web client ID with YouTube Data API v3, the page URL as authorized redirect URI and `https://austegard.com` as JavaScript origin; sign-in is a full-page redirect with the token in the URL fragment (the code flow would need the client secret), good for one hour; each search costs 100 of 10,000 daily quota units |
 | Apple Music | 30-second previews in the page; each song opens an Apple Music search | nothing. Creating Apple Music playlists needs a MusicKit developer token, which a static page cannot sign |
 | Amazon Music | 30-second previews in the page; each song opens an Amazon Music search | nothing. Amazon has no public playlist API |
 
