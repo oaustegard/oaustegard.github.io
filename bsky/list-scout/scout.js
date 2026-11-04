@@ -2,25 +2,31 @@
 // and put the ones you pick on a list. Everything runs in this tab:
 //
 //   1. search   authenticated post search (Bluesky's public AppView refuses searchPosts) for each term over
-//               the last N days; authors not on the excluded list, seen at least MIN times, become candidates
-//   2. sample   each candidate's last 100 posts and replies (no reposts), from the public AppView
-//   3. classify Ettin-17m embeds every sampled post on the GPU (../embedders/engine.js) and a logistic
-//               regression (about-ai.json, 768 weights) gives P(about AI); a candidate's share is the mean
-//   4. review   a table pre-ticks accounts that look like people posting on topic; you decide
-//   5. list     a new curate list (or an existing one) gets the ticked accounts
+//               the last N days; authors not on the excluded lists, seen at least MIN times, become candidates
+//   2. learn    Ettin-17m embeds the posts the search found and a background sample of Bluesky's Discover feed
+//               on the GPU (../embedders/engine.js), and a logistic regression fitted here (topic.js) separates
+//               them, giving P(on topic) for any post. Or the pre-trained about-AI model (about-ai.json) instead
+//   3. sample   each candidate's last 100 posts and replies (no reposts), from the public AppView
+//   4. classify every sampled post gets P(on topic); a candidate's topic share is the mean
+//   5. review   a table pre-ticks accounts that look like people posting on topic; you decide
+//   6. list     a new curate list (or an existing one) gets the ticked accounts
 //
 // Built from the analysis in oaustegard/experiments bsky-list-ai-share, which also ran a Claude judge
 // over the shortlist; here the reviewer is you.
 
 import { initializeLib, login, logout, checkStoredSession, getAuthAgent, getListMembers, getLists } from '../bsky-lib.js';
 import { SmallEngine } from '../embedders/engine.js';
+import { trainLogistic, auc } from './topic.js';
 
 const E = new URL('../embedders/models/ettin/', import.meta.url).href;
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
 const PUBLIC = 'https://public.api.bsky.app/xrpc';
-const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32;
+const DISCOVER = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
+const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32, DIM = 768;
+const MAX_POS = 1500, POS_PER_AUTHOR = 25, MAX_BG = 1200;   // training posts: search hits, Discover background
 const BOTWORDS = /\b(bot|bots|feed|feeds|news|newsletter|digest|daily|hourly|updates|automated|arxiv|headlines|briefing|aggregat\w*|curated|rss|jobs?|deals|crypto|signals)\b|-bot\b|bot\./i;
-const DEFAULT_TERMS = ['LLM', 'LLMs', 'large language model', 'Claude', 'ChatGPT', 'OpenAI', 'Anthropic', 'Gemini', 'AI agent',
+// the terms the about-AI model was built with; offered as an example and filled in when that model is chosen
+const AI_TERMS = ['LLM', 'LLMs', 'large language model', 'Claude', 'ChatGPT', 'OpenAI', 'Anthropic', 'Gemini', 'AI agent',
   'agentic', 'machine learning', 'neural network', 'RLHF', 'AI safety', 'alignment', 'interpretability', 'coding agent',
   'Claude Code', 'Codex', 'vibe coding', 'open weights', 'Llama', 'DeepSeek', 'Qwen', 'Mistral', 'diffusion model',
   'transformer', 'embeddings', 'RAG', 'fine-tuning', 'AI policy', 'AGI', 'frontier model', 'inference', 'benchmark',
@@ -32,12 +38,20 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; $('log').append(d); $('log').scrollTop = $('log').scrollHeight; };
 const bar = (f) => { $('bar').style.width = `${Math.round(Math.min(1, f) * 100)}%`; };
 
-const settings = { terms: DEFAULT_TERMS.join('\n'), days: 14, pages: 3, minHits: 3, maxCands: 200, minShare: 0.4, maxPpd: 40, minReplies: 0.15 };
+// The learned model gives accounts higher shares than the about-AI one: on 200 members of an AI list its shares
+// ran 0.08 to 0.2 above that model's, more with more terms, so its pre-tick threshold starts higher.
+const MIN_SHARE = { learn: 0.5, 'about-ai': 0.4 };
+const settings = { terms: '', model: 'learn', days: 14, pages: 3, minHits: 3, maxCands: 200, minShareBy: { ...MIN_SHARE },
+  maxPpd: 40, minReplies: 0.15, exclude: [] };
 try { Object.assign(settings, JSON.parse(localStorage.getItem('list-scout-settings') || '{}')); } catch (e) { /* no storage */ }
+delete settings.minShare;                                    // a single threshold, before there were two models
+settings.minShareBy = { ...MIN_SHARE, ...settings.minShareBy };
+if (!(settings.model in MIN_SHARE)) settings.model = 'learn';
+const minShare = () => settings.minShareBy[settings.model] ?? MIN_SHARE[settings.model];
 const save = () => { try { localStorage.setItem('list-scout-settings', JSON.stringify(settings)); } catch (e) { /* no storage */ } };
 
-let candidates = [];        // [{did, handle, name, bio, followers, hits, posts, replyFrac, ppd, share, aiPerDay, samples, checked}]
-let sortKey = 'aiPerDay', sortDir = -1, running = false;
+let candidates = [];        // [{did, handle, name, bio, followers, hits, posts, replyFrac, ppd, share, topicPerDay, flags, checked}]
+let sortKey = 'topicPerDay', sortDir = -1, running = false;
 
 // ---------------------------------------------------------------- network
 
@@ -58,10 +72,14 @@ async function listMembers(listUri) {
   return new Set(items.map((it) => it.subject.did));
 }
 
+const wordy = (t) => t.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length >= 3;
+
+// Search each term; returns the authors not excluded with their hit counts, and the texts of the posts found
+// (anyone's, at most POS_PER_AUTHOR each), which are the on-topic examples the topic model learns from.
 async function search(terms, days, pages, exclude, me) {
   const agent = getAuthAgent();
   const since = new Date(Date.now() - days * 86400e3).toISOString().slice(0, 10);
-  const hits = new Map(), seen = new Set();
+  const hits = new Map(), seen = new Set(), texts = [], perAuthor = new Map();
   for (const [t, term] of terms.entries()) {
     let cursor;
     for (let p = 0; p < pages; p++) {
@@ -74,7 +92,8 @@ async function search(terms, days, pages, exclude, me) {
       for (const post of res.data.posts || []) {
         if (seen.has(post.uri)) continue;
         seen.add(post.uri);
-        const did = post.author.did;
+        const did = post.author.did, text = post.record?.text || '';
+        if (wordy(text) && (perAuthor.get(did) || 0) < POS_PER_AUTHOR) { texts.push(text); perAuthor.set(did, (perAuthor.get(did) || 0) + 1); }
         if (exclude.has(did) || did === me) continue;
         const h = hits.get(did) || { did, handle: post.author.handle, hits: 0 };
         h.hits++;
@@ -86,10 +105,24 @@ async function search(terms, days, pages, exclude, me) {
     $('stage').textContent = `searching: ${t + 1} / ${terms.length} terms, ${seen.size.toLocaleString()} posts, ${hits.size.toLocaleString()} authors`;
     bar(0.25 * (t + 1) / terms.length);
   }
-  return { hits: [...hits.values()], posts: seen.size };
+  // spread the examples over the terms: the search order put the first terms' posts first
+  for (let i = texts.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [texts[i], texts[j]] = [texts[j], texts[i]]; }
+  return { hits: [...hits.values()], posts: seen.size, texts: texts.slice(0, MAX_POS) };
 }
 
-const wordy = (t) => t.split(/\s+/).filter((w) => /\p{L}/u.test(w)).length >= 3;
+// What Bluesky looks like off topic: posts from the Discover feed, in whatever languages it holds
+async function background(n) {
+  const texts = new Set();
+  let cursor;
+  for (let p = 0; p < 20 && texts.size < n; p++) {
+    const d = await getJSON(`${PUBLIC}/app.bsky.feed.getFeed?${qs({ feed: DISCOVER, limit: 100, cursor })}`);
+    for (const it of d?.feed || []) { const t = it.post.record?.text || ''; if (wordy(t)) texts.add(t); }
+    cursor = d?.cursor;
+    if (!cursor) break;
+  }
+  return [...texts].slice(0, n);
+}
+
 async function sample(c) {
   const d = await getJSON(`${PUBLIC}/app.bsky.feed.getAuthorFeed?${qs({ actor: c.did, limit: 100, filter: 'posts_with_replies' })}`);
   const own = (d?.feed || []).filter((it) => !it.reason && it.post.author.did === c.did).map((it) => it.post);
@@ -108,39 +141,32 @@ async function profiles(dids) {
   return out;
 }
 
-// ---------------------------------------------------------------- the classifier on the GPU
+// ---------------------------------------------------------------- the model on the GPU
 
-let clf = null;
-async function ensureClassifier() {
-  if (clf) return clf;
+// embedEach(texts, onRows) hands each batch's Ettin-17m unit vectors (rows of DIM) to onRows(V, start, n), so a
+// caller scoring 20,000 posts need not keep them all; embed(texts) keeps them.
+let embedder = null;
+async function ensureEmbedder() {
+  if (embedder) return embedder;
   const adapter = await navigator.gpu?.requestAdapter({ powerPreference: 'high-performance' });
   if (!adapter) throw new Error('This page needs WebGPU (Chrome, Edge, or Safari 26+): the classifier runs on the GPU.');
   const device = await adapter.requestDevice({ requiredLimits: {
     maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
-  $('stage').textContent = 'loading the classifier (11 MB, once)';
-  const [manifest, meta, tj, model, weights, tokMod] = await Promise.all([
+  $('stage').textContent = 'loading the embedding model (11 MB, once)';
+  const [manifest, meta, tj, model, tokMod] = await Promise.all([
     fetch(E + 'manifest.json').then((r) => r.json()), fetch(E + 'meta.json').then((r) => r.json()),
-    fetch(E + 'tokenizer.json').then((r) => r.json()), fetch(E + 'model.onnx').then((r) => r.arrayBuffer()),
-    fetch(new URL('about-ai.json', import.meta.url)).then((r) => r.json()), import(TOKENIZERS)]);
+    fetch(E + 'tokenizer.json').then((r) => r.json()), fetch(E + 'model.onnx').then((r) => r.arrayBuffer()), import(TOKENIZERS)]);
   const tok = new tokMod.Tokenizer(tj, {});
   const dp = (meta.prompts || {}).document ?? '';
   const engine = await SmallEngine.create(device, manifest, model, { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
-  const w = Float32Array.from(weights.w), b = weights.bias, D = w.length;
   const ids = (text) => { const x = tok.encode(dp + text).ids; return x.length > MAX_SEQ ? x.slice(0, MAX_SEQ - 1).concat(x[x.length - 1]) : x; };
-  // P(about the topic) for many texts, in batches the engine accepts; onBatch(done) reports progress
-  const score = async (texts, onBatch) => {
-    const out = new Float32Array(texts.length);
+  const embedEach = async (texts, onRows) => {
     let batch = [], start = 0, toks = 0;
     const flush = async () => {
       if (!batch.length) return;
-      const V = await engine.embed(batch);
-      for (let j = 0; j < batch.length; j++) {
-        let z = b;
-        for (let k = 0; k < D; k++) z += w[k] * V[j * D + k];
-        out[start + j] = 1 / (1 + Math.exp(-z));
-      }
-      start += batch.length; batch = []; toks = 0;
-      onBatch?.(start);
+      const n = batch.length;
+      await onRows(await engine.embed(batch), start, n);
+      start += n; batch = []; toks = 0;
     };
     for (const t of texts) {
       const x = ids(t);
@@ -148,10 +174,60 @@ async function ensureClassifier() {
       batch.push(x); toks += x.length;
     }
     await flush();
+  };
+  const embed = async (texts, onBatch) => {
+    const out = new Float32Array(texts.length * DIM);
+    await embedEach(texts, (V, start, n) => { out.set(V.subarray(0, n * DIM), start * DIM); onBatch?.(start + n); });
     return out;
   };
-  clf = { score, name: weights.name };
-  return clf;
+  embedder = { embed, embedEach };
+  return embedder;
+}
+
+// P(on topic) for many texts under a head {w, b}; onBatch(done) reports progress
+async function score(head, texts, onBatch) {
+  const { embedEach } = await ensureEmbedder();
+  const out = new Float32Array(texts.length);
+  await embedEach(texts, (V, start, n) => {
+    for (let j = 0; j < n; j++) {
+      let z = head.b;
+      for (let k = 0; k < DIM; k++) z += head.w[k] * V[j * DIM + k];
+      out[start + j] = 1 / (1 + Math.exp(-z));
+    }
+    onBatch?.(start + n);
+  });
+  return out;
+}
+
+let aboutAI = null;
+function aboutAIHead() {
+  aboutAI ??= fetch(new URL('about-ai.json', import.meta.url)).then((r) => r.json()).then((m) => ({ w: Float32Array.from(m.w), b: m.bias }));
+  return aboutAI;
+}
+
+// Learn the topic from the posts the search found (on topic) against the Discover sample (mostly not). A fifth of
+// both is held out to report how well they separate. Returns { w, b, auc, pos, neg }.
+async function learnTopic(posTexts, negTexts, onStage = () => {}) {
+  if (posTexts.length < 30) throw new Error(`The search found ${posTexts.length} usable posts, too few to learn the topic from: add terms or days.`);
+  if (negTexts.length < 100) throw new Error('Could not read enough of the Discover feed for a background sample; try again.');
+  const { embed } = await ensureEmbedder();
+  const texts = [...posTexts, ...negTexts];
+  const X = await embed(texts, (n) => onStage(`learning the topic: embedding ${n.toLocaleString()} / ${texts.length.toLocaleString()} posts`));
+  const y = texts.map((_, i) => (i < posTexts.length ? 1 : 0));
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648);
+  const held = y.map(() => rnd() < 0.2);
+  const pick = (heldOut) => {
+    const rows = y.map((_, i) => i).filter((i) => held[i] === heldOut);
+    const Xs = new Float32Array(rows.length * DIM);
+    rows.forEach((r, j) => Xs.set(X.subarray(r * DIM, (r + 1) * DIM), j * DIM));
+    return { X: Xs, y: rows.map((r) => y[r]) };
+  };
+  const tr = pick(false), te = pick(true);
+  const head = await trainLogistic(tr.X, tr.y, DIM, { C: 1, iters: 600,
+    onIter: async (i, n) => { onStage(`learning the topic: fitting ${Math.round(100 * i / n)}%`); await sleep(0); } });
+  const z = te.y.map((_, i) => { let s = head.b; for (let k = 0; k < DIM; k++) s += head.w[k] * te.X[i * DIM + k]; return s; });
+  return { ...head, auc: auc(z, te.y), pos: posTexts.length, neg: negTexts.length };
 }
 
 // ---------------------------------------------------------------- the run
@@ -164,7 +240,7 @@ function flags(c) {
   if (c.posts.length < 10) f.push('few posts');
   return f;
 }
-const looksRight = (c) => c.share >= settings.minShare && !flags(c).length;
+const looksRight = (c) => c.share >= minShare() && !flags(c).length;
 
 async function run() {
   if (running) return;
@@ -181,8 +257,11 @@ async function run() {
       m.forEach((d) => exclude.add(d));
       log(`excluding ${m.size} members of <b>${esc($('exclude').querySelector(`option[value="${CSS.escape(uri)}"]`).textContent)}</b>`);
     }
-    const loading = ensureClassifier();                // load the model while searching
+    const learning = settings.model === 'learn';
+    const loading = ensureEmbedder();                   // load the model while searching
     loading.catch(() => {});
+    const bg = learning ? background(MAX_BG) : null;    // and read the background sample
+    bg?.catch(() => {});
     const s = await search(terms, settings.days, settings.pages, exclude, me);
     let cands = s.hits.filter((h) => h.hits >= settings.minHits).sort((a, b) => b.hits - a.hits);
     log(`${s.posts.toLocaleString()} posts from ${s.hits.length.toLocaleString()} authors not excluded; ` +
@@ -190,6 +269,18 @@ async function run() {
     cands = cands.slice(0, settings.maxCands);
     if (!cands.length) throw new Error('No candidates: try more terms, more days, or a lower minimum.');
 
+    // learn the topic (GPU, then CPU) while the candidates are sampled (network)
+    let learnMsg = '';
+    const heading = (async () => {
+      await loading;
+      if (!learning) return aboutAIHead();
+      const head = await learnTopic(s.texts, await bg, (m) => { learnMsg = m; });
+      log(`learned the topic from ${head.pos.toLocaleString()} posts the search found and ${head.neg.toLocaleString()} from Discover; ` +
+          `held out, the two separate with AUC ${head.auc.toFixed(3)}` + (head.auc < 0.9 ? ' <span class="warn">(low: the terms may be too general)</span>' : ''));
+      learnMsg = '';
+      return head;
+    })();
+    heading.catch(() => {});
     const sampled = [];
     let done = 0;
     const queue = cands.slice();
@@ -198,7 +289,7 @@ async function run() {
         const c = queue.shift();
         sampled.push(await sample(c));
         done++;
-        $('stage').textContent = `sampling posts: ${done} / ${cands.length} accounts`;
+        $('stage').textContent = `sampling posts: ${done} / ${cands.length} accounts` + (learnMsg ? ` · ${learnMsg}` : '');
         bar(0.25 + 0.25 * done / cands.length);
       }
     }));
@@ -209,18 +300,20 @@ async function run() {
         followers: p.followersCount ?? null, avatar: p.avatar || '' });
     }
 
-    const { score } = await loading;
+    const ticker = setInterval(() => { if (learnMsg) $('stage').textContent = learnMsg; }, 250);
+    let head;
+    try { head = await heading; } finally { clearInterval(ticker); }
     const flat = sampled.flatMap((c) => c.posts.map((p) => p.text));
     log(`classifying ${flat.length.toLocaleString()} posts on the GPU`);
     const t1 = performance.now();
-    const P = await score(flat, (n) => { $('stage').textContent = `classifying: ${n.toLocaleString()} / ${flat.length.toLocaleString()} posts`; bar(0.5 + 0.5 * n / flat.length); });
+    const P = await score(head, flat, (n) => { $('stage').textContent = `classifying: ${n.toLocaleString()} / ${flat.length.toLocaleString()} posts`; bar(0.5 + 0.5 * n / flat.length); });
     log(`classified in ${((performance.now() - t1) / 1000).toFixed(1)} s`);
     let o = 0;
     for (const c of sampled) {
       const ps = P.subarray(o, o + c.posts.length); o += c.posts.length;
       c.posts.forEach((p, j) => { p.p = ps[j]; });
       c.share = c.posts.length ? ps.reduce((a, b) => a + b, 0) / c.posts.length : 0;
-      c.aiPerDay = c.share * c.ppd;
+      c.topicPerDay = c.share * c.ppd;
       c.flags = flags(c);
       c.checked = looksRight(c);
     }
@@ -228,6 +321,7 @@ async function run() {
     bar(1);
     $('stage').textContent = `done in ${((performance.now() - t0) / 1000).toFixed(0)} s: ${candidates.length} accounts scored, ` +
       `${candidates.filter((c) => c.checked).length} pre-ticked`;
+    if (!descEdited) $('listDesc').value = describe(terms);
     render();
     $('results').hidden = false; $('listCard').hidden = false;
   } catch (e) {
@@ -255,7 +349,7 @@ function render() {
         <div class="name">${esc(c.name)}</div><div class="bio">${esc(c.bio.slice(0, 160))}</div>
         ${c.flags.length ? `<div class="flags">${c.flags.map((f) => `<span>${esc(f)}</span>`).join('')}</div>` : ''}
         <details><summary>most and least on-topic posts</summary><ul>${samples}</ul></details></td>
-      <td class="n"><b>${pct(c.share)}</b></td><td class="n">${c.aiPerDay.toFixed(1)}</td><td class="n">${c.ppd.toFixed(1)}</td>
+      <td class="n"><b>${pct(c.share)}</b></td><td class="n">${c.topicPerDay.toFixed(1)}</td><td class="n">${c.ppd.toFixed(1)}</td>
       <td class="n">${pct(c.replyFrac)}</td><td class="n">${c.followers?.toLocaleString() ?? '–'}</td><td class="n">${c.hits}</td></tr>`;
   }).join('');
   for (const th of document.querySelectorAll('th[data-k]')) th.classList.toggle('sorted', th.dataset.k === sortKey);
@@ -315,33 +409,53 @@ $('target').onchange = () => { $('newList').hidden = $('target').value !== 'new'
 
 function readSettings() {
   settings.terms = $('terms').value;
+  settings.model = $('model').value;
   for (const k of ['days', 'pages', 'minHits', 'maxCands']) settings[k] = Math.max(1, parseInt($(k).value, 10) || settings[k]);
-  settings.minShare = (parseFloat($('minShare').value) || 40) / 100;
+  const ms = parseFloat($('minShare').value);
+  settings.minShareBy[settings.model] = Number.isFinite(ms) ? ms / 100 : MIN_SHARE[settings.model];
   settings.maxPpd = parseFloat($('maxPpd').value) || 40;
   settings.minReplies = (parseFloat($('minReplies').value) || 0) / 100;
+  if ($('exclude').options.length) settings.exclude = [...$('exclude').selectedOptions].map((o) => o.value);
   save();
 }
 function fillSettings() {
   $('terms').value = settings.terms;
+  $('model').value = settings.model;
   for (const k of ['days', 'pages', 'minHits', 'maxCands']) $(k).value = settings[k];
-  $('minShare').value = Math.round(settings.minShare * 100); $('maxPpd').value = settings.maxPpd; $('minReplies').value = Math.round(settings.minReplies * 100);
+  $('minShare').value = Math.round(minShare() * 100); $('maxPpd').value = settings.maxPpd; $('minReplies').value = Math.round(settings.minReplies * 100);
 }
-$('resetTerms').onclick = () => { $('terms').value = DEFAULT_TERMS.join('\n'); };
+// each model keeps its own pre-tick threshold; the about-AI model comes with the terms it was built for
+$('model').onchange = () => {
+  const ms = parseFloat($('minShare').value);
+  if (Number.isFinite(ms)) settings.minShareBy[settings.model] = ms / 100;
+  settings.model = $('model').value;
+  $('minShare').value = Math.round(minShare() * 100);
+  if (settings.model === 'about-ai' && !$('terms').value.trim()) $('terms').value = AI_TERMS.join('\n');
+  save();
+};
+$('aiTerms').onclick = () => { $('terms').value = AI_TERMS.join('\n'); };
+
+let descEdited = false;
+$('listDesc').oninput = () => { descEdited = true; };
+function describe(terms) {
+  const shown = terms.slice(0, 4).map((t) => `"${t}"`).join(', ') + (terms.length > 4 ? ` and ${terms.length - 4} more` : '');
+  return `Accounts that posted ${shown} on Bluesky and whose recent posts are mostly on that topic, found by List Scout. To review.`.slice(0, 300);
+}
 
 async function loadLists() {
   const agent = getAuthAgent();
   const r = await getLists(agent.session.did);
   const lists = r.data.lists.filter((l) => l.purpose === 'app.bsky.graph.defs#curatelist');
   const opts = lists.map((l) => `<option value="${esc(l.uri)}">${esc(l.name)} (${l.listItemCount ?? '?'})</option>`).join('');
-  const prev = [...$('exclude').selectedOptions].map((o) => o.value);
+  const prev = $('exclude').options.length ? [...$('exclude').selectedOptions].map((o) => o.value) : settings.exclude;
   $('exclude').innerHTML = opts;
-  for (const o of $('exclude').options) o.selected = prev.includes(o.value) || (!prev.length && /intelligence|ai\b/i.test(o.textContent));
+  for (const o of $('exclude').options) o.selected = prev.includes(o.value);
   $('target').innerHTML = '<option value="new">a new list</option>' + opts;
   $('newList').hidden = $('target').value !== 'new';
 }
 async function signedIn() {
   $('who').textContent = '@' + getAuthAgent().session.handle;
-  await loadLists();                                 // before showing the form, so the skip list is set when it appears
+  await loadLists();                                 // before showing the form, so the skip lists are set when it appears
   $('authCard').hidden = true; $('scoutCard').hidden = false;
 }
 $('loginBtn').onclick = async () => {
@@ -357,12 +471,10 @@ $('logout').onclick = () => { logout(); location.reload(); };
 $('run').onclick = run;
 
 fillSettings();
-const listDate = new Date().toISOString().slice(0, 10);
-$('listName').value = `List Scout candidates ${listDate}`;
-$('listDesc').value = 'Accounts that posted about AI in Bluesky search and whose recent posts are mostly about it (List Scout). To review.';
+$('listName').value = `List Scout candidates ${new Date().toISOString().slice(0, 10)}`;
 // show(rows): render a review table from saved rows without a run (for screenshots and tests)
 const show = (rows) => { candidates = rows; $('authCard').hidden = true; render(); $('results').hidden = false; };
-window.scout = { get candidates() { return candidates; }, ensureClassifier, run, show };
+window.scout = { get candidates() { return candidates; }, ensureEmbedder, score, aboutAIHead, learnTopic, background, run, show };
 (async () => {
   await initializeLib();
   if (await checkStoredSession()) await signedIn();

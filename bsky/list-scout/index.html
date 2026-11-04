@@ -3,10 +3,10 @@
 <meta charset="utf-8">
 <title>Bluesky List Scout</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="description" content="Find Bluesky accounts that post about AI and are not on your list yet: search posts, sample each author's recent posts, classify them on your GPU, review, and add the ones you pick to a list.">
+<meta name="description" content="Build a Bluesky list on any topic: search posts for your terms, learn the topic from what the search finds, score each author's recent posts on your GPU, review, and add the ones you pick to a list.">
 <meta name="ai-disclosure" content="ai-assisted">
 <meta property="og:title" content="Bluesky List Scout">
-<meta property="og:description" content="Find Bluesky accounts that post about AI and are not on your list yet: search posts, sample each author's recent posts, classify them on your GPU, review, and add the ones you pick to a list.">
+<meta property="og:description" content="Build a Bluesky list on any topic: search posts for your terms, learn the topic from what the search finds, score each author's recent posts on your GPU, review, and add the ones you pick to a list.">
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://austegard.com/bsky/list-scout/">
 <meta property="og:image" content="https://austegard.com/images/og/bsky-list-scout.jpg">
@@ -74,8 +74,9 @@
 </style>
 <main>
   <h1>Bluesky List Scout</h1>
-  <p class="sub">Find accounts that post about AI and are not on your list yet. It searches Bluesky posts, reads each
-  author's last 100 posts, measures on your GPU how much of it is about AI, and lets you pick who goes on a list.</p>
+  <p class="sub">Find accounts that post about a topic and are not on your list yet. It searches Bluesky posts for your
+  terms, learns the topic from the posts it finds, reads each author's last 100 posts, measures on your GPU how much of
+  it is on topic, and lets you pick who goes on a list.</p>
 
   <section class="card" id="authCard">
     <h2>Sign in</h2>
@@ -93,8 +94,17 @@
     <div class="grid">
       <div>
         <label for="terms">Search terms, one per line (each is searched as a phrase)</label>
-        <textarea id="terms" spellcheck="false"></textarea>
-        <button id="resetTerms" style="margin-top:.3rem">default AI terms</button>
+        <textarea id="terms" spellcheck="false" placeholder="sourdough&#10;levain&#10;crumb shot&#10;bread baking"></textarea>
+        <p class="hint">The posts these find teach the page what the topic is, so use terms that mostly mean it: a
+        dozen or more specific ones work better than a few broad ones.</p>
+        <label for="model">Measure the topic with</label>
+        <select id="model">
+          <option value="learn">a model learned from these search results</option>
+          <option value="about-ai">the pre-trained about-AI model (for AI lists only)</option>
+        </select>
+        <button id="aiTerms" style="margin-top:.3rem" title="replace the terms with the 40 the about-AI model was built with">example: AI terms</button>
+        <p class="hint">Each model keeps its own pre-tick threshold: 50% to start for the learned one, whose shares run
+        high, and 40% for the about-AI one.</p>
       </div>
       <div>
         <label for="exclude">Skip people already on (ctrl/cmd-click for several)</label>
@@ -106,12 +116,12 @@
           <div><label for="maxCands">Max. accounts</label><input type="number" id="maxCands" min="10" max="1000"></div>
         </div>
         <div class="row">
-          <div><label for="minShare">Pre-tick at AI share ≥ %</label><input type="number" id="minShare" min="0" max="100"></div>
+          <div><label for="minShare">Pre-tick at topic share ≥ %</label><input type="number" id="minShare" min="0" max="100"></div>
           <div><label for="maxPpd">and posts/day ≤</label><input type="number" id="maxPpd" min="1" max="1000"></div>
           <div><label for="minReplies">and replies ≥ %</label><input type="number" id="minReplies" min="0" max="100"></div>
         </div>
         <p class="hint">A page of search results is 100 posts. Each sampled account costs one request and about 100
-        posts to classify. Bots, feeds and marketers post a lot about AI too; they rarely reply, so the reply
+        posts to classify. Bots, feeds and marketers post a lot on most topics; they rarely reply, so the reply
         threshold and the bot/feed words in names and bios do most of the screening. You make the final call.</p>
       </div>
     </div>
@@ -127,8 +137,8 @@
       <span id="count"></span></div>
     <div class="tablewrap"><table>
       <thead><tr><th></th><th>account</th>
-        <th class="n" data-k="share" title="mean P(about AI) over the sampled posts">AI share</th>
-        <th class="n" data-k="aiPerDay" title="AI share × posts per day">AI/day</th>
+        <th class="n" data-k="share" title="mean P(on topic) over the sampled posts">topic share</th>
+        <th class="n" data-k="topicPerDay" title="topic share × posts per day">on topic/day</th>
         <th class="n" data-k="ppd">posts/day</th>
         <th class="n" data-k="replyFrac">replies</th>
         <th class="n" data-k="followers">followers</th>
@@ -152,15 +162,19 @@
     <h2>How it works</h2>
     <p class="hint">Search terms are searched as phrases over the last N days, newest first. Authors who are not on the
     lists you skip, and who turn up at least the minimum number of times, are sampled: their last 100 posts and replies,
-    without reposts. <a href="../embedders/">Ettin-17m</a> embeds every sampled post on your GPU, and a logistic
-    regression trained on 600 Bluesky posts labelled about AI or not (cross-validated AUC 0.88) scores each one. An
-    account's AI share is the mean of its posts' scores, the same measure used to decide who to remove from the list
-    it was built for. The classifier only knows "about AI"; other search terms still find people, but the share
-    column will not measure their topic. Nothing leaves this tab except the requests to Bluesky.</p>
+    without reposts. <a href="../embedders/">Ettin-17m</a> embeds posts on your GPU. To learn the topic, it embeds up
+    to 1,500 of the posts the search found and 1,200 posts from Bluesky's Discover feed, and a logistic regression
+    fitted in the tab tells the two apart; the log reports its AUC on a fifth of the posts, held out from fitting. That model
+    then scores every sampled post, and an account's topic share is the mean of its posts' scores. Tested on 200
+    members of an AI list, it ranked them as the pre-trained about-AI model does (rank correlation 0.89 with three
+    terms, 0.93 with forty) but gave shares 0.08 to 0.2 higher, so read the share as a ranking and set the pre-tick
+    threshold by looking at the table. The about-AI model was trained on 600 Bluesky posts labelled by Claude Haiku
+    (cross-validated AUC 0.88) and is the better measure when the topic is AI. Nothing leaves this tab except the
+    requests to Bluesky.</p>
   </section>
 
   <footer>
-    <p>Method and the measurement behind it: <a href="https://github.com/oaustegard/experiments/tree/main/bsky-list-ai-share">bsky-list-ai-share</a>.
+    <p>The about-AI model and the first use of this method: <a href="https://github.com/oaustegard/experiments/tree/main/bsky-list-ai-share">bsky-list-ai-share</a>.
     Model and WebGPU engine shared with <a href="../embedders/">Three query embedders</a> and <a href="../answer-search/">Bluesky Answer Search</a>.
     Needs WebGPU (Chrome, Edge, Safari 26+).</p>
   </footer>
