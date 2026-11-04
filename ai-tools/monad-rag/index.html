@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Monad Bluesky RAG</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="A complete retrieval-augmented generation system in one browser tab, 98 MB in all: Ettin-17m searches 61,686 Bluesky posts about AI on your GPU, and the 56M-parameter Monad answers from the posts it finds, with every quote checked against them.">
+<meta name="ai-disclosure" content="ai-assisted">
+<style>
+  :root { color-scheme: light dark; --fg:#151515; --dim:#686660; --bg:#fbfbf9; --line:#d8d6d0;
+          --card:#fff; --soft:#f2f1ec; --accent:#2d5b8a; --ok:#1a7f4b; --warn:#9a5b00; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e6e1; --dim:#9a978f; --bg:#16171a; --line:#33353a; --card:#1d1f23;
+            --soft:#23252a; --accent:#8db6e0; --ok:#4fbf87; --warn:#e0a54a; --bad:#f2836b; }
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 1.6rem 1rem 3rem; }
+  h1 { font-size: 1.55rem; margin: 0 0 .25rem; font-weight: 600; }
+  p.sub { color: var(--dim); margin: 0 0 1rem; font-size: .95rem; }
+  a { color: inherit; }
+  code, button, select, input, textarea, .badge, .stats, .think, .pmeta, .verdict, table { font-family: ui-monospace,
+    SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .bar { display:flex; gap:.5rem; flex-wrap:wrap; align-items:center; margin-bottom:.6rem; }
+  .badge { font-size:.74rem; padding:.18rem .5rem; border:1px solid var(--line); border-radius:3px; color:var(--dim); white-space:nowrap; }
+  select, button { font-size:.82rem; padding:.42rem .7rem; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--fg); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  #status { flex:1 1 220px; font-size:.78rem; color:var(--dim); }
+  .prog { height:3px; background:var(--soft); border-radius:2px; overflow:hidden; margin:.15rem 0 .8rem; }
+  .prog > div { height:100%; width:0; background:var(--accent); transition:width .15s; }
+  .composer { display:flex; gap:.5rem; align-items:flex-end; }
+  textarea { flex:1; min-width:0; font-size:.92rem; padding:.55rem .65rem; border:1px solid var(--line); border-radius:5px;
+             background:var(--card); color:var(--fg); resize:vertical; line-height:1.4; min-height:2.8rem; }
+  .examples { display:flex; gap:.4rem; flex-wrap:wrap; margin:.6rem 0; }
+  .examples button { font-size:.74rem; padding:.28rem .55rem; font-family:ui-serif, Georgia, serif; }
+  details.box { border:1px solid var(--line); border-radius:6px; padding:.45rem .8rem; margin:.8rem 0; font-size:.85rem; }
+  details.box summary { cursor:pointer; color:var(--dim); }
+  .grid { display:grid; grid-template-columns: 11rem 1fr; gap:.5rem .8rem; align-items:center; margin-top:.7rem; }
+  .grid label { color:var(--dim); font-size:.8rem; }
+  .grid input[type=range] { width:calc(100% - 4rem); vertical-align:middle; }
+  .val { font-size:.78rem; color:var(--dim); margin-left:.4rem; }
+  .hint { font-size:.76rem; color:var(--dim); line-height:1.45; }
+  table { border-collapse:collapse; font-size:.76rem; margin:.5rem 0; width:100%; }
+  td, th { text-align:left; padding:.2rem .5rem .2rem 0; border-bottom:1px solid var(--line); vertical-align:top; }
+  td.n, th.n { text-align:right; white-space:nowrap; }
+  #log { display:flex; flex-direction:column; gap:1.2rem; margin:1rem 0; }
+  .turn { border:1px solid var(--line); border-radius:6px; padding:.8rem .95rem; background:var(--card); overflow-wrap:anywhere; }
+  .question { font-weight:600; margin-bottom:.3rem; white-space:pre-wrap; }
+  details.think { margin:.15rem 0 .5rem; font-size:.78rem; color:var(--dim); }
+  details.think summary { cursor:pointer; user-select:none; }
+  details.think .trace { white-space:pre-wrap; margin-top:.35rem; padding:.5rem .6rem; border-left:2px solid var(--line); max-height:20rem; overflow:auto; }
+  .answer p { margin:.35rem 0; } .answer ul, .answer ol { margin:.35rem 0; padding-left:1.4rem; }
+  .answer h4 { margin:.6rem 0 .2rem; font-size:1rem; }
+  .answer .cursor::after { content:"▍"; color:var(--dim); animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:0; } }
+  q.ref { font-style:italic; quotes:"“" "”"; padding:0 .1em; border-bottom:2px solid; }
+  q.k-exact { border-color:var(--ok); } q.k-moved, q.k-pieced { border-color:var(--warn); } q.k-absent { border-color:var(--bad); }
+  button.chip { font-size:.66rem; padding:.02rem .3rem; margin-left:.2rem; vertical-align:.12em; border-radius:3px; }
+  .k-exact { color:var(--ok); } .k-moved, .k-pieced { color:var(--warn); } .k-absent { color:var(--bad); }
+  button.chip.k-exact { border-color:var(--ok); } button.chip.k-moved, button.chip.k-pieced { border-color:var(--warn); } button.chip.k-absent { border-color:var(--bad); }
+  .verdict { font-size:.74rem; color:var(--dim); margin-top:.5rem; }
+  .stats { font-size:.72rem; color:var(--dim); margin-top:.35rem; display:flex; gap:.7rem; flex-wrap:wrap; }
+  .warn { color:var(--warn); } .bad { color:var(--bad); }
+  details.posts { margin-top:.6rem; font-size:.84rem; }
+  details.posts summary { cursor:pointer; color:var(--dim); font-size:.76rem; font-family:ui-monospace, monospace; }
+  details.posts ol { list-style:none; padding:0; margin:.4rem 0 0; display:flex; flex-direction:column; gap:.45rem; }
+  details.posts li { border-left:2px solid var(--line); padding:.2rem 0 .2rem .6rem; }
+  details.posts li.was-cited { border-left-color:var(--accent); }
+  details.posts li.flash { animation: flash 1.2s ease-out; }
+  @keyframes flash { from { background:var(--soft); } to { background:transparent; } }
+  .pmeta { font-size:.7rem; color:var(--dim); display:flex; gap:.6rem; flex-wrap:wrap; }
+  .pmeta .cited { color:var(--accent); }
+  .ptext { white-space:pre-wrap; margin-top:.1rem; }
+  footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
+  footer p { margin:.35rem 0; }
+  @media (max-width: 700px) {
+    main { padding:1rem 16px 2rem; }
+    h1 { font-size:1.3rem; }
+    textarea, select { font-size:16px !important; }   /* below 16px iOS zooms on focus */
+    .grid { grid-template-columns: 1fr; }
+    #status { flex-basis:100%; order:3; font-size:.74rem; }
+  }
+</style>
+<main>
+  <h1>Monad Bluesky RAG</h1>
+  <p class="sub">A whole retrieval-augmented generation system in this tab, 98 MB in all.
+  <a href="../../bsky/embedders/">Ettin-17m</a> turns your question into a vector and your GPU searches
+  61,686 Bluesky posts about AI for the closest ones. Then <a href="../monad-chat/">Monad</a>, a 56-million-parameter
+  reasoning model, answers from those posts and quotes them. Monad is small, so the quotes are checked: each one is
+  marked by whether it is really in the post it cites. Most are stitched together from pieces.</p>
+  <div class="bar">
+    <select id="model" aria-label="model"></select>
+    <span id="backend" class="badge">WebGPU needed</span>
+    <span id="status">Nothing downloaded yet. The first question fetches 98 MB, which the browser then keeps.</span>
+    <button id="load">Load now</button>
+  </div>
+  <div class="prog"><div id="bar"></div></div>
+  <div class="composer">
+    <textarea id="q" rows="2" placeholder="Ask AI Bluesky something. Enter sends."></textarea>
+    <button id="ask" class="primary">Ask</button>
+  </div>
+  <div class="examples" id="examples"></div>
+  <div id="log" aria-live="polite"></div>
+
+  <details class="box">
+    <summary>Settings</summary>
+    <div class="grid">
+      <label for="k">Posts handed to Monad</label>
+      <div><input type="range" id="k" min="1" max="10" step="1"><span class="val" id="kV"></span>
+        <div class="hint">Monad was trained (on <a href="https://huggingface.co/datasets/PleIAs/SYNTH">SYNTH</a>) with up to ten
+        numbered sources. More posts leave less of its 2,048-token window for thinking, and the lowest-ranked posts are
+        dropped if they would leave under 640.</div></div>
+      <label for="temp">Temperature</label>
+      <div><input type="range" id="temp" min="0" max="1.5" step="0.05"><span class="val" id="tempV"></span></div>
+      <label for="maxnew">Max new tokens</label>
+      <div><input type="range" id="maxnew" min="256" max="1536" step="64"><span class="val" id="maxnewV"></span></div>
+      <label for="showThink">Thinking trace</label>
+      <div><label><input type="checkbox" id="showThink"> open while it streams</label></div>
+    </div>
+    <div class="bar" style="margin-top:.8rem"><button id="clearCache">Delete cached files</button></div>
+  </details>
+
+  <details class="box">
+    <summary>What the 98 MB is</summary>
+    <table>
+      <tr><th>part</th><th class="n">MB over the wire</th></tr>
+      <tr><td>Monad (loop-fixed), 8-bit weights, graph and tokenizer</td><td class="n">66.0</td></tr>
+      <tr><td>Ettin-17m query embedder, int4 token table, and its tokenizer</td><td class="n">10.5</td></tr>
+      <tr><td>Index: 61,686 posts as 2-bit codes (768 dimensions each)</td><td class="n">11.8</td></tr>
+      <tr><td>The posts' text, gzipped</td><td class="n">5.4</td></tr>
+      <tr><td>onnxruntime-web (runs Monad), the tokenizer library, and the WebGPU engines for Ettin and the scan</td><td class="n">4.7</td></tr>
+      <tr><th>total</th><th class="n">98.4</th></tr>
+    </table>
+    <div class="hint">Measured 2026-11-03 with compression on. Nothing is sent anywhere after the download: your question,
+    the search and the answer all stay in this tab. The posts are from members of the "Artificial (and real) Intelligence"
+    list and were collected in October 2026.</div>
+  </details>
+
+  <details class="box">
+    <summary>How the quotes are checked</summary>
+    <p class="hint">Monad cites a post by writing <code>&lt;ref name="source_2"&gt;…&lt;/ref&gt;</code> around a quote, as
+    SYNTH taught it. Each quote is compared with the posts, ignoring case and punctuation:</p>
+    <p class="hint"><span class="k-exact">✓ word for word</span>: the quote is in the post it cites.<br>
+    <span class="k-moved">↷ moved</span>: the quote is in a different post than the one it cites.<br>
+    <span class="k-pieced">≈ stitched</span>: runs of six or more words come from the posts, but no post has the whole quote.<br>
+    <span class="k-absent">✗ not found</span>: none of it is in any post.</p>
+    <p class="hint">Click a mark to jump to the post. On six test questions, 1 of Monad's 10 quotes was word for word and 9 were stitched.
+    A stitched quote can say the opposite of the post: "I think it's dumb to blame data centers for hogging electricity" came
+    back as support for "data centers are energy-efficient infrastructure".</p>
+  </details>
+
+  <footer>
+    <p>Retrieval: Ettin-17m distilled for Bluesky search (<a href="https://github.com/oaustegard/experiments/tree/main/ettin-native">ettin-native</a>),
+    hand-written WGSL engine, and a GPU scan over <a href="https://github.com/oaustegard/remex">remex</a> 2-bit codes, all shared with
+    <a href="../../bsky/embedders/">Three query embedders</a>. Generation: <a href="https://huggingface.co/PleIAs/Monad">PleIAs/Monad</a>
+    (Apache-2.0) with the training-free loop fix from <a href="https://muninn.austegard.com/blog/editing-monad-weights-to-stop-loops.html">Editing
+    Monad's weights to stop its loops</a>, on <a href="https://onnxruntime.ai/">onnxruntime-web</a> 1.30, shared with
+    <a href="../monad-chat/">Monad Bullshitter</a>. Needs WebGPU (Chrome, Edge, Safari 26+).</p>
+    <p>Bluesky posts belong to their authors; each links back to the original. Do not believe a word Monad says.</p>
+  </footer>
+</main>
+<script type="module" src="rag.js"></script>
