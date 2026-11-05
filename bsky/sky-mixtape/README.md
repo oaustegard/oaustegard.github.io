@@ -2,7 +2,7 @@
 
 https://austegard.com/bsky/sky-mixtape/
 
-Makes a playlist from someone's last 50, 100 or 200 Bluesky posts, or from a few keywords, for Spotify,
+Makes a playlist from someone's last 50, 100 or 200 Bluesky posts, from a few keywords, or from a photo, for Spotify,
 YouTube Music, Apple Music or Amazon Music. Thumbs up and down are written to the signed-in user's own
 repo as `com.austegard.mixtape.rating` records, and every later mix reads them back.
 
@@ -28,6 +28,32 @@ repo as `com.austegard.mixtape.rating` records, and every later mix reads them b
    net dislikes and lift liked songs. Dropping a tag chip (×) zeroes it for the current mix.
 
 The code for steps 3 to 5 is `mix-core.js`; the page and `build/tune.mjs` share it.
+
+## How a photo becomes songs
+
+The photo never leaves the device. EmbeddingGemma 2 (EG2, `onnx-community/embeddinggemma-2-ONNX`) maps
+images and text into one vector space, so a photo can be scored against each tag's description by cosine
+similarity. Its q4 vision encoder and text model, about 285 MB together, load through transformers.js
+4.3.1 when a photo is first used, and run on WebGPU (recent Chrome or Edge, Safari 26 and later). Without
+WebGPU the page says so, and posts and keywords still work. The browser has no CPU path, because every
+quantized EG2 build uses the `GatherBlockQuantized` op, which onnxruntime-web's WASM backend lacks; the
+unquantized builds are 540 MB and up.
+
+`image-tags.json` holds the 247 tags embedded with EG2's text model and the query prompt
+`task: search result | query: `. It also holds each tag's mean and spread of cosine over 16,878 popular
+Bluesky photos, the index of the sibling Bluesky image search (`../image-search/`). Each photo is z-scored
+against that background, so a tag counts only when this photo sits closer to it than Bluesky photos
+usually do. The photo is embedded the way that index was, with a budget of 70 vision tokens, so the two
+are comparable. The background cosines come from the index's compressed vectors and stay within a few
+thousandths of exact ones.
+
+The photo spreads its weight over up to eight tags with z of at least 1, the same `tagProfile` call
+posts use (step 3 above, with `perPost: 8, zMin: 1, temp: 0.8`), and the mix is then made as in steps 4
+and 5. An autumn woodland photo with a squirrel on a fallen log gives, on WebGPU, autumn, nature and
+wildlife, death and grief, indie folk, birds, dogs, contemplative and acoustic. The squirrel reads as
+an animal close enough to pull in dogs, and the fallen log as loss.
+A 160-pixel thumbnail of the photo is kept with the last mix in this browser's localStorage, to show
+next to the tags; the saved playlist record holds nothing of the photo.
 
 ## Services
 
@@ -65,7 +91,7 @@ rejects granular scopes, the page retries once with `transition:generic`.
 ```
 
 `com.austegard.mixtape.playlist` is written when a mix is saved to Spotify or YouTube, or with
-"Save this mix to Bluesky": name, service, source (`posts` with handle and count, or `keywords`), the
+"Save this mix to Bluesky": name, service, source (`posts` with handle and count, `keywords` with the query, or `photo` with nothing else), the
 top 12 tags with weights in thousandths, the tracks, the service URL and `createdAt`.
 
 Ratings made before sign-in stay in localStorage and are uploaded at the next sign-in.
@@ -87,7 +113,12 @@ Everything is in `build/`. Python scripts need numpy, onnxruntime and tokenizers
    query prompt for posts gave better tags than no prompt: "heartbroken, missing her, lonely winter nights"
    maps to heartbreak, snow and winter, and lonely with it, and to female vocals without it.
 6. `python3 build_catalog.py tag_emb.json`: writes `../catalog.json`. Live recordings are dropped.
-7. `python3 tune.py tag_emb.json [...] --actor <handle> --n 100` (or `--words "..."`) prints the tag
+7. `python3 embed_tags_image.py HF_DIR`: writes `../image-tags.json` for photos, after step 6 (it checks
+   that `tags.json` and `catalog.json` list the same tags). It reads the image index from
+   `../../image-search/data/` and needs `remex==2.1.0`, the version that built that index. HF_DIR holds
+   `onnx/model_q4.onnx`, `onnx/model_q4.onnx_data` and `tokenizer.json` from the Hugging Face repo
+   `onnx-community/embeddinggemma-2-ONNX`, flattened into one directory.
+8. `python3 tune.py tag_emb.json [...] --actor <handle> --n 100` (or `--words "..."`) prints the tag
    profile for each embedding file, to compare variants.
 
-Bump `V` in `index.html` after changing `catalog.json` or `mix-core.js`; it versions both requests.
+Bump `V` in `index.html` after changing `catalog.json`, `image-tags.json` or `mix-core.js`; it versions those requests.

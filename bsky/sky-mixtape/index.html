@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Sky Mixtape</title>
-<meta name="description" content="Turn your recent Bluesky posts, or a few keywords, into a playlist for Spotify, YouTube Music, Apple Music or Amazon Music. Thumbs up and down are saved to your own Bluesky repo and steer the next mix.">
+<meta name="description" content="Turn your recent Bluesky posts, a few keywords or a photo into a playlist for Spotify, YouTube Music, Apple Music or Amazon Music. Thumbs up and down are saved to your own Bluesky repo and steer the next mix.">
 <meta name="ai-disclosure" content="ai-assisted">
 <meta name="theme-color" content="#0b0f17">
 <meta property="og:title" content="Sky Mixtape">
@@ -87,6 +87,13 @@
   .svc .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--c) 22%, transparent); }
   @media (max-width: 560px) { .svc { display: grid; grid-template-columns: 1fr 1fr; } .svc button { flex: auto; } }
   .hint { margin: 8px 0 0; color: var(--mute); font-size: 13.5px; line-height: 1.45; }
+  .drop { display: flex; align-items: center; gap: 14px; min-height: 84px; padding: 10px 14px; border: 1px dashed var(--line-2); border-radius: 10px;
+    background: var(--deck-2); color: var(--ink-2); font-size: 14px; cursor: pointer; }
+  .drop:hover, .drop.over { border-color: var(--blue); color: var(--ink); }
+  .drop:focus-within { outline: 2px solid var(--blue); outline-offset: 2px; }
+  .drop img { width: 64px; height: 64px; object-fit: cover; border-radius: 6px; flex: none; }
+  .drop input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+  #evidence .shot { display: block; max-width: 160px; max-height: 160px; border-radius: 6px; margin-top: 4px; }
   .opts { display: grid; grid-template-columns: auto 1fr auto; gap: 18px; align-items: end; }
   @media (max-width: 560px) { .opts { grid-template-columns: 1fr; gap: 14px; } }
   .feel { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--mute); height: 40px; }
@@ -287,7 +294,7 @@
     </svg>
     <div>
       <h1>Sky <span>Mixtape</span></h1>
-      <p>Your last Bluesky posts, or a few words, turned into a playlist. A small language model reads the text in your browser and matches it against 247 moods, genres, themes and settings. Rate the songs and the next mix leans your way.</p>
+      <p>Your last Bluesky posts, a few words or a photo, turned into a playlist. A model in your browser reads the text, or looks at the photo, and matches it against 247 moods, genres, themes and settings. Rate the songs and the next mix leans your way.</p>
     </div>
   </header>
 
@@ -297,6 +304,7 @@
       <div class="seg" role="group" aria-label="Seed">
         <button id="tabPosts" aria-pressed="true">Recent posts</button>
         <button id="tabWords" aria-pressed="false">Keywords</button>
+        <button id="tabPhoto" aria-pressed="false">A photo</button>
       </div>
       <div id="seedPosts" style="margin-top:10px">
         <div class="line">
@@ -311,6 +319,14 @@
       <div id="seedWords" hidden style="margin-top:10px">
         <div class="line"><input type="search" id="keywords" placeholder="rainy ferry crossing, coffee, old maps, quiet optimism" aria-label="Keywords"></div>
         <p class="hint">A mood, a place, a topic, a scene. Separate ideas with commas.</p>
+      </div>
+      <div id="seedPhoto" hidden style="margin-top:10px">
+        <label class="drop" id="photoDrop">
+          <input type="file" id="photoFile" accept="image/*">
+          <img id="photoPrev" alt="The chosen photo" hidden>
+          <span id="photoMsg">Choose a photo, or drop one here</span>
+        </label>
+        <p class="hint">The photo stays on this device. An image model, EmbeddingGemma 2, looks at it in your browser and finds the tags it fits better than a typical Bluesky photo does. It is a one-time download of about 285 MB and needs WebGPU: recent Chrome or Edge, or Safari 26 and later.</p>
       </div>
     </div>
     <div class="row">
@@ -399,7 +415,7 @@
 </div>
 
 <script type="module">
-const V = '2026-11-05a';
+const V = '2026-11-05b';
 const core = await import(`./mix-core.js?v=${V}`);
 
 const NS = 'com.austegard.mixtape';
@@ -410,6 +426,8 @@ const EMB = new URL('../embedders/models/ettin/', location.href).href;
 const ETTIN = { manifest: EMB + 'manifest.json', tokenizer: EMB + 'tokenizer.json', model: EMB + 'model.onnx' };
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
+// Photo seed: EmbeddingGemma 2 (vision encoder + text model, q4) through transformers.js, as ../image-search/ indexed its photos.
+const EG2 = { lib: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1', id: 'onnx-community/embeddinggemma-2-ONNX', softTokens: 70 };
 const CACHE = 'sky-mixtape-v1';
 const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32;
 // Default app IDs for austegard.com. Empty means "bring your own" via Settings.
@@ -441,7 +459,7 @@ const state = {
   seedKind: LS.get('seedKind', 'posts'),
   mix: LS.get('lastMix', null), // { source, base (weights array), evidence, muted, picks, seed, title, uri, external }
   ratings: new Map(Object.entries(LS.get('ratings', {}))), // key -> rating entry
-  session: null, did: null, profile: null,
+  session: null, did: null, profile: null, photo: null,
   catalog: null, tagVecs: null, tagIndex: null,
   sp: LS.get('sp', null),   // { access, refresh, exp }
   yt: (t => t && Date.now() < t.exp ? t : null)(LS.get('yt', null)), // { access, exp }, one hour
@@ -753,6 +771,77 @@ async function embedTexts(texts) {
   return out;
 }
 
+// ---------- photo seed ----------
+let photoModel = null, imageTags = null;
+
+async function loadImageTags() {
+  if (!imageTags) {
+    const j = await (await fetch(`./image-tags.json?v=${V}`)).json();
+    imageTags = { vecs: core.decodeTagVectors(j), stats: j.tagStats };
+  }
+  return imageTags;
+}
+
+async function getPhotoModel() {
+  if (photoModel) return photoModel;
+  if (!await navigator.gpu?.requestAdapter().catch(() => null))
+    throw new Error('making a mix from a photo needs WebGPU (recent Chrome or Edge, or Safari 26 and later). Posts and keywords work in any browser.');
+  const loadMsg = 'Loading EmbeddingGemma 2, the image model (about 285 MB the first time, cached after that)…';
+  status(loadMsg, { progress: 0.05 });
+  const T = await import(EG2.lib);
+  const files = new Map();
+  const progress_callback = p => {
+    if (p.status !== 'progress' || !p.total) return;
+    files.set(p.file, [p.loaded, p.total]);
+    let got = 0, all = 0;
+    for (const [a, b] of files.values()) { got += a; all += b; }
+    status(`Loading EmbeddingGemma 2… ${Math.round(got / 1e6)} of ${Math.round(all / 1e6)} MB`, { progress: 0.05 + 0.75 * got / all });
+  };
+  const config = await T.AutoConfig.from_pretrained(EG2.id);
+  config.audio_config = null; // vision and text only: skip the 189 MB audio encoder
+  const processor = await T.AutoProcessor.from_pretrained(EG2.id);
+  // 70 soft tokens per image, the budget the image-search index (and so the tag baseline) was built with.
+  const ip = processor.image_processor;
+  ip.config.max_soft_tokens = ip.max_soft_tokens = ip.config.image_seq_length = ip.image_seq_length = EG2.softTokens;
+  processor.image_seq_length = EG2.softTokens;
+  // WebGPU only: every quantized build of EG2 uses GatherBlockQuantized, which onnxruntime-web's CPU (WASM)
+  // backend does not implement, and the unquantized builds are 540 MB and up.
+  const model = await T.AutoModel.from_pretrained(EG2.id, { config, device: 'webgpu', dtype: 'q4', progress_callback });
+  photoModel = { T, processor, model, name: 'your GPU' };
+  return photoModel;
+}
+
+async function embedPhoto(file) {
+  const m = await getPhotoModel();
+  status(`Looking at the photo on ${m.name}…`, { progress: 0.85 });
+  let img;
+  try { img = await m.T.RawImage.fromBlob(file); }
+  catch { throw new Error('this browser could not read that image file. Try a JPEG or PNG.'); }
+  const out = await m.model(await m.processor(null, [img]));
+  return unit(Float32Array.from(out.sentence_embedding.data));
+}
+
+// A small JPEG of the photo for the J-card and the saved mix in localStorage (never sent anywhere).
+async function photoThumb(file, px = 160) {
+  const bmp = await createImageBitmap(file);
+  const k = Math.min(1, px / Math.max(bmp.width, bmp.height));
+  const c = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * k), height: Math.round(bmp.height * k) });
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return c.toDataURL('image/jpeg', 0.75);
+}
+
+async function setPhoto(file) {
+  if (!file || !file.type.startsWith('image/')) { status('That is not an image file.', { err: true }); return; }
+  let thumb = null;
+  try { thumb = await photoThumb(file); } catch {}
+  state.photo = { file, thumb };
+  $('photoPrev').src = thumb || URL.createObjectURL(file);
+  $('photoPrev').hidden = false;
+  $('photoMsg').textContent = 'Photo ready. Choose another, or make the mix.';
+  status('');
+}
+
 // ---------- making the mix ----------
 function ratingsList() { return [...state.ratings.values()]; }
 
@@ -780,8 +869,15 @@ async function makeMix() {
   try {
     status('Loading the song catalog…', { progress: 0.02 });
     const cat = await loadCatalog();
-    let items, source;
-    if (state.seedKind === 'words') {
+    let items, source, prof;
+    if (state.seedKind === 'photo') {
+      if (!state.photo) { status('Choose a photo first.', { err: true }); return; }
+      const [it, v] = await Promise.all([loadImageTags(), embedPhoto(state.photo.file)]);
+      items = [{ text: 'the photo' }];
+      source = { kind: 'photo', thumb: state.photo.thumb };
+      // One image: let it spread over more tags than a single post does, a little more evenly.
+      prof = core.tagProfile([v], it.vecs, it.stats, { perPost: 8, zMin: 1.0, temp: 0.8 });
+    } else if (state.seedKind === 'words') {
       const q = $('keywords').value.trim();
       if (!q) { status('Type a few keywords first.', { err: true }); return; }
       items = q.split(/[,;\n]+/).map(s => s.trim()).filter(Boolean).map(text => ({ text }));
@@ -795,10 +891,12 @@ async function makeMix() {
       if (!items.length) { status(`No posts found for @${actor}.`, { err: true }); return; }
       source = { kind: 'posts', handle: actor, count: items.length };
     }
-    const vecs = await embedTexts(items.map(x => x.text));
-    const prof = core.tagProfile(vecs, state.tagVecs, cat.tagStats,
-      source.kind === 'keywords' ? { zMin: 0.5, perPost: 6 } : {});
-    if (!prof.weights.some(w => w > 0)) { status('Nothing in that text matched a mood or genre strongly. Try more words or more posts.', { err: true }); return; }
+    if (!prof) {
+      const vecs = await embedTexts(items.map(x => x.text));
+      prof = core.tagProfile(vecs, state.tagVecs, cat.tagStats,
+        source.kind === 'keywords' ? { zMin: 0.5, perPost: 6 } : {});
+    }
+    if (!prof.weights.some(w => w > 0)) { status(source.kind === 'photo' ? 'Nothing in that photo stood out from ordinary Bluesky photos. Try another one.' : 'Nothing in that text matched a mood or genre strongly. Try more words or more posts.', { err: true }); return; }
     const evidence = {};
     for (const { j } of core.topTags(prof.weights, 48)) {
       evidence[cat.tags[j].id] = prof.evidence[j].slice(0, 3).map(([i, z]) => ({ text: items[i].text.slice(0, 280), uri: items[i].uri, z: +z.toFixed(2) }));
@@ -849,8 +947,9 @@ function renderMix() {
   const secs = mix.picks.reduce((s, p) => s + (cat.tracks[p.index].d || 0), 0);
   const mins = Math.round(secs / 60);
   const len = mins >= 60 ? `${Math.floor(mins / 60)} h ${mins % 60} min` : `${mins} min`;
-  $('spine').textContent = ['Sky Mixtape', mix.source.kind === 'posts' ? '@' + mix.source.handle : 'keywords', fmtDate(mix.createdAt)].join(' · ');
-  $('mixSub').textContent = (mix.source.kind === 'posts' ? `From the last ${mix.source.count} posts` : `From “${mix.source.query}”`) +
+  const kind = mix.source.kind;
+  $('spine').textContent = ['Sky Mixtape', kind === 'posts' ? '@' + mix.source.handle : kind === 'photo' ? 'photo' : 'keywords', fmtDate(mix.createdAt)].join(' · ');
+  $('mixSub').textContent = (kind === 'posts' ? `From the last ${mix.source.count} posts` : kind === 'photo' ? 'From a photo' : `From “${mix.source.query}”`) +
     ` · ${mix.picks.length} songs · ${len} · ${svcLabel()}`;
   const w = mix.weightsShown || mix.base;
   const shown = core.topTags(Float64Array.from(mix.base), 10);
@@ -879,8 +978,12 @@ function renderEvidence(tagId) {
       const m = (uri || '').match(/^at:\/\/([^/]+)\/app\.bsky\.feed\.post\/(.+)$/);
       return m ? ` <a href="https://bsky.app/profile/${esc(m[1])}/post/${esc(m[2])}" target="_blank" rel="noopener">open post</a>` : '';
     };
+    const photo = state.mix.source.kind === 'photo';
+    const shot = state.mix.source.thumb && /^data:image\/jpeg;base64,[A-Za-z0-9+/=]+$/.test(state.mix.source.thumb)
+      ? `<img class="shot" src="${state.mix.source.thumb}" alt="The photo this mix was made from">` : '';
     $('evidence').innerHTML = `<b>${esc(t.label)}</b> · ${esc(t.desc)}` +
-      (ev.length ? ev.map(e => `<blockquote>${esc(e.text)}${link(e.uri)}</blockquote>`).join('') : '<blockquote>Pulled in by your ratings rather than your posts.</blockquote>');
+      (photo && ev.length ? `<blockquote>The photo sits ${ev[0].z.toFixed(1)} standard deviations closer to this tag than the typical Bluesky photo.${shot}</blockquote>` :
+       ev.length ? ev.map(e => `<blockquote>${esc(e.text)}${link(e.uri)}</blockquote>`).join('') : '<blockquote>Pulled in by your ratings rather than your posts.</blockquote>');
   }
   document.querySelectorAll('.note').forEach(n => n.classList.toggle('on', n.querySelector('[data-tag]')?.dataset.tag === state.evTag));
 }
@@ -1413,7 +1516,8 @@ async function playYouTube(i) {
 
 // ---------- mix records ----------
 function mixDescription() {
-  const src = state.mix.source.kind === 'posts' ? `the last ${state.mix.source.count} Bluesky posts of @${state.mix.source.handle}` : `the words “${state.mix.source.query}”`;
+  const s = state.mix.source;
+  const src = s.kind === 'posts' ? `the last ${s.count} Bluesky posts of @${s.handle}` : s.kind === 'photo' ? 'a photo' : `the words “${s.query}”`;
   return `Made by Sky Mixtape (austegard.com/bsky/sky-mixtape) from ${src}.`.slice(0, 300);
 }
 
@@ -1425,7 +1529,7 @@ async function saveMixRecord() {
     $type: `${NS}.playlist`,
     name: state.mix.title,
     service: state.svc,
-    source: state.mix.source,
+    source: state.mix.source.kind === 'photo' ? { kind: 'photo' } : state.mix.source,
     tags: core.topTags(Float64Array.from(w), 12).map(({ j, w }) => ({ tag: cat.tags[j].id, weight: Math.round(w * 1000) })),
     tracks: state.mix.picks.map(p => { const t = cat.tracks[p.index]; const x = { artist: t.a, title: t.ti }; if (t.isrc) x.isrc = t.isrc; return x; }),
     createdAt: new Date().toISOString(),
@@ -1449,8 +1553,10 @@ function setSeedKind(k) {
   state.seedKind = k; LS.set('seedKind', k);
   $('tabPosts').setAttribute('aria-pressed', k === 'posts');
   $('tabWords').setAttribute('aria-pressed', k === 'words');
+  $('tabPhoto').setAttribute('aria-pressed', k === 'photo');
   $('seedPosts').hidden = k !== 'posts';
   $('seedWords').hidden = k !== 'words';
+  $('seedPhoto').hidden = k !== 'photo';
 }
 
 function setSvc(s) {
@@ -1468,6 +1574,12 @@ function setSvc(s) {
 
 $('tabPosts').onclick = () => setSeedKind('posts');
 $('tabWords').onclick = () => setSeedKind('words');
+$('tabPhoto').onclick = () => setSeedKind('photo');
+$('photoFile').addEventListener('change', e => setPhoto(e.target.files[0]));
+const drop = $('photoDrop');
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); setPhoto(e.dataTransfer.files[0]); });
 document.querySelectorAll('.svc button').forEach(b => b.onclick = () => setSvc(b.dataset.svc));
 $('signInBtn').onclick = signIn;
 $('handle').addEventListener('keydown', e => { if (e.key === 'Enter') signIn(); });
