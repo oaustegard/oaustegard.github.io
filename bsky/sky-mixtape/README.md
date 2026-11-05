@@ -20,7 +20,7 @@ repo as `com.austegard.mixtape.rating` records, and every later mix reads them b
    against that tag's mean and spread over 1,500 English posts sampled from Jetstream, so a tag counts
    only when these posts sit closer to it than ordinary Bluesky posts do. Each post spreads one unit of
    weight over its four strongest tags; the sum over posts is the profile.
-4. The catalog's 7,001 songs carry the tags they were chosen for; genre tags also spread to the
+4. The catalog's 7,186 songs carry the tags they were chosen for; genre tags also spread to the
    artist's other songs. A song scores the sum of its tags' weights, scaled by Deezer popularity and
    perturbed by Gumbel noise from the Familiar/Adventurous slider. After each pick the weights of its
    tags decay, so the mix covers the profile instead of filling up from the top tag. One song per artist.
@@ -113,7 +113,7 @@ Everything is in `build/`. Paths below are relative to `build/`. Python scripts 
    the round-2 songs were already in the catalog under other tags, so they add tags to existing tracks
    as well as new tracks.
 3. `python3 validate_deezer.py`: looks each candidate up on Deezer and keeps exact artist and title
-   matches in `resolved.json` (cached; rerunning only looks up new candidates). 7,239 of 8,894
+   matches in `resolved.json` (cached; rerunning only looks up new candidates). 7,446 of 9,132
    candidates matched. Classical works are credited to performers on Deezer, so those were matched on
    title and composer surname in a separate pass.
 4. `node jet.mjs`: samples 1,500 English posts from Jetstream into `background.json` (not committed).
