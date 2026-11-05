@@ -33,25 +33,30 @@ The code for steps 3 to 5 is `mix-core.js`; the page and `build/tune.mjs` share 
 
 The photo never leaves the device. MobileCLIP-S0 (`Xenova/mobileclip_s0`, Apple's small CLIP model)
 maps images and text into one vector space, so a photo can be scored against each tag by cosine
-similarity. The page downloads only its image encoder (fp16, 23 MB, through transformers.js 4.3.1) when
-a photo is first used, and runs it on the CPU through onnxruntime-web, so any browser works. The int8
-build of that encoder, half the size, is broken: it ranks techno and IDM first for a photo of cats.
+similarity. The tag side is embedded at build time, so the page downloads only the image encoder: 23 MB
+of fp16 weights from Hugging Face, with transformers.js 4.3.1 from jsdelivr, fetched when a photo is
+first used and cached by the browser after that. It runs on the CPU through onnxruntime-web, so any
+browser works; a photo takes a few seconds. Any image the browser can decode works (JPEG and PNG
+everywhere; HEIC only where the browser reads it). The int8 encoder is not used because its scores are
+wrong: it ranks techno first for a photo of cats.
 
-`image-tags.json` holds the 247 tags embedded with MobileCLIP-S0's text model. Each tag's vector is
-the average of two phrasings, "a photo of autumn" and "Autumn: falling leaves, pumpkin spice…", the
-description the posts path uses. The file also holds each tag's mean and spread of cosine over 2,969
-popular Bluesky photos, an even sample of the index behind the sibling Bluesky image search
-(`../image-search/`). The photo is z-scored against that background, so a tag counts only when this
-photo sits closer to it than Bluesky photos usually do.
+`image-tags.json` holds the 247 tags embedded with MobileCLIP-S0's text model. Each tag's vector
+averages two phrasings: "a photo of autumn", and the tag's label and description from `catalog.json`
+("Autumn: falling leaves, pumpkin spice, …"). The file also holds each tag's mean and spread of cosine
+over 2,969 Bluesky photos: every fifth or sixth row of the index behind the sibling Bluesky image search
+(`../image-search/`), whose photos come from the top of 12 popular feeds. The photo is z-scored against
+that background, so a tag counts only when this photo sits closer to it than Bluesky photos usually do.
 
-The photo spreads its weight over up to eight tags with z of at least 1, the same `tagProfile` call
-posts use (step 3 above, with `perPost: 8, zMin: 1, temp: 0.8`), and the mix is then made as in steps 4
-and 5. An autumn woodland photo with a squirrel on a fallen log gives autumn, nature and wildlife,
-spring, campfire, birds, acoustic, dogs and southern rock; a rainy street gives weather, rain, eerie and
-ambient.
+From there a photo is treated like a single post in steps 3 to 5 above, with `tagProfile` options that
+let one photo reach more tags: up to eight tags with z of at least 1 share its weight
+(`perPost: 8, zMin: 1, temp: 0.8`, where `temp` sets how evenly). An autumn woodland photo with a
+squirrel on a fallen log gives autumn, nature & wildlife, campfire, birds, acoustic and southern rock,
+plus spring and dogs, which a CLIP model reads into green leaves and a small animal. A rainy street
+gives weather, rain, eerie and ambient.
 
-A 160-pixel thumbnail of the photo is kept with the last mix in this browser's localStorage, to show
-next to the tags; the saved playlist record holds nothing of the photo.
+A 160-pixel thumbnail of the photo is kept with the last mix in this browser's localStorage and shown
+in the panel that opens when a tag on the J-card is tapped. The playlist record saved to Bluesky holds
+only `source: { kind: "photo" }`.
 
 ## Services
 
@@ -96,7 +101,7 @@ Ratings made before sign-in stay in localStorage and are uploaded at the next si
 
 ## Rebuilding the catalog
 
-Everything is in `build/`. Python scripts need numpy, onnxruntime and tokenizers; `jet.mjs` needs Node 22.
+Everything is in `build/`. Paths below are relative to `build/`. Python scripts need numpy, onnxruntime and tokenizers; `jet.mjs` and `embed_tags_clip.mjs` need Node 22.
 
 1. `tags.json`: the tag vocabulary, generated from `taxonomy_prompt.txt` by Claude Sonnet and kept as is.
 2. `python3 gen_tracks.py`: asks Claude Sonnet (`claude -p`) for 18 songs per tag, 12 tags per call,
@@ -111,12 +116,14 @@ Everything is in `build/`. Python scripts need numpy, onnxruntime and tokenizers
    query prompt for posts gave better tags than no prompt: "heartbroken, missing her, lonely winter nights"
    maps to heartbreak, snow and winter, and lonely with it, and to female vocals without it.
 6. `python3 build_catalog.py tag_emb.json`: writes `../catalog.json`. Live recordings are dropped.
-7. `node embed_tags_clip.mjs`: writes `../image-tags.json` for photos, after step 6 (it checks that
-   `tags.json` and `catalog.json` list the same tags). Run `npm i @huggingface/transformers@4.3.1` in
-   `build/` first. It reads `../../image-search/data/rows.json` and fetches 3,000 of those photos from
-   Bluesky's CDN (about 6 minutes); `--cache FILE` keeps their vectors for reruns, and
-   `--try PHOTO ...` prints a photo's top tags under each phrasing.
+7. `node embed_tags_clip.mjs` (Node 22): writes `../image-tags.json` for photos, after step 6 (it checks
+   that `tags.json` and `catalog.json` list the same tags). Run `npm i @huggingface/transformers@4.3.1`
+   in `build/` first; the script downloads MobileCLIP-S0 from Hugging Face itself. It samples 3,000 rows
+   of `../../image-search/data/rows.json` and fetches those photos from Bluesky's CDN (about 6 minutes;
+   a few dozen fail, hence 2,969). `--cache FILE` keeps their vectors for reruns, and
+   `--try PATH_OR_URL ...` prints a photo's top tags under each phrasing (label only, label and
+   description, both averaged).
 8. `python3 tune.py tag_emb.json [...] --actor <handle> --n 100` (or `--words "..."`) prints the tag
    profile for each embedding file, to compare variants.
 
-Bump `V` in `index.html` after changing `catalog.json`, `image-tags.json` or `mix-core.js`; it versions those requests.
+Bump the `V` constant in `index.html` after changing `catalog.json`, `image-tags.json` or `mix-core.js`; it is added to those URLs so browsers fetch the new files.
