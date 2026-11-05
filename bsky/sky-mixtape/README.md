@@ -14,7 +14,7 @@ repo as `com.austegard.mixtape.rating` records, and every later mix reads them b
    the browser with its query prompt. With WebGPU it runs on the page's hand-written engine
    (`../embedders/engine.js`); without it, onnxruntime-web runs the same `model.onnx` on the CPU (WASM).
    `?engine=cpu` forces the CPU path. A visitor who has used Answer Search already has the 12 MB file cached.
-3. `catalog.json` holds 247 tags: moods, genres, themes, settings and textures. Each tag has a
+3. `catalog.json` holds 266 tags: moods, genres, themes, settings and textures. Each tag has a
    description written in the words posts use ("code, bug, debugging, deploy, refactor…" for
    Programming), embedded with the same model and stored as int8. Each post-to-tag cosine is z-scored
    against that tag's mean and spread over 1,500 English posts sampled from Jetstream, so a tag counts
@@ -40,7 +40,7 @@ browser works; a photo takes a few seconds. Any image the browser can decode wor
 everywhere; HEIC only where the browser reads it). The int8 encoder is not used because its scores are
 wrong: it ranks techno first for a photo of cats.
 
-`image-tags.json` holds the 247 tags embedded with MobileCLIP-S0's text model. Each tag's vector
+`image-tags.json` holds the 266 tags embedded with MobileCLIP-S0's text model. Each tag's vector
 averages two phrasings: "a photo of autumn", and the tag's label and description from `catalog.json`
 ("Autumn: falling leaves, pumpkin spice, …"). The file also holds each tag's mean and spread of cosine
 over 2,969 Bluesky photos: every fifth or sixth row of the index behind the sibling Bluesky image search
@@ -104,6 +104,9 @@ Ratings made before sign-in stay in localStorage and are uploaded at the next si
 Everything is in `build/`. Paths below are relative to `build/`. Python scripts need numpy, onnxruntime and tokenizers; `jet.mjs` and `embed_tags_clip.mjs` need Node 22.
 
 1. `tags.json`: the tag vocabulary, generated from `taxonomy_prompt.txt` by Claude Sonnet and kept as is.
+   Nineteen place, light and visual tags (forest, fog, golden hour and the like, in
+   `tags_added_2026-11-05.json`) were added by hand, for photos, and got songs with
+   `gen_tracks.py --tags tags_added_2026-11-05.json`, both rounds.
 2. `python3 gen_tracks.py`: asks Claude Sonnet (`claude -p`) for 18 songs per tag, 12 tags per call,
    into `candidates/`. Then `python3 gen_tracks.py --round 2 --n 40 --batch 6` asks for 40 more per tag,
    listing the songs each tag already has so they are not repeated (`candidates/r2_*.json`). Many of

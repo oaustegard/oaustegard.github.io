@@ -1,7 +1,8 @@
 """Ask claude -p children for candidate songs per tag. Output: candidates/<batch>.json (round 1) or
 candidates/r<N>_<batch>.json (later rounds, which exclude every song already proposed for that tag).
 usage: python3 gen_tracks.py                         round 1: 18 songs per tag, 12 tags per call
-       python3 gen_tracks.py --round 2 --n 40 --batch 6"""
+       python3 gen_tracks.py --round 2 --n 40 --batch 6
+       python3 gen_tracks.py --tags tags_added_2026-11-05.json [...]   only the tags in that file"""
 import argparse, glob, json, subprocess, os, concurrent.futures as cf
 ap = argparse.ArgumentParser()
 ap.add_argument('--round', type=int, default=1)
@@ -9,8 +10,14 @@ ap.add_argument('--n', type=int, default=18, help='songs per tag')
 ap.add_argument('--batch', type=int, default=12, help='tags per claude call')
 ap.add_argument('--workers', type=int, default=7)
 ap.add_argument('--only', type=int, help='run one batch, to check a prompt')
+ap.add_argument('--tags', help='JSON list of tags (with id) to restrict this run to; outputs get the file name as prefix')
 a = ap.parse_args()
 tags = json.load(open('tags.json'))
+PREFIX = ''
+if a.tags:
+    keep = {t['id'] for t in json.load(open(a.tags))}
+    tags = [t for t in tags if t['id'] in keep]
+    PREFIX = os.path.splitext(os.path.basename(a.tags))[0] + '_'
 os.makedirs('candidates', exist_ok=True)
 batches = [tags[i:i + a.batch] for i in range(0, len(tags), a.batch)]
 have = {}
@@ -27,7 +34,7 @@ MORE = """
 Each tag already has the songs listed under it; give {n} DIFFERENT songs. Reach wider than the obvious picks: other decades, other countries and languages, women and men, album tracks as well as singles, while still fitting the tag clearly. At most two songs per artist per tag.
 """
 def run(i):
-    out = f'candidates/{i:02d}.json' if a.round == 1 else f'candidates/r{a.round}_{i:02d}.json'
+    out = f'candidates/{PREFIX}{i:02d}.json' if a.round == 1 else f'candidates/{PREFIX}r{a.round}_{i:02d}.json'
     if os.path.exists(out): return i, 'cached'
     lines = []
     for t in batches[i]:
@@ -36,8 +43,14 @@ def run(i):
     prompt = PROMPT.format(n=a.n, more=MORE.format(n=a.n) if a.round > 1 else '') + '\n'.join(lines)
     r = subprocess.run(['claude', '-p', '--model', 'sonnet', prompt], capture_output=True, text=True, timeout=1500)
     t = r.stdout
-    try:
-        d = json.loads(t[t.index('{'):t.rindex('}') + 1])
+    try:  # the reply is normally one object; sometimes it is several back to back, so merge them
+        d, dec, k = {}, json.JSONDecoder(), t.index('{')
+        while k < len(t):
+            obj, k = dec.raw_decode(t, k)
+            d.update(obj)
+            k = t.find('{', k)
+            if k < 0: break
+        if not d: raise ValueError('empty reply')
     except Exception as e:
         return i, f'parse fail {e} {t[:200]!r} {r.stderr[:200]!r}'
     json.dump(d, open(out, 'w'))
