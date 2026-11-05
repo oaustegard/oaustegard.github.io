@@ -9,9 +9,9 @@ list (the kind a feed or a reader follows, as opposed to a moderation list). Sig
 
 The topic is measured by one of two models, chosen under "Measure the topic with":
 
-- **Learned from the search results** (the default, for any topic). The page fits a classifier during the run
+- **Learned from the search** (the default, for any topic). The page fits a classifier during the run
   from the posts your terms found, as described below.
-- **Pre-trained about-AI model**, for lists about AI. It was trained on 600 Bluesky posts labelled about-AI or
+- **Pre-trained about-AI**, for lists about AI only. It was trained on 600 Bluesky posts labelled about-AI or
   not by Claude Haiku (cross-validated AUC 0.885) in oaustegard/experiments `bsky-list-ai-share`, and is stored
   as `about-ai.json` (768 weights and a bias). Choosing it fills in the 40 AI terms it was built with when the
   term box is empty; the "example: AI terms" button fills them in at any time.
