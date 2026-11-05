@@ -5,14 +5,15 @@
 //               the last N days; authors not on the excluded lists, seen at least MIN times, become candidates
 //   2. learn    Ettin-17m embeds the posts the search found and a background sample of Bluesky's Discover feed
 //               on the GPU (../embedders/engine.js), and a logistic regression fitted here (topic.js) separates
-//               them, giving P(on topic) for any post. Or the pre-trained about-AI model (about-ai.json) instead
+//               them, giving P(on topic) for any post
 //   3. sample   each candidate's last 100 posts and replies (no reposts), from the public AppView
 //   4. classify every sampled post gets P(on topic); a candidate's topic share is the mean
 //   5. review   a table pre-ticks accounts that look like people posting on topic; you decide
 //   6. list     a new curate list (or an existing one) gets the ticked accounts
 //
-// Built from the analysis in oaustegard/experiments bsky-list-ai-share, which also ran a Claude judge
-// over the shortlist; here the reviewer is you.
+// Grown from oaustegard/experiments bsky-list-ai-share, which built an AI list the same way with a classifier
+// trained on Claude-labelled posts and a Claude judge over the shortlist; here the topic is learned from the
+// search and the reviewer is you.
 
 import { initializeLib, login, logout, checkStoredSession, getAuthAgent, getListMembers, getLists } from '../bsky-lib.js';
 import { SmallEngine } from '../embedders/engine.js';
@@ -25,12 +26,6 @@ const DISCOVER = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/
 const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32, DIM = 768;
 const MAX_POS = 1500, POS_PER_AUTHOR = 25, MAX_BG = 1200;   // training posts: search hits, Discover background
 const BOTWORDS = /\b(bot|bots|feed|feeds|news|newsletter|digest|daily|hourly|updates|automated|arxiv|headlines|briefing|aggregat\w*|curated|rss|jobs?|deals|crypto|signals)\b|-bot\b|bot\./i;
-// the terms the about-AI model was built with; offered as an example and filled in when that model is chosen
-const AI_TERMS = ['LLM', 'LLMs', 'large language model', 'Claude', 'ChatGPT', 'OpenAI', 'Anthropic', 'Gemini', 'AI agent',
-  'agentic', 'machine learning', 'neural network', 'RLHF', 'AI safety', 'alignment', 'interpretability', 'coding agent',
-  'Claude Code', 'Codex', 'vibe coding', 'open weights', 'Llama', 'DeepSeek', 'Qwen', 'Mistral', 'diffusion model',
-  'transformer', 'embeddings', 'RAG', 'fine-tuning', 'AI policy', 'AGI', 'frontier model', 'inference', 'benchmark',
-  'arxiv', 'MCP', 'prompt injection', 'evals', 'GPU'];
 
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -38,16 +33,16 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const log = (html) => { const d = document.createElement('div'); d.innerHTML = html; $('log').append(d); $('log').scrollTop = $('log').scrollHeight; };
 const bar = (f) => { $('bar').style.width = `${Math.round(Math.min(1, f) * 100)}%`; };
 
-// The learned model gives accounts higher shares than the about-AI one: on 200 members of an AI list its shares
-// ran 0.08 to 0.2 above that model's, more with more terms, so its pre-tick threshold starts higher.
-const MIN_SHARE = { learn: 0.5, 'about-ai': 0.4 };
-const settings = { terms: '', model: 'learn', days: 14, pages: 3, minHits: 3, maxCands: 200, minShareBy: { ...MIN_SHARE },
-  maxPpd: 40, minReplies: 0.15, exclude: [] };
-try { Object.assign(settings, JSON.parse(localStorage.getItem('list-scout-settings') || '{}')); } catch (e) { /* no storage */ }
-delete settings.minShare;                                    // a single threshold, before there were two models
-settings.minShareBy = { ...MIN_SHARE, ...settings.minShareBy };
-if (!(settings.model in MIN_SHARE)) settings.model = 'learn';
-const minShare = () => settings.minShareBy[settings.model] ?? MIN_SHARE[settings.model];
+// Shares run high: on 200 members of an AI list they were 0.08 to 0.2 above those of a classifier trained on posts
+// Claude labelled about AI or not, so the pre-tick threshold starts at 50%.
+const settings = { terms: '', days: 14, pages: 3, minHits: 3, maxCands: 200, minShare: 0.5, maxPpd: 40, minReplies: 0.15, exclude: [] };
+let stored = {};
+try { stored = JSON.parse(localStorage.getItem('list-scout-settings') || '{}') || {}; } catch (e) { /* no storage */ }
+Object.assign(settings, stored);
+// settings saved by earlier versions: per-model thresholds, or the first version's 40%, set for a stricter model
+if (stored.minShareBy) settings.minShare = stored.minShareBy.learn ?? 0.5;
+else if (!('exclude' in stored)) settings.minShare = 0.5;
+delete settings.minShareBy; delete settings.model;
 const save = () => { try { localStorage.setItem('list-scout-settings', JSON.stringify(settings)); } catch (e) { /* no storage */ } };
 
 let candidates = [];        // [{did, handle, name, bio, followers, hits, posts, replyFrac, ppd, share, topicPerDay, flags, checked}]
@@ -199,12 +194,6 @@ async function score(head, texts, onBatch) {
   return out;
 }
 
-let aboutAI = null;
-function aboutAIHead() {
-  aboutAI ??= fetch(new URL('about-ai.json', import.meta.url)).then((r) => r.json()).then((m) => ({ w: Float32Array.from(m.w), b: m.bias }));
-  return aboutAI;
-}
-
 // Learn the topic from the posts the search found (on topic) against the Discover sample (mostly not). A fifth of
 // both is held out to report how well they separate. Returns { w, b, auc, pos, neg }.
 async function learnTopic(posTexts, negTexts, onStage = () => {}) {
@@ -240,7 +229,7 @@ function flags(c) {
   if (c.posts.length < 10) f.push('few posts');
   return f;
 }
-const looksRight = (c) => c.share >= minShare() && !flags(c).length;
+const looksRight = (c) => c.share >= settings.minShare && !flags(c).length;
 
 async function run() {
   if (running) return;
@@ -257,11 +246,10 @@ async function run() {
       m.forEach((d) => exclude.add(d));
       log(`excluding ${m.size} members of <b>${esc($('exclude').querySelector(`option[value="${CSS.escape(uri)}"]`).textContent)}</b>`);
     }
-    const learning = settings.model === 'learn';
     const loading = ensureEmbedder();                   // load the model while searching
     loading.catch(() => {});
-    const bg = learning ? background(MAX_BG) : null;    // and read the background sample
-    bg?.catch(() => {});
+    const bg = background(MAX_BG);                      // and read the background sample
+    bg.catch(() => {});
     const s = await search(terms, settings.days, settings.pages, exclude, me);
     let cands = s.hits.filter((h) => h.hits >= settings.minHits).sort((a, b) => b.hits - a.hits);
     log(`${s.posts.toLocaleString()} posts from ${s.hits.length.toLocaleString()} authors not excluded; ` +
@@ -273,7 +261,6 @@ async function run() {
     let learnMsg = '';
     const heading = (async () => {
       await loading;
-      if (!learning) return aboutAIHead();
       const head = await learnTopic(s.texts, await bg, (m) => { learnMsg = m; });
       log(`learned the topic from ${head.pos.toLocaleString()} posts the search found and ${head.neg.toLocaleString()} from Discover; ` +
           `held out, the two separate with AUC ${head.auc.toFixed(3)}` + (head.auc < 0.9 ? ' <span class="warn">(low: the terms may be too general)</span>' : ''));
@@ -409,10 +396,9 @@ $('target').onchange = () => { $('newList').hidden = $('target').value !== 'new'
 
 function readSettings() {
   settings.terms = $('terms').value;
-  settings.model = $('model').value;
   for (const k of ['days', 'pages', 'minHits', 'maxCands']) settings[k] = Math.max(1, parseInt($(k).value, 10) || settings[k]);
   const ms = parseFloat($('minShare').value);
-  settings.minShareBy[settings.model] = Number.isFinite(ms) ? ms / 100 : MIN_SHARE[settings.model];
+  settings.minShare = Number.isFinite(ms) ? ms / 100 : 0.5;
   settings.maxPpd = parseFloat($('maxPpd').value) || 40;
   settings.minReplies = (parseFloat($('minReplies').value) || 0) / 100;
   if ($('exclude').options.length) settings.exclude = [...$('exclude').selectedOptions].map((o) => o.value);
@@ -420,20 +406,9 @@ function readSettings() {
 }
 function fillSettings() {
   $('terms').value = settings.terms;
-  $('model').value = settings.model;
   for (const k of ['days', 'pages', 'minHits', 'maxCands']) $(k).value = settings[k];
-  $('minShare').value = Math.round(minShare() * 100); $('maxPpd').value = settings.maxPpd; $('minReplies').value = Math.round(settings.minReplies * 100);
+  $('minShare').value = Math.round(settings.minShare * 100); $('maxPpd').value = settings.maxPpd; $('minReplies').value = Math.round(settings.minReplies * 100);
 }
-// each model keeps its own pre-tick threshold; the about-AI model comes with the terms it was built for
-$('model').onchange = () => {
-  const ms = parseFloat($('minShare').value);
-  if (Number.isFinite(ms)) settings.minShareBy[settings.model] = ms / 100;
-  settings.model = $('model').value;
-  $('minShare').value = Math.round(minShare() * 100);
-  if (settings.model === 'about-ai' && !$('terms').value.trim()) $('terms').value = AI_TERMS.join('\n');
-  save();
-};
-$('aiTerms').onclick = () => { $('terms').value = AI_TERMS.join('\n'); };
 
 let descEdited = false;
 $('listDesc').oninput = () => { descEdited = true; };
@@ -474,7 +449,7 @@ fillSettings();
 $('listName').value = `List Scout candidates ${new Date().toISOString().slice(0, 10)}`;
 // show(rows): render a review table from saved rows without a run (for screenshots and tests)
 const show = (rows) => { candidates = rows; $('authCard').hidden = true; render(); $('results').hidden = false; };
-window.scout = { get candidates() { return candidates; }, ensureEmbedder, score, aboutAIHead, learnTopic, background, run, show };
+window.scout = { get candidates() { return candidates; }, ensureEmbedder, score, learnTopic, background, run, show };
 (async () => {
   await initializeLib();
   if (await checkStoredSession()) await signedIn();
