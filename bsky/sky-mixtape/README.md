@@ -31,27 +31,25 @@ The code for steps 3 to 5 is `mix-core.js`; the page and `build/tune.mjs` share 
 
 ## How a photo becomes songs
 
-The photo never leaves the device. EmbeddingGemma 2 (EG2, `onnx-community/embeddinggemma-2-ONNX`) maps
-images and text into one vector space, so a photo can be scored against each tag's description by cosine
-similarity. Its q4 vision encoder and text model, about 285 MB together, load through transformers.js
-4.3.1 when a photo is first used, and run on WebGPU (recent Chrome or Edge, Safari 26 and later). Without
-WebGPU the page says so, and posts and keywords still work. The browser has no CPU path, because every
-quantized EG2 build uses the `GatherBlockQuantized` op, which onnxruntime-web's WASM backend lacks; the
-unquantized builds are 540 MB and up.
+The photo never leaves the device. MobileCLIP-S0 (`Xenova/mobileclip_s0`, Apple's small CLIP model)
+maps images and text into one vector space, so a photo can be scored against each tag by cosine
+similarity. The page downloads only its image encoder (fp16, 23 MB, through transformers.js 4.3.1) when
+a photo is first used, and runs it on the CPU through onnxruntime-web, so any browser works. The int8
+build of that encoder, half the size, is broken: it ranks techno and IDM first for a photo of cats.
 
-`image-tags.json` holds the 247 tags embedded with EG2's text model and the query prompt
-`task: search result | query: `. It also holds each tag's mean and spread of cosine over 16,878 popular
-Bluesky photos, the index of the sibling Bluesky image search (`../image-search/`). Each photo is z-scored
-against that background, so a tag counts only when this photo sits closer to it than Bluesky photos
-usually do. The photo is embedded the way that index was, with a budget of 70 vision tokens, so the two
-are comparable. The background cosines come from the index's compressed vectors and stay within a few
-thousandths of exact ones.
+`image-tags.json` holds the 247 tags embedded with MobileCLIP-S0's text model. Each tag's vector is
+the average of two phrasings, "a photo of autumn" and "Autumn: falling leaves, pumpkin spice…", the
+description the posts path uses. The file also holds each tag's mean and spread of cosine over 2,969
+popular Bluesky photos, an even sample of the index behind the sibling Bluesky image search
+(`../image-search/`). The photo is z-scored against that background, so a tag counts only when this
+photo sits closer to it than Bluesky photos usually do.
 
 The photo spreads its weight over up to eight tags with z of at least 1, the same `tagProfile` call
 posts use (step 3 above, with `perPost: 8, zMin: 1, temp: 0.8`), and the mix is then made as in steps 4
-and 5. An autumn woodland photo with a squirrel on a fallen log gives, on WebGPU, autumn, nature and
-wildlife, death and grief, indie folk, birds, dogs, contemplative and acoustic. The squirrel reads as
-an animal close enough to pull in dogs, and the fallen log as loss.
+and 5. An autumn woodland photo with a squirrel on a fallen log gives autumn, nature and wildlife,
+spring, campfire, birds, acoustic, dogs and southern rock; a rainy street gives weather, rain, eerie and
+ambient.
+
 A 160-pixel thumbnail of the photo is kept with the last mix in this browser's localStorage, to show
 next to the tags; the saved playlist record holds nothing of the photo.
 
@@ -113,11 +111,11 @@ Everything is in `build/`. Python scripts need numpy, onnxruntime and tokenizers
    query prompt for posts gave better tags than no prompt: "heartbroken, missing her, lonely winter nights"
    maps to heartbreak, snow and winter, and lonely with it, and to female vocals without it.
 6. `python3 build_catalog.py tag_emb.json`: writes `../catalog.json`. Live recordings are dropped.
-7. `python3 embed_tags_image.py HF_DIR`: writes `../image-tags.json` for photos, after step 6 (it checks
-   that `tags.json` and `catalog.json` list the same tags). It reads the image index from
-   `../../image-search/data/` and needs `remex==2.1.0`, the version that built that index. HF_DIR holds
-   `onnx/model_q4.onnx`, `onnx/model_q4.onnx_data` and `tokenizer.json` from the Hugging Face repo
-   `onnx-community/embeddinggemma-2-ONNX`, flattened into one directory.
+7. `node embed_tags_clip.mjs`: writes `../image-tags.json` for photos, after step 6 (it checks that
+   `tags.json` and `catalog.json` list the same tags). Run `npm i @huggingface/transformers@4.3.1` in
+   `build/` first. It reads `../../image-search/data/rows.json` and fetches 3,000 of those photos from
+   Bluesky's CDN (about 6 minutes); `--cache FILE` keeps their vectors for reruns, and
+   `--try PHOTO ...` prints a photo's top tags under each phrasing.
 8. `python3 tune.py tag_emb.json [...] --actor <handle> --n 100` (or `--words "..."`) prints the tag
    profile for each embedding file, to compare variants.
 

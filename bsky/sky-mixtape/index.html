@@ -326,7 +326,7 @@
           <img id="photoPrev" alt="The chosen photo" hidden>
           <span id="photoMsg">Choose a photo, or drop one here</span>
         </label>
-        <p class="hint">The photo stays on this device. An image model, EmbeddingGemma 2, looks at it in your browser and finds the tags it fits better than a typical Bluesky photo does. It is a one-time download of about 285 MB and needs WebGPU: recent Chrome or Edge, or Safari 26 and later.</p>
+        <p class="hint">The photo stays on this device. An image model, MobileCLIP-S0, looks at it in your browser and finds the tags it fits better than a typical Bluesky photo does. It is a one-time download of 23 MB.</p>
       </div>
     </div>
     <div class="row">
@@ -415,7 +415,7 @@
 </div>
 
 <script type="module">
-const V = '2026-11-05b';
+const V = '2026-11-05c';
 const core = await import(`./mix-core.js?v=${V}`);
 
 const NS = 'com.austegard.mixtape';
@@ -426,8 +426,8 @@ const EMB = new URL('../embedders/models/ettin/', location.href).href;
 const ETTIN = { manifest: EMB + 'manifest.json', tokenizer: EMB + 'tokenizer.json', model: EMB + 'model.onnx' };
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
 const ORT = 'https://cdn.jsdelivr.net/npm/onnxruntime-web@1.30.0/dist/';
-// Photo seed: EmbeddingGemma 2 (vision encoder + text model, q4) through transformers.js, as ../image-search/ indexed its photos.
-const EG2 = { lib: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1', id: 'onnx-community/embeddinggemma-2-ONNX', softTokens: 70 };
+// Photo seed: MobileCLIP-S0's image encoder through transformers.js; the tag text vectors ship in image-tags.json.
+const PHOTO = { lib: 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1', id: 'Xenova/mobileclip_s0' };
 const CACHE = 'sky-mixtape-v1';
 const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32;
 // Default app IDs for austegard.com. Empty means "bring your own" via Settings.
@@ -784,41 +784,28 @@ async function loadImageTags() {
 
 async function getPhotoModel() {
   if (photoModel) return photoModel;
-  if (!await navigator.gpu?.requestAdapter().catch(() => null))
-    throw new Error('making a mix from a photo needs WebGPU (recent Chrome or Edge, or Safari 26 and later). Posts and keywords work in any browser.');
-  const loadMsg = 'Loading EmbeddingGemma 2, the image model (about 285 MB the first time, cached after that)…';
+  const loadMsg = 'Loading MobileCLIP-S0, the image model (23 MB, cached after the first time)…';
   status(loadMsg, { progress: 0.05 });
-  const T = await import(EG2.lib);
-  const files = new Map();
+  const T = await import(PHOTO.lib);
   const progress_callback = p => {
-    if (p.status !== 'progress' || !p.total) return;
-    files.set(p.file, [p.loaded, p.total]);
-    let got = 0, all = 0;
-    for (const [a, b] of files.values()) { got += a; all += b; }
-    status(`Loading EmbeddingGemma 2… ${Math.round(got / 1e6)} of ${Math.round(all / 1e6)} MB`, { progress: 0.05 + 0.75 * got / all });
+    if (p.status === 'progress' && p.total && /vision/.test(p.file)) status(loadMsg, { progress: 0.05 + 0.75 * p.loaded / p.total });
   };
-  const config = await T.AutoConfig.from_pretrained(EG2.id);
-  config.audio_config = null; // vision and text only: skip the 189 MB audio encoder
-  const processor = await T.AutoProcessor.from_pretrained(EG2.id);
-  // 70 soft tokens per image, the budget the image-search index (and so the tag baseline) was built with.
-  const ip = processor.image_processor;
-  ip.config.max_soft_tokens = ip.max_soft_tokens = ip.config.image_seq_length = ip.image_seq_length = EG2.softTokens;
-  processor.image_seq_length = EG2.softTokens;
-  // WebGPU only: every quantized build of EG2 uses GatherBlockQuantized, which onnxruntime-web's CPU (WASM)
-  // backend does not implement, and the unquantized builds are 540 MB and up.
-  const model = await T.AutoModel.from_pretrained(EG2.id, { config, device: 'webgpu', dtype: 'q4', progress_callback });
-  photoModel = { T, processor, model, name: 'your GPU' };
+  // fp16 weights on onnxruntime-web's CPU (WASM) backend, which every browser has. Not int8: that build
+  // of MobileCLIP-S0 ranks techno and IDM first for a photo of cats.
+  const [processor, model] = await Promise.all([T.AutoProcessor.from_pretrained(PHOTO.id),
+    T.CLIPVisionModelWithProjection.from_pretrained(PHOTO.id, { device: 'wasm', dtype: 'fp16', progress_callback })]);
+  photoModel = { T, processor, model };
   return photoModel;
 }
 
 async function embedPhoto(file) {
   const m = await getPhotoModel();
-  status(`Looking at the photo on ${m.name}…`, { progress: 0.85 });
+  status('Looking at the photo…', { progress: 0.85 });
   let img;
   try { img = await m.T.RawImage.fromBlob(file); }
   catch { throw new Error('this browser could not read that image file. Try a JPEG or PNG.'); }
-  const out = await m.model(await m.processor(null, [img]));
-  return unit(Float32Array.from(out.sentence_embedding.data));
+  const out = await m.model(await m.processor(img));
+  return unit(Float32Array.from(out.image_embeds.data));
 }
 
 // A small JPEG of the photo for the J-card and the saved mix in localStorage (never sent anywhere).
