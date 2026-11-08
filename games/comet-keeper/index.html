@@ -412,47 +412,6 @@ for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) {
 // not fire on iOS 27, so there the Vibration chips are hidden.
 const canVibrate = typeof navigator.vibrate === 'function';
 function buzz(p) { if (settings.haptics && canVibrate) try { navigator.vibrate(p); } catch {} }
-// Play is all tilt, so no tap comes along to restart audio that iOS suspended or interrupted (the motion
-// permission sheet can do it). The loop retries resume() once a second, which is allowed once an interruption
-// ends, and after two seconds of silence asks for a tap.
-let audioRetryT = 0, audioDeadT = 0, audioAsked = false;
-function keepAudio(dt) {
-  if (!settings.sound || !Snd.ctx) return;
-  if (Snd.ctx.state === 'running') { audioDeadT = 0; return; }
-  audioRetryT -= dt; audioDeadT += dt;
-  if (audioRetryT <= 0) { audioRetryT = 1; try { Snd.ctx.resume().catch(() => {}); } catch {} }
-  if (audioDeadT > 2 && !audioAsked) { audioAsked = true; tip('Sound is paused: tap the screen to turn it back on'); }
-}
-function unlockAudio() {
-  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
-  try {
-    if (!Snd.ensure()) return;
-    if (Snd.ctx.state !== 'running') { Snd.ctx.resume(); audioAsked = false; }
-    const src = Snd.ctx.createBufferSource(); src.buffer = Snd.ctx.createBuffer(1, 1, 22050); src.connect(Snd.ctx.destination); src.start(0);
-  } catch {}
-}
-for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) {
-  addEventListener(ev, () => { if (!Snd.ctx || Snd.ctx.state !== 'running') unlockAudio(); }, { capture: true, passive: true });
-}
-// Safari on iOS has no Vibration API. Since iOS 18, toggling an <input type=checkbox switch> gives a haptic
-// tick, so that stands in for it there: one tick per pulse in a pattern.
-let tickLabel = null;
-function iosTick() {
-  if (!tickLabel) {
-    tickLabel = document.createElement('label'); tickLabel.setAttribute('aria-hidden', 'true');
-    tickLabel.style.cssText = 'position:fixed;left:-200px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
-    const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.tabIndex = -1;
-    tickLabel.append(i); document.body.append(tickLabel);
-  }
-  tickLabel.click();
-}
-function buzz(p) {
-  if (!settings.haptics) return;
-  if (typeof navigator.vibrate === 'function') { try { navigator.vibrate(p); } catch {} return; }
-  const n = Array.isArray(p) ? Math.ceil(p.length / 2) : 1;
-  iosTick();   // the first tick runs synchronously, inside the tap that may have caused it
-  for (let i = 1; i < n; i++) setTimeout(iosTick, i * 90);
-}
 
 /* ---------- motion: roll steers, pitch flicks ---------- */
 // The phone's gravity vector gives two angles that hold up in any pose: roll (sideways tilt, which steers) and
