@@ -1,0 +1,1382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Comet Keeper</title>
+<meta name="description" content="A phone arcade game played with the wrist: tilt the top of the phone toward you to catch a comet, flick it away to hurl the comet back at the sentinels that threw it, and roll the phone to move.">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta name="theme-color" content="#070614">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Comet Keeper">
+<meta property="og:description" content="Tilt the phone back to catch a comet, flick it forward to throw it back. A wrist-gesture arcade game.">
+<meta property="og:url" content="https://austegard.com/games/comet-keeper/">
+<meta property="og:image" content="https://austegard.com/games/comet-keeper/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Comets flying down a starlit lane toward a glowing cradle, with sentinels at the far end">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Comet Keeper">
+<meta name="twitter:description" content="Tilt the phone back to catch a comet, flick it forward to throw it back. A wrist-gesture arcade game.">
+<meta name="twitter:image" content="https://austegard.com/games/comet-keeper/og-image.png">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-512.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Comet Keeper">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Audiowide&family=Exo+2:wght@400;600&display=swap">
+<style>
+/* Full-screen canvas with a DOM HUD on top. Dark only, by choice. */
+:root {
+  --bg: #070614;
+  --panel: rgba(17, 14, 40, 0.9);
+  --line: #2f2a5c;
+  --ink: #f1eeff;
+  --muted: #a6a1c8;
+  --cyan: #5ae6ff;
+  --red: #ff4a60;
+  --amber: #ffb040;
+  --violet: #b9a2ff;
+  --display: "Audiowide", "Arial Black", system-ui, sans-serif;
+  --body: "Exo 2", "Trebuchet MS", system-ui, sans-serif;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body {
+  height: 100%; margin: 0; background: var(--bg); color: var(--ink); font-family: var(--body);
+  overflow: hidden; overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent; touch-action: none;
+}
+#cv { position: fixed; inset: 0; display: block; touch-action: none; }
+
+#hud {
+  position: fixed; left: 0; right: 0; top: 0; z-index: 2; pointer-events: none;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) max(14px, env(safe-area-inset-right, 0px)) 0 max(14px, env(safe-area-inset-left, 0px));
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: start;
+}
+#score { font-family: var(--body); font-weight: 600; font-size: 26px; line-height: 1; text-shadow: 0 0 12px rgba(90, 230, 255, 0.5); }
+#mult { font-size: 14px; color: var(--amber); font-weight: 600; margin-top: 3px; min-height: 1.2em; }
+#wave { text-align: center; font-family: var(--display); font-size: 12px; color: var(--muted); letter-spacing: 0.16em; padding-top: 4px; }
+.hr { justify-self: end; display: flex; flex-direction: column; align-items: flex-end; gap: 7px; }
+#hearts { display: flex; gap: 5px; }
+#hearts i { width: 14px; height: 14px; border-radius: 50%; background: var(--red); box-shadow: 0 0 10px var(--red); }
+#hearts i.off { background: transparent; box-shadow: none; border: 1.5px solid rgba(255, 74, 96, 0.45); width: 11px; height: 11px; }
+#focus { width: 78px; height: 5px; border-radius: 3px; background: rgba(90, 230, 255, 0.14); overflow: hidden; }
+#focus i { display: block; height: 100%; width: 100%; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); transform-origin: left; }
+#focus.on i { background: #fff; }
+
+#pauseBtn {
+  position: fixed; z-index: 3; left: max(12px, env(safe-area-inset-left, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  width: 42px; height: 42px; border-radius: 12px; border: 1px solid var(--line); background: rgba(12, 10, 30, 0.6);
+  color: var(--muted); font: 600 15px var(--body); cursor: pointer;
+}
+#skipBtn {
+  position: fixed; z-index: 3; right: max(12px, env(safe-area-inset-right, 0px)); bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  height: 42px; padding: 0 16px; border-radius: 12px; border: 1px solid var(--line); background: rgba(12, 10, 30, 0.6);
+  color: var(--muted); font: 600 14px var(--body); cursor: pointer;
+}
+
+#gauge {
+  position: fixed; z-index: 2; right: max(8px, env(safe-area-inset-right, 0px)); top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; align-items: center; gap: 6px; pointer-events: none; opacity: 0.85;
+}
+#gauge .lab { font: 600 9px var(--body); letter-spacing: 0.12em; color: var(--muted); writing-mode: vertical-rl; transform: rotate(180deg); }
+#gauge .track { position: relative; width: 8px; height: 150px; border-radius: 4px; background: rgba(255, 255, 255, 0.07); }
+#gauge .zone { position: absolute; left: 0; right: 0; border-radius: 4px; }
+#gauge .zf { top: 0; height: 36%; background: linear-gradient(rgba(255, 176, 64, 0.35), transparent); }
+#gauge .zb { bottom: 0; height: 36%; background: linear-gradient(transparent, rgba(90, 230, 255, 0.35)); }
+#gauge .mid { position: absolute; left: -4px; right: -4px; top: 50%; height: 1px; background: rgba(255, 255, 255, 0.3); }
+#needle { position: absolute; left: -5px; right: -5px; height: 4px; margin-top: -2px; top: 50%; border-radius: 2px; background: #fff; box-shadow: 0 0 8px #fff; }
+#gauge.fwd .zf { background: linear-gradient(rgba(255, 176, 64, 0.95), rgba(255, 176, 64, 0.2)); }
+#gauge.back .zb { background: linear-gradient(rgba(90, 230, 255, 0.2), rgba(90, 230, 255, 0.95)); }
+#pw { font: 600 11px var(--body); color: var(--amber); min-height: 1.2em; }
+
+#coach {
+  position: fixed; z-index: 2; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 64px); transform: translateX(-50%);
+  width: min(88vw, 360px); text-align: center; font-size: 16px; line-height: 1.35; font-weight: 600;
+  padding: 10px 14px; border-radius: 14px; background: rgba(12, 10, 30, 0.66); border: 1px solid var(--line);
+  pointer-events: none;
+}
+#coach small { display: block; color: var(--muted); font-weight: 400; font-size: 13px; margin-top: 4px; }
+#callout {
+  position: fixed; z-index: 2; left: 0; right: 0; top: 36%; text-align: center; pointer-events: none;
+  font-family: var(--display); font-size: 30px; letter-spacing: 0.06em; opacity: 0;
+  text-shadow: 0 0 18px rgba(185, 162, 255, 0.8);
+}
+#callout small { display: block; font-family: var(--body); font-size: 15px; font-weight: 600; letter-spacing: 0; color: var(--muted); margin-top: 6px; text-shadow: none; }
+#callout.show { animation: call 1.7s ease-out forwards; }
+@keyframes call { 0% { opacity: 0; transform: scale(1.4); } 12% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; transform: translateY(-14px); } }
+#tip {
+  position: fixed; z-index: 2; left: 50%; bottom: calc(env(safe-area-inset-bottom, 0px) + 70px); transform: translateX(-50%);
+  width: min(86vw, 340px); text-align: center; font-size: 14px; font-weight: 600; color: #ffd7dc; opacity: 0; pointer-events: none;
+}
+#tip.show { animation: tip 2.6s ease-out forwards; }
+@keyframes tip { 0% { opacity: 0; } 8% { opacity: 1; } 80% { opacity: 1; } 100% { opacity: 0; } }
+
+.ov {
+  position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; overflow-y: auto;
+  padding: calc(env(safe-area-inset-top, 0px) + 16px) 16px calc(env(safe-area-inset-bottom, 0px) + 16px);
+  background: rgba(5, 4, 14, 0.66); backdrop-filter: blur(3px); -webkit-backdrop-filter: blur(3px);
+}
+.card {
+  width: 100%; max-width: 380px; box-sizing: border-box; background: var(--panel); border: 1px solid var(--line);
+  border-radius: 20px; padding: 22px 20px 18px; text-align: center; box-shadow: 0 0 70px rgba(120, 90, 255, 0.2);
+}
+h1, h2 { font-family: var(--display); font-weight: 400; margin: 0; letter-spacing: 0.04em; }
+h1 {
+  font-size: 34px; line-height: 1.05;
+  background: linear-gradient(90deg, var(--cyan), #fff 50%, var(--amber)); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+h2 { font-size: 24px; margin-bottom: 6px; }
+.tag { color: var(--muted); margin: 8px 0 16px; font-size: 15px; line-height: 1.35; }
+.moves { list-style: none; padding: 0; margin: 0 0 18px; text-align: left; display: grid; gap: 9px; font-size: 14.5px; line-height: 1.3; }
+.moves li { display: grid; grid-template-columns: 40px 1fr; align-items: center; gap: 12px; }
+.moves b { color: #fff; }
+.ic { width: 40px; height: 40px; border-radius: 11px; background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line); display: grid; place-items: center; }
+.ic svg { width: 32px; height: 32px; overflow: visible; }
+.ic .ph { fill: none; stroke: var(--ink); stroke-width: 2.4; stroke-linejoin: round; }
+.ic .gr { stroke: var(--muted); stroke-width: 1.5; stroke-dasharray: 2 3; fill: none; }
+.ic .ar { fill: none; stroke-width: 2; stroke-linecap: round; }
+.a-roll { transform-origin: 16px 16px; animation: roll 2.4s ease-in-out infinite; }
+.a-fwd { transform-origin: 16px 28px; animation: fwd 1.8s cubic-bezier(.3, 0, .2, 1) infinite; }
+.a-back { transform-origin: 16px 28px; animation: back 1.8s cubic-bezier(.3, 0, .2, 1) infinite; }
+.a-hold { transform-origin: 16px 28px; transform: rotate(-24deg); }
+@keyframes roll { 0%, 100% { transform: rotate(-16deg); } 50% { transform: rotate(16deg); } }
+@keyframes fwd { 0%, 40% { transform: rotate(0deg); } 52% { transform: rotate(34deg); } 75%, 100% { transform: rotate(0deg); } }
+@keyframes back { 0%, 40% { transform: rotate(0deg); } 52% { transform: rotate(-30deg); } 75%, 100% { transform: rotate(0deg); } }
+.btns { display: grid; gap: 9px; }
+button { font-family: var(--body); }
+.go {
+  font-family: var(--display); font-size: 20px; letter-spacing: 0.05em; padding: 13px 20px; border-radius: 14px; border: 0; cursor: pointer;
+  background: linear-gradient(180deg, #8beeff, #39a8e6); color: #031019; box-shadow: 0 0 26px rgba(90, 230, 255, 0.35);
+}
+.sec {
+  font-size: 15px; font-weight: 600; padding: 11px 16px; border-radius: 12px; cursor: pointer;
+  background: rgba(255, 255, 255, 0.05); color: var(--ink); border: 1px solid var(--line);
+}
+.row { display: flex; gap: 8px; justify-content: center; margin-top: 12px; flex-wrap: wrap; }
+.chip {
+  font-size: 13px; font-weight: 600; padding: 7px 12px; border-radius: 999px; cursor: pointer;
+  background: transparent; color: var(--muted); border: 1px solid var(--line);
+}
+.chip[aria-pressed="true"] { color: var(--ink); border-color: var(--violet); background: rgba(185, 162, 255, 0.12); }
+.best { font-size: 13.5px; color: var(--muted); margin: 14px 0 0; }
+.note { font-size: 12.5px; color: var(--muted); margin: 12px 0 0; line-height: 1.4; }
+kbd { font: 600 11.5px var(--body); padding: 1px 5px; border-radius: 4px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.06); }
+.set { text-align: left; margin: 6px 0 14px; display: grid; gap: 12px; font-size: 14px; }
+.set label { display: grid; gap: 6px; }
+.set .seg { display: flex; gap: 6px; }
+.set .seg button { flex: 1; }
+input[type=range] { width: 100%; accent-color: var(--cyan); }
+.big { font-family: var(--display); font-size: 40px; margin: 8px 0 2px; text-shadow: 0 0 20px rgba(90, 230, 255, 0.5); }
+.stats { color: var(--muted); font-size: 14px; margin: 0 0 16px; }
+.live { display: flex; justify-content: center; gap: 18px; margin: 4px 0 16px; font-size: 13px; color: var(--muted); }
+.live b { display: block; font: 400 20px var(--display); color: var(--ink); }
+#calibGauge { width: 100%; height: 10px; border-radius: 5px; background: rgba(255, 255, 255, 0.07); position: relative; margin: 6px 0 16px; }
+#calibDot { position: absolute; top: -3px; width: 16px; height: 16px; margin-left: -8px; left: 50%; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); }
+</style>
+</head>
+<body>
+<canvas id="cv"></canvas>
+
+<div id="hud" hidden>
+  <div><div id="score">0</div><div id="mult"></div></div>
+  <div id="wave"></div>
+  <div class="hr"><div id="hearts"></div><div id="focus" title="Slow time"><i></i></div></div>
+</div>
+<div id="gauge" hidden aria-hidden="true">
+  <span class="lab">THROW</span>
+  <div class="track"><i class="zone zf"></i><i class="zone zb"></i><i class="mid"></i><i id="needle"></i></div>
+  <span class="lab">CATCH</span>
+  <span id="pw"></span>
+</div>
+<div id="coach" hidden></div>
+<div id="callout"></div>
+<div id="tip"></div>
+<button id="pauseBtn" type="button" aria-label="Pause" hidden>II</button>
+<button id="skipBtn" type="button" hidden>Skip training</button>
+
+<section class="ov" id="menu">
+  <div class="card">
+    <h1>COMET KEEPER</h1>
+    <p class="tag">Catch comets with a tilt of the wrist and hurl them back at the sentinels that threw them.</p>
+    <ul class="moves">
+      <li><span class="ic"><svg viewBox="0 0 32 32"><g class="a-roll"><rect class="ph" x="10" y="3" width="12" height="26" rx="3"/></g></svg></span><span><b>Roll</b> the phone left and right to move</span></li>
+      <li><span class="ic"><svg viewBox="0 0 32 32"><line class="gr" x1="2" y1="29" x2="30" y2="29"/><g class="a-fwd"><rect class="ph" x="14" y="4" width="4" height="24" rx="1.5"/></g><path class="ar" stroke="var(--amber)" d="M24 6 q5 4 4 10"/></svg></span><span><b>Flick the top away</b> to throw, or to punch a thorn back</span></li>
+      <li><span class="ic"><svg viewBox="0 0 32 32"><line class="gr" x1="2" y1="29" x2="30" y2="29"/><g class="a-back"><rect class="ph" x="14" y="4" width="4" height="24" rx="1.5"/></g><path class="ar" stroke="var(--cyan)" d="M8 6 q-5 4 -4 10"/></svg></span><span><b>Tilt the top toward you</b> as a comet lands to catch it</span></li>
+      <li><span class="ic"><svg viewBox="0 0 32 32"><line class="gr" x1="2" y1="29" x2="30" y2="29"/><g class="a-hold"><rect class="ph" x="14" y="4" width="4" height="24" rx="1.5"/></g></svg></span><span><b>Hold it tilted back</b> to slow time</span></li>
+    </ul>
+    <div class="btns">
+      <button class="go" id="playBtn" type="button">PLAY</button>
+      <button class="sec" id="trainBtn" type="button">Training</button>
+    </div>
+    <p class="best" id="bestLine"></p>
+    <div class="row">
+      <button class="chip" id="sndChip" type="button" aria-pressed="true">Sound</button>
+      <button class="chip" id="hapChip" type="button" aria-pressed="true">Vibration</button>
+    </div>
+    <p class="note" id="deskNote" hidden>No tilt sensor here: <kbd>←</kbd> <kbd>→</kbd> move, <kbd>↑</kbd> throws (hold it longer to throw farther), <kbd>↓</kbd> catches, and holding <kbd>↓</kbd> slows time. On a touchscreen, drag sideways to move and swipe up or down.</p>
+  </div>
+</section>
+
+<section class="ov" id="calib" hidden>
+  <div class="card">
+    <h2>Hold it how you'll play</h2>
+    <p class="tag">Sitting, standing or lying down, hold the phone at the angle you'll play from and press Ready. That pose is level. The game follows slow drift on its own.</p>
+    <div id="calibGauge"><i id="calibDot"></i></div>
+    <div class="btns"><button class="go" id="readyBtn" type="button">READY</button></div>
+    <p class="note" id="calibNote"></p>
+  </div>
+</section>
+
+<section class="ov" id="pause" hidden>
+  <div class="card">
+    <h2>Paused</h2>
+    <div class="set">
+      <label>Roll needed to cross the lane: <span id="sweepVal"></span>
+        <input type="range" id="sweep" min="10" max="34" step="1"></label>
+      <div>Flick strength needed
+        <div class="seg" style="margin-top:6px">
+          <button class="chip" type="button" data-flick="0">Light</button>
+          <button class="chip" type="button" data-flick="1">Normal</button>
+          <button class="chip" type="button" data-flick="2">Firm</button>
+        </div>
+      </div>
+    </div>
+    <div class="btns">
+      <button class="go" id="resumeBtn" type="button">RESUME</button>
+      <button class="sec" id="relevelBtn" type="button">Level here</button>
+      <button class="sec" id="quitBtn" type="button">Quit to title</button>
+    </div>
+    <div class="row">
+      <button class="chip" id="sndChip2" type="button" aria-pressed="true">Sound</button>
+      <button class="chip" id="hapChip2" type="button" aria-pressed="true">Vibration</button>
+    </div>
+    <p class="note" id="flickInfo"></p>
+  </div>
+</section>
+
+<section class="ov" id="over" hidden>
+  <div class="card">
+    <h2>The sky fell</h2>
+    <div class="big" id="finalScore">0</div>
+    <p class="stats" id="finalStats"></p>
+    <div class="btns">
+      <button class="go" id="againBtn" type="button">PLAY AGAIN</button>
+      <button class="sec" id="menuBtn" type="button">Title</button>
+    </div>
+  </div>
+</section>
+
+<section class="ov" id="rotate" hidden>
+  <div class="card"><h2>Turn the phone upright</h2><p class="tag">Comet Keeper plays in portrait, so the flicks run along the phone's long side.</p></div>
+</section>
+
+<script>
+'use strict';
+/* ---------- helpers ---------- */
+const $ = id => document.getElementById(id);
+const cv = $('cv');
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const lerp = (a, b, t) => a + (b - a) * t;
+const rand = (a, b) => a + Math.random() * (b - a);
+const pick = a => a[Math.floor(Math.random() * a.length)];
+const D2R = Math.PI / 180, TAU = Math.PI * 2;
+const now = () => performance.now() / 1000;
+function load(k) { try { return JSON.parse(localStorage.getItem(k) || 'null'); } catch { return null; } }
+function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+
+const settings = Object.assign({ sound: true, haptics: true, sweep: 20, flick: 1, trained: false }, load('comet-keeper:settings') || {});
+const saveSettings = () => save('comet-keeper:settings', settings);
+const record = Object.assign({ score: 0, wave: 0 }, load('comet-keeper:best') || {});
+
+/* ---------- world constants ---------- */
+// The lane runs into the screen: x across (-1..1), y up, z away from the keeper. The keeper's cradle sits at
+// z = 0, y = 0; the floor is below it, and a camera behind and above looks down the lane.
+const CD = 28, FLOOR = -1.1, XMAX = 1.1, LANE = 1.35, KX = 0.78, REACH = 0.36, BODY = 0.3, MAXH = 3;
+const tierY = z => 0.5 + (z - 14) * 0.075;   // sentinels further back float higher, so rows don't overlap on screen
+const WIN_EARLY = 0.3, WIN_LATE = -0.09, PERFECT = 0.075;   // catch / punch window, in seconds before contact
+const COL = { wisp: '90,230,255', thorn: '255,72,98', stone: '255,168,60', warden: '226,112,255', dummy: '185,162,255', gold: '255,226,120', keeper: '196,170,255' };
+
+/* ---------- sound: synthesized with Web Audio ---------- */
+const Snd = {
+  ctx: null, out: null, mus: null, nb: null,
+  ensure() {
+    if (this.ctx) return true;
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
+    try {
+      const c = this.ctx = new AC();
+      const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4; comp.connect(c.destination);
+      this.out = c.createGain(); this.out.gain.value = settings.sound ? 0.75 : 0; this.out.connect(comp);
+      this.mus = c.createGain(); this.mus.gain.value = 0.3; this.mus.connect(this.out);
+      const n = c.sampleRate; this.nb = c.createBuffer(1, n, n); const d = this.nb.getChannelData(0);
+      for (let i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    } catch { this.ctx = null; return false; }
+    return true;
+  },
+  ok() { return this.ctx && this.ctx.state === 'running' && settings.sound; },
+  tone(type, f0, f1, dur, vol, delay = 0, dest) {
+    if (!this.ok()) return; const c = this.ctx, t = c.currentTime + delay;
+    const o = c.createOscillator(), g = c.createGain(); o.type = type;
+    o.frequency.setValueAtTime(f0, t); if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(dest || this.out); o.start(t); o.stop(t + dur + 0.03);
+  },
+  noise(dur, vol, f0, f1, q = 1, type = 'bandpass', delay = 0, dest) {
+    if (!this.ok()) return; const c = this.ctx, t = c.currentTime + delay;
+    const s = c.createBufferSource(); s.buffer = this.nb; s.loop = true;
+    const f = c.createBiquadFilter(); f.type = type; f.Q.value = q;
+    f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(Math.max(20, f1), t + dur);
+    const g = c.createGain(); g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.008); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(dest || this.out); s.start(t, Math.random() * 0.8); s.stop(t + dur + 0.03);
+  },
+};
+const sfx = {
+  catch(perfect, heavy) {
+    Snd.tone('sine', heavy ? 150 : 230, heavy ? 40 : 60, heavy ? 0.24 : 0.15, 0.55); Snd.noise(0.05, 0.25, 2200, 700, 1);
+    if (perfect) { Snd.tone('sine', 1318, 1318, 0.4, 0.14, 0.02); Snd.tone('sine', 1976, 1976, 0.32, 0.08, 0.06); }
+  },
+  throw(p) { Snd.noise(0.2 + p * 0.1, 0.22 + p * 0.3, 450, 2200 + p * 2600, 1.3); },
+  punch(perfect) { Snd.noise(0.09, 0.5, 3200, 1400, 0.8); Snd.tone('square', 150, 55, 0.11, 0.16); if (perfect) Snd.tone('sine', 1568, 1568, 0.3, 0.12, 0.02); },
+  hit() { Snd.tone('triangle', 660, 620, 0.22, 0.2); Snd.tone('triangle', 990, 960, 0.18, 0.1, 0.01); },
+  clang() { Snd.tone('square', 1200, 1100, 0.08, 0.06); Snd.noise(0.12, 0.2, 5000, 3000, 2); },
+  kill() { [523, 659, 784, 1047].forEach((f, i) => Snd.tone('square', f, f, 0.12, 0.07, i * 0.045)); Snd.noise(0.35, 0.3, 1400, 160, 0.7); },
+  hurt() { Snd.tone('sawtooth', 120, 48, 0.4, 0.28); Snd.noise(0.25, 0.3, 600, 120, 0.6, 'lowpass'); },
+  bonk() { Snd.tone('triangle', 200, 120, 0.12, 0.2); },
+  clash() { Snd.noise(0.16, 0.42, 4500, 900, 1); Snd.tone('sine', 1760, 1760, 0.28, 0.12); },
+  tick() { Snd.tone('sine', 1046, 1046, 0.035, 0.05); },
+  whiff() { Snd.noise(0.12, 0.07, 700, 1600, 1); },
+  land() { Snd.noise(0.22, 0.14, 500, 140, 0.8); },
+  wave() { [392, 494, 587, 784].forEach((f, i) => Snd.tone('triangle', f, f, 0.25, 0.1, i * 0.08)); },
+  over() { [392, 330, 262, 196].forEach((f, i) => Snd.tone('triangle', f, f * 0.98, 0.4, 0.12, i * 0.16)); },
+};
+// A quiet generative backing: a two-note drone and pentatonic plucks, a little faster each wave.
+const Music = {
+  timer: null, next: 0, step: 0, drone: null,
+  start() {
+    if (this.timer || !Snd.ensure()) return;
+    const c = Snd.ctx; this.next = c.currentTime + 0.1; this.step = 0;
+    const g = c.createGain(); g.gain.value = 0.0001; g.gain.setTargetAtTime(0.06, c.currentTime, 1.5);
+    const f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 420; f.connect(g); g.connect(Snd.mus);
+    const oscs = [55, 82.4, 110.3].map(fr => { const o = c.createOscillator(); o.type = 'triangle'; o.frequency.value = fr; o.connect(f); o.start(); return o; });
+    this.drone = { g, oscs };
+    this.timer = setInterval(() => this.tick(), 50);
+  },
+  stop() {
+    clearInterval(this.timer); this.timer = null;
+    if (this.drone && Snd.ctx) { const d = this.drone, t = Snd.ctx.currentTime; d.g.gain.setTargetAtTime(0.0001, t, 0.2); d.oscs.forEach(o => o.stop(t + 1)); }
+    this.drone = null;
+  },
+  tick() {
+    const c = Snd.ctx; if (!c) return;
+    const bpm = 92 + Math.min(game.wave, 12) * 2, sp = 60 / bpm / 2;
+    const scale = [0, 3, 5, 7, 10, 12, 15, 17];
+    while (this.next < c.currentTime + 0.2) {
+      const i = this.step, d = this.next - c.currentTime;
+      const bar = Math.floor(i / 8) % 4, root = [0, -4, 3, -2][bar];
+      if (i % 8 === 0 || i % 8 === 5) Snd.tone('triangle', 110 * Math.pow(2, root / 12), 110 * Math.pow(2, root / 12), 0.35, 0.16, d, Snd.mus);
+      if (i % 2 === 0) Snd.noise(0.03, 0.025, 8000, 7000, 1, 'highpass', d, Snd.mus);
+      if (Math.random() < 0.42) { const n = scale[Math.floor(Math.random() * scale.length)] + root; Snd.tone('sine', 440 * Math.pow(2, n / 12), 440 * Math.pow(2, n / 12), 0.28, 0.05, d, Snd.mus); }
+      this.step++; this.next += sp;
+    }
+  },
+};
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+  try {
+    if (!Snd.ensure()) return;
+    if (Snd.ctx.state !== 'running') Snd.ctx.resume();
+    const src = Snd.ctx.createBufferSource(); src.buffer = Snd.ctx.createBuffer(1, 1, 22050); src.connect(Snd.ctx.destination); src.start(0);
+  } catch {}
+}
+for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) {
+  addEventListener(ev, () => { if (!Snd.ctx || Snd.ctx.state !== 'running') unlockAudio(); }, { capture: true, passive: true });
+}
+function buzz(p) { if (settings.haptics && navigator.vibrate) try { navigator.vibrate(p); } catch {} }
+
+/* ---------- motion: roll steers, pitch flicks ---------- */
+// The phone's gravity vector gives two angles that hold up in any pose: roll (sideways tilt, which steers) and
+// pitch (how far the top leans back toward you). Gestures come from the pitch rate. rotationRate from
+// devicemotion is used once its sign and scale are confirmed against the derivative of the pitch angle, since
+// browsers have disagreed on both; until then the derivative itself is the rate.
+const motion = {
+  ok: false, listening: false, denied: false,
+  roll: 0, roll0: 0, pitch: 60, neutral: 60, P: 0, rate: 0, dRate: 0, lastPitch: null, lastT: 0,
+  rr: null, rrT: 0, sxy: 0, sxx: 0, syy: 0, n: 0, k: 1, trustRR: false, brace: false, braceT: 0, lastPeak: 0,
+};
+const G = { state: 0, peak: 0, t0: 0, lastDir: 0, lastEnd: -9 };   // gesture detector: state 1 forward, -1 back
+const flickBase = () => [75, 110, 150][settings.flick];
+const powerOf = peak => clamp((peak - flickBase()) / (flickBase() * 4.4), 0, 1);
+const peakFor = p => flickBase() * (1 + p * 4.4);
+const screenAngle = () => (screen.orientation && screen.orientation.angle) || window.orientation || 0;
+
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  const b = e.beta * D2R, g = e.gamma * D2R, t = now();
+  let gx = Math.cos(b) * Math.sin(g), gy = -Math.sin(b);
+  const gz = -Math.cos(b) * Math.cos(g);
+  if (Math.abs(screenAngle()) === 180) { gx = -gx; gy = -gy; }
+  const roll = Math.asin(clamp(gx, -1, 1)) / D2R, raw = Math.atan2(-gy, -gz) / D2R;
+  if (motion.lastPitch == null) motion.lastPitch = raw;
+  let d = raw - motion.lastPitch; if (d > 180) d -= 360; else if (d < -180) d += 360;
+  motion.lastPitch = raw;
+  const pitch = motion.ok ? motion.pitch + d : raw, dt = t - motion.lastT;
+  motion.lastT = t; motion.roll = roll; motion.pitch = pitch;
+  if (!motion.ok) { motion.ok = true; motion.neutral = pitch; motion.roll0 = roll; onMotionReady(); return; }
+  if (dt > 0.002 && dt < 0.25) {
+    motion.dRate = lerp(motion.dRate, d / dt, 0.55);
+    if (motion.rr != null && t - motion.rrT < 0.05 && Math.abs(motion.dRate) > 40 && !motion.trustRR) {
+      motion.sxy += motion.rr * motion.dRate; motion.sxx += motion.rr * motion.rr; motion.syy += motion.dRate * motion.dRate; motion.n++;
+      if (motion.n >= 30) {
+        const k = motion.sxy / motion.sxx, r = motion.sxy / Math.sqrt(motion.sxx * motion.syy);
+        // the smoothed derivative lags, so the fit reads low: snap to degrees or radians when it is near either
+        if (Math.abs(r) > 0.6 && Math.abs(k) > 0.3 && Math.abs(k) < 80) { const a = Math.abs(k); motion.k = Math.sign(k) * (a > 0.5 && a < 1.6 ? 1 : a > 30 && a < 90 ? 180 / Math.PI : a); motion.trustRR = true; }
+        else if (motion.n > 400) { motion.sxy = motion.sxx = motion.syy = 0; motion.n = 0; }
+      }
+    }
+  }
+  motion.P = pitch - motion.neutral;
+  // The neutral pose follows slow drift: quickly while the phone rests near it, slowly when held far from it.
+  if (G.state === 0 && Math.abs(motion.rate) < 45 && dt > 0 && dt < 0.25) {
+    const tau = Math.abs(motion.P) < 9 ? 1.4 : 6;
+    motion.neutral += (pitch - motion.neutral) * Math.min(1, dt / tau);
+  }
+  if (motion.P > 13 && G.state === 0) motion.braceT += Math.max(0, Math.min(dt, 0.1)); else motion.braceT = 0;
+  motion.brace = motion.braceT > 0.3;
+  if (!motion.trustRR) { motion.rate = motion.dRate; detect(motion.P, motion.rate, t); }
+}
+function onDeviceMotion(e) {
+  const r = e.rotationRate; if (!r || r.beta == null) return;
+  const t = now(); motion.rr = Math.abs(screenAngle()) === 180 ? -r.beta : r.beta; motion.rrT = t;
+  if (motion.trustRR && motion.ok) { motion.rate = lerp(motion.rate, motion.k * motion.rr, 0.7); detect(motion.P, motion.rate, t); }
+}
+// A flick starts when the pitch rate crosses the threshold and ends when it falls below half its peak (or after
+// 150 ms); the peak sets the strength. The swing back after a flick must not read as the opposite flick, so for
+// 0.4 s after one the opposite one needs a faster rate and has to carry past the neutral pose.
+function detect(P, w, t) {
+  const T = flickBase();
+  if (G.state === 0) {
+    const recent = t - G.lastEnd < 0.4;
+    const fwdRecentOpp = recent && G.lastDir === -1, backRecentOpp = recent && G.lastDir === 1;
+    if (-w > T * (fwdRecentOpp ? 1.6 : 1) && P < (fwdRecentOpp ? -4 : 6)) { G.state = 1; G.peak = -w; G.t0 = t; gestureStart(1, G.peak); }
+    else if (w > T * (backRecentOpp ? 1.6 : 1) && P > (backRecentOpp ? 7 : -6)) { G.state = -1; G.peak = w; G.t0 = t; gestureStart(-1, G.peak); }
+  } else {
+    const m = G.state === 1 ? -w : w;
+    if (m > G.peak) G.peak = m;
+    if (m < G.peak * 0.45 || t - G.t0 > 0.15) { motion.lastPeak = G.peak; gestureEnd(G.state, G.peak); G.lastDir = G.state; G.lastEnd = t; G.state = 0; }
+  }
+}
+// iOS asks for permission; Chromium has the same call. A refusal is noted, but the listeners go on anyway: they
+// cost nothing if no events come, and some browsers expose the call without gating the sensors behind it.
+async function enableMotion() {
+  if (motion.listening) return;
+  if (!motion.attached) { addEventListener('deviceorientation', onOrient); addEventListener('devicemotion', onDeviceMotion); motion.attached = true; }
+  try {
+    if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+      const r = await DeviceOrientationEvent.requestPermission();
+      if (r !== 'granted') motion.denied = true;
+    }
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function') {
+      try { await DeviceMotionEvent.requestPermission(); } catch {}
+    }
+  } catch { motion.denied = true; }
+  motion.listening = !motion.denied;
+}
+function levelHere() { motion.roll0 = motion.roll; motion.neutral = motion.pitch; motion.P = 0; }
+function onMotionReady() { $('gauge').hidden = !playing(); $('deskNote').hidden = true; }
+const inputStyle = () => motion.ok ? 'tilt' : matchMedia('(pointer: coarse)').matches ? 'swipe' : 'keys';
+
+/* ---------- gesture queue: sensors, keys and swipes all end up here ---------- */
+const gq = [];
+let gaugeFlashT = 0;
+function gestureStart(dir, peak) { gq.push({ k: 's', dir, peak }); if (window.CK && CK.log) CK.log.push(['s', dir, Math.round(peak), Math.round(motion.P)]); const el = $('gauge'); el.classList.remove('fwd', 'back'); el.classList.add(dir > 0 ? 'fwd' : 'back'); gaugeFlashT = 0.28; }
+function gestureEnd(dir, peak) { gq.push({ k: 'e', dir, peak }); if (window.CK && CK.log) CK.log.push(['e', dir, Math.round(peak)]); }
+
+/* ---------- touch, mouse, keys ---------- */
+const input = { keyL: false, keyR: false, upT: 0, downT: 0, lastManual: -9, touchBrace: false };
+const ptr = { id: null, x0: 0, y0: 0, lastX: 0, lastY: 0, lastT: 0, dir: 0, startT: 0, vPeak: 0, ended: false };
+const peakFromSwipe = v => peakFor(clamp((v - 300) / 1900, 0, 1));
+function endSwipe() { if (ptr.ended || !ptr.dir) return; ptr.ended = true; gestureEnd(ptr.dir, peakFromSwipe(ptr.vPeak)); }
+cv.addEventListener('pointerdown', e => {
+  if (!playing()) return;
+  Object.assign(ptr, { id: e.pointerId, x0: e.clientX, y0: e.clientY, lastX: e.clientX, lastY: e.clientY, lastT: e.timeStamp, dir: 0, vPeak: 0, ended: false });
+  try { cv.setPointerCapture(e.pointerId); } catch {}
+});
+cv.addEventListener('pointermove', e => {
+  if (!playing()) return;
+  if (ptr.id == null) {
+    if (e.pointerType === 'mouse') { hand.tx = clamp((e.clientX - view.cx) / (view.s0 * KX), -XMAX, XMAX); input.lastManual = now(); }
+    return;
+  }
+  if (e.pointerId !== ptr.id) return;
+  const dts = Math.max(1, e.timeStamp - ptr.lastT) / 1000, vy = (e.clientY - ptr.lastY) / dts;
+  const dx = e.clientX - ptr.x0, dy = e.clientY - ptr.y0;
+  if (!ptr.dir) {
+    if (Math.abs(dy) > 22 && Math.abs(dy) > Math.abs(dx) * 1.3) {
+      ptr.dir = dy < 0 ? 1 : -1; ptr.startT = now(); ptr.vPeak = Math.abs(vy); gestureStart(ptr.dir, peakFromSwipe(ptr.vPeak));
+    } else if (Math.abs(dx) > 4) {
+      hand.tx = clamp(hand.tx + (e.clientX - ptr.lastX) / (view.s0 * KX), -XMAX, XMAX); input.lastManual = now();
+    }
+  } else if (!ptr.ended && Math.sign(-vy) === ptr.dir) ptr.vPeak = Math.max(ptr.vPeak, Math.abs(vy));
+  ptr.lastX = e.clientX; ptr.lastY = e.clientY; ptr.lastT = e.timeStamp;
+});
+function ptrUp(e) { if (e.pointerId !== ptr.id) return; endSwipe(); ptr.id = null; ptr.dir = 0; input.touchBrace = false; }
+cv.addEventListener('pointerup', ptrUp);
+cv.addEventListener('pointercancel', ptrUp);
+
+const isUp = k => k === 'ArrowUp' || k === 'w' || k === 'W' || k === ' ';
+const isDown = k => k === 'ArrowDown' || k === 's' || k === 'S';
+addEventListener('keydown', e => {
+  const k = e.key;
+  if (playing() && (isUp(k) || isDown(k) || k === 'ArrowLeft' || k === 'ArrowRight')) e.preventDefault();
+  if (e.repeat) return;
+  if (k === 'p' || k === 'P' || k === 'Escape') { if (playing() || game.mode === 'paused') togglePause(); return; }
+  if (k === 'm' || k === 'M') { setSound(!settings.sound); return; }
+  if (!playing()) return;
+  if (k === 'ArrowLeft' || k === 'a' || k === 'A') input.keyL = true;
+  if (k === 'ArrowRight' || k === 'd' || k === 'D') input.keyR = true;
+  if (isUp(k) && !input.upT) { input.upT = now(); gestureStart(1, peakFor(0.5)); }
+  if (isDown(k) && !input.downT) { input.downT = now(); gestureStart(-1, peakFor(1)); gestureEnd(-1, peakFor(1)); }
+});
+addEventListener('keyup', e => {
+  const k = e.key;
+  if (k === 'ArrowLeft' || k === 'a' || k === 'A') input.keyL = false;
+  if (k === 'ArrowRight' || k === 'd' || k === 'D') input.keyR = false;
+  if (isUp(k) && input.upT) { const held = now() - input.upT; input.upT = 0; gestureEnd(1, peakFor(clamp(0.15 + held / 0.5 * 0.85, 0.15, 1))); }
+  if (isDown(k)) input.downT = 0;
+});
+
+/* ---------- view and projection ---------- */
+const ctx = cv.getContext('2d');
+const view = { w: 1, h: 1, dpr: 1, cx: 0, hz: 0, hy: 0, F: 1, camY: 2, pw: 1, s0: 1 };
+const bg = document.createElement('canvas');
+let stars = [];
+function resize() {
+  const dpr = Math.min(2, window.devicePixelRatio || 1), w = innerWidth, h = innerHeight;
+  cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+  cv.style.width = w + 'px'; cv.style.height = h + 'px';
+  Object.assign(view, { w, h, dpr });
+  view.pw = Math.min(w, h * 0.6);
+  view.cx = w / 2; view.hz = h * 0.2; view.hy = h * 0.79;
+  view.F = 0.43 * view.pw * CD; view.s0 = view.F / CD;
+  view.camY = (view.hy - view.hz) / view.s0;
+  buildBg(); checkRotate();
+}
+function proj(x, y, z, o) { o = o || {}; const s = view.F / Math.max(0.6, z + CD); o.x = view.cx + x * s * KX; o.y = view.hz + (view.camY - y) * s; o.s = s; return o; }
+function buildBg() {
+  const { w, h, dpr, hz } = view;
+  bg.width = Math.round(w * dpr); bg.height = Math.round(h * dpr);
+  const g = bg.getContext('2d'); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const gr = g.createLinearGradient(0, 0, 0, h);
+  gr.addColorStop(0, '#04030c'); gr.addColorStop(hz / h * 0.98, '#1c1245'); gr.addColorStop(Math.min(1, hz / h + 0.01), '#120c2e'); gr.addColorStop(1, '#05040b');
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  let seed = 7; const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (const [x, y, r, c] of [[0.2, 0.06, 0.5, '120,60,200'], [0.78, 0.12, 0.45, '40,130,190'], [0.5, 0.17, 0.6, '170,70,180']]) {
+    const ng = g.createRadialGradient(x * w, y * h, 0, x * w, y * h, r * w);
+    ng.addColorStop(0, `rgba(${c},0.22)`); ng.addColorStop(1, `rgba(${c},0)`);
+    g.fillStyle = ng; g.fillRect(0, 0, w, hz + 4);
+  }
+  stars = [];
+  for (let i = 0; i < 170; i++) {
+    const s = { x: rnd() * w, y: rnd() * (hz - 6), r: 0.3 + rnd() * 1.1, a: 0.25 + rnd() * 0.65, tw: rnd() * TAU };
+    if (i < 30) stars.push(s);
+    else { g.globalAlpha = s.a; g.fillStyle = '#fff'; g.beginPath(); g.arc(s.x, s.y, s.r, 0, TAU); g.fill(); }
+  }
+  g.globalAlpha = 1;
+  // distant ridges on the horizon
+  for (const [amp, col, off] of [[34, '#140c30', 0], [20, '#0c0822', 3]]) {
+    g.fillStyle = col; g.beginPath(); g.moveTo(0, hz + 1);
+    for (let x = 0; x <= w; x += 6) {
+      const u = x / w; const y = hz + 1 - amp * (0.35 + 0.35 * Math.sin(u * 9 + off) * Math.sin(u * 3.3 + off * 2) + 0.3 * Math.abs(Math.sin(u * 23 + off)));
+      g.lineTo(x, Math.min(hz + 1, y));
+    }
+    g.lineTo(w, hz + 1); g.closePath(); g.fill();
+  }
+  const hg = g.createLinearGradient(0, hz - 30, 0, hz + 40);
+  hg.addColorStop(0, 'rgba(150,110,255,0)'); hg.addColorStop(0.42, 'rgba(150,110,255,0.32)'); hg.addColorStop(1, 'rgba(150,110,255,0)');
+  g.fillStyle = hg; g.fillRect(0, hz - 30, w, 70);
+}
+const glowCache = new Map();
+function glowImg(col) {
+  let c = glowCache.get(col); if (c) return c;
+  c = document.createElement('canvas'); c.width = c.height = 128;
+  const g = c.getContext('2d'), gr = g.createRadialGradient(64, 64, 0, 64, 64, 64);
+  gr.addColorStop(0, `rgba(${col},1)`); gr.addColorStop(0.22, `rgba(${col},0.5)`); gr.addColorStop(0.55, `rgba(${col},0.12)`); gr.addColorStop(1, `rgba(${col},0)`);
+  g.fillStyle = gr; g.fillRect(0, 0, 128, 128); glowCache.set(col, c); return c;
+}
+function glow(col, x, y, r, a) { if (r < 0.5 || a <= 0) return; ctx.globalAlpha = Math.min(1, a); ctx.drawImage(glowImg(col), x - r, y - r, r * 2, r * 2); }
+
+/* ---------- game state ---------- */
+const hand = { x: 0, tx: 0, lunge: 0, dip: 0, pose: 0 };
+const game = {
+  mode: 'menu', prev: null, score: 0, wave: 0, hearts: MAXH, combo: 0, mult: 1, focus: 1, ts: 1, t: 0,
+  held: null, catching: null, gest: null, sentinels: [], incoming: [], outgoing: [], parts: [], pops: [],
+  shake: 0, flash: 0, flashCol: '255,60,80', stop: 0, lastLaunch: -9, clearT: 0, overT: 0, bracing: false,
+  train: null, refillT: 0, deco: [], stats: { catches: 0, perfects: 0, punches: 0, kills: 0 },
+};
+const playing = () => game.mode === 'play' || game.mode === 'train';
+const STEP = 1 / 120;
+
+function resetGame() {
+  Object.assign(game, { score: 0, wave: 0, hearts: MAXH, combo: 0, mult: 1, focus: 1, ts: 1, t: 0, held: null, catching: null, gest: null,
+    sentinels: [], incoming: [], outgoing: [], parts: [], pops: [], shake: 0, flash: 0, stop: 0, lastLaunch: -9, clearT: 0, overT: 0, train: null, refillT: 0,
+    deco: [], stats: { catches: 0, perfects: 0, punches: 0, kills: 0 } });
+  hand.x = hand.tx = 0; gq.length = 0;
+  hud();
+}
+
+/* ---------- sentinels and waves ---------- */
+function addSentinel(o) {
+  const s = Object.assign({ kind: 'wisp', x: 0, yo: 0, z: 24, r: 0.4, hp: 1, amp: 0.2, f: rand(0.35, 0.7), ph: rand(0, TAU), adv: 0,
+    cd: rand(1.2, 2.6), charge: 0, next: null, flash: 0, dead: false, only: false, speed: 0, rate: 0, t: 0, eye: 1, eyeT: 0, spin: rand(0, TAU) }, o);
+  s.bx = s.x; s.maxHp = s.hp; if (s.kind === 'warden') { s.r = 0.95; s.yo = 0.2; }
+  s.y = tierY(s.z) + s.yo;
+  game.sentinels.push(s); return s;
+}
+const sentX = (s, dt = 0) => s.bx + s.amp * Math.sin(s.f * (s.t + dt) + s.ph);
+function startWave(n) {
+  game.wave = n; game.sentinels = []; game.lastLaunch = game.t;
+  const boss = n % 5 === 0;
+  const kinds = n === 1 ? ['wisp'] : n === 2 ? ['wisp', 'thorn'] : ['wisp', 'thorn', 'stone'];
+  const count = boss ? 1 + Math.floor(n / 5) : n === 1 ? 2 : Math.min(2 + Math.floor(n * 0.6), 7);
+  const zMin = 16 + Math.min(n, 8) * 0.5, zMax = 28 + Math.min(n, 10) * 1.5;
+  const adv = n >= 4 && !boss ? Math.min(0.7, 0.22 + 0.03 * n) : 0;
+  // one row for up to three, else a front and a back row, each spread across the lane
+  const rows = count > 3 ? 2 : 1, perRow = [Math.ceil(count / rows), Math.floor(count / rows)];
+  let i = 0;
+  for (let r = 0; r < rows; r++) {
+    for (let j = 0; j < perRow[r]; j++, i++) {
+      const kind = i === 0 ? 'wisp' : i === 1 && n >= 3 ? pick(['thorn', 'stone']) : pick(kinds);
+      const x = perRow[r] === 1 ? rand(-0.5, 0.5) : lerp(-1.1, 1.1, j / (perRow[r] - 1)) + rand(-0.08, 0.08);
+      const z = rows === 1 ? rand(zMin, zMax) : r === 0 ? rand(zMin, zMin + 4) : rand(zMax - 4, zMax);
+      addSentinel({ kind, x, z, yo: rand(-0.08, 0.08), hp: 1 + (n > 3 && Math.random() < 0.35 ? 1 : 0) + (kind === 'stone' && n > 5 ? 1 : 0),
+        amp: rand(0.1, 0.22) * Math.min(1, 0.4 + n / 6) * (perRow[r] > 2 ? 0.7 : 1), adv: adv * rand(0.7, 1.2) });
+    }
+  }
+  if (boss) addSentinel({ kind: 'warden', x: 0, z: 33, hp: 6 + n, amp: 0.6, f: 0.3 });
+  sortSentinels();
+  callout(boss ? 'THE WARDEN' : `WAVE ${n}`, boss ? 'Hit it while its eye is open' : n === 2 ? 'Red thorns: punch them' : n === 3 ? 'Amber stones: catch hard' : '');
+  sfx.wave(); hud();
+}
+const sortSentinels = () => game.sentinels.sort((a, b) => b.z - a.z);
+function waveParams() {
+  const n = game.mode === 'train' ? 1 : game.wave;
+  return { speed: Math.min(30, 15 + 1.1 * n), gap: Math.max(0.45, 1.25 - 0.06 * n), maxIn: Math.min(4, 1 + Math.floor((n + 1) / 3)), cd: Math.max(0.45, 1 - 0.05 * n) };
+}
+function chooseKind(s) {
+  if (s.only || s.kind === 'wisp') return s.kind;
+  if (s.kind === 'thorn') return Math.random() < 0.72 ? 'thorn' : 'wisp';
+  if (s.kind === 'stone') return Math.random() < 0.68 ? 'stone' : 'wisp';
+  const r = Math.random(); return r < 0.4 ? 'wisp' : r < 0.72 ? 'thorn' : 'stone';
+}
+function launch(s) {
+  const kind = s.next, wp = waveParams();
+  const base = s.speed || wp.speed, v = base * (kind === 'thorn' ? 1.15 : kind === 'stone' ? 0.78 : 1);
+  const o = { kind, x0: s.x, y0: s.y - 0.15, z0: s.z - s.r * 0.5, tx: clamp(hand.x + rand(-1, 1) * (0.18 + Math.min(0.22, game.wave * 0.02)), -1.15, 1.15), t: 0,
+    arc: kind === 'stone' ? 1.1 : 0.35, curve: game.wave >= 6 && kind !== 'stone' && Math.random() < 0.4 ? rand(-0.55, 0.55) : 0,
+    src: s, spin: rand(0, TAU), trail: [], x: s.x, y: s.y, z: s.z, pz: s.z, ticked: false, resolved: false };
+  o.T = o.z0 / v;
+  if (kind === 'stone') o.shape = Array.from({ length: 9 }, () => rand(0.75, 1.1));
+  game.incoming.push(o); s.flash = 0.4;
+  Snd.tone('sine', kind === 'thorn' ? 520 : kind === 'stone' ? 180 : 330, kind === 'thorn' ? 760 : kind === 'stone' ? 240 : 480, 0.18, 0.05);
+}
+function orbPos(o) {
+  const u = o.t / o.T;
+  o.x = lerp(o.x0, o.tx, u) + o.curve * Math.sin(Math.PI * clamp(u, 0, 1));
+  o.y = lerp(o.y0, 0, u) + 4 * o.arc * u * (1 - u);
+  o.z = o.z0 * (1 - u);
+}
+
+/* ---------- scoring and feedback ---------- */
+function bump() { game.combo++; game.mult = Math.min(4, 1 + Math.floor(game.combo / 4) * 0.5); }
+function addScore(base, x, y, z, label, col) {
+  const pts = Math.round(base * game.mult); game.score += pts;
+  const p = proj(x, y, z); pop(label ? `${label} +${pts}` : `+${pts}`, p.x, p.y, col || '255,255,255', !!label);
+  hud();
+}
+function pop(text, x, y, col, big) { game.pops.push({ text, x, y, col, big, t: 0 }); }
+function popAtHand(text, col) { const p = proj(hand.x, 0.5, 0); pop(text, p.x, p.y - 30, col || '255,255,255', true); }
+function tip(msg) { const el = $('tip'); el.textContent = msg; el.classList.remove('show'); void el.offsetWidth; el.classList.add('show'); }
+function callout(big, small) {
+  const el = $('callout'); el.innerHTML = ''; el.append(big);
+  if (small) { const s = document.createElement('small'); s.textContent = small; el.append(s); }
+  el.classList.remove('show'); void el.offsetWidth; el.classList.add('show');
+}
+function burst(x, y, z, col, n, speed = 4, life = 0.7, size = 0.06, grav = 3) {
+  for (let i = 0; i < n; i++) {
+    const a = rand(0, TAU), e = rand(-1, 1), sp = rand(0.3, 1) * speed;
+    game.parts.push({ x, y, z, vx: Math.cos(a) * sp * Math.sqrt(1 - e * e), vy: e * sp + speed * 0.2, vz: Math.sin(a) * sp * Math.sqrt(1 - e * e), life: rand(0.5, 1) * life, max: life, col, size: size * rand(0.6, 1.4), g: grav });
+  }
+}
+function hurt(msg) {
+  game.combo = 0; game.mult = 1; game.shake = 1; game.flash = 0.55; game.flashCol = '255,50,70';
+  sfx.hurt(); buzz([35, 40, 35]); tip(msg);
+  if (game.mode === 'train') { hud(); return; }
+  game.hearts--; hud();
+  if (game.hearts <= 0 && !game.overT) { game.overT = 1.4; sfx.over(); }
+}
+
+/* ---------- gestures resolved against the game ---------- */
+function findInWindow() {
+  let best = null, bt = 9;
+  for (const o of game.incoming) {
+    if (o.resolved || o.done) continue;
+    const ttc = o.T - o.t;
+    if (ttc <= WIN_EARLY && ttc >= WIN_LATE && Math.abs(o.tx - hand.x) < REACH && Math.abs(ttc) < bt) { best = o; bt = Math.abs(ttc); }
+  }
+  return best;
+}
+function processGestures() {
+  while (gq.length) {
+    const g = gq.shift();
+    if (!playing() || game.overT) continue;
+    if (g.k === 's') {
+      game.gest = { dir: g.dir, done: false, t0: now() };
+      if (g.dir > 0) hand.lunge = 1; else hand.dip = 1;
+      const o = findInWindow();
+      if (o && g.dir < 0 && game.held) popAtHand('HANDS FULL', COL.thorn);
+      tryGesture();
+    } else {
+      if (g.dir > 0) {
+        if (game.gest && game.gest.done && game.gest.dir > 0) { game.gest = null; continue; }
+        if (game.held && !game.catching) throwHeld(powerOf(g.peak));
+        else sfx.whiff();
+      } else if (game.catching && !game.catching.resolved) resolveCatch(g.peak);
+      game.gest = null;
+    }
+  }
+}
+// A gesture acts on the orb in the window when it starts, or on one that enters the window while the flick is
+// still under way, so starting a touch early still counts.
+function tryGesture() {
+  const g = game.gest;
+  if (!g || g.done || game.held && g.dir < 0 || game.catching || now() - g.t0 > 0.16) return;
+  if (g.dir > 0 && game.held) return;
+  const o = findInWindow(); if (!o) return;
+  g.done = true;
+  if (g.dir > 0) punch(o); else beginCatch(o);
+}
+function beginCatch(o) {
+  const ttc = o.T - o.t;
+  o.done = true; o.resolved = true;
+  game.incoming.splice(game.incoming.indexOf(o), 1);
+  if (o.kind === 'thorn') {
+    burst(hand.x, 0.1, 0.2, COL.thorn, 26, 4); hand.dip = 1.4;
+    hurt("Thorns can't be held. Flick forward to punch them back");
+    return;
+  }
+  game.catching = { kind: o.kind, ttc, t: 0, resolved: false };
+}
+function resolveCatch(peak) {
+  const c = game.catching; if (!c || c.resolved) return;
+  c.resolved = true; game.catching = null;
+  if (c.kind === 'stone' && peak < flickBase() * 2.4) {
+    burst(hand.x, 0.1, 0.2, COL.stone, 30, 4.5, 0.9, 0.08, 6);
+    hurt('Too stiff. Pull back harder to cushion a stone');
+    return;
+  }
+  const perfect = Math.abs(c.ttc) <= PERFECT;
+  game.held = { kind: c.kind, charged: perfect && c.kind === 'wisp' };
+  game.stats.catches++; if (perfect) game.stats.perfects++;
+  bump(); game.focus = Math.min(1, game.focus + (perfect ? 0.22 : 0.06));
+  const base = c.kind === 'stone' ? (perfect ? 160 : 90) : (perfect ? 120 : 50);
+  addScore(base, hand.x, 0.4, 0, perfect ? 'PERFECT' : c.kind === 'stone' ? 'CUSHIONED' : 'CATCH', perfect ? COL.gold : COL[c.kind]);
+  burst(hand.x, 0.15, 0.1, perfect ? COL.gold : COL[c.kind], perfect ? 28 : 14, 2.4, 0.5, 0.05, 1);
+  sfx.catch(perfect, c.kind === 'stone'); buzz(c.kind === 'stone' ? 30 : 14);
+  game.stop = perfect ? 0.07 : 0.035; hand.dip = 1;
+}
+function aimAt(q, s) { const tA = Math.max(0.05, (s.z - q.z) / q.vz); q.vx = (sentX(s, tA) - q.x) / tA; }
+function punch(o) {
+  const ttc = o.T - o.t, perfect = Math.abs(ttc) <= PERFECT;
+  o.done = true; o.resolved = true;
+  game.incoming.splice(game.incoming.indexOf(o), 1);
+  if (o.kind === 'stone') {
+    burst(hand.x, 0.1, 0.2, COL.stone, 30, 5, 0.9, 0.08, 6); hand.dip = 1.4;
+    hurt('Stones are too heavy to punch. Tilt back hard to catch them');
+    return;
+  }
+  const alive = game.sentinels.filter(s => !s.dead);
+  let target = o.src && !o.src.dead ? o.src : null;
+  if (!target && alive.length) target = alive.reduce((a, b) => Math.abs(sentX(a) - hand.x) < Math.abs(sentX(b) - hand.x) ? a : b);
+  const q = { kind: o.kind, x: hand.x, y: 0.1, z: 0.3, pz: 0.3, vx: 0, vy: 0.5, vz: 40, g: 1, dmg: (o.kind === 'thorn' ? 2 : 1) + (perfect ? 1 : 0), target, home: 1, punched: true, trail: [], charged: perfect };
+  if (target) aimAt(q, target);
+  game.outgoing.push(q);
+  game.stats.punches++; bump();
+  addScore(o.kind === 'thorn' ? (perfect ? 150 : 70) : (perfect ? 90 : 40), hand.x, 0.4, 0, perfect ? 'PERFECT PUNCH' : 'PUNCH', perfect ? COL.gold : COL[o.kind]);
+  burst(hand.x, 0.2, 0.3, COL[o.kind], 18, 3.5, 0.45, 0.05, 1);
+  sfx.punch(perfect); buzz(22); game.shake = Math.max(game.shake, 0.35); game.stop = 0.04;
+}
+function landTime(vy, g) { return (vy + Math.sqrt(vy * vy - 2 * g * FLOOR)) / g; }
+function throwHeld(p) {
+  const h = game.held; game.held = null;
+  const q = { kind: h.kind, charged: h.charged, x: hand.x, y: 0.15, z: 0.3, pz: 0.3, vx: 0, vy: 3 + 2.4 * p, vz: 16 + 42 * p, g: 9.5,
+    dmg: h.kind === 'stone' ? 3 : h.charged ? 2 : 1, splash: h.kind === 'stone', trail: [], target: null, home: 0.8 };
+  const range = q.z + q.vz * landTime(q.vy - 0.0, q.g);
+  let best = null, bd = 0.42, shortOf = null;
+  for (const s of game.sentinels) {
+    if (s.dead) continue;
+    const dx = Math.abs(sentX(s, s.z / q.vz) - hand.x);
+    if (dx < bd) { if (s.z < range + 1) { best = s; bd = dx; } else if (!shortOf || s.z < shortOf.z) shortOf = s; }
+  }
+  if (best) { q.target = best; aimAt(q, best); } else q.shortOf = shortOf;
+  game.outgoing.push(q);
+  hand.lunge = 1.2; sfx.throw(p); buzz(10);
+  const pw = $('pw'); pw.textContent = Math.round(p * 100) + '%'; pwT = 1.2;
+}
+let pwT = 0;
+
+/* ---------- simulation step ---------- */
+function update(dt) {
+  game.t += dt;
+  const wp = waveParams();
+  // sentinels
+  let charging = 0;
+  for (const s of game.sentinels) if (!s.dead && s.charge > 0) charging++;
+  for (const s of game.sentinels) {
+    if (s.dead) continue;
+    s.t += dt; s.x = sentX(s); s.spin += dt * 0.6; s.flash = Math.max(0, s.flash - dt * 3);
+    if (s.adv) s.z -= s.adv * dt;
+    s.y = tierY(s.z) + s.yo;
+    if (s.kind === 'warden') { s.eyeT += dt; const cyc = s.eyeT % 5.2; s.eye = cyc < 3 ? 1 : 0; }
+    if (s.kind === 'dummy' || game.overT || game.clearT) continue;
+    if (game.mode === 'train' && s.charge <= 0 && (game.held || game.catching || game.outgoing.length)) continue;   // drills wait for the throw back
+    if (s.charge > 0) { s.charge -= dt; if (s.charge <= 0) { launch(s); s.cd = (s.rate || rand(2.4, 4) * wp.cd) * (s.kind === 'warden' ? 0.55 : 1); } }
+    else {
+      s.cd -= dt;
+      if (s.cd <= 0 && game.t - game.lastLaunch >= wp.gap && game.incoming.length + charging < wp.maxIn) {
+        s.charge = 0.75; s.next = chooseKind(s); game.lastLaunch = game.t; charging++;
+      }
+    }
+    if (s.z < 7 && s.kind !== 'warden') { s.dead = true; burst(s.x, s.y, s.z, COL[s.kind], 40, 6); hurt('A sentinel broke through'); }
+  }
+  // incoming orbs
+  for (const o of game.incoming) {
+    o.pz = o.z; o.t += dt; orbPos(o); o.spin += dt * 9;
+    o.trail.push(o.x, o.y, o.z); if (o.trail.length > 30) o.trail.splice(0, 3);
+    const ttc = o.T - o.t;
+    if (!o.ticked && ttc <= WIN_EARLY) { o.ticked = true; if (Math.abs(o.tx - hand.x) < REACH) sfx.tick(); }
+    if (!o.resolved && ttc < WIN_LATE) {
+      o.resolved = true;
+      if (Math.abs(o.x - hand.x) < BODY) {
+        o.done = true;
+        if (o.kind === 'wisp') { game.combo = 0; game.mult = 1; sfx.bonk(); popAtHand('MISSED', COL.wisp); burst(o.x, o.y, 0, COL.wisp, 12, 2); hud(); }
+        else { burst(o.x, o.y, 0, COL[o.kind], 30, 4); hurt(o.kind === 'thorn' ? 'Thorn hit. Punch them back, or roll aside' : 'Stone hit. Pull back hard to catch, or roll aside'); }
+      }
+    }
+    if (o.z < -4) o.done = true;
+  }
+  // outgoing orbs
+  for (const q of game.outgoing) {
+    q.pz = q.z;
+    if (q.target && !q.target.dead && q.z < q.target.z) {
+      const tA = Math.max(0.04, (q.target.z - q.z) / q.vz), want = (q.target.x - q.x) / tA;
+      q.vx = lerp(q.vx, want, Math.min(1, dt * 12 * q.home));
+    }
+    q.x += q.vx * dt; q.z += q.vz * dt; q.y += q.vy * dt; q.vy -= q.g * dt;
+    q.trail.push(q.x, q.y, q.z); if (q.trail.length > 36) q.trail.splice(0, 3);
+    for (const s of game.sentinels) {
+      if (s.dead) continue;
+      if (q.pz < s.z && q.z >= s.z && Math.abs(q.x - s.x) < s.r * 0.85 + 0.14) { hitSentinel(s, q); q.done = true; break; }
+    }
+    if (!q.done && q.y < FLOOR) {
+      q.done = true; burst(q.x, FLOOR + 0.05, q.z, COL[q.kind], 16, 2.5, 0.6, 0.06, 4); sfx.land();
+      if (q.shortOf && !q.shortOf.dead) { const p = proj(q.x, FLOOR, q.z); pop(inputStyle() === 'tilt' ? 'SHORT: FLICK HARDER' : 'SHORT: THROW HARDER', p.x, p.y - 10, '255,200,140', true); }
+    }
+    if (q.z > 95) q.done = true;
+  }
+  // head-on collisions between thrown and incoming orbs
+  for (const q of game.outgoing) {
+    if (q.done) continue;
+    for (const o of game.incoming) {
+      if (o.done) continue;
+      if ((q.pz - o.pz) * (q.z - o.z) <= 0 && Math.abs(q.x - o.x) < 0.42 && Math.abs(q.y - o.y) < 1) {
+        q.done = o.done = o.resolved = true; bump();
+        burst((q.x + o.x) / 2, (q.y + o.y) / 2, o.z, '255,255,255', 34, 5, 0.7, 0.06, 2);
+        addScore(80, o.x, o.y + 0.4, o.z, 'CLASH', '255,255,255'); sfx.clash(); game.shake = Math.max(game.shake, 0.3);
+        break;
+      }
+    }
+  }
+  game.incoming = game.incoming.filter(o => !o.done);
+  game.outgoing = game.outgoing.filter(q => !q.done);
+  game.sentinels = game.sentinels.filter(s => !s.dead);
+  sortSentinels();
+  // particles
+  for (const p of game.parts) { p.life -= dt; p.x += p.vx * dt; p.y += p.vy * dt; p.z += p.vz * dt; p.vy -= p.g * dt; p.vx *= 0.985; p.vz *= 0.985; }
+  if (game.parts.length) game.parts = game.parts.filter(p => p.life > 0);
+  // wave flow
+  if (game.mode === 'play' && !game.overT) {
+    if (!game.clearT && game.wave && !game.sentinels.length && !game.incoming.length) {
+      game.clearT = 2;
+      const bonus = 250 * game.wave; game.score += bonus;
+      const healed = game.hearts < MAXH; if (healed) game.hearts++;
+      callout('WAVE CLEAR', `+${bonus}${healed ? '  ·  heart restored' : ''}`); sfx.wave(); hud();
+    }
+  }
+  if (game.mode === 'train') trainTick(dt);
+}
+function hitSentinel(s, q) {
+  const p = proj(s.x, s.y, s.z);
+  if (s.kind === 'warden' && !s.eye) {
+    burst(q.x, q.y, s.z - 0.5, '200,200,255', 14, 3); sfx.clang(); pop('SHIELDED', p.x, p.y - 20, '200,200,255', true); return;
+  }
+  s.hp -= q.dmg; s.flash = 1; sfx.hit();
+  burst(q.x, s.y, s.z - 0.3, COL[q.kind], 20 + q.dmg * 6, 4, 0.7, 0.07, 3);
+  if (q.splash) {
+    burst(s.x, s.y, s.z, COL.stone, 40, 7, 0.9, 0.09, 4); game.shake = Math.max(game.shake, 0.5);
+    for (const o of game.sentinels) {
+      if (o === s || o.dead || (o.kind === 'warden' && !o.eye)) continue;
+      if (Math.hypot(o.x - s.x, (o.z - s.z) * 0.4) < 1.6) { o.hp -= 1; o.flash = 1; if (o.hp <= 0) kill(o); }
+    }
+  }
+  if (s.hp <= 0) kill(s); else addScore(30 * q.dmg, s.x, s.y + s.r, s.z, '', COL[q.kind]);
+}
+function kill(s) {
+  if (s.dead) return;
+  s.dead = true; game.stats.kills++; bump();
+  burst(s.x, s.y, s.z, COL[s.kind], s.kind === 'warden' ? 140 : 60, s.kind === 'warden' ? 9 : 6, 1.1, 0.09, 2);
+  burst(s.x, s.y, s.z, '255,255,255', 20, 3, 0.5, 0.05, 0);
+  addScore(s.kind === 'warden' ? 1500 : 120 * s.maxHp, s.x, s.y + s.r, s.z, s.kind === 'warden' ? 'WARDEN DOWN' : '', COL[s.kind]);
+  sfx.kill(); buzz(30); game.stop = Math.max(game.stop, 0.06); game.shake = Math.max(game.shake, s.kind === 'warden' ? 1 : 0.4);
+}
+
+/* ---------- training ---------- */
+const say = (tilt, keys, swipe) => ({ tilt, keys, swipe: swipe || keys });
+const TRAIN = [
+  { id: 'throw', text: say('Flick the top of the phone away from you to throw the comet', 'Press ↑ to throw the comet', 'Swipe up to throw the comet'),
+    sub: 'Hit the target', refill: true, setup() { game.held = { kind: 'wisp' }; addSentinel({ kind: 'dummy', x: 0, z: 14, amp: 0 }); } },
+  { id: 'far', text: say('Harder flicks fly farther. Roll the phone to line up under the target', 'Hold ↑ longer to throw farther. ← → to line up', 'Swipe faster to throw farther. Drag sideways to line up'),
+    sub: 'A weak throw lands short', refill: true, setup() { game.held = { kind: 'wisp' }; addSentinel({ kind: 'dummy', x: 0.55, z: 36, amp: 0 }); } },
+  { id: 'catch', text: say('When a comet reaches its ring, tilt the top toward you to catch it', 'When a comet reaches its ring, press ↓ to catch it', 'When a comet reaches its ring, swipe down to catch it'),
+    sub: 'Then throw it back', setup() { addSentinel({ kind: 'wisp', x: 0, z: 22, amp: 0.12, speed: 9, rate: 2.2, cd: 0.8 }); } },
+  { id: 'punch', text: say('Red thorns hurt to hold. Flick forward as one lands to punch it back', 'Red thorns hurt to hold. Press ↑ as one lands to punch it back', 'Red thorns hurt to hold. Swipe up as one lands to punch it back'),
+    sub: 'Punching sends it straight at the sentinel', setup() { addSentinel({ kind: 'thorn', only: true, x: 0, z: 22, amp: 0.12, speed: 9, rate: 2.2, cd: 0.8 }); } },
+  { id: 'stone', text: say('Amber stones are heavy. Pull the top back hard to cushion one', 'Amber stones are heavy: catch with ↓, never punch', 'Amber stones are heavy: swipe down hard to catch, never punch'),
+    sub: 'A thrown stone hits for 3 and splashes', setup() { addSentinel({ kind: 'stone', only: true, x: 0, z: 22, amp: 0.12, speed: 8, rate: 2.4, cd: 0.8 }); } },
+  { id: 'slow', text: say('Hold the phone tilted back to slow time', 'Hold ↓ to slow time', 'Swipe down and keep your finger on the glass to slow time'),
+    sub: 'The blue bar at the top is how long it lasts', setup() { addSentinel({ kind: 'wisp', x: -0.3, z: 26, amp: 0.3, hp: 2, speed: 13, rate: 1.8, cd: 0.6 }); } },
+];
+function startTraining() {
+  resetGame(); game.mode = 'train'; game.train = { step: -1, braced: 0 };
+  showOnly(null); $('skipBtn').hidden = false; $('coach').hidden = false; hudVisible(true);
+  nextTrainStep();
+}
+function nextTrainStep() {
+  const tr = game.train; tr.step++;
+  game.incoming = []; game.outgoing = []; game.sentinels = []; game.held = null; game.catching = null; game.refillT = 0;
+  if (tr.step >= TRAIN.length) { finishTraining(); return; }
+  const st = TRAIN[tr.step]; st.setup(); sortSentinels();
+  const c = $('coach'); c.textContent = st.text[inputStyle()];
+  const s = document.createElement('small'); s.textContent = `${tr.step + 1} of ${TRAIN.length} · ${st.sub}`; c.append(s);
+  $('wave').textContent = 'TRAINING';
+}
+function trainTick(dt) {
+  const tr = game.train, st = TRAIN[tr.step]; if (!st) return;
+  if (st.refill && !game.held && !game.outgoing.length) { game.refillT += dt; if (game.refillT > 0.7) { game.held = { kind: 'wisp' }; game.refillT = 0; } }
+  if (st.id === 'slow' && game.bracing) tr.braced += dt;
+  const done = !game.sentinels.length && !game.incoming.length && !game.catching && (st.id !== 'slow' || tr.braced > 0.6);
+  if (done) { if (!tr.wait) { tr.wait = 0.9; callout('NICE'); sfx.wave(); } }
+  if (tr.wait) { tr.wait -= dt; if (tr.wait <= 0) { tr.wait = 0; nextTrainStep(); } }
+  if (st.id === 'slow' && !game.sentinels.length && tr.braced <= 0.6 && !tr.wait && !game.incoming.length) { addSentinel({ kind: 'wisp', x: 0.3, z: 26, amp: 0.3, speed: 13, rate: 1.8, cd: 0.4 }); }
+}
+function finishTraining() {
+  settings.trained = true; saveSettings();
+  $('skipBtn').hidden = true; $('coach').hidden = true;
+  beginPlay();
+}
+
+/* ---------- per-frame (real time) ---------- */
+function realUpdate(dt) {
+  processGestures();
+  tryGesture();
+  const t = now();
+  // steering
+  const kd = (input.keyR ? 1 : 0) - (input.keyL ? 1 : 0);
+  if (kd) { hand.tx = clamp(hand.tx + kd * 2.1 * dt, -XMAX, XMAX); input.lastManual = t; }
+  else if (motion.ok && t - input.lastManual > 1.2 && G.state === 0 && Math.abs(motion.rate) < 90) {
+    hand.tx = clamp((motion.roll - motion.roll0) / settings.sweep, -1, 1) * XMAX;
+  }
+  hand.x += (hand.tx - hand.x) * Math.min(1, dt * 16);
+  hand.lunge = Math.max(0, hand.lunge - dt * 5); hand.dip = Math.max(0, hand.dip - dt * 5);
+  hand.pose = lerp(hand.pose, motion.ok ? clamp(motion.P, -30, 30) : 0, Math.min(1, dt * 20));
+  // swipe end without a further move event, and touch-and-hold to slow time
+  if (ptr.dir && !ptr.ended && t - ptr.startT > 0.12) endSwipe();
+  if (ptr.id != null && ptr.dir === -1 && ptr.ended && t - ptr.startT > 0.35) input.touchBrace = true;
+  // a catch whose end event never came
+  if (game.catching) { game.catching.t += dt; if (game.catching.t > 0.3) resolveCatch(G.peak || peakFor(0.5)); }
+  // slow time
+  const wantBrace = motion.brace || (input.downT && t - input.downT > 0.3) || input.touchBrace;
+  game.bracing = !!wantBrace && game.focus > 0.02 && !game.overT;
+  if (game.bracing) game.focus = Math.max(0, game.focus - dt * 0.55); else game.focus = Math.min(1, game.focus + dt * 0.07);
+  const target = game.overT ? 0.22 : game.bracing ? 0.36 : 1;
+  game.ts += (target - game.ts) * Math.min(1, dt * 9);
+  // timers
+  game.shake = Math.max(0, game.shake - dt * 3); game.flash = Math.max(0, game.flash - dt * 2.2);
+  if (gaugeFlashT > 0) { gaugeFlashT -= dt; if (gaugeFlashT <= 0) $('gauge').classList.remove('fwd', 'back'); }
+  if (pwT > 0) { pwT -= dt; if (pwT <= 0) $('pw').textContent = ''; }
+  if (game.clearT && game.mode === 'play' && !game.overT) { game.clearT -= dt; if (game.clearT <= 0) { game.clearT = 0; startWave(game.wave + 1); } }
+  if (game.overT) { game.overT -= dt; if (game.overT <= 0) gameOver(); }
+  for (const p of game.pops) p.t += dt;
+  if (game.pops.length) game.pops = game.pops.filter(p => p.t < 1.1);
+  gaugeUI(); focusUI();
+}
+function gaugeUI() {
+  if ($('gauge').hidden) return;
+  $('needle').style.top = (50 + clamp(motion.P / 30, -1, 1) * 50) + '%';
+}
+let focusShown = -1;
+function focusUI() {
+  const f = Math.round(game.focus * 100) / 100;
+  if (f !== focusShown) { $('focus').firstElementChild.style.transform = `scaleX(${f})`; focusShown = f; }
+  $('focus').classList.toggle('on', game.bracing);
+}
+
+/* ---------- rendering ---------- */
+const tmpA = {}, tmpB = {};
+function render(t) {
+  const { w, h } = view;
+  ctx.setTransform(view.dpr, 0, 0, view.dpr, 0, 0);
+  ctx.globalCompositeOperation = 'source-over'; ctx.globalAlpha = 1;
+  ctx.save();
+  if (game.shake > 0) { const m = game.shake * game.shake * 9; ctx.translate(rand(-m, m), rand(-m, m)); }
+  ctx.drawImage(bg, -12, -12, w + 24, h + 24);
+  drawStars(t); drawFloor(t);
+  // shadows
+  for (const s of game.sentinels) shadow(s.x, s.y, s.z, s.r * 0.9);
+  for (const o of game.incoming) shadow(o.x, o.y, o.z, 0.2);
+  for (const q of game.outgoing) shadow(q.x, q.y, q.z, 0.18);
+  // things in the lane, far to near
+  const items = [];
+  for (const s of game.sentinels) items.push([s.z, 0, s]);
+  for (const o of game.incoming) items.push([o.z, 1, o]);
+  for (const q of game.outgoing) items.push([q.z, 2, q]);
+  for (const d of game.deco) items.push([d.z, 1, d]);
+  items.sort((a, b) => b[0] - a[0]);
+  for (const [, k, it] of items) { if (k === 0) drawSentinel(it, t); else drawOrb(it, t, k === 2); }
+  drawParticles();
+  for (const o of game.incoming) drawRing(o);
+  drawCradle(t);
+  drawPops();
+  ctx.restore();
+  // screen-space washes
+  if (game.bracing || game.ts < 0.9) {
+    const a = clamp((1 - game.ts) * 0.9, 0, 0.55);
+    const vg = ctx.createRadialGradient(w / 2, h / 2, Math.min(w, h) * 0.3, w / 2, h / 2, Math.max(w, h) * 0.75);
+    vg.addColorStop(0, 'rgba(40,120,255,0)'); vg.addColorStop(1, `rgba(40,120,255,${a})`);
+    ctx.fillStyle = vg; ctx.fillRect(0, 0, w, h);
+  }
+  if (game.flash > 0) { ctx.fillStyle = `rgba(${game.flashCol},${game.flash * 0.35})`; ctx.fillRect(0, 0, w, h); }
+}
+function drawStars(t) {
+  ctx.fillStyle = '#fff';
+  for (const s of stars) { ctx.globalAlpha = s.a * (0.55 + 0.45 * Math.sin(t * 1.7 + s.tw)); ctx.beginPath(); ctx.arc(s.x, s.y, s.r + 0.4, 0, TAU); ctx.fill(); }
+  ctx.globalAlpha = 1;
+}
+function drawFloor(t) {
+  const zNear = Math.max(-CD + 1, (view.camY - FLOOR) * view.F / (view.h - view.hz) - CD - 0.5);
+  ctx.lineWidth = 1;
+  // lines along the lane
+  for (let i = -6; i <= 6; i++) {
+    const x = i * LANE / 4, edge = Math.abs(i) === 4;
+    for (let k = 0; k < 6; k++) {
+      const z0 = lerp(zNear, 110, Math.pow(k / 6, 2)), z1 = lerp(zNear, 110, Math.pow((k + 1) / 6, 2));
+      const a = (edge ? 0.55 : 0.2) * (1 - k / 6);
+      proj(x, FLOOR, z0, tmpA); proj(x, FLOOR, z1, tmpB);
+      ctx.strokeStyle = edge ? `rgba(185,162,255,${a})` : `rgba(90,200,255,${a})`;
+      ctx.beginPath(); ctx.moveTo(tmpA.x, tmpA.y); ctx.lineTo(tmpB.x, tmpB.y); ctx.stroke();
+    }
+  }
+  // cross lines drifting toward the keeper
+  const off = (t * 3.2) % 4;
+  for (let z = 4 - off + Math.floor(zNear / 4) * 4; z < 100; z += 4) {
+    if (z < zNear) continue;
+    const a = 0.28 * Math.pow(1 - z / 100, 1.6);
+    proj(-LANE * 1.5, FLOOR, z, tmpA); proj(LANE * 1.5, FLOOR, z, tmpB);
+    ctx.strokeStyle = `rgba(90,200,255,${a})`; ctx.beginPath(); ctx.moveTo(tmpA.x, tmpA.y); ctx.lineTo(tmpB.x, tmpB.y); ctx.stroke();
+  }
+}
+function shadow(x, y, z, r) {
+  const p = proj(x, FLOOR, z, tmpA); if (p.y > view.h + 20) return;
+  const lift = clamp((y - FLOOR) / 3, 0, 1);
+  ctx.globalAlpha = 0.45 * (1 - lift * 0.6); ctx.fillStyle = '#000';
+  ctx.beginPath(); ctx.ellipse(p.x, p.y, r * p.s * (1.2 - lift * 0.4), r * p.s * 0.32, 0, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
+}
+function polyPath(x, y, r, n, rot, inner) {
+  ctx.beginPath();
+  for (let i = 0; i < n * (inner ? 2 : 1); i++) {
+    const a = rot + i * TAU / (n * (inner ? 2 : 1)), rr = inner && i % 2 ? r * inner : r;
+    i ? ctx.lineTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr) : ctx.moveTo(x + Math.cos(a) * rr, y + Math.sin(a) * rr);
+  }
+  ctx.closePath();
+}
+function drawSentinel(s, t) {
+  const p = proj(s.x, s.y + Math.sin(t * 1.3 + s.ph) * 0.06, s.z), r = s.r * p.s, col = COL[s.kind];
+  ctx.globalCompositeOperation = 'lighter';
+  glow(col, p.x, p.y, r * 2.6, 0.32 + s.flash * 0.5 + (s.charge > 0 ? 0.25 : 0));
+  ctx.globalCompositeOperation = 'source-over';
+  ctx.lineWidth = Math.max(1.5, r * 0.09); ctx.strokeStyle = `rgba(${col},0.95)`; ctx.fillStyle = 'rgba(12,9,30,0.88)';
+  if (s.kind === 'dummy') {
+    for (let i = 3; i >= 1; i--) { ctx.beginPath(); ctx.arc(p.x, p.y, r * i / 3, 0, TAU); ctx.fillStyle = i % 2 ? 'rgba(12,9,30,0.88)' : `rgba(${col},0.25)`; ctx.fill(); ctx.stroke(); }
+    return;
+  }
+  if (s.kind === 'thorn') polyPath(p.x, p.y, r, 8, s.spin, 0.72);
+  else if (s.kind === 'stone') polyPath(p.x, p.y, r, 4, Math.PI / 4 + Math.sin(s.spin) * 0.15);
+  else if (s.kind === 'warden') polyPath(p.x, p.y, r, 8, s.spin * 0.5, 0.86);
+  else polyPath(p.x, p.y, r, 6, s.spin * 0.4);
+  ctx.fill(); ctx.stroke();
+  if (s.flash > 0) { ctx.fillStyle = `rgba(255,255,255,${s.flash * 0.6})`; ctx.fill(); }
+  // the eye glows the colour of what it is about to throw
+  const er = r * (s.kind === 'warden' ? 0.36 : 0.32);
+  const ch = s.charge > 0 ? 1 - s.charge / 0.75 : 0, ec = s.charge > 0 ? COL[s.next] : col;
+  if (s.kind === 'warden' && !s.eye) {
+    ctx.strokeStyle = `rgba(${col},0.8)`; ctx.beginPath(); ctx.moveTo(p.x - er, p.y); ctx.quadraticCurveTo(p.x, p.y + er * 0.5, p.x + er, p.y); ctx.stroke();
+  } else {
+    ctx.fillStyle = `rgba(${ec},${0.35 + ch * 0.65})`; ctx.beginPath(); ctx.arc(p.x, p.y, er * (0.8 + ch * 0.35), 0, TAU); ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x + (hand.x - s.x) * er * 0.25, p.y + er * 0.15, er * 0.32, 0, TAU); ctx.fill();
+    if (ch > 0) { ctx.globalCompositeOperation = 'lighter'; glow(ec, p.x, p.y, er * (2 + ch * 3), ch); ctx.globalCompositeOperation = 'source-over'; }
+  }
+  // health
+  if (s.maxHp > 1) {
+    if (s.kind === 'warden') {
+      const bw = r * 1.8; ctx.fillStyle = 'rgba(255,255,255,0.15)'; ctx.fillRect(p.x - bw / 2, p.y - r - 12, bw, 4);
+      ctx.fillStyle = `rgb(${col})`; ctx.fillRect(p.x - bw / 2, p.y - r - 12, bw * Math.max(0, s.hp) / s.maxHp, 4);
+    } else for (let i = 0; i < s.maxHp; i++) {
+      ctx.fillStyle = i < s.hp ? `rgb(${col})` : 'rgba(255,255,255,0.2)';
+      ctx.beginPath(); ctx.arc(p.x + (i - (s.maxHp - 1) / 2) * 7, p.y + r + 7, 2.2, 0, TAU); ctx.fill();
+    }
+  }
+}
+function drawOrb(o, t, out) {
+  const col = o.charged ? COL.gold : COL[o.kind];
+  const p = proj(o.x, o.y, o.z, tmpA);
+  const rad = o.kind === 'stone' ? 0.21 : 0.16, r = rad * p.s;
+  // trail
+  ctx.globalCompositeOperation = 'lighter';
+  const tr = o.trail || [], n = tr.length / 3;
+  for (let i = 0; i < n; i++) {
+    const f = (i + 1) / n; proj(tr[i * 3], tr[i * 3 + 1], tr[i * 3 + 2], tmpB);
+    glow(col, tmpB.x, tmpB.y, rad * tmpB.s * (o.kind === 'stone' ? 1.2 : 2) * f, f * (o.kind === 'stone' ? 0.15 : 0.32));
+  }
+  glow(col, p.x, p.y, r * 4, o.kind === 'stone' ? 0.45 : 0.85);
+  ctx.globalCompositeOperation = 'source-over';
+  if (o.kind === 'thorn') {
+    polyPath(p.x, p.y, r * 1.25, 7, o.spin, 0.45); ctx.fillStyle = `rgb(${col})`; ctx.fill();
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.35, 0, TAU); ctx.fill();
+  } else if (o.kind === 'stone') {
+    const sh = o.shape || [1, 0.9, 1, 0.85, 1, 0.95, 0.88, 1, 0.92];
+    ctx.beginPath();
+    for (let i = 0; i < sh.length; i++) { const a = o.spin * 0.3 + i * TAU / sh.length; ctx[i ? 'lineTo' : 'moveTo'](p.x + Math.cos(a) * r * sh[i], p.y + Math.sin(a) * r * sh[i]); }
+    ctx.closePath();
+    const gr = ctx.createRadialGradient(p.x - r * 0.3, p.y - r * 0.3, r * 0.1, p.x, p.y, r);
+    gr.addColorStop(0, '#ffd59a'); gr.addColorStop(0.6, '#c9772a'); gr.addColorStop(1, '#6b3510');
+    ctx.fillStyle = gr; ctx.fill(); ctx.lineWidth = Math.max(1, r * 0.08); ctx.strokeStyle = `rgba(${col},0.9)`; ctx.stroke();
+    ctx.fillStyle = 'rgba(80,35,10,0.6)'; ctx.beginPath(); ctx.arc(p.x + r * 0.25, p.y + r * 0.1, r * 0.2, 0, TAU); ctx.arc(p.x - r * 0.3, p.y + r * 0.35, r * 0.13, 0, TAU); ctx.fill();
+  } else {
+    ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.arc(p.x, p.y, r * 0.75, 0, TAU); ctx.fill();
+    ctx.globalCompositeOperation = 'lighter'; glow('255,255,255', p.x, p.y, r * 1.6, 0.6); ctx.globalCompositeOperation = 'source-over';
+  }
+}
+function drawRing(o) {
+  const ttc = o.T - o.t; if (ttc > 0.95 || o.resolved) return;
+  const p = proj(o.tx, 0, 0, tmpA), base = REACH * 0.62 * p.s, col = COL[o.kind];
+  const inWin = ttc <= WIN_EARLY && ttc >= WIN_LATE, aligned = Math.abs(o.tx - hand.x) < REACH;
+  const r = base * (1 + Math.max(0, ttc) * 3.2);
+  ctx.globalAlpha = clamp((0.95 - ttc) * 2, 0, 1) * (aligned ? 1 : 0.45);
+  ctx.strokeStyle = `rgb(${col})`; ctx.lineWidth = inWin ? 4 : 2;
+  if (o.kind === 'thorn') ctx.setLineDash([7, 5]);
+  ctx.beginPath(); ctx.arc(p.x, p.y, Math.max(base * 0.9, r), 0, TAU); ctx.stroke(); ctx.setLineDash([]);
+  if (Math.abs(ttc) <= PERFECT) { ctx.globalCompositeOperation = 'lighter'; glow(col, p.x, p.y, base * 2.2, 0.5); ctx.globalCompositeOperation = 'source-over'; }
+  if ((game.wave <= 3 || game.mode === 'train') && ttc < 0.7) {
+    ctx.font = '600 12px "Exo 2", sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = `rgb(${col})`;
+    ctx.fillText(o.kind === 'thorn' ? 'PUNCH ↑' : o.kind === 'stone' ? 'CATCH HARD ↓' : 'CATCH ↓', p.x, p.y + base + 18);
+  }
+  ctx.globalAlpha = 1;
+}
+function drawParticles() {
+  ctx.globalCompositeOperation = 'lighter';
+  for (const q of game.parts) { const p = proj(q.x, q.y, q.z, tmpA); const f = q.life / q.max; glow(q.col, p.x, p.y, q.size * p.s * (1 + (1 - f)) * 3, f); }
+  ctx.globalCompositeOperation = 'source-over';
+}
+function drawCradle(t) {
+  if (!playing() && game.mode !== 'paused' && game.mode !== 'shot') return;
+  const p = proj(hand.x, 0, 0, tmpA), u = 0.3 * p.s;
+  const x = p.x, y = p.y + hand.pose * 1.1 - hand.lunge * 34 + hand.dip * 16;
+  const sc = 1 - hand.lunge * 0.12 + hand.dip * 0.06, col = game.bracing ? '160,220,255' : COL.keeper;
+  // reach band
+  ctx.globalAlpha = 0.18; ctx.fillStyle = `rgb(${col})`;
+  ctx.beginPath(); ctx.ellipse(x, p.y + 6, REACH * p.s * KX, 9, 0, 0, TAU); ctx.fill(); ctx.globalAlpha = 1;
+  ctx.globalCompositeOperation = 'lighter'; glow(col, x, y, u * 2.6 * sc, 0.35); ctx.globalCompositeOperation = 'source-over';
+  ctx.lineCap = 'round'; ctx.strokeStyle = `rgb(${col})`; ctx.lineWidth = Math.max(4, u * 0.16) * sc;
+  ctx.beginPath(); ctx.arc(x, y - u * 0.55 * sc, u * sc, Math.PI * 0.12, Math.PI * 0.88); ctx.stroke();
+  ctx.lineWidth = Math.max(3, u * 0.11) * sc;
+  for (const sgn of [-1, 1]) { ctx.beginPath(); ctx.moveTo(x + sgn * u * 0.95 * sc, y - u * 0.25 * sc); ctx.lineTo(x + sgn * u * 1.12 * sc, y - u * 0.62 * sc); ctx.stroke(); }
+  if (game.held) {
+    const hc = game.held.charged ? COL.gold : COL[game.held.kind], hy = y - u * 0.18 * sc, hr = (game.held.kind === 'stone' ? 0.21 : 0.16) * p.s;
+    drawOrb({ kind: game.held.kind, charged: game.held.charged, x: hand.x, y: (p.y - hy) / p.s, z: 0, spin: t * 2, trail: null, shape: null }, t, false);
+    ctx.globalCompositeOperation = 'lighter'; glow(hc, x, hy, hr * (3 + Math.sin(t * 6) * 0.5), 0.35); ctx.globalCompositeOperation = 'source-over';
+  }
+}
+function drawPops() {
+  ctx.textAlign = 'center';
+  for (const p of game.pops) {
+    const f = p.t / 1.1;
+    ctx.globalAlpha = f < 0.75 ? 1 : 1 - (f - 0.75) / 0.25;
+    ctx.font = p.big ? '18px Audiowide, sans-serif' : '600 14px "Exo 2", sans-serif';
+    ctx.fillStyle = `rgb(${p.col})`; ctx.fillText(p.text, p.x, p.y - f * 40);
+  }
+  ctx.globalAlpha = 1;
+}
+
+/* ---------- menu backdrop: comets drifting down the lane ---------- */
+function ambient(dt) {
+  if (game.mode === 'paused' || game.mode === 'shot') return;
+  if (game.deco.length < 4 && Math.random() < dt * 1.2) {
+    const kind = pick(['wisp', 'wisp', 'thorn', 'stone']);
+    game.deco.push({ kind, x: rand(-1.2, 1.2), y: rand(0.3, 1.6), z: 70, vx: rand(-0.2, 0.2), vz: -rand(9, 16), spin: 0, trail: [], shape: kind === 'stone' ? Array.from({ length: 9 }, () => rand(0.75, 1.1)) : null });
+  }
+  for (const d of game.deco) { d.x += d.vx * dt; d.z += d.vz * dt; d.spin += dt * 6; d.trail.push(d.x, d.y, d.z); if (d.trail.length > 30) d.trail.splice(0, 3); }
+  game.deco = game.deco.filter(d => d.z > -4);
+}
+
+/* ---------- HUD and screens ---------- */
+function hud() {
+  $('score').textContent = game.score.toLocaleString('en-US');
+  $('mult').textContent = game.mult > 1 ? `×${game.mult}  ·  ${game.combo} chain` : game.combo >= 2 ? `${game.combo} chain` : '';
+  if (game.mode === 'play') $('wave').textContent = game.wave ? `WAVE ${game.wave}` : '';
+  const hs = $('hearts');
+  if (hs.childElementCount !== MAXH) { hs.innerHTML = ''; for (let i = 0; i < MAXH; i++) hs.append(document.createElement('i')); }
+  [...hs.children].forEach((el, i) => el.classList.toggle('off', i >= game.hearts));
+}
+function hudVisible(on) { $('hud').hidden = $('pauseBtn').hidden = !on; $('gauge').hidden = !(on && motion.ok); }
+const overlays = ['menu', 'calib', 'pause', 'over'];
+function showOnly(id) { for (const o of overlays) $(o).hidden = o !== id; }
+function bestLine() {
+  $('bestLine').textContent = record.score ? `Best ${record.score.toLocaleString('en-US')} · wave ${record.wave}` : '';
+}
+function toMenu() {
+  Music.stop(); game.mode = 'menu'; game.sentinels = []; game.incoming = []; game.outgoing = []; game.parts = []; game.held = null;
+  hudVisible(false); $('coach').hidden = true; $('skipBtn').hidden = true; showOnly('menu'); bestLine();
+  $('deskNote').hidden = motion.ok;
+}
+function beginPlay() {
+  resetGame(); game.mode = 'play'; showOnly(null); hudVisible(true); $('coach').hidden = true; $('skipBtn').hidden = true;
+  startWave(1);
+}
+let afterCalib = null;
+async function withCalibration(fn) {
+  unlockAudio();
+  await enableMotion();
+  for (let i = 0; i < 8 && !motion.ok; i++) await new Promise(r => setTimeout(r, 60));
+  if (motion.ok) { afterCalib = fn; showOnly('calib'); } else fn();
+}
+function startSession(train) {
+  withCalibration(() => { levelHere(); Music.start(); train ? startTraining() : beginPlay(); });
+}
+function gameOver() {
+  game.mode = 'over'; Music.stop();
+  const isBest = game.score > record.score;
+  if (isBest) { record.score = game.score; record.wave = game.wave; save('comet-keeper:best', record); }
+  $('finalScore').textContent = game.score.toLocaleString('en-US');
+  const st = game.stats;
+  $('finalStats').textContent = `${isBest ? 'New best · ' : ''}wave ${game.wave} · ${st.catches} catches (${st.perfects} perfect) · ${st.punches} punches · ${st.kills} sentinels`;
+  hudVisible(false); showOnly('over');
+}
+function togglePause() {
+  if (playing()) {
+    game.prev = game.mode; game.mode = 'paused'; showOnly('pause'); syncSettingsUI();
+    $('flickInfo').textContent = motion.ok ? `Last flick ${Math.round(motion.lastPeak)}°/s · rate from ${motion.trustRR ? 'gyroscope' : 'tilt angle'}` : '';
+  } else if (game.mode === 'paused') { game.mode = game.prev; showOnly(null); gq.length = 0; }
+}
+function setSound(on) {
+  settings.sound = on; saveSettings(); syncSettingsUI();
+  if (Snd.out) Snd.out.gain.value = on ? 0.75 : 0;
+}
+function syncSettingsUI() {
+  for (const id of ['sndChip', 'sndChip2']) $(id).setAttribute('aria-pressed', settings.sound);
+  for (const id of ['hapChip', 'hapChip2']) $(id).setAttribute('aria-pressed', settings.haptics);
+  $('sweep').value = settings.sweep; $('sweepVal').textContent = settings.sweep + '°';
+  document.querySelectorAll('[data-flick]').forEach(b => b.setAttribute('aria-pressed', +b.dataset.flick === settings.flick));
+}
+function checkRotate() {
+  const coarse = matchMedia('(pointer: coarse)').matches, land = innerWidth > innerHeight * 1.05;
+  const show = coarse && land;
+  $('rotate').hidden = !show;
+  if (show && playing()) togglePause();
+}
+
+$('playBtn').addEventListener('click', () => startSession(!settings.trained));
+$('trainBtn').addEventListener('click', () => startSession(true));
+$('readyBtn').addEventListener('click', () => { unlockAudio(); const f = afterCalib; afterCalib = null; showOnly(null); if (f) f(); });
+$('resumeBtn').addEventListener('click', togglePause);
+$('relevelBtn').addEventListener('click', () => { levelHere(); togglePause(); });
+$('quitBtn').addEventListener('click', toMenu);
+$('againBtn').addEventListener('click', () => startSession(false));
+$('menuBtn').addEventListener('click', toMenu);
+$('pauseBtn').addEventListener('click', togglePause);
+$('skipBtn').addEventListener('click', finishTraining);
+for (const id of ['sndChip', 'sndChip2']) $(id).addEventListener('click', () => { unlockAudio(); setSound(!settings.sound); });
+for (const id of ['hapChip', 'hapChip2']) $(id).addEventListener('click', () => { settings.haptics = !settings.haptics; saveSettings(); syncSettingsUI(); buzz(15); });
+$('sweep').addEventListener('input', e => { settings.sweep = +e.target.value; saveSettings(); syncSettingsUI(); });
+document.querySelectorAll('[data-flick]').forEach(b => b.addEventListener('click', () => { settings.flick = +b.dataset.flick; saveSettings(); syncSettingsUI(); }));
+document.addEventListener('visibilitychange', () => { if (document.hidden && playing()) togglePause(); });
+addEventListener('resize', resize);
+if (screen.orientation) screen.orientation.addEventListener('change', resize);
+
+/* ---------- calibration readout ---------- */
+function calibUI() {
+  if ($('calib').hidden) return;
+  const r = clamp((motion.roll - motion.roll0) / 30, -1, 1);
+  $('calibDot').style.left = (50 + r * 50) + '%';
+  $('calibNote').textContent = motion.ok ? `Roll ${Math.round(motion.roll)}° · pitch ${Math.round(motion.pitch)}°` : 'Waiting for the motion sensor…';
+}
+
+/* ---------- a staged frame for the link preview (?shot) ---------- */
+function stageShot() {
+  game.mode = 'shot'; game.wave = 4; showOnly(null);
+  addSentinel({ kind: 'wisp', x: -0.85, z: 22, amp: 0 });
+  addSentinel({ kind: 'thorn', x: 0.9, z: 24, amp: 0, hp: 2 }); addSentinel({ kind: 'wisp', x: 0.25, z: 34, amp: 0 });
+  const st = addSentinel({ kind: 'stone', x: -0.4, z: 36, amp: 0 }); st.charge = 0.2; st.next = 'stone';
+  game.sentinels[0].flash = 0.3; sortSentinels();
+  const mk = (kind, x0, y0, z0, tx, u, curve = 0) => {
+    const o = { kind, x0, y0, z0, tx, T: 1, t: 0, arc: kind === 'stone' ? 1.1 : 0.35, curve, spin: 1, trail: [], shape: null };
+    for (let k = 0; k <= 10; k++) { o.t = Math.max(0, u - 0.25 + k * 0.025); orbPos(o); o.trail.push(o.x, o.y, o.z); }
+    o.t = u; orbPos(o); game.incoming.push(o);
+  };
+  mk('wisp', 0.25, tierY(34), 34, 0.08, 0.9); mk('thorn', 0.9, tierY(24), 24, 0.45, 0.45, -0.25);
+  const q = { kind: 'wisp', charged: true, trail: [], spin: 0 };
+  for (let k = 0; k <= 12; k++) q.trail.push(0.05 - k * 0.06, 0.2 + k * 0.16 - k * k * 0.008, 1.5 + k * 1.1);
+  Object.assign(q, { x: 0.05 - 12 * 0.06, y: 0.2 + 12 * 0.16 - 144 * 0.008, z: 1.5 + 12 * 1.1 }); game.outgoing.push(q);
+  burst(-0.85, tierY(22), 21.6, COL.wisp, 22, 4, 0.7, 0.06, 2);
+  for (const p of game.parts) { const k = rand(0.04, 0.2); p.life *= rand(0.4, 1); p.x += p.vx * k; p.y += p.vy * k; p.z += p.vz * k; }
+  hand.x = hand.tx = 0.08; hand.pose = 8;
+  game.score = 18450; game.combo = 9; game.mult = 2; game.hearts = 2; game.focus = 0.7;
+  hudVisible(true); $('gauge').hidden = false; $('needle').style.top = '62%'; hud(); focusUI();
+}
+
+/* ---------- main loop ---------- */
+let last = performance.now(), acc = 0;
+function frame(ts) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (ts - last) / 1000); last = ts;
+  if (playing()) {
+    realUpdate(dt);
+    if (game.stop > 0) game.stop -= dt;
+    else { acc += dt * game.ts; let n = 0; while (acc >= STEP && n < 12) { update(STEP); acc -= STEP; n++; } if (n >= 12) acc = 0; }
+  } else { ambient(dt); calibUI(); gq.length = 0; }
+  render(ts / 1000);
+}
+
+resize(); syncSettingsUI(); bestLine(); hud();
+if (!('ondeviceorientation' in window) || !matchMedia('(pointer: coarse)').matches) $('deskNote').hidden = false;
+if (/[?&]shot\b/.test(location.search)) stageShot();
+requestAnimationFrame(frame);
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+window.CK = { game, motion, G, hand, settings, onOrient, onDeviceMotion, levelHere, view, startWave };
+</script>
+</body>
+</html>
