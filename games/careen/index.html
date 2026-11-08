@@ -159,7 +159,7 @@ body { font: 13px/1.45 var(--mono); }
     <h1>Careen</h1>
     <div class="legend" id="legend"></div>
     <p>Tilt the phone and every tile slides to the low wall. Line up <b>three of a colour</b> to clear them;
-      a tilt mid-cascade can set off the next clear. <b>Swipe</b> a tile to swap it with a neighbour; a swap that clears nothing costs 10 points.
+      a tilt mid-cascade can set off the next clear. <b>Swipe</b> a tile to swap it with a neighbour; a swap that clears nothing costs 10 points, and a tilt that moves tiles and clears nothing costs 5.
       New tiles pour in from the high side, so keep clearing before the board fills.</p>
     <div class="seg" id="levelSeg"><button data-level="easy">Easy</button><button data-level="normal">Normal</button></div>
     <button class="btn" id="startBtn">Start</button>
@@ -201,8 +201,9 @@ const LEVEL_UP = 30;         // tiles cleared per level
 const POP = 0.26;            // seconds a matched tile flashes before it bursts
 const ACC = 70, VMAX = 24;   // tile slide, cells/s² and cells/s
 const SWAP_ACC = 260, SWAP_VMAX = 12;
-// A swap that the board settles from without a clear costs this many points (a tile's worth).
-const SWAP_PENALTY = 10;
+// A swap or a gravity turn that the board settles from without a clear costs this many points.
+// A turn costs less: tilting is the main move, and a tilt back to level is a turn too.
+const SWAP_PENALTY = 10, TURN_PENALTY = 5;
 const DWELL = 0.12;          // a tilt must point a new way this long before gravity turns
 const PALETTE = ['#ff5d55', '#ffbe3b', '#4fd17a', '#45a8ff', '#b07cff', '#ff7ac3'];
 const SHAPE_NAMES = ['circle', 'square', 'triangle', 'diamond', 'hexagon', 'cross'];
@@ -354,7 +355,7 @@ let chain = 0, score = 0, cleared = 0, level = 1, best = 0;
 let pourT = 0, pourEvery = 0, nextColors = [], overflowT = -1;
 let idleT = 0, hint = null, selected = null, warned = false;
 let popT = 0, pendingSettle = false;
-let idleSwaps = []; // midpoints of swaps made since the board last came to rest
+let idleMoves = []; // { c, r, cost } for each swap or turn made since the board last came to rest
 const vis = new Map(); // tile id -> { x, y, v, acc, vmax, sq, sqx, dying }
 let rng = Math.random;
 
@@ -374,7 +375,7 @@ function newGame() {
   best = store.get(bestKey(), 0);
   pourEvery = L.pourEvery; pourT = pourEvery + 1.5;
   nextColors = makePour();
-  overflowT = -1; idleT = 0; hint = null; selected = null; warned = false; pendingSettle = false; idleSwaps = [];
+  overflowT = -1; idleT = 0; hint = null; selected = null; warned = false; pendingSettle = false; idleMoves = [];
   phase = 'moving';
   layout();
   updateHUD();
@@ -391,7 +392,10 @@ function setGravity(d) {
   touchAction();
   if (phase === 'popping') { pendingSettle = true; return; }
   const moved = board.settle(g);
-  if (moved) { phase = 'moving'; sfx.slide(moved); }
+  if (moved) {
+    phase = 'moving'; sfx.slide(moved);
+    idleMoves.push({ c: (L.cols - 1) / 2, r: (L.rows - 1) / 2, cost: TURN_PENALTY });
+  }
   updateDial();
 }
 function atRest(id) {
@@ -405,7 +409,7 @@ function trySwap(a, b) {
   if (ia < 0 && ib < 0) return false;
   if ((ia >= 0 && !atRest(ia)) || (ib >= 0 && !atRest(ib))) return false;
   board.swap(a, b);
-  idleSwaps.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
+  idleMoves.push({ c: (a[0] + b[0]) / 2, r: (a[1] + b[1]) / 2, cost: SWAP_PENALTY });
   for (const id of [ia, ib]) if (id >= 0) Object.assign(vis.get(id), { acc: SWAP_ACC, vmax: SWAP_VMAX });
   board.settle(g);
   chain = 0;
@@ -514,10 +518,10 @@ function resolve() {
   if (!cells.size) {
     phase = 'idle';
     chain = 0;
-    if (idleSwaps.length) penalizeSwaps();
+    if (idleMoves.length) penalizeMoves();
     return;
   }
-  idleSwaps = [];
+  idleMoves = [];
   chain++;
   const pts = scoreClear(runs, cells.size, chain);
   score += pts;
@@ -544,11 +548,11 @@ function resolve() {
   }
   updateHUD();
 }
-// Swaps that settled without clearing anything cost SWAP_PENALTY each; the score stops at zero.
-function penalizeSwaps() {
-  const loss = Math.min(score, idleSwaps.length * SWAP_PENALTY);
-  const [c, r] = idleSwaps[idleSwaps.length - 1];
-  idleSwaps = [];
+// Swaps and turns that settled without clearing anything cost their penalty; the score stops at zero.
+function penalizeMoves() {
+  const loss = Math.min(score, idleMoves.reduce((n, m) => n + m.cost, 0));
+  const { c, r } = idleMoves[idleMoves.length - 1];
+  idleMoves = [];
   if (!loss) return;
   score -= loss;
   floatText(`−${loss}`, c, r, false, 'penalty');
