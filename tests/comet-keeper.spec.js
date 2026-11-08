@@ -83,11 +83,9 @@ test('keyboard: training throws, then a catch', async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
-test('haptics fall back to the iOS switch tick without a Vibration API', async ({ page }) => {
+test('the Vibration chips hide where there is no Vibration API', async ({ page }) => {
   await page.addInitScript(() => { Object.defineProperty(Navigator.prototype, 'vibrate', { value: undefined, configurable: true }); });
   await page.goto('/games/comet-keeper/');
-  await page.locator('#trainBtn').click();
-  await expect.poll(() => page.evaluate(() => window.CK.game.mode)).toBe('train');
-  await page.keyboard.down('ArrowUp'); await page.waitForTimeout(80); await page.keyboard.up('ArrowUp');   // a throw buzzes
-  await expect.poll(() => page.evaluate(() => !!document.querySelector('label input[type=checkbox][switch]'))).toBe(true);
+  await expect(page.locator('#hapChip')).toBeHidden();
+  await expect(page.locator('#sndChip')).toBeVisible();
 });
