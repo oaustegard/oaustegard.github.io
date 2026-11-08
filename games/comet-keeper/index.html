@@ -386,18 +386,46 @@ const Music = {
     }
   },
 };
+// Play is all tilt, so no tap comes along to restart audio that iOS suspended or interrupted (the motion
+// permission sheet can do it). The loop retries resume() once a second, which is allowed once an interruption
+// ends, and after two seconds of silence asks for a tap.
+let audioRetryT = 0, audioDeadT = 0, audioAsked = false;
+function keepAudio(dt) {
+  if (!settings.sound || !Snd.ctx) return;
+  if (Snd.ctx.state === 'running') { audioDeadT = 0; return; }
+  audioRetryT -= dt; audioDeadT += dt;
+  if (audioRetryT <= 0) { audioRetryT = 1; try { Snd.ctx.resume().catch(() => {}); } catch {} }
+  if (audioDeadT > 2 && !audioAsked) { audioAsked = true; tip('Sound is paused: tap the screen to turn it back on'); }
+}
 function unlockAudio() {
   try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
   try {
     if (!Snd.ensure()) return;
-    if (Snd.ctx.state !== 'running') Snd.ctx.resume();
+    if (Snd.ctx.state !== 'running') { Snd.ctx.resume(); audioAsked = false; }
     const src = Snd.ctx.createBufferSource(); src.buffer = Snd.ctx.createBuffer(1, 1, 22050); src.connect(Snd.ctx.destination); src.start(0);
   } catch {}
 }
 for (const ev of ['pointerup', 'touchend', 'click', 'keydown']) {
   addEventListener(ev, () => { if (!Snd.ctx || Snd.ctx.state !== 'running') unlockAudio(); }, { capture: true, passive: true });
 }
-function buzz(p) { if (settings.haptics && navigator.vibrate) try { navigator.vibrate(p); } catch {} }
+// Safari on iOS has no Vibration API. Since iOS 18, toggling an <input type=checkbox switch> gives a haptic
+// tick, so that stands in for it there: one tick per pulse in a pattern.
+let tickLabel = null;
+function iosTick() {
+  if (!tickLabel) {
+    tickLabel = document.createElement('label'); tickLabel.setAttribute('aria-hidden', 'true');
+    tickLabel.style.cssText = 'position:fixed;left:-200px;top:0;width:1px;height:1px;opacity:0;pointer-events:none';
+    const i = document.createElement('input'); i.type = 'checkbox'; i.setAttribute('switch', ''); i.tabIndex = -1;
+    tickLabel.append(i); document.body.append(tickLabel);
+  }
+  tickLabel.click();
+}
+function buzz(p) {
+  if (!settings.haptics) return;
+  if (typeof navigator.vibrate === 'function') { try { navigator.vibrate(p); } catch {} return; }
+  const n = Array.isArray(p) ? Math.ceil(p.length / 2) : 1;
+  for (let i = 0; i < n; i++) setTimeout(iosTick, i * 90);
+}
 
 /* ---------- motion: roll steers, pitch flicks ---------- */
 // The phone's gravity vector gives two angles that hold up in any pose: roll (sideways tilt, which steers) and
@@ -804,26 +832,35 @@ function punch(o) {
   let target = o.src && !o.src.dead ? o.src : null;
   if (!target && alive.length) target = alive.reduce((a, b) => Math.abs(sentX(a) - hand.x) < Math.abs(sentX(b) - hand.x) ? a : b);
   const q = { kind: o.kind, x: hand.x, y: 0.1, z: 0.3, pz: 0.3, vx: 0, vy: 0.5, vz: 40, g: 1, dmg: (o.kind === 'thorn' ? 2 : 1) + (perfect ? 1 : 0), target, home: 1, punched: true, trail: [], charged: perfect };
-  if (target) aimAt(q, target);
+  if (target) { aimAt(q, target); aimArc(q, target, q.g); }
   game.outgoing.push(q);
   game.stats.punches++; bump();
   addScore(o.kind === 'thorn' ? (perfect ? 150 : 70) : (perfect ? 90 : 40), hand.x, 0.4, 0, perfect ? 'PERFECT PUNCH' : 'PUNCH', perfect ? COL.gold : COL[o.kind]);
   burst(hand.x, 0.2, 0.3, COL[o.kind], 18, 3.5, 0.45, 0.05, 1);
   sfx.punch(perfect); buzz(22); game.shake = Math.max(game.shake, 0.35); game.stop = 0.04;
 }
-function landTime(vy, g) { return (vy + Math.sqrt(vy * vy - 2 * g * FLOOR)) / g; }
+// A throw's flick power sets its launch: forward speed and lift. A sentinel is in reach only if that arc,
+// on its way down, is still at least as high as the sentinel's lower edge when it gets there; then the arc
+// is re-aimed through the sentinel's centre (never higher than the full-power lob would go).
+const THROW_G = 8, Y0 = 0.15, Z0 = 0.3;
+const launch0 = p => ({ vy: 4.5 + 3 * p, vz: 16 + 42 * p });
+function reachAt(p, h) {
+  const { vy, vz } = launch0(p), disc = vy * vy - 2 * THROW_G * (h - Y0);
+  return disc < 0 ? 0 : Z0 + vz * (vy + Math.sqrt(disc)) / THROW_G;
+}
+function aimArc(q, s, g) { const tA = Math.max(0.05, (s.z - q.z) / q.vz); q.vy = (s.y - q.y + g * tA * tA / 2) / tA; }
 function throwHeld(p) {
   const h = game.held; game.held = null;
-  const q = { kind: h.kind, charged: h.charged, x: hand.x, y: 0.15, z: 0.3, pz: 0.3, vx: 0, vy: 3 + 2.4 * p, vz: 16 + 42 * p, g: 9.5,
+  const l = launch0(p);
+  const q = { kind: h.kind, charged: h.charged, x: hand.x, y: Y0, z: Z0, pz: Z0, vx: 0, vy: l.vy, vz: l.vz, g: THROW_G,
     dmg: h.kind === 'stone' ? 3 : h.charged ? 2 : 1, splash: h.kind === 'stone', trail: [], target: null, home: 0.8 };
-  const range = q.z + q.vz * landTime(q.vy - 0.0, q.g);
   let best = null, bd = 0.42, shortOf = null;
   for (const s of game.sentinels) {
     if (s.dead) continue;
     const dx = Math.abs(sentX(s, s.z / q.vz) - hand.x);
-    if (dx < bd) { if (s.z < range + 1) { best = s; bd = dx; } else if (!shortOf || s.z < shortOf.z) shortOf = s; }
+    if (dx < bd) { if (s.z <= reachAt(p, s.y - s.r)) { best = s; bd = dx; } else if (!shortOf || s.z < shortOf.z) shortOf = s; }
   }
-  if (best) { q.target = best; aimAt(q, best); } else q.shortOf = shortOf;
+  if (best) { q.target = best; aimAt(q, best); aimArc(q, best, q.g); } else q.shortOf = shortOf;
   game.outgoing.push(q);
   hand.lunge = 1.2; sfx.throw(p); buzz(10);
   const pw = $('pw'); pw.textContent = Math.round(p * 100) + '%'; pwT = 1.2;
@@ -881,7 +918,7 @@ function update(dt) {
     q.trail.push(q.x, q.y, q.z); if (q.trail.length > 36) q.trail.splice(0, 3);
     for (const s of game.sentinels) {
       if (s.dead) continue;
-      if (q.pz < s.z && q.z >= s.z && Math.abs(q.x - s.x) < s.r * 0.85 + 0.14) { hitSentinel(s, q); q.done = true; break; }
+      if (q.pz < s.z && q.z >= s.z && Math.abs(q.x - s.x) < s.r * 0.85 + 0.14 && Math.abs(q.y - s.y) < s.r + 0.3) { hitSentinel(s, q); q.done = true; break; }
     }
     if (!q.done && q.y < FLOOR) {
       q.done = true; burst(q.x, FLOOR + 0.05, q.z, COL[q.kind], 16, 2.5, 0.6, 0.06, 4); sfx.land();
@@ -994,6 +1031,7 @@ function finishTraining() {
 function realUpdate(dt) {
   processGestures();
   tryGesture();
+  keepAudio(dt);
   const t = now();
   // steering
   const kd = (input.keyR ? 1 : 0) - (input.keyL ? 1 : 0);

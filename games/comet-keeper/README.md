@@ -17,7 +17,7 @@ Press Play, hold the phone the way you mean to play, and press Ready: that pose 
 
 Each comet draws a ring on the cradle's line that closes as the comet arrives. A catch or punch counts from 0.3 s before contact to 0.09 s after, and one within 0.075 s of contact is perfect: a perfect catch charges the comet gold, so it hits twice as hard.
 
-A harder flick throws farther. The sentinels stand at different depths, so a weak flick lands short of the back row; the pause menu shows the speed of your last flick and how the game is reading it. A throw that is roughly lined up with a sentinel it can reach curves onto it.
+A harder flick throws farther. The sentinels stand at different depths, so a weak flick lands short of the back row; the pause menu shows the speed of your last flick and how the game is reading it. A sentinel is in reach when the throw's arc is still at its height when it gets there: the front row takes almost no power, the deepest back row about 60%. A throw that is roughly lined up with a sentinel in reach curves onto it; one that is not in reach drops under it and misses.
 
 Three things come down the lane:
 
@@ -43,5 +43,6 @@ One self-contained HTML file with no build step, drawn on a Canvas 2D context wi
 
 - **Lane**: a perspective projection with the horizontal scale compressed, so the far rows stay wide enough to aim at. Sentinels further back float higher, so a back row shows above the front row instead of behind it.
 - **Simulation**: fixed 120 Hz steps scaled by the slow-time factor, with a few frames of hit-stop on perfect catches and kills. Comets fly on arcs timed to reach the cradle line at a set moment, which is what the rings count down to. Throws are ballistic, so power decides range.
-- **Sound**: synthesized with Web Audio, with a quiet generative backing of a drone and pentatonic plucks that speeds up each wave. A tick marks the moment a comet you are lined up with enters the catch window.
+- **Sound**: synthesized with Web Audio, with a quiet generative backing of a drone and pentatonic plucks that speeds up each wave. A tick marks the moment a comet you are lined up with enters the catch window. Play needs no taps, so the loop restarts audio that the browser has suspended (iOS can do this after the motion-permission sheet) and asks for a tap if that fails.
+- **Haptics**: the Vibration API where there is one. Safari on iOS has none, so there the game toggles a hidden `<input type=checkbox switch>`, which gives a haptic tick on iOS 18 and later.
 - **Tests**: [`tests/comet-keeper.spec.js`](../../tests/comet-keeper.spec.js) replays scripted orientation and gyroscope streams through the detector, with the gyroscope absent and reporting radians, and plays the first training drills from the keyboard.

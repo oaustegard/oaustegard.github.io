@@ -67,6 +67,13 @@ test('keyboard: training throws, then a catch', async ({ page }) => {
   await page.keyboard.down('ArrowUp'); await page.waitForTimeout(80); await page.keyboard.up('ArrowUp');
   await expect.poll(() => page.evaluate(() => window.CK.game.train.step)).toBe(1);
   await page.keyboard.down('ArrowRight'); await page.waitForTimeout(260); await page.keyboard.up('ArrowRight');
+  // a tap of ↑ is about 20% power: it must fall short of the target 36 deep, and not count as a hit
+  await page.waitForFunction(() => window.CK.game.held, null, { timeout: 3000 });
+  await page.keyboard.press('ArrowUp');
+  await page.waitForFunction(() => !window.CK.game.outgoing.length && !window.CK.game.held, null, { timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(400);
+  expect(await page.evaluate(() => window.CK.game.train.step)).toBe(1);
+  await page.waitForFunction(() => window.CK.game.held, null, { timeout: 3000 });
   await page.keyboard.down('ArrowUp'); await page.waitForTimeout(500); await page.keyboard.up('ArrowUp');
   await expect.poll(() => page.evaluate(() => window.CK.game.train.step), { timeout: 5000 }).toBe(2);
   // catch drill: press ↓ when the comet is about to land
@@ -74,4 +81,13 @@ test('keyboard: training throws, then a catch', async ({ page }) => {
   await page.keyboard.press('ArrowDown');
   await expect.poll(() => page.evaluate(() => window.CK.game.held && window.CK.game.held.kind)).toBe('wisp');
   expect(errors).toEqual([]);
+});
+
+test('haptics fall back to the iOS switch tick without a Vibration API', async ({ page }) => {
+  await page.addInitScript(() => { Object.defineProperty(Navigator.prototype, 'vibrate', { value: undefined, configurable: true }); });
+  await page.goto('/games/comet-keeper/');
+  await page.locator('#trainBtn').click();
+  await expect.poll(() => page.evaluate(() => window.CK.game.mode)).toBe('train');
+  await page.keyboard.down('ArrowUp'); await page.waitForTimeout(80); await page.keyboard.up('ArrowUp');   // a throw buzzes
+  await expect.poll(() => page.evaluate(() => !!document.querySelector('label input[type=checkbox][switch]'))).toBe(true);
 });
