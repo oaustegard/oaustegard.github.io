@@ -98,6 +98,7 @@ body { font: 13px/1.45 var(--mono); }
 .pop { position: fixed; pointer-events: none; font: 700 20px var(--display); color: var(--fg);
   text-shadow: 0 2px 8px rgba(0,0,0,.6); transform: translate(-50%, -50%); animation: rise 0.9s ease-out forwards; white-space: nowrap; }
 .pop.chain { font-size: 30px; color: var(--accent); animation-duration: 1.2s; }
+.pop.penalty { font-size: 17px; color: var(--hot); }
 @keyframes rise { from { opacity: 1; transform: translate(-50%, -50%) scale(.8); }
   20% { transform: translate(-50%, -60%) scale(1.08); } to { opacity: 0; transform: translate(-50%, -150%) scale(1); } }
 
@@ -158,7 +159,7 @@ body { font: 13px/1.45 var(--mono); }
     <h1>Careen</h1>
     <div class="legend" id="legend"></div>
     <p>Tilt the phone and every tile slides to the low wall. Line up <b>three of a colour</b> to clear them;
-      a tilt mid-cascade can set off the next clear. <b>Swipe</b> a tile to swap it with a neighbour.
+      a tilt mid-cascade can set off the next clear. <b>Swipe</b> a tile to swap it with a neighbour; a swap that clears nothing costs 10 points.
       New tiles pour in from the high side, so keep clearing before the board fills.</p>
     <div class="seg" id="levelSeg"><button data-level="easy">Easy</button><button data-level="normal">Normal</button></div>
     <button class="btn" id="startBtn">Start</button>
@@ -200,6 +201,8 @@ const LEVEL_UP = 30;         // tiles cleared per level
 const POP = 0.26;            // seconds a matched tile flashes before it bursts
 const ACC = 70, VMAX = 24;   // tile slide, cells/s² and cells/s
 const SWAP_ACC = 260, SWAP_VMAX = 12;
+// A swap that the board settles from without a clear costs this many points (a tile's worth).
+const SWAP_PENALTY = 10;
 const DWELL = 0.12;          // a tilt must point a new way this long before gravity turns
 const PALETTE = ['#ff5d55', '#ffbe3b', '#4fd17a', '#45a8ff', '#b07cff', '#ff7ac3'];
 const SHAPE_NAMES = ['circle', 'square', 'triangle', 'diamond', 'hexagon', 'cross'];
@@ -275,6 +278,7 @@ const sfx = {
     src.connect(f); f.connect(g); g.connect(this.out); src.start(t);
   },
   swap() { this.tone(520, 780, 0.07, 'triangle', 0.12); },
+  miss() { this.tone(260, 190, 0.12, 'triangle', 0.08); },
   slide(n) { this.noise(0.24, clamp(0.05 + n * 0.006, 0.05, 0.22), 500, 1800, 0.8); },
   land(n) {
     const now = performance.now();
@@ -350,6 +354,7 @@ let chain = 0, score = 0, cleared = 0, level = 1, best = 0;
 let pourT = 0, pourEvery = 0, nextColors = [], overflowT = -1;
 let idleT = 0, hint = null, selected = null, warned = false;
 let popT = 0, pendingSettle = false;
+let idleSwaps = []; // midpoints of swaps made since the board last came to rest
 const vis = new Map(); // tile id -> { x, y, v, acc, vmax, sq, sqx, dying }
 let rng = Math.random;
 
@@ -369,7 +374,7 @@ function newGame() {
   best = store.get(bestKey(), 0);
   pourEvery = L.pourEvery; pourT = pourEvery + 1.5;
   nextColors = makePour();
-  overflowT = -1; idleT = 0; hint = null; selected = null; warned = false; pendingSettle = false;
+  overflowT = -1; idleT = 0; hint = null; selected = null; warned = false; pendingSettle = false; idleSwaps = [];
   phase = 'moving';
   layout();
   updateHUD();
@@ -400,6 +405,7 @@ function trySwap(a, b) {
   if (ia < 0 && ib < 0) return false;
   if ((ia >= 0 && !atRest(ia)) || (ib >= 0 && !atRest(ib))) return false;
   board.swap(a, b);
+  idleSwaps.push([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]);
   for (const id of [ia, ib]) if (id >= 0) Object.assign(vis.get(id), { acc: SWAP_ACC, vmax: SWAP_VMAX });
   board.settle(g);
   chain = 0;
@@ -508,8 +514,10 @@ function resolve() {
   if (!cells.size) {
     phase = 'idle';
     chain = 0;
+    if (idleSwaps.length) penalizeSwaps();
     return;
   }
+  idleSwaps = [];
   chain++;
   const pts = scoreClear(runs, cells.size, chain);
   score += pts;
@@ -534,6 +542,17 @@ function resolve() {
     sfx.levelUp();
     showTip((level - 1) % L.growEvery === 0 ? `Level ${level}: bigger pours` : `Level ${level}: pours come faster`);
   }
+  updateHUD();
+}
+// Swaps that settled without clearing anything cost SWAP_PENALTY each; the score stops at zero.
+function penalizeSwaps() {
+  const loss = Math.min(score, idleSwaps.length * SWAP_PENALTY);
+  const [c, r] = idleSwaps[idleSwaps.length - 1];
+  idleSwaps = [];
+  if (!loss) return;
+  score -= loss;
+  floatText(`−${loss}`, c, r, false, 'penalty');
+  sfx.miss();
   updateHUD();
 }
 function burst() {
@@ -604,9 +623,9 @@ function showTip(text) {
   clearTimeout(tipTimer);
   tipTimer = setTimeout(() => { el.style.opacity = 0; }, 3200);
 }
-function floatText(text, c, r, isChain) {
+function floatText(text, c, r, isChain, extra) {
   const el = document.createElement('div');
-  el.className = 'pop' + (isChain ? ' chain' : '');
+  el.className = 'pop' + (isChain ? ' chain' : '') + (extra ? ' ' + extra : '');
   el.textContent = text;
   el.style.left = (geo.cssX + (c + 0.5) * geo.cssCell) + 'px';
   el.style.top = (geo.cssY + (r + 0.5) * geo.cssCell - (isChain ? geo.cssCell : 0)) + 'px';
