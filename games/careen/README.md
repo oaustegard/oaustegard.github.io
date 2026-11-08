@@ -41,10 +41,11 @@ threshold (8° to 30°).
   a cascade multiplies the score by the chain count. A gravity turn during a cascade keeps the chain
   going; a swap starts a new one.
 - **Score.** 10 a tile, 20 more for each tile a run has past three, times the chain.
-- **Wasted moves.** A swap (including a swipe into an empty cell) costs 10 points, and a tilt that
-  turns gravity and moves tiles costs 5, if the board comes to rest without a clear. Penalties for
-  several moves add up until the board rests, and any clear before then cancels them all. Tilting
-  back to level turns gravity down again, so it counts as a turn. The score never drops below zero.
+- **Wasted moves.** A swap (including a swipe into an empty cell) costs 10 points, and a gravity turn
+  that moves tiles costs 5, if the board comes to rest without a clear. Penalties for several moves
+  add up until the board rests, and any clear before then, from any move, cancels them all. Coming
+  back inside the tilt threshold turns gravity down again, so it counts as a gravity turn. The score
+  never drops below zero.
 - **Hints** (Easy only). After 7 s with nothing happening, the game looks for a gravity turn that
   would clear something, then for a swap, and lights the arrow or the pair.
 
