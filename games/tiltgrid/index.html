@@ -1,0 +1,1175 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Tiltgrid '84</title>
+<meta name="description" content="Roll a glass marble down four isometric neon courses against the clock. WebGPU rendering, phone tilt controls and a chiptune score played live on four 1984-style sound channels.">
+<meta name="theme-color" content="#07030f">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Tiltgrid '84">
+<meta property="og:description" content="Roll a glass marble down four isometric neon courses against the clock: WebGPU, phone tilt and a live 1984-style chiptune score.">
+<meta property="og:url" content="https://austegard.com/games/tiltgrid/">
+<meta property="og:image" content="https://austegard.com/games/tiltgrid/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="The Tiltgrid '84 logo over a teal isometric course of neon tiles">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Tiltgrid '84">
+<meta name="twitter:description" content="Roll a glass marble down four isometric neon courses against the clock: WebGPU, phone tilt and a live 1984-style chiptune score.">
+<meta name="twitter:image" content="https://austegard.com/games/tiltgrid/og-image.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=Tilt+Neon&family=Tilt+Prism&display=swap">
+<style>
+/* Layout: one full-bleed WebGPU canvas; HUD pinned to the safe-area edges; overlays centred on top. Single dark arcade look. */
+:root {
+  --ink: #07030f;        /* cabinet black */
+  --glass: #efeaff;      /* primary text */
+  --dim: #9a8fbf;        /* secondary text */
+  --neon: #ff3fa4;       /* magenta tube */
+  --tube: #3fe7ff;       /* cyan tube */
+  --amber: #ffc23f;      /* warning / timer low */
+  --panel: rgba(12, 6, 28, 0.78);
+  --f-display: "Tilt Prism", "Tilt Neon", "Arial Black", system-ui, sans-serif;
+  --f-hud: "Tilt Neon", "Arial Rounded MT Bold", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; overflow: hidden; background: var(--ink); color: var(--glass);
+  font: 14px/1.45 var(--f-mono); overscroll-behavior: none; -webkit-user-select: none; user-select: none;
+  -webkit-tap-highlight-color: transparent; }
+canvas#view { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+.crt { position: fixed; inset: 0; pointer-events: none; z-index: 2;
+  background:
+    repeating-linear-gradient(to bottom, rgba(0,0,0,0) 0 2px, rgba(0,0,0,0.16) 2px 3px),
+    radial-gradient(ellipse at center, rgba(0,0,0,0) 55%, rgba(0,0,0,0.55) 100%); }
+
+/* HUD */
+.hud { position: fixed; left: 0; right: 0; top: 0; z-index: 3; display: grid;
+  grid-template-columns: 1fr auto 1fr; align-items: start; gap: 8px;
+  padding-top: max(10px, env(safe-area-inset-top, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  pointer-events: none; }
+.hud .race { font: 12px/1.3 var(--f-mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--dim); min-width: 0; }
+.hud .race b { display: block; color: var(--tube); font: 18px/1.1 var(--f-hud); letter-spacing: 0.06em; text-shadow: 0 0 10px rgba(63,231,255,0.6); }
+.hud .clock { text-align: center; font: 44px/1 var(--f-hud); font-variant-numeric: tabular-nums; color: var(--glass);
+  text-shadow: 0 0 6px var(--neon), 0 0 22px rgba(255,63,164,0.7); min-width: 3ch; }
+.hud .clock small { display: block; font: 10px/1.6 var(--f-mono); letter-spacing: 0.3em; color: var(--dim); text-shadow: none; }
+.hud .clock.low { color: var(--amber); text-shadow: 0 0 6px var(--amber), 0 0 20px rgba(255,194,63,0.7); animation: pulse 0.5s steps(2) infinite; }
+@keyframes pulse { 50% { opacity: 0.55; } }
+.hud .right { text-align: right; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.hud .score { font: 22px/1 var(--f-hud); font-variant-numeric: tabular-nums; color: var(--neon); text-shadow: 0 0 10px rgba(255,63,164,0.6); }
+.hud .score small { display: block; font: 10px/1.6 var(--f-mono); letter-spacing: 0.3em; color: var(--dim); text-shadow: none; }
+.btns { display: flex; gap: 6px; pointer-events: auto; flex-wrap: wrap; justify-content: flex-end; }
+.chip { font: 600 11px/1 var(--f-mono); letter-spacing: 0.1em; text-transform: uppercase; color: var(--glass);
+  background: var(--panel); border: 1px solid rgba(63,231,255,0.35); border-radius: 3px; padding: 7px 9px; cursor: pointer; }
+.chip[aria-pressed="false"] { color: var(--dim); border-color: rgba(154,143,191,0.3); text-decoration: line-through; }
+.chip:focus-visible, .go:focus-visible { outline: 2px solid var(--tube); outline-offset: 2px; }
+.tiltflag { font: 600 10px/1 var(--f-mono); letter-spacing: 0.14em; color: var(--tube); }
+
+/* Overlays */
+.overlay { position: fixed; inset: 0; z-index: 4; display: grid; place-items: center; overflow-y: auto;
+  padding-block: max(24px, env(safe-area-inset-top, 0px)) max(24px, env(safe-area-inset-bottom, 0px));
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  background: radial-gradient(ellipse at 50% 40%, rgba(7,3,15,0.25), rgba(7,3,15,0.82)); }
+.card { width: min(560px, 100%); text-align: center; display: flex; flex-direction: column; gap: 14px; align-items: center; }
+.logo { margin: 0; font: 400 clamp(54px, 15vw, 116px)/0.9 var(--f-display); letter-spacing: 0.02em;
+  background: linear-gradient(180deg, #fff 0%, #ffd6f0 30%, var(--neon) 52%, #6a2bff 53%, var(--tube) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+  filter: drop-shadow(0 0 14px rgba(255,63,164,0.55)); text-wrap: balance; }
+.logo span { display: block; font: 400 0.32em/1 var(--f-hud); letter-spacing: 0.5em; padding-left: 0.5em; color: var(--tube);
+  -webkit-text-fill-color: var(--tube); filter: drop-shadow(0 0 8px rgba(63,231,255,0.8)); margin-top: 0.2em; }
+.tag { margin: 0; color: var(--glass); max-width: 44ch; font-size: 14px; }
+.go { font: 22px/1 var(--f-hud); letter-spacing: 0.12em; color: var(--ink); background: var(--tube); border: 0; border-radius: 4px;
+  padding: 14px 30px; cursor: pointer; box-shadow: 0 0 0 2px var(--ink), 0 0 0 4px var(--tube), 0 0 26px rgba(63,231,255,0.7); }
+.go:hover { background: #8ff2ff; }
+.go[disabled] { opacity: 0.4; cursor: not-allowed; }
+.controls { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px 16px; width: 100%; text-align: left;
+  font-size: 12px; color: var(--dim); border-top: 1px solid rgba(154,143,191,0.25); padding-top: 12px; }
+.controls b { color: var(--glass); font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; font-size: 11px; display: block; }
+.legend { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px 14px; font-size: 11px; color: var(--dim); }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.warn { color: var(--amber); font-size: 13px; max-width: 46ch; }
+.best { font-size: 12px; color: var(--dim); letter-spacing: 0.1em; }
+.banner { position: fixed; left: 0; right: 0; top: 34%; z-index: 4; text-align: center; pointer-events: none;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+.banner h2 { margin: 0; font: 400 clamp(40px, 11vw, 84px)/1 var(--f-display); color: var(--glass);
+  text-shadow: 0 0 10px var(--neon), 0 0 34px rgba(255,63,164,0.8); text-wrap: balance; }
+.banner p { margin: 10px 0 0; font: 15px/1.4 var(--f-hud); letter-spacing: 0.2em; color: var(--tube); text-shadow: 0 0 10px rgba(63,231,255,0.7); }
+.banner .go { pointer-events: auto; margin-top: 18px; }
+.joy { position: fixed; z-index: 3; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%;
+  border: 2px solid rgba(63,231,255,0.45); pointer-events: none; }
+.joy::after { content: ""; position: absolute; left: 50%; top: 50%; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 50%;
+  background: rgba(255,63,164,0.55); transform: translate(var(--jx, 0px), var(--jy, 0px)); }
+@media (prefers-reduced-motion: reduce) { .hud .clock.low { animation: none; } }
+</style>
+</head>
+<body>
+<canvas id="view" aria-label="Game view"></canvas>
+<div class="crt"></div>
+
+<div class="hud" id="hud" hidden>
+  <div class="race"><span id="raceNo">Race 1 / 4</span><b id="raceName">Practice Run</b></div>
+  <div class="clock" id="clock">45<small>seconds</small></div>
+  <div class="right">
+    <div class="score"><span id="score">0</span><small>score</small></div>
+    <div class="btns">
+      <span class="tiltflag" id="tiltFlag" hidden>TILT</span>
+      <button class="chip" id="calBtn" type="button" hidden title="Make the phone's current angle the level position (C)">Level</button>
+      <button class="chip" id="musBtn" type="button" aria-pressed="true" title="Music on or off (M)">Music</button>
+      <button class="chip" id="pauseBtn" type="button" title="Pause (P)">Pause</button>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="title">
+  <div class="card">
+    <h1 class="logo">TILTGRID<span>'84</span></h1>
+    <p class="tag">Roll a glass marble down four neon courses before the clock runs out. Ramps are safe. A drop of more than five wall stripes shatters the glass.</p>
+    <button class="go" id="startBtn" type="button">INSERT COIN</button>
+    <p class="warn" id="gpuWarn" hidden></p>
+    <div class="legend" aria-label="Floor key">
+      <span><i style="background:#ffffff"></i>finish</span>
+      <span><i style="background:#ffd23f"></i>speed arrows</span>
+      <span><i style="background:#8cff3a"></i>acid</span>
+      <span><i style="background:#bfe9ff"></i>ice</span>
+      <span><i style="background:#3fe7ff"></i>+6 s clock</span>
+    </div>
+    <div class="controls">
+      <div><b>Phone</b>Tilt to roll. Hold it the way you like when you start; that angle counts as level.</div>
+      <div><b>Touch / mouse</b>Press and drag anywhere: a stick appears under your finger.</div>
+      <div><b>Keys</b>Arrows or WASD. P pauses, M mutes music, C re-levels tilt.</div>
+      <div><b>Gamepad</b>Left stick; Start begins a race.</div>
+    </div>
+    <p class="best" id="bestLine"></p>
+  </div>
+</div>
+
+<div class="banner" id="banner" hidden><h2 id="bTitle"></h2><p id="bSub"></p><button class="go" id="bBtn" type="button" hidden>PLAY AGAIN</button></div>
+<div class="joy" id="joy" hidden></div>
+
+<script>
+'use strict';
+// ======================================================================
+//  Tiltgrid '84 — an original isometric marble race.
+//  WebGPU renderer, heightfield physics, tilt/touch/keys/gamepad input,
+//  and a four-channel chiptune score sequenced live in Web Audio.
+// ======================================================================
+const $ = (s) => document.querySelector(s);
+
+// ---------------------------------------------------------------- math
+const sub3 = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+const dot3 = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+const cross3 = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+const norm3 = (a) => { const l = Math.hypot(a[0], a[1], a[2]) || 1; return [a[0] / l, a[1] / l, a[2] / l]; };
+const clamp = (x, a, b) => Math.min(b, Math.max(a, x));
+const lerp = (a, b, t) => a + (b - a) * t;
+
+function mat4mul(a, b) {
+  const o = new Float32Array(16);
+  for (let c = 0; c < 4; c++) for (let r = 0; r < 4; r++) {
+    let s = 0; for (let k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k];
+    o[c * 4 + r] = s;
+  }
+  return o;
+}
+function lookAt(e, t, u) {
+  const z = norm3(sub3(e, t)), x = norm3(cross3(u, z)), y = cross3(z, x);
+  return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot3(x, e), -dot3(y, e), -dot3(z, e), 1]);
+}
+function ortho(l, r, b, t, n, f) { // WebGPU clip z in [0,1]
+  const m = new Float32Array(16);
+  m[0] = 2 / (r - l); m[5] = 2 / (t - b); m[10] = 1 / (n - f);
+  m[12] = -(r + l) / (r - l); m[13] = -(t + b) / (t - b); m[14] = n / (n - f); m[15] = 1;
+  return m;
+}
+// 3x3 rotation, column-major
+const m3id = () => [1, 0, 0, 0, 1, 0, 0, 0, 1];
+function m3axis(x, y, z, a) {
+  const c = Math.cos(a), s = Math.sin(a), t = 1 - c;
+  return [t * x * x + c, t * x * y + s * z, t * x * z - s * y,
+          t * x * y - s * z, t * y * y + c, t * y * z + s * x,
+          t * x * z + s * y, t * y * z - s * x, t * z * z + c];
+}
+function m3mul(a, b) {
+  const o = new Array(9);
+  for (let c = 0; c < 3; c++) for (let r = 0; r < 3; r++) o[c * 3 + r] = a[r] * b[c * 3] + a[3 + r] * b[c * 3 + 1] + a[6 + r] * b[c * 3 + 2];
+  return o;
+}
+function m3fix(m) { // Gram-Schmidt so accumulated rolling never shears the marble
+  let x = norm3([m[0], m[1], m[2]]);
+  let y = [m[3], m[4], m[5]]; const d = dot3(x, y); y = norm3([y[0] - x[0] * d, y[1] - x[1] * d, y[2] - x[2] * d]);
+  const z = cross3(x, y);
+  return [x[0], x[1], x[2], y[0], y[1], y[2], z[0], z[1], z[2]];
+}
+
+// --------------------------------------------------------------- levels
+// Every course is built from rectangles of cells. A cell spans [x,x+1]×[z,z+1] and stores its four corner
+// heights (nw, ne, sw, se) in world units, so a ramp is a plane and a ledge is a height jump between cells.
+const MAT = { FLOOR: 0, RAMP: 1, ACID: 2, GOAL: 3, BXP: 4, BXN: 5, BZP: 6, BZN: 7, WALL: 9, ICE: 10, START: 11 };
+const PAL = [
+  { lo: [0.07, 0.22, 0.34], hi: [0.30, 0.78, 0.86], line: [0.25, 0.95, 1.0], bg: [0.035, 0.02, 0.09], acc: [1.0, 0.25, 0.65] },
+  { lo: [0.26, 0.06, 0.32], hi: [0.95, 0.42, 0.78], line: [1.0, 0.35, 0.85], bg: [0.05, 0.012, 0.07], acc: [0.25, 0.9, 1.0] },
+  { lo: [0.30, 0.11, 0.04], hi: [1.0, 0.68, 0.24], line: [1.0, 0.58, 0.15], bg: [0.06, 0.02, 0.025], acc: [0.3, 0.85, 1.0] },
+  { lo: [0.05, 0.20, 0.12], hi: [0.42, 1.0, 0.62], line: [0.3, 1.0, 0.62], bg: [0.02, 0.012, 0.075], acc: [1.0, 0.3, 0.9] },
+];
+const COURSES = [
+  { name: 'Practice Run', w: 13, d: 36, time: 45, pal: 0, build(b) {
+      b.plat(2, 0, 7, 4, 8); b.start(4, 2);
+      b.rampZ(2, 5, 7, 8, 8, 6);
+      b.plat(2, 9, 11, 13, 6); b.clock(10, 10);
+      b.plat(7, 14, 11, 17, 5);                 // one-unit ledge: safe drop
+      b.rampZ(7, 18, 11, 21, 5, 3);
+      b.plat(3, 22, 11, 26, 3); b.mat(5, 25, 6, 25, MAT.BZP);
+      b.plat(5, 27, 6, 30, 3);                  // two-wide bridge
+      b.plat(3, 31, 9, 35, 3); b.mat(3, 34, 9, 35, MAT.GOAL);
+  } },
+  { name: 'Zigzag Ice', w: 18, d: 42, time: 40, pal: 1, build(b) {
+      b.plat(1, 0, 5, 4, 12); b.start(3, 2);
+      b.rampX(6, 1, 11, 3, 12, 9);
+      b.plat(12, 0, 16, 6, 9); b.clock(15, 1);
+      b.rampZ(13, 7, 15, 10, 9, 7);
+      b.plat(9, 11, 16, 15, 7); b.sweeper(9.5, 13.5, 16.5, 13.5, 3.2, 0);
+      b.plat(9, 16, 10, 21, 7);
+      b.plat(4, 22, 12, 26, 7, MAT.ICE);
+      b.rampZ(4, 27, 6, 30, 7, 4.5);
+      b.plat(2, 31, 9, 35, 4.5); b.chaser(8, 33); b.mat(2, 34, 3, 35, MAT.ACID);
+      b.rampX(10, 32, 13, 34, 4.5, 2.5);
+      b.plat(14, 30, 17, 41, 2.5); b.mat(14, 40, 17, 41, MAT.GOAL);
+  } },
+  { name: 'The Spire', w: 20, d: 50, time: 40, pal: 2, build(b) {
+      b.plat(8, 0, 12, 4, 16); b.start(10, 1); b.mat(9, 4, 11, 4, MAT.BZP);
+      b.rampZ(9, 5, 11, 12, 16, 12);
+      b.plat(5, 13, 15, 17, 12); b.chaser(6, 14); b.clock(14, 13);
+      b.plat(5, 18, 5, 25, 12);                 // left: one-wide plank
+      b.plat(3, 26, 8, 29, 11);
+      b.plat(13, 18, 15, 23, 12);               // right: wide lane with two sweepers
+      b.sweeper(13.5, 19.5, 15.5, 19.5, 1.9, 0); b.sweeper(13.5, 22.5, 15.5, 22.5, 1.9, 0.5);
+      b.rampZ(13, 24, 15, 27, 12, 10);
+      b.plat(9, 28, 15, 31, 10); b.mat(11, 29, 12, 30, MAT.ACID); b.chaser(14, 30);
+      b.rampZ(9, 32, 11, 36, 10, 7.5);
+      b.plat(6, 37, 14, 40, 7.5);
+      b.plat(10, 41, 14, 42, 6.5); b.plat(10, 43, 14, 44, 5.5);
+      b.plat(8, 45, 14, 49, 4.5); b.mat(8, 48, 14, 49, MAT.GOAL);
+  } },
+  { name: 'Neon Gauntlet', w: 22, d: 56, time: 45, pal: 3, build(b) {
+      b.plat(1, 0, 6, 4, 20); b.start(3, 2);
+      b.rampX(7, 1, 13, 3, 20, 16.5);
+      b.plat(14, 0, 20, 6, 16.5); b.chaser(19, 1); b.clock(19, 5);
+      b.plat(16, 7, 17, 14, 16.5); b.sweeper(15.6, 11, 18.4, 11, 2.2, 0);
+      b.plat(12, 15, 20, 19, 16.5, MAT.ICE); b.mat(12, 18, 13, 19, MAT.ACID); b.mat(14, 19, 16, 19, MAT.BZP);
+      b.rampZ(14, 20, 16, 25, 16.5, 13.5);
+      b.plat(8, 26, 18, 30, 13.5); b.chaser(9, 27); b.chaser(17, 29);
+      b.plat(8, 31, 9, 38, 13.5); b.mat(8, 33, 9, 34, MAT.BXN);   // crosswind pads on a narrow bridge
+      b.plat(4, 39, 12, 43, 12.5); b.sweeper(4.5, 41, 11.5, 41, 3.0, 0.25); b.clock(4, 43);
+      b.plat(8, 44, 12, 45, 11.5); b.plat(8, 46, 12, 47, 10.5); b.plat(8, 48, 12, 49, 9.5);
+      b.rampZ(9, 50, 11, 52, 9.5, 8);
+      b.plat(6, 53, 14, 55, 8); b.mat(6, 54, 14, 55, MAT.GOAL);
+  } },
+];
+
+function buildCourse(i) {
+  const def = COURSES[i];
+  const L = { i, name: def.name, w: def.w, d: def.d, time: def.time, pal: PAL[def.pal],
+    cells: new Array(def.w * def.d).fill(null), start: [0.5, 0.5], chasers: [], sweepers: [], clocks: [] };
+  const set = (x, z, c) => { if (x >= 0 && z >= 0 && x < L.w && z < L.d) L.cells[z * L.w + x] = c; };
+  const b = {
+    plat(x0, z0, x1, z1, h, mat = MAT.FLOOR) { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) set(x, z, { h: [h, h, h, h], mat }); },
+    rampZ(x0, z0, x1, z1, h0, h1) { const n = z1 - z0 + 1;
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+        const a = lerp(h0, h1, (z - z0) / n), c = lerp(h0, h1, (z - z0 + 1) / n); set(x, z, { h: [a, a, c, c], mat: MAT.RAMP }); } },
+    rampX(x0, z0, x1, z1, h0, h1) { const n = x1 - x0 + 1;
+      for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) {
+        const a = lerp(h0, h1, (x - x0) / n), c = lerp(h0, h1, (x - x0 + 1) / n); set(x, z, { h: [a, c, a, c], mat: MAT.RAMP }); } },
+    mat(x0, z0, x1, z1, m) { for (let z = z0; z <= z1; z++) for (let x = x0; x <= x1; x++) { const c = L.cells[z * L.w + x]; if (c) c.mat = m; } },
+    start(x, z) { L.start = [x + 0.5, z + 0.5]; const c = L.cells[z * L.w + x]; if (c) c.mat = MAT.START; },
+    chaser(x, z) { L.chasers.push([x + 0.5, z + 0.5]); },
+    clock(x, z) { L.clocks.push([x + 0.5, z + 0.5]); },
+    sweeper(ax, az, bx, bz, period, phase) { L.sweepers.push({ a: [ax, az], b: [bx, bz], period, phase }); },
+  };
+  def.build(b);
+  let lo = Infinity, hi = -Infinity;
+  for (const c of L.cells) if (c) for (const h of c.h) { lo = Math.min(lo, h); hi = Math.max(hi, h); }
+  L.minH = lo; L.maxH = hi;
+  return L;
+}
+function cellAt(L, x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z);
+  if (ix < 0 || iz < 0 || ix >= L.w || iz >= L.d) return null;
+  return L.cells[iz * L.w + ix];
+}
+function surf(L, x, z) {
+  const c = cellAt(L, x, z); if (!c) return -Infinity;
+  const fx = x - Math.floor(x), fz = z - Math.floor(z), h = c.h;
+  return lerp(lerp(h[0], h[1], fx), lerp(h[2], h[3], fx), fz);
+}
+function grad(L, x, z) {
+  const c = cellAt(L, x, z); if (!c) return [0, 0];
+  const fx = x - Math.floor(x), fz = z - Math.floor(z), h = c.h;
+  return [lerp(h[1] - h[0], h[3] - h[2], fz), lerp(h[2] - h[0], h[3] - h[1], fx)];
+}
+
+// --------------------------------------------------------------- meshes
+// Vertex: position(3) normal(3) colour(3) material(1) = 10 floats.
+function levelMesh(L) {
+  const v = [], BASE = L.minH - 9;
+  const P = L.pal;
+  const tier = (h) => { const t = (h - L.minH) / Math.max(1, L.maxH - L.minH); return [lerp(P.lo[0], P.hi[0], t), lerp(P.lo[1], P.hi[1], t), lerp(P.lo[2], P.hi[2], t)]; };
+  const push = (p, n, c, m) => v.push(p[0], p[1], p[2], n[0], n[1], n[2], c[0], c[1], c[2], m);
+  const quad = (a, b, c, d, n, col, m) => { push(a, n, col, m); push(b, n, col, m); push(c, n, col, m); push(a, n, col, m); push(c, n, col, m); push(d, n, col, m); };
+  const cell = (x, z) => (x < 0 || z < 0 || x >= L.w || z >= L.d) ? null : L.cells[z * L.w + x];
+  for (let z = 0; z < L.d; z++) for (let x = 0; x < L.w; x++) {
+    const c = cell(x, z); if (!c) continue;
+    const [h0, h1, h2, h3] = c.h;
+    const nw = [x, h0, z], ne = [x + 1, h1, z], sw = [x, h2, z + 1], se = [x + 1, h3, z + 1];
+    const n = norm3(cross3(sub3(sw, nw), sub3(ne, nw)));
+    const col = tier((h0 + h1 + h2 + h3) / 4);
+    quad(nw, ne, se, sw, n, col, c.mat);
+    const wc = col;
+    // east edge (x+1): ours ne,se vs neighbour's nw,sw
+    let nb = cell(x + 1, z), b0 = nb ? nb.h[0] : BASE, b1 = nb ? nb.h[2] : BASE;
+    if (h1 > b0 + 1e-4 || h3 > b1 + 1e-4) quad([x + 1, h1, z], [x + 1, h3, z + 1], [x + 1, Math.min(b1, h3), z + 1], [x + 1, Math.min(b0, h1), z], [1, 0, 0], wc, MAT.WALL);
+    nb = cell(x - 1, z); b0 = nb ? nb.h[1] : BASE; b1 = nb ? nb.h[3] : BASE;
+    if (h0 > b0 + 1e-4 || h2 > b1 + 1e-4) quad([x, h0, z], [x, h2, z + 1], [x, Math.min(b1, h2), z + 1], [x, Math.min(b0, h0), z], [-1, 0, 0], wc, MAT.WALL);
+    nb = cell(x, z + 1); b0 = nb ? nb.h[0] : BASE; b1 = nb ? nb.h[1] : BASE;
+    if (h2 > b0 + 1e-4 || h3 > b1 + 1e-4) quad([x, h2, z + 1], [x + 1, h3, z + 1], [x + 1, Math.min(b1, h3), z + 1], [x, Math.min(b0, h2), z + 1], [0, 0, 1], wc, MAT.WALL);
+    nb = cell(x, z - 1); b0 = nb ? nb.h[2] : BASE; b1 = nb ? nb.h[3] : BASE;
+    if (h0 > b0 + 1e-4 || h1 > b1 + 1e-4) quad([x, h0, z], [x + 1, h1, z], [x + 1, Math.min(b1, h1), z], [x, Math.min(b0, h0), z], [0, 0, -1], wc, MAT.WALL);
+  }
+  return new Float32Array(v);
+}
+function sphereMesh(seg = 28, rings = 18) {
+  const v = [], pt = (i, j) => { const th = j / rings * Math.PI, ph = i / seg * Math.PI * 2; return [Math.sin(th) * Math.cos(ph), Math.cos(th), Math.sin(th) * Math.sin(ph)]; };
+  const push = (p) => v.push(p[0], p[1], p[2], p[0], p[1], p[2], 1, 1, 1, 0);
+  for (let j = 0; j < rings; j++) for (let i = 0; i < seg; i++) {
+    const a = pt(i, j), b = pt(i + 1, j), c = pt(i + 1, j + 1), d = pt(i, j + 1);
+    push(a); push(b); push(c); push(a); push(c); push(d);
+  }
+  return new Float32Array(v);
+}
+function cubeMesh() {
+  const v = [], F = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  for (const n of F) {
+    const u = Math.abs(n[1]) > 0.5 ? [1, 0, 0] : [0, 1, 0], w = cross3(n, u);
+    const c = (s, t) => [n[0] + u[0] * s + w[0] * t, n[1] + u[1] * s + w[1] * t, n[2] + u[2] * s + w[2] * t];
+    const q = [c(-1, -1), c(1, -1), c(1, 1), c(-1, 1)];
+    for (const k of [0, 1, 2, 0, 2, 3]) v.push(...q[k], ...n, 1, 1, 1, 0);
+  }
+  return new Float32Array(v);
+}
+function octaMesh() {
+  const v = [], P = [[1, 0, 0], [-1, 0, 0], [0, 1, 0], [0, -1, 0], [0, 0, 1], [0, 0, -1]];
+  for (const sx of [0, 1]) for (const sy of [2, 3]) for (const sz of [4, 5]) {
+    const a = P[sx], b = P[sy], c = P[sz], n = norm3([a[0] + b[0] + c[0], a[1] + b[1] + c[1], a[2] + b[2] + c[2]]);
+    for (const p of [a, b, c]) v.push(...p, ...n, 1, 1, 1, 0);
+  }
+  return new Float32Array(v);
+}
+
+// --------------------------------------------------------------- shaders
+const WGSL = /* wgsl */`
+struct Frame {
+  vp: mat4x4f,
+  view: vec4f,    // xyz toward camera
+  light: vec4f,   // xyz toward light, w time
+  misc: vec4f,    // x lowest floor, y camera x, z camera z
+  line: vec4f,
+  bg: vec4f,
+  acc: vec4f,
+  bodies: array<vec4f, 8>,
+};
+struct Obj { model: mat4x4f, color: vec4f, params: vec4f };  // params: kind, flash, glow
+@group(0) @binding(0) var<uniform> F: Frame;
+@group(1) @binding(0) var<uniform> O: Obj;
+
+struct VO {
+  @builtin(position) pos: vec4f,
+  @location(0) w: vec3f,
+  @location(1) n: vec3f,
+  @location(2) c: vec4f,
+  @location(3) l: vec3f,
+};
+
+@vertex fn vs(@location(0) p: vec3f, @location(1) n: vec3f, @location(2) c: vec4f) -> VO {
+  var o: VO;
+  let w = O.model * vec4f(p, 1.0);
+  o.pos = F.vp * w;
+  o.w = w.xyz;
+  o.n = (O.model * vec4f(n, 0.0)).xyz;
+  o.c = c;
+  o.l = p;
+  return o;
+}
+
+fn sky(r: vec3f) -> vec3f {
+  let t = clamp(r.y, -1.0, 1.0);
+  var c = mix(F.acc.rgb * 0.55 + vec3f(0.12, 0.04, 0.1), vec3f(0.03, 0.05, 0.22), pow(max(t, 0.0), 0.6));
+  if (t < 0.0) {
+    let g = r.xz / max(-r.y, 0.08);
+    let e = abs(fract(g) - 0.5);
+    let ln = smoothstep(0.44, 0.5, max(e.x, e.y));
+    c = mix(vec3f(0.02, 0.01, 0.05), F.line.rgb, ln * 0.7 * min(-t * 3.0, 1.0));
+  }
+  let sun = smoothstep(0.990, 0.998, dot(r, normalize(F.light.xyz)));
+  return c + vec3f(1.0, 0.85, 0.75) * sun * 2.0;
+}
+
+fn shadow(w: vec3f) -> f32 {
+  var s = 1.0;
+  for (var i = 0; i < 8; i++) {
+    let b = F.bodies[i];
+    if (b.w <= 0.0) { continue; }
+    let dy = b.y - w.y;
+    if (dy < -0.05) { continue; }
+    let d = distance(b.xz, w.xz);
+    let k = (1.0 - smoothstep(b.w * 0.3, b.w * 1.35, d)) * clamp(1.0 - dy / 8.0, 0.0, 1.0);
+    s *= 1.0 - 0.7 * k;
+  }
+  return s;
+}
+
+fn shadeLevel(i: VO, N: vec3f) -> vec3f {
+  let t = F.light.w;
+  let mid = i32(round(i.c.a));
+  let L = normalize(F.light.xyz);
+  let V = normalize(F.view.xyz);
+  var base = i.c.rgb;
+  var emit = vec3f(0.0);
+  if (N.y > 0.4) {
+    let f = fract(i.w.xz);
+    let e = abs(f - 0.5);
+    let ln = smoothstep(0.455, 0.492, max(e.x, e.y));
+    let chk = f32((i32(floor(i.w.x)) + i32(floor(i.w.z))) & 1);
+    base = base * (0.9 + 0.1 * chk);
+    emit += F.line.rgb * ln * 0.6;
+    if (mid == 1) {
+      let s = step(0.5, fract((i.w.x - i.w.z) * 2.0));
+      base *= 0.86 + 0.14 * s;
+    } else if (mid == 2) {
+      let wv = sin(t * 3.0 + i.w.x * 5.0 + sin(i.w.z * 4.0 + t * 2.0) * 2.0);
+      base = mix(vec3f(0.06, 0.3, 0.02), vec3f(0.55, 1.0, 0.15), 0.5 + 0.5 * wv);
+      emit += base * 0.55;
+    } else if (mid == 3) {
+      let q = (i32(floor(i.w.x * 3.0)) + i32(floor(i.w.z * 3.0)) + i32(floor(t * 2.5))) & 1;
+      base = select(vec3f(0.06), vec3f(1.0), q == 1);
+      emit += base * 0.35 + F.acc.rgb * 0.18;
+    } else if (mid >= 4 && mid <= 7) {
+      let u = f - vec2f(0.5);
+      var a = u.x; var b = u.y;
+      if (mid == 5) { a = -u.x; }
+      if (mid == 6) { a = u.y; b = u.x; }
+      if (mid == 7) { a = -u.y; b = u.x; }
+      let s = fract((a - abs(b)) * 2.5 - t * 2.5);
+      let arrow = smoothstep(0.0, 0.08, s) * (1.0 - smoothstep(0.32, 0.42, s)) * (1.0 - step(0.4, abs(b)));
+      base *= 0.45;
+      emit += vec3f(1.0, 0.82, 0.25) * arrow * 1.1;
+    } else if (mid == 10) {
+      base = mix(base, vec3f(0.72, 0.9, 1.0), 0.7);
+      let R = reflect(-V, N);
+      emit += sky(R) * 0.25 + vec3f(pow(max(dot(R, L), 0.0), 24.0)) * 0.5;
+    } else if (mid == 11) {
+      let d = length(f - 0.5);
+      emit += F.acc.rgb * (1.0 - smoothstep(0.0, 0.05, abs(d - 0.3))) * (0.6 + 0.4 * sin(t * 4.0));
+    }
+  } else {
+    base *= 0.6;
+    let fy = fract(i.w.y * 2.0);
+    let band = 1.0 - smoothstep(0.0, 0.07, min(fy, 1.0 - fy));
+    emit += F.line.rgb * band * 0.22;
+    let fx = fract(i.w.x + i.w.z);
+    emit += F.line.rgb * (1.0 - smoothstep(0.0, 0.04, min(fx, 1.0 - fx))) * 0.12;
+  }
+  var col = base * (0.3 + 0.7 * max(dot(N, L), 0.0));
+  if (N.y > 0.4) { col *= shadow(i.w); }
+  return col + emit;
+}
+
+fn shadeObj(i: VO, N: vec3f) -> vec3f {
+  let kind = i32(round(O.params.x));
+  let V = normalize(F.view.xyz);
+  let L = normalize(F.light.xyz);
+  let R = reflect(-V, N);
+  let fres = pow(1.0 - max(dot(N, V), 0.0), 3.0);
+  let diff = max(dot(N, L), 0.0);
+  let spec = pow(max(dot(R, L), 0.0), 90.0);
+  let base = O.color.rgb;
+  let lp = normalize(i.l);
+  if (kind == 1) {
+    let b1 = 1.0 - smoothstep(0.09, 0.15, abs(lp.y));
+    let b2 = 1.0 - smoothstep(0.09, 0.15, abs(lp.x));
+    var c = base * (0.25 + 0.75 * diff);
+    c = mix(c, vec3f(1.0, 0.95, 1.0), max(b1, b2 * 0.6) * 0.85);
+    c = mix(c, sky(R), 0.28 + 0.6 * fres);
+    return c + vec3f(spec * 1.6) + vec3f(O.params.y);
+  }
+  if (kind == 2) {
+    let slit = (1.0 - smoothstep(0.06, 0.13, abs(lp.y))) * step(0.0, lp.z);
+    var c = vec3f(0.02, 0.01, 0.03) + sky(R) * (0.12 + 0.55 * fres);
+    return c + base * (fres * 1.6 + slit * 2.2) + vec3f(spec);
+  }
+  if (kind == 3) {
+    let s = step(0.5, fract((i.l.x + i.l.y + i.l.z) * 1.5));
+    let c = mix(vec3f(0.05, 0.03, 0.02), base, s) * (0.35 + 0.65 * diff);
+    return c + base * 0.25 + vec3f(spec * 0.5);
+  }
+  return base * (0.3 + 0.7 * diff) + base * O.params.z + vec3f(spec * 0.6) + fres * base * 0.6;
+}
+
+@fragment fn fs(i: VO) -> @location(0) vec4f {
+  let N = normalize(i.n);
+  var c: vec3f;
+  if (O.params.x < 0.5) { c = shadeLevel(i, N); } else { c = shadeObj(i, N); }
+  let fog = clamp((F.misc.x - 0.3 - i.w.y) / 6.0, 0.0, 1.0);
+  c = mix(c, F.bg.rgb, fog);
+  c = c / (1.0 + c * 0.12);
+  return vec4f(c, 1.0);
+}
+
+struct BO { @builtin(position) pos: vec4f, @location(0) uv: vec2f };
+@vertex fn bvs(@builtin(vertex_index) vi: u32) -> BO {
+  var p = array<vec2f, 3>(vec2f(-1.0, -1.0), vec2f(3.0, -1.0), vec2f(-1.0, 3.0));
+  var o: BO;
+  o.pos = vec4f(p[vi], 0.0, 1.0);
+  o.uv = p[vi] * 0.5 + 0.5;
+  return o;
+}
+@fragment fn bfs(b: BO) -> @location(0) vec4f {
+  let uv = b.uv;
+  var c = mix(F.bg.rgb * 1.6 + F.acc.rgb * 0.05, F.bg.rgb * 0.45, uv.y);
+  let cam = vec2f(F.misc.y - F.misc.z, F.misc.y + F.misc.z) * 6.0;
+  let p = floor((b.pos.xy + cam) / 3.0);
+  let h = fract(sin(dot(p, vec2f(12.9898, 78.233))) * 43758.5453);
+  let tw = 0.55 + 0.45 * sin(F.light.w * 2.0 + h * 60.0);
+  c += vec3f(step(0.9965, h) * tw * 0.75 * (0.3 + uv.y));
+  c += F.acc.rgb * 0.10 * exp(-abs(uv.y - 0.22) * 7.0);
+  return vec4f(c, 1.0);
+}
+`;
+
+// --------------------------------------------------------------- renderer
+const MAXOBJ = 64, SLOT = 256;
+const GFX = { ok: false };
+async function initGPU(canvas) {
+  if (!navigator.gpu) throw new Error('This browser has no WebGPU.');
+  const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+  if (!adapter) throw new Error('WebGPU is present but no GPU adapter was offered.');
+  const device = await adapter.requestDevice();
+  const ctx = canvas.getContext('webgpu');
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  ctx.configure({ device, format, alphaMode: 'opaque' });
+  device.lost.then((info) => { GFX.ok = false; console.error('GPU device lost', info.message); showGpuProblem('The GPU stopped responding (' + (info.message || info.reason) + '). Reload the page to play again.'); });
+  const module = device.createShaderModule({ code: WGSL });
+  const info = await module.getCompilationInfo();
+  for (const m of info.messages) if (m.type === 'error') throw new Error('Shader error line ' + m.lineNum + ': ' + m.message);
+  const bgl0 = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform' } }] });
+  const bgl1 = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: 'uniform', hasDynamicOffset: true, minBindingSize: 96 } }] });
+  const frameBuf = device.createBuffer({ size: 288, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const objBuf = device.createBuffer({ size: SLOT * MAXOBJ, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const bg0 = device.createBindGroup({ layout: bgl0, entries: [{ binding: 0, resource: { buffer: frameBuf } }] });
+  const bg1 = device.createBindGroup({ layout: bgl1, entries: [{ binding: 0, resource: { buffer: objBuf, size: 96 } }] });
+  const ms = { count: 4 };
+  const main = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bgl0, bgl1] }),
+    vertex: { module, entryPoint: 'vs', buffers: [{ arrayStride: 40, attributes: [
+      { shaderLocation: 0, offset: 0, format: 'float32x3' }, { shaderLocation: 1, offset: 12, format: 'float32x3' }, { shaderLocation: 2, offset: 24, format: 'float32x4' }] }] },
+    fragment: { module, entryPoint: 'fs', targets: [{ format }] },
+    primitive: { topology: 'triangle-list', cullMode: 'none' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: true, depthCompare: 'less' },
+    multisample: ms,
+  });
+  const back = device.createRenderPipeline({
+    layout: device.createPipelineLayout({ bindGroupLayouts: [bgl0] }),
+    vertex: { module, entryPoint: 'bvs' },
+    fragment: { module, entryPoint: 'bfs', targets: [{ format }] },
+    primitive: { topology: 'triangle-list' },
+    depthStencil: { format: 'depth24plus', depthWriteEnabled: false, depthCompare: 'always' },
+    multisample: ms,
+  });
+  const mk = (arr) => { const b = device.createBuffer({ size: arr.byteLength, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST }); device.queue.writeBuffer(b, 0, arr); return { buf: b, n: arr.length / 10 }; };
+  Object.assign(GFX, { ok: true, device, ctx, format, main, back, frameBuf, objBuf, bg0, bg1, mk,
+    meshes: { sphere: mk(sphereMesh()), cube: mk(cubeMesh()), octa: mk(octaMesh()) },
+    level: null, frame: new Float32Array(72), objs: new Float32Array(SLOT / 4 * MAXOBJ), msaa: null, depth: null, size: [0, 0] });
+}
+function gpuLevel(L) { if (!GFX.ok) return; if (GFX.level) GFX.level.buf.destroy(); GFX.level = GFX.mk(levelMesh(L)); }
+function resizeTargets(w, h) {
+  if (GFX.size[0] === w && GFX.size[1] === h) return;
+  GFX.size = [w, h];
+  if (GFX.msaa) { GFX.msaa.destroy(); GFX.depth.destroy(); }
+  GFX.msaa = GFX.device.createTexture({ size: [w, h], sampleCount: 4, format: GFX.format, usage: GPUTextureUsage.RENDER_ATTACHMENT });
+  GFX.depth = GFX.device.createTexture({ size: [w, h], sampleCount: 4, format: 'depth24plus', usage: GPUTextureUsage.RENDER_ATTACHMENT });
+}
+function draw(scene) {
+  if (!GFX.ok) return;
+  const cv = GFX.ctx.canvas, dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const w = Math.max(1, Math.round(cv.clientWidth * dpr)), h = Math.max(1, Math.round(cv.clientHeight * dpr));
+  if (cv.width !== w || cv.height !== h) { cv.width = w; cv.height = h; }
+  resizeTargets(w, h);
+  const L = scene.L, P = L.pal, aspect = w / h;
+  const hh = Math.max(6.4, 5.4 / aspect), hw = hh * aspect;
+  const tgt = scene.cam, eye = [tgt[0] + 30, tgt[1] + 31.5, tgt[2] + 30];
+  const vp = mat4mul(ortho(-hw, hw, -hh, hh, 1, 140), lookAt(eye, tgt, [0, 1, 0]));
+  const f = GFX.frame; f.fill(0); f.set(vp, 0);
+  f.set(norm3([1, 1.05, 1]), 16); f.set(norm3([0.3, 1.0, 0.62]), 20); f[23] = scene.t;
+  f[24] = L.minH; f[25] = tgt[0]; f[26] = tgt[2];
+  f.set(P.line, 28); f.set(P.bg, 32); f.set(P.acc, 36);
+  scene.bodies.slice(0, 8).forEach((b, k) => { f.set([b[0], b[1], b[2], b[3]], 40 + k * 4); });
+  GFX.device.queue.writeBuffer(GFX.frameBuf, 0, f);
+  const o = GFX.objs, S = SLOT / 4;
+  o.fill(0); o[0] = o[5] = o[10] = o[15] = 1; o[16] = o[17] = o[18] = o[19] = 1;
+  const list = scene.objs.slice(0, MAXOBJ - 1);
+  list.forEach((ob, k) => {
+    const base = (k + 1) * S, R = ob.R || m3id(), s = ob.s;
+    o.set([R[0] * s, R[1] * s, R[2] * s, 0, R[3] * s, R[4] * s, R[5] * s, 0, R[6] * s, R[7] * s, R[8] * s, 0, ob.p[0], ob.p[1], ob.p[2], 1], base);
+    o.set([ob.c[0], ob.c[1], ob.c[2], 1, ob.kind, ob.flash || 0, ob.glow || 0, 0], base + 16);
+  });
+  GFX.device.queue.writeBuffer(GFX.objBuf, 0, o, 0, S * (list.length + 1));
+  const enc = GFX.device.createCommandEncoder();
+  const pass = enc.beginRenderPass({
+    colorAttachments: [{ view: GFX.msaa.createView(), resolveTarget: GFX.ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'discard', clearValue: { r: P.bg[0], g: P.bg[1], b: P.bg[2], a: 1 } }],
+    depthStencilAttachment: { view: GFX.depth.createView(), depthClearValue: 1, depthLoadOp: 'clear', depthStoreOp: 'discard' },
+  });
+  pass.setPipeline(GFX.back); pass.setBindGroup(0, GFX.bg0); pass.draw(3);
+  pass.setPipeline(GFX.main); pass.setBindGroup(0, GFX.bg0);
+  if (GFX.level) { pass.setBindGroup(1, GFX.bg1, [0]); pass.setVertexBuffer(0, GFX.level.buf); pass.draw(GFX.level.n); }
+  list.forEach((ob, k) => { const m = GFX.meshes[ob.mesh]; pass.setBindGroup(1, GFX.bg1, [(k + 1) * SLOT]); pass.setVertexBuffer(0, m.buf); pass.draw(m.n); });
+  pass.end();
+  GFX.device.queue.submit([enc.finish()]);
+}
+
+// --------------------------------------------------------------- audio
+const NOTE_RE = /^([A-G])(#?)(\d)$/;
+const PC = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
+const midiOf = (s) => { const m = NOTE_RE.exec(s); return m ? 12 * (+m[3] + 1) + PC[m[1]] + (m[2] ? 1 : 0) : null; };
+const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+const CHORD = { Am: [9, 3], F: [5, 4], C: [0, 4], G: [7, 4], Em: [4, 3], E: [4, 4], Dm: [2, 3] };
+const SECTIONS = {
+  intro: { chords: ['Am', 'F', 'G', 'Em'], arp: 1, drums: ['..h...h...h...h.', '..h...h...h...h.', 'k.h...h.k.h...h.', 'k.h.k.h.s.s.ssss'], lead: null },
+  verse: { chords: ['Am', 'F', 'C', 'G', 'Am', 'F', 'C', 'E'], arp: 0.6,
+    drums: ['k.h.s.h.k.khs.h.', 'k.h.s.h.k.khs.h.', 'k.h.s.h.k.khs.h.', 'k.h.s.h.k.khs.ho', 'k.h.s.h.k.khs.h.', 'k.h.s.h.k.khs.h.', 'k.h.s.h.k.khs.h.', 'k.h.s.h.s.s.ssss'],
+    lead: ['E5 - - - A5 - G5 - E5 - - - C5 - D5 -', 'C5 - - - A4 - - - C5 - F5 - E5 - C5 -', 'E5 - - - G5 - - - E5 - D5 - C5 - - -', 'D5 - - - B4 - - - G4 - - - B4 - D5 -',
+           'E5 - - - A5 - B5 - C6 - B5 - A5 - G5 -', 'A5 - - - F5 - - - C5 - F5 - A5 - C6 -', 'B5 - - - G5 - - - E5 - G5 - C6 - B5 -', 'B5 - - - G#5 - - - E5 - - - B4 - - -'] },
+  bridge: { chords: ['Dm', 'Am', 'F', 'E'], arp: 0.8, drums: ['k...s...k.k.s...', 'k...s...k.k.s...', 'k...s...k.k.s...', 'k.k.s.k.s.s.ssss'],
+    lead: ['D5 - - - - - - - F5 - - - A5 - - -', 'C6 - - - - - - - B5 - A5 - G5 - E5 -', 'A5 - - - - - - - G5 - F5 - E5 - C5 -', 'E5 - - - G#5 - - - B5 - - - E6 - - -'] },
+};
+const SONG = (() => { // flatten intro, verse, bridge, verse into 16th-note steps
+  const steps = [];
+  for (const name of ['intro', 'verse', 'bridge', 'verse']) {
+    const s = SECTIONS[name];
+    s.chords.forEach((ch, bar) => {
+      const lead = s.lead ? s.lead[bar].split(/\s+/) : null;
+      if (lead && lead.length !== 16) console.warn('bar length', name, bar, lead.length);
+      for (let k = 0; k < 16; k++) steps.push({ ch, k, arp: s.arp, drum: s.drums[bar][k], lead: lead ? lead[k] : '.' });
+    });
+  }
+  steps.forEach((st, i) => { // how many 16ths each lead note lasts
+    if (midiOf(st.lead) == null) return;
+    let n = 1; while (steps[(i + n) % steps.length].lead === '-') n++;
+    st.len = n;
+  });
+  return steps;
+})();
+
+const Chip = {
+  ctx: null, musicOn: true, bpm: 138, step: 0, next: 0, timer: null, rollG: null, rollF: null,
+  init() {
+    if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+    const c = this.ctx = new AC();
+    const out = c.createGain(); out.gain.value = 0.9;
+    const lp = c.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 7800; lp.Q.value = 0.4; // a 1984 TV speaker
+    const comp = c.createDynamicsCompressor(); comp.threshold.value = -16; comp.ratio.value = 4;
+    out.connect(lp); lp.connect(comp); comp.connect(c.destination);
+    this.music = c.createGain(); this.music.gain.value = this.musicOn ? 0.3 : 0; this.music.connect(out);
+    this.sfx = c.createGain(); this.sfx.gain.value = 0.65; this.sfx.connect(out);
+    const pulse = (duty) => { const n = 40, re = new Float32Array(n), im = new Float32Array(n);
+      for (let k = 1; k < n; k++) { re[k] = Math.sin(2 * Math.PI * k * duty) / (Math.PI * k); im[k] = (1 - Math.cos(2 * Math.PI * k * duty)) / (Math.PI * k); }
+      return c.createPeriodicWave(re, im); };
+    this.p25 = pulse(0.25); this.p12 = pulse(0.125); this.p50 = pulse(0.5);
+    // noise channel: a held-sample random stream, like a polynomial counter clocked low
+    const nb = c.createBuffer(1, c.sampleRate * 2, c.sampleRate), d = nb.getChannelData(0);
+    let v = 0; for (let i = 0; i < d.length; i++) { if (i % 3 === 0) v = Math.random() < 0.5 ? -1 : 1; d[i] = v; }
+    this.noiseBuf = nb;
+    // rolling rumble: looped noise through a band-pass whose level follows the marble's speed
+    const rs = c.createBufferSource(); rs.buffer = nb; rs.loop = true;
+    this.rollF = c.createBiquadFilter(); this.rollF.type = 'bandpass'; this.rollF.frequency.value = 200; this.rollF.Q.value = 1.2;
+    this.rollG = c.createGain(); this.rollG.gain.value = 0;
+    rs.connect(this.rollF); this.rollF.connect(this.rollG); this.rollG.connect(this.sfx); rs.start();
+    this.startMusic();
+  },
+  tone(wave, freq, t, dur, vol, dest, o = {}) {
+    const c = this.ctx, osc = c.createOscillator(), g = c.createGain();
+    if (typeof wave === 'string') osc.type = wave; else osc.setPeriodicWave(wave);
+    osc.frequency.setValueAtTime(freq, t);
+    if (o.to) osc.frequency.exponentialRampToValueAtTime(o.to, t + (o.slide || dur));
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(vol, t + 0.004);
+    g.gain.setTargetAtTime(vol * (o.sus ?? 0.7), t + 0.01, o.decay ?? 0.08);
+    g.gain.setTargetAtTime(0.0001, t + dur, 0.025);
+    if (o.vib) { const l = c.createOscillator(), lg = c.createGain(); l.frequency.value = 5.6; lg.gain.setValueAtTime(0, t); lg.gain.linearRampToValueAtTime(o.vib, t + Math.min(dur, 0.35));
+      l.connect(lg); lg.connect(osc.detune); l.start(t); l.stop(t + dur + 0.2); }
+    osc.connect(g); g.connect(dest); osc.start(t); osc.stop(t + dur + 0.2);
+  },
+  noise(t, dur, vol, type, freq, dest, q = 0.7) {
+    const c = this.ctx, s = c.createBufferSource(), f = c.createBiquadFilter(), g = c.createGain();
+    s.buffer = this.noiseBuf; s.playbackRate.value = 1; f.type = type; f.frequency.value = freq; f.Q.value = q;
+    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(f); f.connect(g); g.connect(dest); s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.05);
+  },
+  startMusic() {
+    if (this.timer) return;
+    this.step = 0; this.next = this.ctx.currentTime + 0.08;
+    this.timer = setInterval(() => this.pump(), 25);
+  },
+  pump() {
+    const c = this.ctx; if (!c || c.state !== 'running') return;
+    if (this.next < c.currentTime - 0.2) this.next = c.currentTime + 0.02; // after a stall, skip ahead
+    while (this.next < c.currentTime + 0.12) {
+      const dt = 60 / this.bpm / 4;
+      this.play(SONG[this.step % SONG.length], this.next, dt);
+      this.next += dt; this.step++;
+    }
+  },
+  play(st, t, dt) {
+    const m = this.music, [root, third] = CHORD[st.ch];
+    if (st.k % 2 === 0) { // triangle bass, octave-pumping eighths
+      const b = 45 + ((root - 9 + 12) % 12) + (st.k % 4 === 2 ? 12 : 0);
+      this.tone('triangle', mtof(b), t, dt * 1.7, 0.42, m, { sus: 0.85, decay: 0.2 });
+    }
+    if (st.arp) { // 12.5% pulse arpeggio
+      const r = 57 + ((root - 9 + 12) % 12), tones = [0, third, 7, 12, 7, third];
+      this.tone(this.p12, mtof(r + tones[st.k % 6]), t, dt * 0.85, 0.055 * st.arp, m, { sus: 0.5, decay: 0.05 });
+    }
+    const n = midiOf(st.lead);
+    if (n != null) this.tone(this.p25, mtof(n), t, dt * st.len * 0.94, 0.11, m, { sus: 0.75, decay: 0.12, vib: st.len >= 4 ? 14 : 0 });
+    switch (st.drum) {
+      case 'k': this.tone('sine', 150, t, 0.13, 0.75, m, { to: 42, slide: 0.12, sus: 0.6, decay: 0.06 }); break;
+      case 's': this.noise(t, 0.16, 0.42, 'bandpass', 1900, m, 0.6); this.tone('triangle', 220, t, 0.05, 0.25, m, { to: 120, slide: 0.05 }); break;
+      case 'h': this.noise(t, 0.035, 0.16, 'highpass', 7000, m); break;
+      case 'o': this.noise(t, 0.22, 0.13, 'highpass', 6000, m); break;
+    }
+  },
+  setMusic(on) { this.musicOn = on; if (this.music) this.music.gain.setTargetAtTime(on ? 0.3 : 0, this.ctx.currentTime, 0.05); },
+  now() { return this.ctx ? this.ctx.currentTime : 0; },
+  ok() { return this.ctx && this.ctx.state === 'running'; },
+  roll(speed, grounded) {
+    if (!this.ok()) return;
+    const t = this.ctx.currentTime, s = clamp(speed / 11, 0, 1);
+    this.rollG.gain.setTargetAtTime(grounded ? s * 0.22 : 0, t, 0.05);
+    this.rollF.frequency.setTargetAtTime(120 + s * 520, t, 0.08);
+  },
+  bump(mag) { if (!this.ok()) return; const t = this.now(), v = clamp(mag / 8, 0.1, 1);
+    this.tone(this.p50, 180 + 140 * v, t, 0.06, 0.18 * v, this.sfx, { to: 70, slide: 0.06 }); this.noise(t, 0.06, 0.15 * v, 'lowpass', 900, this.sfx); },
+  land(mag) { if (!this.ok()) return; const t = this.now(); this.tone('triangle', 110, t, 0.09, clamp(mag / 10, 0.1, 0.6), this.sfx, { to: 50, slide: 0.08 }); },
+  whistle() { if (!this.ok()) return; const t = this.now(); this.tone(this.p50, 1400, t, 1.1, 0.07, this.sfx, { to: 160, slide: 1.1, sus: 1 }); },
+  shatter() { if (!this.ok()) return; const t = this.now();
+    this.noise(t, 0.5, 0.5, 'highpass', 2500, this.sfx); this.noise(t, 0.25, 0.4, 'lowpass', 600, this.sfx);
+    [0, 0.06, 0.12, 0.18].forEach((d, i) => this.tone(this.p12, 1800 - i * 330, t + d, 0.05, 0.08, this.sfx)); },
+  dissolve() { if (!this.ok()) return; const t = this.now(); for (let i = 0; i < 6; i++) this.tone(this.p25, 300 - i * 30, t + i * 0.07, 0.06, 0.07, this.sfx, { to: 200 - i * 20 }); this.noise(t, 0.6, 0.2, 'bandpass', 3000, this.sfx, 3); },
+  clock() { if (!this.ok()) return; const t = this.now(); [76, 81, 88].forEach((n, i) => this.tone(this.p25, mtof(n), t + i * 0.06, 0.07, 0.1, this.sfx)); },
+  boost() { if (!this.ok()) return; const t = this.now(); this.tone(this.p50, 300, t, 0.18, 0.07, this.sfx, { to: 900, slide: 0.18 }); },
+  tick() { if (!this.ok()) return; this.tone(this.p50, 1760, this.now(), 0.03, 0.06, this.sfx); },
+  ready() { if (!this.ok()) return; const t = this.now(); [0, 0.45, 0.9].forEach((d) => this.tone(this.p50, 660, t + d, 0.12, 0.09, this.sfx)); this.tone(this.p50, 1320, t + 1.35, 0.3, 0.1, this.sfx); },
+  goal() { if (!this.ok()) return; const t = this.now(); [72, 76, 79, 84, 79, 84, 88].forEach((n, i) => this.tone(this.p25, mtof(n), t + i * 0.09, i === 6 ? 0.5 : 0.08, 0.12, this.sfx, { vib: i === 6 ? 20 : 0 })); },
+  over() { if (!this.ok()) return; const t = this.now(); [69, 65, 62, 57].forEach((n, i) => this.tone(this.p25, mtof(n), t + i * 0.22, 0.2, 0.12, this.sfx, { vib: 25 })); },
+};
+
+// --------------------------------------------------------------- input
+const Input = { keys: new Set(), joy: null, pad: [0, 0], tilt: { on: false, raw: null, base: null } };
+addEventListener('keydown', (e) => {
+  if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', ' '].includes(e.key)) e.preventDefault();
+  Input.keys.add(e.key.toLowerCase());
+  if (e.repeat) return;
+  const k = e.key.toLowerCase();
+  if ((k === 'enter' || k === ' ') && (Game.state === 'title' || Game.state === 'over' || Game.state === 'win')) onStart();
+  else if (k === 'p' || k === 'escape') togglePause();
+  else if (k === 'm') toggleMusic();
+  else if (k === 'c') calibrate();
+});
+addEventListener('keyup', (e) => Input.keys.delete(e.key.toLowerCase()));
+addEventListener('blur', () => Input.keys.clear());
+function deviceDownhill(beta, gamma) { // gravity's direction across the screen plane, device axes (x right, y toward top edge)
+  const b = beta * Math.PI / 180, g = gamma * Math.PI / 180;
+  return [Math.cos(b) * Math.sin(g), -Math.sin(b)];
+}
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  const t = Input.tilt; t.raw = deviceDownhill(e.beta, e.gamma);
+  if (!t.on) { t.on = true; t.base = t.raw.slice(); $('#tiltFlag').hidden = false; $('#calBtn').hidden = false; }
+}
+function calibrate() { const t = Input.tilt; if (t.raw) t.base = t.raw.slice(); }
+function tiltVector() {
+  const t = Input.tilt; if (!t.on || !t.raw) return [0, 0];
+  const gx = t.raw[0] - t.base[0], gy = t.raw[1] - t.base[1];
+  const ang = ((screen.orientation && screen.orientation.angle) ?? window.orientation ?? 0) * Math.PI / 180;
+  const sx = gx * Math.cos(ang) + gy * Math.sin(ang), sy = -gx * Math.sin(ang) + gy * Math.cos(ang);
+  const SENS = 0.27; // about 16 degrees of tilt is full throttle
+  const dz = (v) => Math.abs(v) < 0.025 ? 0 : v;
+  return [clamp(dz(sx) / SENS, -1, 1), clamp(dz(sy) / SENS, -1, 1)]; // screen-up positive
+}
+const canvas = $('#view'), joyEl = $('#joy');
+canvas.addEventListener('pointerdown', (e) => {
+  if (Game.state === 'title') return;
+  canvas.setPointerCapture(e.pointerId);
+  Input.joy = { id: e.pointerId, x0: e.clientX, y0: e.clientY, v: [0, 0] };
+  joyEl.style.left = e.clientX + 'px'; joyEl.style.top = e.clientY + 'px'; joyEl.style.setProperty('--jx', '0px'); joyEl.style.setProperty('--jy', '0px'); joyEl.hidden = false;
+});
+canvas.addEventListener('pointermove', (e) => {
+  const j = Input.joy; if (!j || j.id !== e.pointerId) return;
+  let dx = (e.clientX - j.x0) / 55, dy = (e.clientY - j.y0) / 55; const l = Math.hypot(dx, dy); if (l > 1) { dx /= l; dy /= l; }
+  j.v = [dx, -dy];
+  joyEl.style.setProperty('--jx', dx * 42 + 'px'); joyEl.style.setProperty('--jy', dy * 42 + 'px');
+});
+const joyEnd = (e) => { if (Input.joy && Input.joy.id === e.pointerId) { Input.joy = null; joyEl.hidden = true; } };
+canvas.addEventListener('pointerup', joyEnd); canvas.addEventListener('pointercancel', joyEnd);
+let padStartHeld = false;
+function pollPad() {
+  Input.pad = [0, 0];
+  const pads = navigator.getGamepads ? navigator.getGamepads() : [];
+  for (const p of pads) {
+    if (!p) continue;
+    const ax = p.axes[0] || 0, ay = p.axes[1] || 0;
+    Input.pad = [Math.abs(ax) > 0.12 ? ax : 0, Math.abs(ay) > 0.12 ? -ay : 0];
+    const st = p.buttons[9] && p.buttons[9].pressed, a = p.buttons[0] && p.buttons[0].pressed;
+    if ((st || a) && !padStartHeld) { if (Game.state === 'title' || Game.state === 'over' || Game.state === 'win') onStart(); else if (st) togglePause(); }
+    padStartHeld = st || a;
+    break;
+  }
+}
+function readInput() { // returns world-space push on the floor plane (x, z)
+  let sx = 0, sy = 0; const k = Input.keys;
+  if (k.has('arrowleft') || k.has('a')) sx -= 1;
+  if (k.has('arrowright') || k.has('d')) sx += 1;
+  if (k.has('arrowup') || k.has('w')) sy += 1;
+  if (k.has('arrowdown') || k.has('s')) sy -= 1;
+  if (Input.joy) { sx += Input.joy.v[0]; sy += Input.joy.v[1]; }
+  sx += Input.pad[0]; sy += Input.pad[1];
+  const tv = tiltVector(); sx += tv[0]; sy += tv[1];
+  const l = Math.hypot(sx, sy); if (l > 1) { sx /= l; sy /= l; }
+  // camera looks along (-1,-1.05,-1): screen right is (1,0,-1)/√2 and screen up is (-1,0,-1)/√2 on the floor
+  const r = Math.SQRT1_2;
+  return [(sx - sy) * r, (-sx - sy) * r];
+}
+
+// --------------------------------------------------------------- physics
+const GRAV = 22, ACC = 12.5, MAXV = 11.5, LETHAL = 2.4, STEP = 0.25, R_PLAYER = 0.32, R_CHASER = 0.3, R_SWEEP = 0.42;
+function mkBody(L, x, z, r) { return { p: [x, surf(L, x, z), z], v: [0, 0, 0], r, grounded: true, airY: 0, R: m3id(), home: [x, z], dead: 0 }; }
+function stepBody(L, b, ix, iz, dt, ctrl, ev) {
+  const cell = cellAt(L, b.p[0], b.p[2]), mat = cell ? cell.mat : -1;
+  let ax = 0, az = 0;
+  if (b.grounded && cell) {
+    const g = grad(L, b.p[0], b.p[2]), k = GRAV / (1 + g[0] * g[0] + g[1] * g[1]);
+    ax -= g[0] * k; az -= g[1] * k;
+  }
+  const grip = b.grounded ? (mat === MAT.ICE ? 0.3 : 1) : 0.22;
+  ax += ix * ACC * ctrl * grip; az += iz * ACC * ctrl * grip;
+  if (b.grounded && mat >= 4 && mat <= 7) {
+    const B = 10; if (mat === MAT.BXP) ax += B; else if (mat === MAT.BXN) ax -= B; else if (mat === MAT.BZP) az += B; else az -= B;
+    ev.boost = true;
+  }
+  b.v[0] += ax * dt; b.v[2] += az * dt;
+  if (b.grounded) { const damp = Math.exp(-(mat === MAT.ICE ? 0.05 : 0.85) * dt); b.v[0] *= damp; b.v[2] *= damp; }
+  const sp = Math.hypot(b.v[0], b.v[2]), cap = b.maxv || MAXV;
+  if (sp > cap) { b.v[0] *= cap / sp; b.v[2] *= cap / sp; }
+  // horizontal moves, one axis at a time, with a wall test at the leading edge
+  for (const ax2 of [0, 2]) {
+    const vel = b.v[ax2]; if (vel === 0) continue;
+    const np = b.p.slice(); np[ax2] += vel * dt;
+    const probe = np.slice(); probe[ax2] += Math.sign(vel) * b.r * 0.75;
+    if (surf(L, probe[0], probe[2]) > b.p[1] + STEP) { ev.bump = Math.max(ev.bump || 0, Math.abs(vel)); b.v[ax2] = -vel * 0.4; }
+    else b.p[ax2] = np[ax2];
+  }
+  const ground = surf(L, b.p[0], b.p[2]);
+  if (b.grounded) {
+    if (ground > -1e9 && ground >= b.p[1] - 0.15) { b.p[1] = ground; b.v[1] = 0; }
+    else { b.grounded = false; b.airY = b.p[1]; b.v[1] = 0; }
+  }
+  if (!b.grounded) {
+    b.v[1] -= GRAV * dt; b.p[1] += b.v[1] * dt; b.airY = Math.max(b.airY, b.p[1]);
+    if (ground > -1e9 && b.p[1] <= ground && b.p[1] > ground - 0.6) {
+      const drop = b.airY - ground; b.p[1] = ground; ev.land = Math.max(ev.land || 0, drop);
+      ev.impact = Math.max(ev.impact || 0, -b.v[1]);
+      if (b.v[1] < -4) { b.v[1] = -b.v[1] * 0.28; b.airY = ground; } else { b.v[1] = 0; b.grounded = true; }
+    }
+  }
+  // rolling: angular velocity = up × v / r
+  const s2 = Math.hypot(b.v[0], b.v[2]);
+  if (s2 > 1e-4) b.R = m3mul(m3axis(b.v[2] / s2, 0, -b.v[0] / s2, s2 * dt / b.r), b.R);
+}
+function collide(a, b, ma, mb) {
+  const dx = b.p[0] - a.p[0], dz = b.p[2] - a.p[2], d = Math.hypot(dx, dz), m = a.r + b.r;
+  if (d >= m || d < 1e-5 || Math.abs(a.p[1] - b.p[1]) > m) return 0;
+  const nx = dx / d, nz = dz / d, rel = (b.v[0] - a.v[0]) * nx + (b.v[2] - a.v[2]) * nz;
+  const over = m - d, wa = (1 / ma) / (1 / ma + 1 / mb), wb = 1 - wa;
+  a.p[0] -= nx * over * wa; a.p[2] -= nz * over * wa; b.p[0] += nx * over * wb; b.p[2] += nz * over * wb;
+  if (rel >= 0) return 0;
+  const j = -(1 + 0.9) * rel / (1 / ma + 1 / mb);
+  a.v[0] -= j / ma * nx; a.v[2] -= j / ma * nz; b.v[0] += j / mb * nx; b.v[2] += j / mb * nz;
+  return -rel;
+}
+
+// --------------------------------------------------------------- game
+const Game = { state: 'boot', li: 0, L: null, t: 0, time: 0, score: 0, best: 0, player: null, chasers: [], sweepers: [], clocks: [],
+  shards: [], cam: [0, 0, 0], stateT: 0, safe: null, invuln: 0, paused: false, whistled: false, lastTick: 0, msg: '' };
+try { Game.best = +localStorage.getItem('tiltgrid84.best') || 0; } catch (e) { /* storage blocked */ }
+function saveBest() { if (Game.score > Game.best) { Game.best = Game.score; try { localStorage.setItem('tiltgrid84.best', String(Game.best)); } catch (e) { /* ignore */ } } }
+
+function loadCourse(i) {
+  const L = Game.L = buildCourse(i); Game.li = i;
+  gpuLevel(L);
+  Game.player = mkBody(L, L.start[0], L.start[1], R_PLAYER);
+  Game.safe = L.start.slice();
+  Game.chasers = L.chasers.map(([x, z]) => Object.assign(mkBody(L, x, z, R_CHASER), { maxv: 5.5 }));
+  Game.sweepers = L.sweepers.map((s) => ({ ...s, p: [s.a[0], surf(L, (s.a[0] + s.b[0]) / 2, (s.a[1] + s.b[1]) / 2) + R_SWEEP, s.a[1]], v: [0, 0, 0], r: R_SWEEP, R: m3id(), ang: 0 }));
+  Game.clocks = L.clocks.map(([x, z]) => ({ p: [x, surf(L, x, z) + 0.45, z], got: false }));
+  Game.shards = [];
+  Game.cam = [Game.player.p[0] + 1.2, Game.player.p[1], Game.player.p[2] + 1.2];
+  $('#raceNo').textContent = `Race ${i + 1} / ${COURSES.length}`;
+  $('#raceName').textContent = L.name;
+}
+function banner(title, sub, btn) {
+  $('#bTitle').textContent = title; $('#bSub').textContent = sub || '';
+  $('#bBtn').hidden = !btn; if (btn) $('#bBtn').textContent = btn;
+  $('#banner').hidden = !title;
+}
+function setState(s, dur = 0) { Game.state = s; Game.stateT = dur; }
+function beginRace(i, carry) {
+  loadCourse(i);
+  Game.time = carry + Game.L.time;
+  setState('ready', 2.0);
+  banner(`Race ${i + 1}`, `${Game.L.name.toUpperCase()}  ·  +${Game.L.time} s`);
+  calibrate(); Chip.ready();
+}
+function onStart() {
+  // iOS asks for motion permission only inside the tap; attach the listener first and never await it (METHODS.md).
+  addEventListener('deviceorientation', onOrient);
+  try { if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') DeviceOrientationEvent.requestPermission().catch(() => {}); } catch (e) { /* not needed */ }
+  Chip.init();
+  if (!GFX.ok) return;
+  try { navigator.wakeLock && navigator.wakeLock.request('screen').catch(() => {}); } catch (e) { /* optional */ }
+  $('#title').hidden = true; $('#hud').hidden = false;
+  Game.score = 0; Game.paused = false;
+  beginRace(0, 0);
+}
+function togglePause() {
+  if (!['play', 'ready', 'dead'].includes(Game.state)) return;
+  Game.paused = !Game.paused;
+  if (Game.paused) { banner('Paused', 'Press P or tap Resume', 'RESUME'); Chip.roll(0, false); }
+  else banner('');
+}
+function toggleMusic() { Chip.setMusic(!Chip.musicOn); $('#musBtn').setAttribute('aria-pressed', String(Chip.musicOn)); }
+$('#startBtn').addEventListener('click', onStart);
+$('#musBtn').addEventListener('click', toggleMusic);
+$('#pauseBtn').addEventListener('click', togglePause);
+$('#calBtn').addEventListener('click', calibrate);
+$('#bBtn').addEventListener('click', () => { if (Game.paused) togglePause(); else onStart(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden && !Game.paused && ['play', 'ready', 'dead'].includes(Game.state)) togglePause(); });
+
+function die(kind) {
+  const P = Game.player; if (Game.state !== 'play') return;
+  setState('dead', 1.7);
+  const msg = { shatter: ['Shattered', 'That ledge was too tall'], acid: ['Dissolved', 'Acid eats glass'], fall: ['Lost in the void', 'Stay on the grid'] }[kind];
+  banner(msg[0], msg[1]);
+  if (kind === 'shatter' || kind === 'acid') {
+    Chip[kind === 'acid' ? 'dissolve' : 'shatter']();
+    for (let i = 0; i < 18; i++) {
+      const a = Math.random() * Math.PI * 2, s = 1.5 + Math.random() * 4;
+      Game.shards.push({ p: P.p.slice(), v: [Math.cos(a) * s, 3 + Math.random() * 5, Math.sin(a) * s], R: m3axis(...norm3([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]), Math.random() * 6),
+        w: norm3([Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5]), spin: 6 + Math.random() * 10, life: 1.5, s: 0.05 + Math.random() * 0.07, acid: kind === 'acid' });
+    }
+    P.hidden = true;
+  }
+  Chip.roll(0, false);
+}
+function respawn() {
+  const L = Game.L, P = Game.player, [x, z] = Game.safe;
+  Object.assign(P, { p: [x, surf(L, x, z), z], v: [0, 0, 0], grounded: true, airY: 0, hidden: false });
+  Game.invuln = 1.4; Game.whistled = false;
+  setState('play'); banner('');
+}
+function isSafeSpot(L, x, z) {
+  const ix = Math.floor(x), iz = Math.floor(z), c = cellAt(L, x, z);
+  if (!c || !(c.mat === MAT.FLOOR || c.mat === MAT.START || c.mat === MAT.ICE)) return false;
+  for (const [dx, dz] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const n = cellAt(L, ix + dx + 0.5, iz + dz + 0.5);
+    if (!n || n.mat === MAT.ACID || Math.abs(n.h[0] - c.h[0]) > 0.01 || n.h.some((h) => h !== n.h[0])) return false;
+  }
+  return true;
+}
+
+function update(dt) {
+  Game.t += dt;
+  pollPad();
+  if (Game.paused) return;
+  const L = Game.L, P = Game.player;
+  if (Game.state === 'title') { // attract mode: drift the camera down the first course
+    const k = 0.5 - 0.5 * Math.cos(Game.t * 0.12);
+    const x = lerp(L.start[0], L.w * 0.55, k), z = lerp(L.start[1], L.d - 4, k);
+    Game.cam = [x, surf(L, x, z) > -1e9 ? surf(L, x, z) : Game.cam[1], z];
+    updateWorld(dt, [0, 0], false);
+    return;
+  }
+  if (Game.stateT > 0) Game.stateT -= dt;
+  if (Game.state === 'ready') { if (Game.stateT <= 0) { setState('play'); banner(''); } updateWorld(dt, [0, 0], false); followCam(dt); return; }
+  if (Game.state === 'goal') { updateWorld(dt, [0, 0], false); followCam(dt);
+    if (Game.stateT <= 0) { if (Game.li + 1 < COURSES.length) beginRace(Game.li + 1, Game.time); else win(); } return; }
+  if (Game.state === 'over' || Game.state === 'win') { updateWorld(dt, [0, 0], false); return; }
+  // play or dead: the clock runs
+  Game.time -= dt;
+  if (Game.time <= 10 && Math.ceil(Game.time) !== Game.lastTick && Game.time > 0) { Game.lastTick = Math.ceil(Game.time); Chip.tick(); }
+  Chip.bpm = Game.time < 10 ? 168 : 138;
+  if (Game.time <= 0) { Game.time = 0; timeUp(); return; }
+  if (Game.state === 'dead') { updateWorld(dt, [0, 0], false); followCam(dt); if (Game.stateT <= 0) respawn(); return; }
+  updateWorld(dt, readInput(), true);
+  followCam(dt);
+}
+function updateWorld(dt, inp, live) {
+  const L = Game.L, P = Game.player;
+  const N = Math.min(8, Math.ceil(dt / (1 / 240))), h = dt / N;
+  const ev = {};
+  for (let s = 0; s < N; s++) {
+    if (live && Game.state === 'play') stepBody(L, P, inp[0], inp[1], h, 1, ev);
+    else if (!P.hidden && (Game.state === 'dead' || Game.state === 'goal')) { if (Game.state === 'goal') { const k = Math.exp(-3 * h); P.v[0] *= k; P.v[2] *= k; } stepBody(L, P, 0, 0, h, 0, {}); }
+    for (const c of Game.chasers) {
+      if (c.dead > 0) { c.dead -= h; if (c.dead <= 0) Object.assign(c, mkBody(L, c.home[0], c.home[1], R_CHASER), { maxv: 5.5, dead: 0 }); continue; }
+      let ix = 0, iz = 0;
+      const dx = P.p[0] - c.p[0], dz = P.p[2] - c.p[2], d = Math.hypot(dx, dz);
+      if (live && !P.hidden && d < 7 && Math.abs(P.p[1] - c.p[1]) < 1.2) { ix = dx / d; iz = dz / d; }
+      else { const hx = c.home[0] - c.p[0], hz = c.home[1] - c.p[2], hd = Math.hypot(hx, hz); if (hd > 0.3) { ix = hx / hd * 0.5; iz = hz / hd * 0.5; } }
+      stepBody(L, c, ix, iz, h, 0.62, {});
+      if (c.p[1] < L.minH - 6) c.dead = 3;
+    }
+    for (let a = 0; a < Game.chasers.length; a++) for (let b = a + 1; b < Game.chasers.length; b++) collide(Game.chasers[a], Game.chasers[b], 1.5, 1.5);
+    if (live && Game.state === 'play' && !P.hidden) {
+      for (const c of Game.chasers) if (c.dead <= 0) { const j = collide(P, c, 1, 1.6); if (j > 1) ev.bump = Math.max(ev.bump || 0, j); }
+    }
+    for (const sw of Game.sweepers) {
+      const ph = (Game.t / sw.period + sw.phase) * Math.PI * 2, k = 0.5 - 0.5 * Math.cos(ph);
+      const nx = lerp(sw.a[0], sw.b[0], k), nz = lerp(sw.a[1], sw.b[1], k);
+      sw.v = [(nx - sw.p[0]) / h, 0, (nz - sw.p[2]) / h]; sw.p[0] = nx; sw.p[2] = nz;
+      if (live && Game.state === 'play' && !P.hidden) {
+        const dx = P.p[0] - nx, dz = P.p[2] - nz, d = Math.hypot(dx, dz), m = P.r + sw.r;
+        if (d < m && d > 1e-5 && Math.abs(P.p[1] - sw.p[1]) < 0.9) {
+          const ux = dx / d, uz = dz / d, vn = (P.v[0] - sw.v[0]) * ux + (P.v[2] - sw.v[2]) * uz;
+          if (vn < 0) { P.v[0] -= 2.2 * vn * ux; P.v[2] -= 2.2 * vn * uz; }
+          P.v[0] += ux * 2.5; P.v[2] += uz * 2.5;
+          P.p[0] = nx + ux * m; P.p[2] = nz + uz * m;
+          ev.bump = Math.max(ev.bump || 0, 6);
+        }
+      }
+    }
+  }
+  for (const sw of Game.sweepers) { sw.ang += dt * 3; sw.R = m3mul(m3axis(0, 1, 0, sw.ang), m3axis(1, 0, 0, 0.6)); }
+  for (const s of Game.shards) {
+    s.v[1] -= GRAV * dt; s.p[0] += s.v[0] * dt; s.p[1] += s.v[1] * dt; s.p[2] += s.v[2] * dt;
+    const g = surf(L, s.p[0], s.p[2]);
+    if (g > -1e9 && s.p[1] < g && s.p[1] > g - 0.4) { s.p[1] = g; s.v[1] *= -0.35; s.v[0] *= 0.6; s.v[2] *= 0.6; }
+    s.R = m3mul(m3axis(s.w[0], s.w[1], s.w[2], s.spin * dt), s.R); s.life -= dt;
+  }
+  Game.shards = Game.shards.filter((s) => s.life > 0);
+  if (!live || Game.state !== 'play') return;
+  // consequences for the player
+  P.R = m3fix(P.R);
+  if (Game.invuln > 0) Game.invuln -= dt;
+  const speed = Math.hypot(P.v[0], P.v[2]);
+  Chip.roll(speed, P.grounded);
+  if (ev.bump > 1.5) Chip.bump(ev.bump);
+  if (ev.boost && !Game.boosting) Chip.boost(); Game.boosting = !!ev.boost;
+  if (ev.land != null) { if (ev.land > LETHAL) return die('shatter'); if (ev.impact > 2) Chip.land(ev.impact); }
+  if (!P.grounded && !Game.whistled && P.airY - P.p[1] > LETHAL) { Game.whistled = true; Chip.whistle(); }
+  if (P.grounded) Game.whistled = false;
+  if (P.p[1] < L.minH - 5) return die('fall');
+  const cell = cellAt(L, P.p[0], P.p[2]);
+  if (P.grounded && cell) {
+    if (cell.mat === MAT.ACID) return die('acid');
+    if (cell.mat === MAT.GOAL) return reachGoal();
+    if (speed < 7 && isSafeSpot(L, P.p[0], P.p[2])) Game.safe = [Math.floor(P.p[0]) + 0.5, Math.floor(P.p[2]) + 0.5];
+  }
+  for (const c of Game.clocks) if (!c.got && Math.hypot(c.p[0] - P.p[0], c.p[2] - P.p[2]) < 0.65 && Math.abs(c.p[1] - 0.45 - P.p[1]) < 0.8) {
+    c.got = true; Game.time += 6; Game.score += 250; Chip.clock();
+  }
+}
+function followCam(dt) {
+  const P = Game.player, k = 1 - Math.exp(-dt * 4);
+  if (Game.state === 'dead' && P.p[1] < Game.L.minH - 1) return;
+  const tx = P.p[0] + P.v[0] * 0.2 + 1.2, ty = Math.max(P.p[1], Game.L.minH - 1), tz = P.p[2] + P.v[2] * 0.2 + 1.2;
+  Game.cam[0] += (tx - Game.cam[0]) * k; Game.cam[1] += (ty - Game.cam[1]) * k; Game.cam[2] += (tz - Game.cam[2]) * k;
+}
+function reachGoal() {
+  setState('goal', 3.0);
+  const bonus = 1000 * (Game.li + 1);
+  Game.score += bonus; Chip.goal(); Chip.roll(0, false);
+  const last = Game.li + 1 >= COURSES.length;
+  banner('Goal', last ? `+${bonus}  ·  final race clear` : `+${bonus}  ·  ${Math.ceil(Game.time)} s carried to race ${Game.li + 2}`);
+}
+function win() {
+  const tb = Math.ceil(Game.time) * 100; Game.score += tb; saveBest();
+  setState('win'); banner('Grid cleared', `${Game.score} points  ·  includes ${tb} for time left  ·  best ${Game.best}`, 'PLAY AGAIN');
+}
+function timeUp() {
+  saveBest(); Chip.over(); Chip.roll(0, false);
+  setState('over'); banner('Time up', `${Game.score} points on race ${Game.li + 1}  ·  best ${Game.best}`, 'PLAY AGAIN');
+}
+
+// --------------------------------------------------------------- scene assembly
+const COL = { player: [0.22, 0.42, 1.0], chaser: [1.0, 0.18, 0.62], sweep: [1.0, 0.55, 0.1], clock: [0.25, 0.92, 1.0] };
+function scene() {
+  const L = Game.L, P = Game.player, objs = [], bodies = [];
+  const blink = Game.invuln > 0 && Math.floor(Game.t * 12) % 2 === 0;
+  if (Game.state !== 'title' && !P.hidden && P.p[1] > L.minH - 12) {
+    objs.push({ mesh: 'sphere', p: [P.p[0], P.p[1] + P.r, P.p[2]], s: P.r, R: P.R, c: COL.player, kind: 1, flash: blink ? 0.35 : 0 });
+    bodies.push([P.p[0], P.p[1] + P.r, P.p[2], P.r]);
+  }
+  for (const c of Game.chasers) if (c.dead <= 0) {
+    objs.push({ mesh: 'sphere', p: [c.p[0], c.p[1] + c.r, c.p[2]], s: c.r, R: c.R, c: COL.chaser, kind: 2 });
+    bodies.push([c.p[0], c.p[1] + c.r, c.p[2], c.r]);
+  }
+  for (const s of Game.sweepers) {
+    objs.push({ mesh: 'cube', p: s.p, s: s.r * 0.78, R: s.R, c: COL.sweep, kind: 3 });
+    bodies.push([s.p[0], s.p[1], s.p[2], s.r]);
+  }
+  for (const c of Game.clocks) if (!c.got) {
+    const R = m3axis(0, 1, 0, Game.t * 2.2);
+    objs.push({ mesh: 'octa', p: [c.p[0], c.p[1] + Math.sin(Game.t * 3 + c.p[0]) * 0.08, c.p[2]], s: 0.24, R, c: COL.clock, kind: 4, glow: 0.9 });
+    bodies.push([c.p[0], c.p[1], c.p[2], 0.2]);
+  }
+  for (const s of Game.shards) objs.push({ mesh: 'cube', p: s.p, s: s.s * Math.min(1, s.life * 2), R: s.R, c: s.acid ? [0.5, 1.0, 0.2] : COL.player, kind: 4, glow: 0.5 });
+  return { L, cam: Game.cam, t: Game.t, objs, bodies };
+}
+
+// --------------------------------------------------------------- HUD + loop
+let hudCache = '';
+function hud() {
+  const t = Math.max(0, Math.ceil(Game.time)), key = t + '|' + Game.score;
+  if (key === hudCache) return; hudCache = key;
+  const el = $('#clock'); el.firstChild.nodeValue = String(t); el.classList.toggle('low', t <= 10 && Game.state === 'play');
+  $('#score').textContent = Game.score.toLocaleString('en-US');
+}
+let last = performance.now();
+function frame(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  try { update(dt); if (Game.L) draw(scene()); if (Game.state !== 'title') hud(); }
+  catch (e) { console.error(e); }
+  requestAnimationFrame(frame);
+}
+function showGpuProblem(msg) {
+  const w = $('#gpuWarn'); w.textContent = msg; w.hidden = false;
+  $('#startBtn').disabled = true; $('#title').hidden = false;
+}
+
+(async function boot() {
+  if (Game.best) $('#bestLine').textContent = `Best on this device: ${Game.best.toLocaleString('en-US')}`;
+  try { await initGPU(canvas); }
+  catch (e) { console.error(e); showGpuProblem(`${e.message} Tiltgrid draws with WebGPU: use a current Chrome or Edge, Safari 26 or later, or Firefox 141+ on Windows.`); }
+  loadCourse(0);
+  setState('title');
+  requestAnimationFrame(frame);
+})();
+window.TILTGRID = { Game, Input, Chip, COURSES, buildCourse, surf, stepBody, onOrient, GFX };
+</script>
+</body>
+</html>
