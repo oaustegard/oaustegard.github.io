@@ -12,7 +12,7 @@ Distances below are in tiles: one floor tile is 1 unit across, and the stripes o
 
 - **Four races, one clock.** Each race adds time (45, 40, 40 and 45 s), and the seconds you have left carry into the next race. Cyan diamonds add 6 s. Below 10 s the clock ticks and the music speeds up. At 0 s the game ends with *Time up* and you start again from race 1.
 - **Score.** Finishing race *n* is worth 1,000 × *n*; each diamond is worth 250; finishing all four adds 100 per second left on the clock. The best score is kept in the browser.
-- **Falls.** Ramps are safe. Landing after a drop of more than 2.4 units (about five wall stripes) shatters the marble, and rolling off the edge of the course into the empty space around it loses the marble. Either way the clock keeps running and the marble comes back on the last tile where it was safe to stop: a flat tile with flat, solid, acid-free tiles on all four sides, crossed at under 7 units/s.
+- **Falls.** Ramps are safe. Landing after a drop of more than 2.4 units (about five wall stripes) shatters the marble, and rolling off the edge of the course into the empty space around it loses the marble. Either way the clock keeps running and the marble comes back on the last tile where it was safe to stop: a flat tile with flat, solid, acid-free tiles on all four sides, crossed at under 7 units/s. Tiles within 1.8 units of a sweeper's lane or 2.5 units of a chaser's starting post never count as safe, and for 1.4 s after a respawn, while the marble blinks, sweepers and chasers pass through it.
 - **Floors.** Acid (green, rippling) dissolves the marble. On ice (pale blue) your steering has 30% of its normal force and the marble barely slows down by itself. Yellow chevrons push at 10 units/s². Your own steering pushes at 12.5 on ordinary floor, so you can hold your line against a sideways chevron on a narrow bridge.
 - **Opponents.** Black glass spheres with a magenta eye chase you when you are within 7 units and on their level. They are 1.6 times as heavy as your marble, so a collision moves you more than them. Orange striped blocks sweep back and forth across lanes and bridges and bat you aside.
 
@@ -37,12 +37,13 @@ One HTML file, no libraries.
 
 ## Checks
 
-`tests/check.mjs` opens the page in headless Chromium with SwiftShader, a software WebGPU, and checks 11 things. All 11 passed on the last run:
+`tests/check.mjs` opens the page in headless Chromium with SwiftShader, a software WebGPU, and checks 12 things. All 12 passed on the last run:
 
 - the shader compiles, frames render, and the console shows no errors or warnings;
 - the arrow keys move the marble toward the bottom of the screen;
 - a synthetic `deviceorientation` event turns tilt on;
 - a scripted driver that steers through waypoints reaches the finish of all four courses with the game's own physics, in 12 to 23 s against time budgets of 40 to 45 s. It holds its own speed to 4.5 units/s; the marble's top speed in the game is 11.5;
+- no respawn tile lies in a sweeper's lane;
 - rolling off the course kills the marble, and it comes back;
 - a 4-unit fall shatters it;
 - the music sequencer advances.

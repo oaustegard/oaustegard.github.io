@@ -85,6 +85,18 @@ const runs = await page.evaluate(() => {
   }
   return out;
 });
+const respawnPoints = await page.evaluate(() => {
+  const T = window.TILTGRID, bad = [];
+  for (let ci = 0; ci < T.COURSES.length; ci++) {
+    const L = T.buildCourse(ci);
+    for (let z = 0; z < L.d; z++) for (let x = 0; x < L.w; x++) {
+      if (!T.isSafeSpot(L, x + 0.5, z + 0.5)) continue;
+      for (const s of L.sweepers) { const d = Math.min(...[0, 0.25, 0.5, 0.75, 1].map((t) => Math.hypot(x + 0.5 - (s.a[0] + (s.b[0] - s.a[0]) * t), z + 0.5 - (s.a[1] + (s.b[1] - s.a[1]) * t)))); if (d < 1.5) bad.push({course: ci + 1, x, z, d}); }
+    }
+  }
+  return bad;
+});
+ok('no respawn point lies in a sweeper lane', respawnPoints.length === 0, respawnPoints.slice(0, 5));
 for (const r of runs) ok(`course "${r.course}" reachable by autopilot`, r.fate === 'goal', r);
 
 // Deaths: drop the live marble off the start platform edge of course 1 into the void, and onto a tall ledge

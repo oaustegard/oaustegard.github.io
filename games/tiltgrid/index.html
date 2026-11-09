@@ -998,7 +998,19 @@ function isSafeSpot(L, x, z) {
     const n = cellAt(L, ix + dx + 0.5, iz + dz + 0.5);
     if (!n || n.mat === MAT.ACID || Math.abs(n.h[0] - c.h[0]) > 0.01 || n.h.some((h) => h !== n.h[0])) return false;
   }
-  return true;
+  return !nearDanger(L, ix + 0.5, iz + 0.5);
+}
+// A respawn point must not sit in a sweeper's lane or beside a chaser's post, or the marble is knocked off again at once.
+const SWEEP_CLEAR = 1.8, CHASER_CLEAR = 2.5;
+function segDist(px, pz, a, b) {
+  const vx = b[0] - a[0], vz = b[1] - a[1], l2 = vx * vx + vz * vz;
+  const t = l2 ? clamp(((px - a[0]) * vx + (pz - a[1]) * vz) / l2, 0, 1) : 0;
+  return Math.hypot(px - a[0] - vx * t, pz - a[1] - vz * t);
+}
+function nearDanger(L, x, z) {
+  for (const s of L.sweepers) if (segDist(x, z, s.a, s.b) < SWEEP_CLEAR) return true;
+  for (const h of L.chasers) if (Math.hypot(x - h[0], z - h[1]) < CHASER_CLEAR) return true;
+  return false;
 }
 
 function update(dt) {
@@ -1044,14 +1056,14 @@ function updateWorld(dt, inp, live) {
       if (c.p[1] < L.minH - 6) c.dead = 3;
     }
     for (let a = 0; a < Game.chasers.length; a++) for (let b = a + 1; b < Game.chasers.length; b++) collide(Game.chasers[a], Game.chasers[b], 1.5, 1.5);
-    if (live && Game.state === 'play' && !P.hidden) {
+    if (live && Game.state === 'play' && !P.hidden && Game.invuln <= 0) {
       for (const c of Game.chasers) if (c.dead <= 0) { const j = collide(P, c, 1, 1.6); if (j > 1) ev.bump = Math.max(ev.bump || 0, j); }
     }
     for (const sw of Game.sweepers) {
       const ph = (Game.t / sw.period + sw.phase) * Math.PI * 2, k = 0.5 - 0.5 * Math.cos(ph);
       const nx = lerp(sw.a[0], sw.b[0], k), nz = lerp(sw.a[1], sw.b[1], k);
       sw.v = [(nx - sw.p[0]) / h, 0, (nz - sw.p[2]) / h]; sw.p[0] = nx; sw.p[2] = nz;
-      if (live && Game.state === 'play' && !P.hidden) {
+      if (live && Game.state === 'play' && !P.hidden && Game.invuln <= 0) {
         const dx = P.p[0] - nx, dz = P.p[2] - nz, d = Math.hypot(dx, dz), m = P.r + sw.r;
         if (d < m && d > 1e-5 && Math.abs(P.p[1] - sw.p[1]) < 0.9) {
           const ux = dx / d, uz = dz / d, vn = (P.v[0] - sw.v[0]) * ux + (P.v[2] - sw.v[2]) * uz;
@@ -1169,7 +1181,7 @@ function showGpuProblem(msg) {
   setState('title');
   requestAnimationFrame(frame);
 })();
-window.TILTGRID = { Game, Input, Chip, COURSES, buildCourse, surf, stepBody, onOrient, GFX };
+window.TILTGRID = { isSafeSpot, nearDanger, Game, Input, Chip, COURSES, buildCourse, surf, stepBody, onOrient, GFX };
 </script>
 </body>
 </html>
