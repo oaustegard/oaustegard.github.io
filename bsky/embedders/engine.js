@@ -5,7 +5,17 @@
 // run/ref.py is the NumPy spec it follows.
 //
 //   const eng = await SmallEngine.create(device, manifest, modelOnnxBytes);
-//   const vecs = await eng.embed([ids0, ids1, ...]);   // Float32Array[B * 768], unit rows
+//   const vecs = await eng.embed([ids0, ids1, ...]);   // Float32Array[B * eng.dim], unit rows
+//
+// Ettin-17m pools 256 numbers and widens them to 768, so its 768 outputs carry 256 numbers' worth of
+// vector. foldHead() swaps that last matrix for the 256 -> 256 one in models/ettin/fold256.f32:
+//
+//   const [m256, bytes256] = foldHead(manifest, modelOnnxBytes, fold256Bytes);
+//   const eng = await SmallEngine.create(device, m256, bytes256);   // eng.dim === 256
+//
+// Every inner product between two outputs is the same as at 768 (the 256 are the 768 in an orthonormal
+// basis of the head's span, rotated the way remex rotates before quantizing). A 256-dim vector cannot be
+// compared with a 768-dim one, so a page uses one width for everything it stores and searches.
 //
 // Weights stay in their shipped formats: int8 matmul codes with one f32 scale per output column
 // (transposed once at init from the file's [K, N] to [N, K]), a 4-bit (packed nibbles, fp16 scale per 32) or 3-bit (eg2-layer-student layout)
@@ -262,8 +272,13 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   }
 }`,
 
-  // L2-normalize rows of 768.
-  l2: HEADER + /* wgsl */ `
+};
+
+// L2-normalize rows of `dim` (256 or 768): each of 256 lanes owns dim / 256 elements.
+const l2Shader = (dim) => {
+  const C = dim / 256, lanes = [...Array(C).keys()];
+  const at = (c) => `b * ${dim}u + i` + (c ? ` + ${256 * c}u` : "");
+  return HEADER + /* wgsl */ `
 @group(0) @binding(2) var<storage, read> x: array<f32>;
 @group(0) @binding(3) var<storage, read_write> y: array<f32>;
 var<workgroup> red: array<f32, 256>;
@@ -272,14 +287,31 @@ fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(local_invocation_index) 
   _ = p.a;
   let b = wid.x;
   if (b >= dn.n.y) { return; }
-  let a0 = x[b * 768u + i]; let a1 = x[b * 768u + i + 256u]; let a2 = x[b * 768u + i + 512u];
-  red[i] = a0 * a0 + a1 * a1 + a2 * a2;
+  ${lanes.map((c) => `let a${c} = x[${at(c)}];`).join(" ")}
+  red[i] = ${lanes.map((c) => `a${c} * a${c}`).join(" + ")};
   workgroupBarrier();
   for (var s = 128u; s > 0u; s >>= 1u) { if (i < s) { red[i] += red[i + s]; } workgroupBarrier(); }
   let inv = 1.0 / max(sqrt(red[0]), 1e-12);
-  y[b * 768u + i] = a0 * inv; y[b * 768u + i + 256u] = a1 * inv; y[b * 768u + i + 512u] = a2 * inv;
-}`,
+  ${lanes.map((c) => `y[${at(c)}] = a${c} * inv;`).join(" ")}
+}`;
 };
+
+// A manifest and weight bytes for the same model with its 256 -> 768 head folded to 256 -> 256.
+// head: the bytes of fold256.f32 (float32 [256][256], row n = the weights of output n). The model's
+// bytes are copied once with the head appended; the 768-wide head stays in them, unused.
+export function foldHead(manifest, data, head) {
+  const m = structuredClone(manifest), d = m.dense;
+  const u8 = (x) => (x instanceof ArrayBuffer ? new Uint8Array(x) : new Uint8Array(x.buffer, x.byteOffset, x.byteLength));
+  const model = u8(data), h = u8(head);
+  if (m.dim !== 768 || !d || d.K !== 256 || d.b) throw new Error("foldHead: expected a bias-free 256 -> 768 head");
+  if (h.byteLength !== 256 * 256 * 4) throw new Error(`foldHead: fold256.f32 is ${h.byteLength} bytes, expected ${256 * 256 * 4}`);
+  const bytes = new Uint8Array(model.byteLength + h.byteLength);
+  bytes.set(model, 0);
+  bytes.set(h, model.byteLength);
+  m.dim = 256;
+  m.dense = { f32_t: { offset: model.byteLength, length: h.byteLength }, K: 256, N: 256 };
+  return [m, bytes];
+}
 
 const U = GPUBufferUsage;
 
@@ -303,7 +335,8 @@ export class SmallEngine {
   async _init(bytes) {
     const dev = this.device, m = this.m, T = this.maxTokens, B = this.maxSeqs;
     const H = m.hidden, nh = m.heads, D = H / nh;
-    if (m.dim !== 768 || D > 64 || H > 512 || H % 32) throw new Error("unexpected manifest shape");
+    const dim = m.dim;
+    if ((dim !== 768 && dim !== 256) || m.dense.N !== dim || D > 64 || H > 512 || H % 32) throw new Error("unexpected manifest shape");
     // The manifest gives each tensor's byte range inside model.onnx, where protobuf leaves them
     // unaligned. Copy every tensor once into a 4-byte-aligned buffer and point the manifest at it.
     const tensors = [];
@@ -341,14 +374,14 @@ export class SmallEngine {
       tok: buf(T * 4, "tok", U.COPY_DST), seqs: buf(B * 4, "seqs", U.COPY_DST),
       e: buf(T * H, "e"), h: buf(T * H, "h"), a: buf(T * H, "a"), o: buf(T * H, "o"), t: buf(T * H, "t"),
       qkv: buf(T * 3 * H, "qkv"), u: buf(T * (bert ? I : 2 * I), "u"), g: buf(T * I, "g"),
-      pooled: buf(B * H, "pooled"), d: buf(B * 768, "d"), out: buf(B * 768, "out"),
+      pooled: buf(B * H, "pooled"), d: buf(B * dim, "d"), out: buf(B * dim, "out"),
     };
     this.b = B_;
     this.dyn = dev.createBuffer({ size: 16, usage: U.UNIFORM | U.COPY_DST, label: "dyn" });
-    this.read = dev.createBuffer({ size: B * 768 * 4, usage: U.MAP_READ | U.COPY_DST, label: "readback" });
+    this.read = dev.createBuffer({ size: B * dim * 4, usage: U.MAP_READ | U.COPY_DST, label: "readback" });
 
     const pipes = {};
-    await Promise.all(Object.entries(SHADERS).map(async ([name, code]) => {
+    await Promise.all(Object.entries({ ...SHADERS, l2: l2Shader(dim) }).map(async ([name, code]) => {
       const module = dev.createShaderModule({ code, label: name });
       const info = await module.getCompilationInfo();
       const errs = info.messages.filter((x) => x.type === "error");
@@ -462,14 +495,14 @@ export class SmallEngine {
     return B;
   }
 
-  // Embed sequences of token ids; returns a Float32Array of B * 768 unit vectors.
+  // Embed sequences of token ids; returns a Float32Array of B * this.dim unit vectors.
   async embed(batch) {
     const enc = this.device.createCommandEncoder();
-    const B = this._record(enc, batch);
-    enc.copyBufferToBuffer(this.b.out, 0, this.read, 0, B * 768 * 4);
+    const B = this._record(enc, batch), n = B * this.dim * 4;
+    enc.copyBufferToBuffer(this.b.out, 0, this.read, 0, n);
     this.device.queue.submit([enc.finish()]);
-    await this.read.mapAsync(GPUMapMode.READ, 0, B * 768 * 4);
-    const out = new Float32Array(this.read.getMappedRange(0, B * 768 * 4).slice(0));
+    await this.read.mapAsync(GPUMapMode.READ, 0, n);
+    const out = new Float32Array(this.read.getMappedRange(0, n).slice(0));
     this.read.unmap();
     return out;
   }

@@ -5,7 +5,9 @@
 //               the last N days; authors not on the excluded lists, seen at least MIN times, become candidates
 //   2. learn    Ettin-17m embeds the posts the search found and a background sample of Bluesky's Discover feed
 //               on the GPU (../embedders/engine.js), and a logistic regression fitted here (topic.js) separates
-//               them, giving P(on topic) for any post
+//               them, giving P(on topic) for any post. The model runs with its last layer folded from 768
+//               outputs to 256 (foldHead, fold256.f32): the same vectors in a third of the numbers, so the
+//               classifier gives the same answers and fits three times faster (tests/embedders-fold.mjs)
 //   3. sample   each candidate's last 100 posts and replies (no reposts), from the public AppView
 //   4. classify every sampled post gets P(on topic); a candidate's topic share is the mean
 //   5. review   a table pre-ticks accounts that look like people posting on topic; you decide
@@ -16,14 +18,14 @@
 // search and the reviewer is you.
 
 import { initializeLib, login, logout, checkStoredSession, getAuthAgent, getListMembers, getLists } from '../bsky-lib.js';
-import { SmallEngine } from '../embedders/engine.js';
+import { SmallEngine, foldHead } from '../embedders/engine.js?v=256';
 import { trainLogistic, auc } from './topic.js';
 
 const E = new URL('../embedders/models/ettin/', import.meta.url).href;
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
 const PUBLIC = 'https://public.api.bsky.app/xrpc';
 const DISCOVER = 'at://did:plc:z72i7hdynmk6r22z27h6tvur/app.bsky.feed.generator/whats-hot';
-const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32, DIM = 768;
+const MAX_SEQ = 128, BATCH_TOKENS = 2048, BATCH_SEQS = 32, DIM = 256;
 const MAX_POS = 1500, POS_PER_AUTHOR = 25, MAX_BG = 1200;   // training posts: search hits, Discover background
 const BOTWORDS = /\b(bot|bots|feed|feeds|news|newsletter|digest|daily|hourly|updates|automated|arxiv|headlines|briefing|aggregat\w*|curated|rss|jobs?|deals|crypto|signals)\b|-bot\b|bot\./i;
 
@@ -148,12 +150,15 @@ async function ensureEmbedder() {
   const device = await adapter.requestDevice({ requiredLimits: {
     maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
   $('stage').textContent = 'loading the embedding model (11 MB, once)';
-  const [manifest, meta, tj, model, tokMod] = await Promise.all([
-    fetch(E + 'manifest.json').then((r) => r.json()), fetch(E + 'meta.json').then((r) => r.json()),
-    fetch(E + 'tokenizer.json').then((r) => r.json()), fetch(E + 'model.onnx').then((r) => r.arrayBuffer()), import(TOKENIZERS)]);
+  const need = async (name) => { const r = await fetch(E + name); if (!r.ok) throw new Error(`${name}: HTTP ${r.status}`); return r; };
+  const [manifest, meta, tj, model, fold, tokMod] = await Promise.all([
+    need('manifest.json').then((r) => r.json()), need('meta.json').then((r) => r.json()),
+    need('tokenizer.json').then((r) => r.json()), need('model.onnx').then((r) => r.arrayBuffer()),
+    need('fold256.f32').then((r) => r.arrayBuffer()), import(TOKENIZERS)]);
   const tok = new tokMod.Tokenizer(tj, {});
   const dp = (meta.prompts || {}).document ?? '';
-  const engine = await SmallEngine.create(device, manifest, model, { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
+  const engine = await SmallEngine.create(device, ...foldHead(manifest, model, fold), { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
+  if (engine.dim !== DIM) throw new Error(`the embedding model gives ${engine.dim} numbers per post, expected ${DIM}`);
   const ids = (text) => { const x = tok.encode(dp + text).ids; return x.length > MAX_SEQ ? x.slice(0, MAX_SEQ - 1).concat(x[x.length - 1]) : x; };
   const embedEach = async (texts, onRows) => {
     let batch = [], start = 0, toks = 0;

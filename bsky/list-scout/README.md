@@ -13,7 +13,9 @@ list (the kind a feed or a reader follows, as opposed to a moderation list). Sig
    pages of 100 posts. Authors not on the lists you choose to skip, who turn up at least "Min. hits" times,
    become candidates; the "Max. accounts" seen most often are sampled.
 2. **Learn the topic.** Ettin-17m, a small text-embedding model that runs on the GPU
-   (`../embedders/models/ettin/`, engine `../embedders/engine.js`), turns posts into vectors. The on-topic
+   (`../embedders/models/ettin/`, engine `../embedders/engine.js`), turns posts into vectors of 256 numbers.
+   The model was trained to emit 768, all of them a fixed mix of 256; the page runs it with that last layer
+   folded (`fold256.f32`), which changes no score and makes the fit three times faster. The on-topic
    examples are up to 1,500 of the posts the search found, at most 25 per author; the off-topic examples are
    1,200 posts from Bluesky's Discover feed. A logistic regression fitted in the tab (`topic.js`) tells the two
    apart, giving the probability that any post is on topic. The log reports its AUC on a fifth of the examples

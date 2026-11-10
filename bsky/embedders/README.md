@@ -13,5 +13,10 @@ full-EG2 index and shares its engine and remex parameters with ../image-search/,
 with that page's onnxruntime fallback (../image-search/model/ort/). The cut's engine manifest is
 models/eg2/manifest.json, because ../image-search/model/manifest.json now describes a different build.
 
+`models/ettin/fold256.f32` is a 256 -> 256 replacement for the last matrix of Ettin-17m, which widens
+256 pooled numbers to 768. `foldHead` in `engine.js` runs the model with it, giving 256 numbers per text
+whose inner products are the same as the 768's (oaustegard/experiments `ettin-span256-remex`). This page
+still searches its 768-dim indexes; ../list-scout/ uses the 256.
+
 Built by oaustegard/experiments `ettin-native/run/publish_site.py`; write-up in
 `ettin-native/RESULTS.md`. Needs WebGPU (Chrome, Edge, Safari 26+).
