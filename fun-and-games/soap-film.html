@@ -57,6 +57,10 @@ dialog .row { display: flex; justify-content: space-between; align-items: center
 #nogpu { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
 #nogpu div { max-width: 420px; color: #c9cfdb; }
 #nogpu h2 { font: italic 500 24px/1.2 var(--display); color: var(--ink); margin: 0 0 8px; }
+.scale .cap { font-size: 11px; color: var(--dim); margin-top: 5px; text-align: center; }
+#exit { position: fixed; top: max(10px, env(safe-area-inset-top)); right: max(10px, env(safe-area-inset-right)); padding: 9px 12px; opacity: .5; }
+#exit:hover { opacity: 1; }
+body.full .top, body.full .bottom { display: none; }
 @media (max-width: 560px) { .top p { font-size: 12px; } .scale { flex-basis: 100%; max-width: none; order: -1; } }
 </style>
 </head>
@@ -65,20 +69,24 @@ dialog .row { display: flex; justify-content: space-between; align-items: center
 <div class="top"><h1>Soap film</h1><p id="hint">drag to blow · tap to pop · tilt to pour</p></div>
 <div class="bottom" id="hud">
   <div class="scale" title="Reflected colour by film thickness"><span id="mark" hidden></span><canvas id="scale" width="840" height="20"></canvas>
-    <div class="ticks"><span>0</span><span>500</span><span>1000</span><span>1500 nm</span></div></div>
+    <div class="ticks"><span>0</span><span>500</span><span>1000</span><span>1500 nm</span></div>
+    <div class="cap">The colour the film shows at each thickness. Touch the film to read its thickness there.</div></div>
   <div class="btns">
     <div id="dial" role="slider" tabindex="0" aria-label="Gravity direction" aria-valuemin="0" aria-valuemax="360" aria-valuenow="180" title="Gravity: drag to change">
       <svg viewBox="-22 -22 44 44"><circle r="15" fill="none" stroke="rgba(255,255,255,.18)"/><line id="garrow" x1="0" y1="0" x2="0" y2="15" stroke="#e9ecf2" stroke-width="2" stroke-linecap="round"/><circle id="gtip" cx="0" cy="15" r="3" fill="#e9ecf2"/></svg></div>
     <button id="dip">Dip</button>
     <button id="tilt" hidden>Tilt</button>
     <button id="shape">Loop</button>
+    <button id="full" aria-label="Full screen">Full</button>
     <button id="info" aria-label="About and settings">About</button>
   </div>
 </div>
+<button id="exit" hidden aria-label="Leave full screen">✕</button>
 <dialog id="about">
   <h2>Soap film</h2>
   <p>A soap film is a sheet of water a few hundred nanometres thick, held between two layers of soap. Light reflecting off its front and back surfaces interferes, so every thickness reflects its own colour. Thinner than about 30 nm it reflects almost nothing and looks black.</p>
-  <p>The page runs a fluid simulation of the film on your GPU. Thick film is heavier than thin film, so it sinks along gravity (your phone's tilt, or the dial) and thin film rises. The frame drinks liquid from the film's edge, which sends thin plumes up from the border, and the film evaporates until black film spreads from the top and it pops. The colour of each point is the reflection summed over the visible spectrum for its thickness; the bar under the film is that same table.</p>
+  <p>The page runs a fluid simulation of the film on your GPU. Thick film is heavier than thin film, so it sinks along gravity (your phone's tilt, or the dial) and thin film rises. The frame drinks liquid from the film's edge, which sends thin plumes up from the border, and the film evaporates until black film spreads from the top and it pops. The colour of each point is the reflection summed over the visible spectrum for its thickness; the bar under the film shows that colour for every thickness.</p>
+  <p>After a pop, tap the empty frame or press Dip for a new film. Loop swaps the rectangular frame for a round wand, and the round dial beside the buttons turns gravity by hand.</p>
   <div class="set">
     <label for="drain">Drainage</label><input id="drain" type="range" min="0" max="4" step="0.1" value="1">
     <label for="autopop">Pops by itself</label><input id="autopop" type="checkbox" checked>
@@ -654,6 +662,15 @@ $('dial').addEventListener('keydown', e => {
 // ───────────────────────── layout and uniforms ─────────────────────────
 const view = { W: 1, H: 1, scale: 1, ox: 0, oy: 0, dpr: 1 };
 let shape = qs.get('shape') === 'loop' ? 'loop' : 'frame';
+let immersive = false;                               // full screen: no title or controls, the frame fills the window
+function setFull(on) {
+  immersive = on; document.body.classList.toggle('full', on); $('exit').hidden = !on;
+  const el = document.documentElement;                // iPhones have no element full screen; there this only hides the controls
+  if (on && el.requestFullscreen) el.requestFullscreen().catch(() => {});
+  else if (!on && document.fullscreenElement) document.exitFullscreen().catch(() => {});
+  resize();
+}
+document.addEventListener('fullscreenchange', () => { if (!document.fullscreenElement && immersive) setFull(false); });
 function gridFor(aw, ah) {
   const N = clamp(Math.round((+qs.get('n') || (Math.min(aw, ah) > 1500 ? 384 : 320)) / 8) * 8, 64, 512);
   if (shape === 'loop') return [N, N];
@@ -662,7 +679,7 @@ function gridFor(aw, ah) {
 }
 function place(W, H, dpr, bare) {
   const pad = bare ? 0.02 * Math.min(W, H) : Math.max(12 * dpr, 0.02 * Math.min(W, H));
-  const top = bare ? pad : 44 * dpr, bot = bare ? pad : (innerWidth <= 560 ? 124 : 76) * dpr;
+  const top = bare ? pad : 44 * dpr, bot = bare ? pad : (innerWidth <= 560 ? 146 : 96) * dpr;
   return { x: pad, y: top, w: W - 2 * pad, h: H - top - bot };
 }
 function fit(W, H, dpr, bare) {
@@ -672,11 +689,12 @@ function fit(W, H, dpr, bare) {
 function resize() {
   const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.max(2, Math.floor(innerWidth * dpr)), H = Math.max(2, Math.floor(innerHeight * dpr));
   canvas.width = W; canvas.height = H;
-  const a = place(W, H, dpr, false), [NX, NY] = gridFor(a.w, a.h);
-  // A phone's address bar sliding away changes the height a little; keep the film unless the shape really changed.
-  const near = sim && sim.shape === shape && Math.abs(NX - sim.NX) < 0.15 * sim.NX && Math.abs(NY - sim.NY) < 0.15 * sim.NY;
+  const a = place(W, H, dpr, immersive), [NX, NY] = gridFor(a.w, a.h);
+  // Keep the film through small changes of the space around it (a phone's address bar, going full screen);
+  // make a new one only when the frame's proportions really change.
+  const near = sim && sim.shape === shape && Math.abs(NX - sim.NX) < 0.35 * sim.NX && Math.abs(NY - sim.NY) < 0.35 * sim.NY;
   if (!near) { buildSim(NX, NY, shape); dip(); blip('dip'); }
-  fit(W, H, dpr, false);
+  fit(W, H, dpr, immersive);
 }
 const pointers = new Map();                          // pointer id → { x, y, vx, vy, t } in cells
 const U = new Float32Array(40), RU = new Float32Array(24);
@@ -739,7 +757,7 @@ let autoPop = true;
 function onStats() {
   const s = sim, st = s.stats;
   const mark = $('mark');
-  if (probeAt && s.probe > 0.5) { mark.hidden = false; mark.textContent = Math.round(s.probe) + ' nm'; mark.style.left = clamp(s.probe / 1500, 0, 1) * 100 + '%'; }
+  if (probeAt && s.probe > 0.5) { mark.hidden = false; mark.textContent = 'here: ' + Math.round(s.probe) + ' nm'; mark.style.left = clamp(s.probe / 1500, 0, 1) * 100 + '%'; }
   else mark.hidden = true;
   // A film that is mostly black film is close to bursting; the more of it, the sooner.
   if (autoPop && !TEST && !s.pop.on && s.age > 15 && st.black > 0.30 && Math.random() < 0.02 + 0.25 * (st.black - 0.30)) {
@@ -824,12 +842,15 @@ $('dip').onclick = () => { dip(); blip('dip'); };
 $('shape').onclick = () => { shape = shape === 'loop' ? 'frame' : 'loop'; $('shape').textContent = shape === 'loop' ? 'Frame' : 'Loop'; resize(); };
 $('shape').textContent = shape === 'loop' ? 'Frame' : 'Loop';
 $('info').onclick = () => $('about').showModal();
+$('full').onclick = () => setFull(true);
+$('exit').onclick = () => setFull(false);
 $('close').onclick = () => $('about').close();
 $('drain').oninput = e => { P.drainMul = +e.target.value; };
 $('autopop').onchange = e => { autoPop = e.target.checked; };
 $('sound').onchange = e => { soundOn = e.target.checked; };
 addEventListener('keydown', e => {
   if (e.target !== document.body && e.target !== canvas) return;
+  if (e.key === 'f') setFull(!immersive);
   if (e.key === 'd' || e.key === ' ') { if (sim.empty || e.key === 'd') { dip(); blip('dip'); } else pop(sim.NX / 2, sim.NY / 2); e.preventDefault(); }
 });
 (function drawScale() {
