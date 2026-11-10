@@ -102,6 +102,10 @@ function ensureRetrieval() {
     const tok = new tokMod.Tokenizer(tj, {});
     const qp = (meta.prompts || {}).query ?? '', dp = idx.doc_prompt ?? (meta.prompts || {}).document ?? '';
     const engine = await SmallEngine.create(device, ...foldHead(manifest, model, fold), { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
+    // One engine call at a time: a search and the minute's catch-up can overlap, and the engine has one
+    // readback buffer, which cannot be mapped twice.
+    let queue = Promise.resolve();
+    const embed = (batch) => { const p = queue.then(() => engine.embed(batch)); queue = p.catch(() => {}); return p; };
     if (engine.dim !== idx.d) throw new Error(`the model gives ${engine.dim} numbers per text, the index ${idx.d}`);
     const scan = await Scan256.create(device, { centroids: idx.centroids, boundaries: idx.boundaries, kappa: idx.kappa, mu: idx.mu });
     const docs = scan.allocCorpus(idx.n + LIVE_CAP);
@@ -121,7 +125,7 @@ function ensureRetrieval() {
       let batch = [], start = 0, toks = 0;
       const flush = async () => {
         if (!batch.length) return;
-        out.set(await engine.embed(batch), start * idx.d);
+        out.set(await embed(batch), start * idx.d);
         start += batch.length; batch = []; toks = 0;
       };
       for (const t of texts) {
@@ -134,7 +138,7 @@ function ensureRetrieval() {
     };
     const search = async (text, k) => {
       const t0 = now();
-      const qv = await engine.embed([ids(qp + text)]);
+      const qv = await embed([ids(qp + text)]);
       const t1 = now();
       const top = await scan.topk(qv, docs, corpus.posts.length, k);
       const t2 = now();
