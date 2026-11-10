@@ -2,17 +2,22 @@
 
 Reads the previous snapshot from OUT (if any), fetches the list feed from the newest post back to the
 newest post it already has, embeds the new posts with Ettin-17m (the same ONNX model and doc prompt the
-page and bsky/embedders use), quantizes them exactly as the embedders index was built (remex 2.1.0,
-Quantizer(768, bits=BITS, seed=42, mean=mu), mu fixed from that index so codes stay comparable), appends
-them, drops the oldest beyond N and writes OUT again:
+page and bsky/embedders use), folds each vector from 768 to 256 numbers the way the page's engine does
+(fold256.f32 beside the model: the model's last matrix replaced by a 256 x 256 one that also applies
+remex's rotation), quantizes them with remex 2.1.0, Quantizer(256, bits=4, seed=42, rotation="none",
+mean=mu), mu fixed so codes stay comparable, appends them, drops the oldest beyond N and writes OUT again:
 
-  snapshot.bin    the whole snapshot in one file, so a CDN can never pair parts of two builds:
+  snapshot-256x4.bin   the whole snapshot in one file, so a CDN can never pair parts of two builds:
                   b"ASNP", uint32 LE header length, the header (UTF-8 JSON, the same as index.json), then
                   the sections the header's "sections" names as [offset, length] after the header:
-                  codes (n x 96 bytes at 1 bit, 192 at 2; remex pack, MSB first), aux (n x 2 float32 LE:
-                  scale, bias),
+                  codes (n x 128 bytes: 256 4-bit codes, remex pack, high nibble first), aux (n x 2
+                  float32 LE: scale, bias),
                   posts (gzip JSON {"authors": [[handle, did]], "posts": [[author, rkey, t]], "texts": [...]})
   index.json      the header alone, for people and tools: n, mu, newest post, build time, counts
+
+Until 2026-11-10 the snapshot was snapshot.bin, 1-bit codes of the 768-dim vectors. A run that finds only
+that file re-embeds every stored post (the snapshot keeps no vectors) and leaves snapshot.bin in place, so
+pages still reading it keep working until they update; the next run, which finds the new file, deletes it.
 
 Rows are oldest first. Posts by accounts no longer on the list are dropped on every run. New posts come
 from the list feed, which Bluesky serves only about a week back;
@@ -22,7 +27,7 @@ feed (posts and replies, no reposts) back to the time needed.
 usage: refresh.py OUT [--n 100000] [--model bsky/embedders/models/ettin] [--mu bsky/embedders/index/ettin/index.json]
 needs numpy, onnxruntime, tokenizers, remex==2.1.0
 """
-import argparse, gzip, json, sys, time, urllib.error, urllib.parse, urllib.request
+import argparse, gzip, hashlib, json, sys, time, urllib.error, urllib.parse, urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,6 +42,8 @@ LIST = "at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.graph.list/3lankcdrlip2f"
 XRPC = "https://public.api.bsky.app/xrpc"
 OVERLAP_S = 3600        # keep paging an hour past the newest known post, for posts indexed late
 MAX_SEQ = 128
+D, BITS = 256, 4        # the index: 256 numbers per post (fold256.f32), 4 bits each
+SNAPSHOT, LEGACY = "snapshot-256x4.bin", "snapshot.bin"
 
 
 def get(endpoint, params, tries=6):
@@ -171,10 +178,34 @@ def fetch_authors(known, since_ts):
     return out
 
 
+def fold_basis(d):
+    """C [768, 256] with y = x C: the model's 768-dim output in the 256 coordinates fold256.f32 gives.
+
+    The model ends in e = p W (p the pooled 256 numbers, W [256, 768] int8 codes times a scale per column);
+    fold256.f32 holds G [256, 256] with p G = e C. W has full row rank and every e lies in its row space, so
+    C = pinv(W) G. Checked: W C = G, and C has orthonormal columns, so inner products are unchanged."""
+    m = json.loads((d / "manifest.json").read_text())
+    dn = m["dense"]
+    raw = (d / "model.onnx").read_bytes()
+    meta = json.loads((d / "fold256.json").read_text())
+    assert meta["model_sha256"] == hashlib.sha256(raw).hexdigest(), "fold256.f32 was built for another model.onnx"
+    head = (d / "fold256.f32").read_bytes()
+    assert meta["sha256"] == hashlib.sha256(head).hexdigest(), "fold256.f32 does not match fold256.json"
+    q = np.frombuffer(raw, np.int8, dn["K"] * dn["N"], dn["q"]["offset"]).reshape(dn["K"], dn["N"])
+    W = q.astype(np.float64) * np.frombuffer(raw, "<f4", dn["N"], dn["s"]["offset"]).astype(np.float64)
+    G = np.frombuffer(head, "<f4").reshape(D, D).T.astype(np.float64)     # the file is [out][in]
+    C = np.linalg.pinv(W) @ G
+    assert np.abs(W @ C - G).max() < 1e-6 and np.abs(C.T @ C - np.eye(D)).max() < 1e-6
+    return C, meta
+
+
 class Ettin:
     def __init__(self, d):
         so = ort.SessionOptions()
         so.intra_op_num_threads = 4
+        # the graph's own arithmetic (int8 code times column scale), as the page's WGSL engine computes it;
+        # ORT_ENABLE_ALL rewrites the dequantize-matmul pairs and moves the output (cosine ~0.9997)
+        so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_BASIC
         self.sess = ort.InferenceSession(str(d / "model.onnx"), so, providers=["CPUExecutionProvider"])
         self.tok = Tokenizer.from_file(str(d / "tokenizer.json"))
         self.out = self.sess.get_outputs()[0].name
@@ -204,9 +235,11 @@ MAGIC = b"ASNP"
 
 
 def load(out):
-    """The previous snapshot: snapshot.bin, or the first layout's four files (read once, to migrate)."""
-    if (out / "snapshot.bin").exists():
-        buf = (out / "snapshot.bin").read_bytes()
+    """The previous snapshot: snapshot-256x4.bin, the 768-dim snapshot.bin, or the first layout's four
+    files (the last two read once, to migrate)."""
+    name = SNAPSHOT if (out / SNAPSHOT).exists() else LEGACY
+    if (out / name).exists():
+        buf = (out / name).read_bytes()
         assert buf[:4] == MAGIC, "not a snapshot.bin"
         hl = int.from_bytes(buf[4:8], "little")
         idx = json.loads(buf[8:8 + hl])
@@ -218,7 +251,7 @@ def load(out):
     else:
         return None
     c = json.loads(gzip.decompress(posts_b))
-    codes = np.frombuffer(codes_b, np.uint8).reshape(idx["n"], 96 * idx.get("bits", 2))
+    codes = np.frombuffer(codes_b, np.uint8).reshape(idx["n"], idx.get("d", 768) * idx.get("bits", 2) // 8)
     aux = np.frombuffer(aux_b, "<f4").reshape(idx["n"], 2)
     assert len(c["posts"]) == len(c["texts"]) == idx["n"]
     rows = [{"did": c["authors"][a][1], "handle": c["authors"][a][0], "rkey": rk, "t": t, "text": tx}
@@ -234,20 +267,23 @@ def main():
     ap.add_argument("--n", type=int, default=100_000)
     ap.add_argument("--model", type=Path, default=Path("bsky/embedders/models/ettin"))
     ap.add_argument("--mu", type=Path, default=Path("bsky/embedders/index/ettin/index.json"))
-    ap.add_argument("--bits", type=int, default=1, choices=(1, 2))
     a = ap.parse_args()
     assert remex.__version__ == "2.1.0", f"remex {remex.__version__}: the index was built with 2.1.0"
     t0 = time.time()
 
+    C, fold = fold_basis(a.model)
     prev = load(a.out)
+    width = D * BITS // 8
     if prev:
         idx, rows, codes, aux = prev
         mu = np.array(idx["mu"], np.float32)
+        if len(mu) == 768:                           # the 768-dim snapshot's mean, in the folded coordinates
+            mu = (mu.astype(np.float64) @ C).astype(np.float32)
         newest = max(r["t"] for r in rows)
         print(f"snapshot: {len(rows)} posts, newest {datetime.fromtimestamp(newest, timezone.utc):%Y-%m-%d %H:%M} UTC")
     else:
-        mu = np.array(json.loads(a.mu.read_text())["mu"], np.float32)
-        rows, codes, aux, newest = [], np.zeros((0, 96 * a.bits), np.uint8), np.zeros((0, 2), "<f4"), None
+        mu = (np.array(json.loads(a.mu.read_text())["mu"], np.float64) @ C).astype(np.float32)
+        rows, codes, aux, newest = [], np.zeros((0, width), np.uint8), np.zeros((0, 2), "<f4"), None
         print(f"bootstrap: paging back for {a.n} posts")
 
     if rows:
@@ -272,17 +308,19 @@ def main():
             new += fetch_authors(known, since)
             new = sorted(new, key=lambda r: r["t"])[-a.n:]
     new.sort(key=lambda r: r["t"])                       # oldest first, like the snapshot
-    qz = remex.Quantizer(768, bits=a.bits, seed=42, mean=mu)
+    qz = remex.Quantizer(D, bits=BITS, seed=42, rotation="none", mean=mu)
     t1 = time.time()
-    if prev and prev[0].get("bits", 2) != a.bits:
-        # a new code width: the snapshot keeps no fp32 vectors, so every stored post is embedded again
-        print(f"re-encoding {len(rows)} stored posts at {a.bits} bit(s)", flush=True)
+    fetched = len(new)
+    if prev and (prev[0].get("d", 768), prev[0].get("bits", 2)) != (D, BITS):
+        # a new code layout: the snapshot keeps no fp32 vectors, so every stored post is embedded again
+        print(f"re-encoding {len(rows)} stored posts as {BITS}-bit codes of {D} numbers", flush=True)
         new = rows + new
-        rows, codes, aux = [], np.zeros((0, 96 * a.bits), np.uint8), np.zeros((0, 2), "<f4")
+        rows, codes, aux = [], np.zeros((0, width), np.uint8), np.zeros((0, 2), "<f4")
     if new:
         X = Ettin(a.model).embed([r["text"] for r in new])
-        cv = qz.encode(X)
-        nc = pack(cv.indices.astype(np.uint8), a.bits).reshape(len(X), 96 * a.bits)
+        Y = (X.astype(np.float64) @ C).astype(np.float32)      # unit rows: C keeps lengths
+        cv = qz.encode(Y)
+        nc = pack(cv.indices.astype(np.uint8), BITS).reshape(len(Y), width)
         na = np.stack([qz._score_norms(cv), qz._row_bias(cv)], 1).astype("<f4")
         rows, codes, aux = rows + new, np.concatenate([codes, nc]), np.concatenate([aux, na])
     embed_s = time.time() - t1
@@ -307,23 +345,29 @@ def main():
         off += len(b)
     last = max(rows, key=lambda r: r["t"])
     header = json.dumps({
-        "n": len(rows), "d": 768, "bits": a.bits, "seed": 42, "rotation": "rht", "remex_version": remex.__version__,
+        "n": len(rows), "d": D, "bits": BITS, "seed": 42, "remex_version": remex.__version__,
+        # remex's rotation is in the model's last layer: queries and posts arrive rotated, and encoding skips it
+        "rotation": "none", "fold": {"file": "bsky/embedders/models/ettin/fold256.f32", "sha256": fold["sha256"],
+                                     "rotation": fold["rotation"]},
         # what a scorer needs besides the rotation: remex's boundaries, centroids and cosine factor at this width
         "boundaries": [float(v) for v in qz.boundaries], "centroids": [float(v) for v in qz.centroids],
         "kappa": float(qz._cosine_factor()),
         "model": "bsky/embedders/models/ettin/model.onnx", "doc_prompt": "", "max_tokens": MAX_SEQ, "list": LIST,
         "built": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "newest": {"uri": last["uri"], "t": last["t"]}, "oldest_t": min(r["t"] for r in rows),
-        "added": len(new), "embed_s": round(embed_s, 1), "sections": sections,
+        "added": fetched, "embed_s": round(embed_s, 1), "sections": sections,
         "mu": [float(v) for v in mu],
     }, separators=(",", ":")).encode()
-    with open(a.out / "snapshot.bin", "wb") as f:
+    migrated = not (a.out / SNAPSHOT).exists()
+    with open(a.out / SNAPSHOT, "wb") as f:
         f.write(MAGIC + len(header).to_bytes(4, "little") + header)
         for b in parts.values():
             f.write(b)
     (a.out / "index.json").write_bytes(header)
     for old in ("codes.u8.bin", "aux.f32.bin", "posts.json.gz"):    # the first layout, if migrating
         (a.out / old).unlink(missing_ok=True)
+    if not migrated:                    # a day after the switch, pages read the new file: drop the old one
+        (a.out / LEGACY).unlink(missing_ok=True)
     print(f"wrote {len(rows)} posts (+{len(new)}), embed {embed_s:.0f} s, total {time.time() - t0:.0f} s")
 
 

@@ -4,19 +4,20 @@ https://austegard.com/bsky/answer-search/
 
 Answers questions with sentences quoted word for word from the last 100,000 posts of the
 "Artificial (and real) Intelligence" Bluesky list. Ettin-17m embeds the question, a WebGPU scan over
-1-bit codes finds the 40 closest posts, and Ettin then scores every sentence of those posts against the
+4-bit codes finds the 40 closest posts, and Ettin then scores every sentence of those posts against the
 question; the 10 best-matching sentences, at most one per post, are shown with author and link. Needs WebGPU.
 
 ## How the index stays current
 
 - `scripts/answer-search/refresh.py` keeps a rolling snapshot: it reads the previous one, fetches the
   list's new posts (the list feed, which Bluesky serves about a week back; members' own feeds for anything
-  older), embeds them with the same Ettin model as the page (`../embedders/models/ettin/`), quantizes them
-  with remex 2.1.0 using the mean vector of `../embedders/index/ettin/index.json`, appends them and drops
-  the oldest beyond 100,000.
+  older), embeds them with the same Ettin model as the page (`../embedders/models/ettin/`), folds each
+  vector from 768 numbers to 256 the way the page's engine does (`fold256.f32`), quantizes them with
+  remex 2.1.0 at 4 bits, centred on a fixed mean (first taken from `../embedders/index/ettin/index.json`,
+  then carried in the snapshot), appends them and drops the oldest beyond 100,000.
 - `.github/workflows/refresh-answer-search.yml` runs it daily at 05:41 UTC and force-pushes the result as a
   single commit to the orphan branch `bsky-answer-search-data`, so history does not grow. The snapshot is
-  one file, `snapshot.bin` (header, 1-bit codes, scale/bias, gzipped post texts; layout in `refresh.py`),
+  one file, `snapshot-256x4.bin` (header, 4-bit codes, scale/bias, gzipped post texts; layout in `refresh.py`),
   because raw.githubusercontent.com caches each file for up to five minutes and ignores query strings, so
   separate files could come from two different builds. `index.json` repeats the header for people. Run the
   workflow by hand from the Actions tab; with no snapshot on the branch it bootstraps from scratch in about

@@ -1,17 +1,18 @@
-// Bluesky answers in one tab: Ettin-17m embeds the query, a GPU scan over 1-bit codes finds the closest
+// Bluesky answers in one tab: Ettin-17m embeds the query, a GPU scan over 4-bit codes finds the closest
 // of the last ~100,000 posts of the "Artificial (and real) Intelligence" list, then Ettin embeds every
 // sentence of those posts and the best-matching sentences are the answer, each quoted from its post.
 // Nothing is generated, so nothing can be misquoted.
 //
-// The index is live. A daily GitHub Action (scripts/answer-search/refresh.py) publishes a snapshot of the
-// last 100,000 posts to the bsky-answer-search-data branch (snapshot.bin); the page loads it, then asks Bluesky for the
-// posts written since, embeds them on the GPU, quantizes them into the same index (RemexTail.encode) and
-// keeps doing that every minute while the tab is visible.
+// Ettin runs with its last layer folded from 768 outputs to 256 (fold256.f32, engine.js foldHead), and that
+// layer also applies remex's rotation. Every vector here has 256 numbers, and the index stores 4 bits of each.
 //
-// The model and engines are the published files of ../embedders/ plus ../image-search/params.json.
+// The index is live. A daily GitHub Action (scripts/answer-search/refresh.py) publishes a snapshot of the
+// last 100,000 posts to the bsky-answer-search-data branch (snapshot-256x4.bin); the page loads it, then asks
+// Bluesky for the posts written since, embeds them on the GPU, encodes them into the same index (scan256.js)
+// and keeps doing that every minute while the tab is visible.
 
-import { SmallEngine } from '../embedders/engine.js';
-import { RemexTail } from '../embedders/tail.js';
+import { SmallEngine, foldHead } from '../embedders/engine.js?v=256';
+import { Scan256 } from './scan256.js';
 
 const E = new URL('../embedders/', import.meta.url).href;
 const SNAP = new URLSearchParams(location.search).get('snap')
@@ -20,8 +21,9 @@ const SNAP = new URLSearchParams(location.search).get('snap')
 const F = {
   manifest: E + 'models/ettin/manifest.json', meta: E + 'models/ettin/meta.json',
   tokenizer: E + 'models/ettin/tokenizer.json', model: E + 'models/ettin/model.onnx',
-  params: new URL('../image-search/params.json', import.meta.url).href,
+  fold: E + 'models/ettin/fold256.f32',
 };
+const SNAPSHOT = 'snapshot-256x4.bin', OLD_SNAPSHOT = 'snapshot.bin';
 const LIST = 'at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.graph.list/3lankcdrlip2f';
 const FEED = 'https://public.api.bsky.app/xrpc/app.bsky.feed.getListFeed';
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
@@ -31,7 +33,7 @@ const BATCH_TOKENS = 2048, BATCH_SEQS = 32;
 const LIVE_CAP = 20000;                   // room for posts added after the snapshot (about 11 days of the list)
 const OVERLAP_S = 3600;                   // page an hour past the newest known post, for posts indexed late
 const POLL_MS = 60000;
-let TOTAL_BYTES = 40e6;                   // replaced by 12.5 MB of model + the snapshot's own size once its download starts
+let TOTAL_BYTES = 31e6;                   // replaced by 13.6 MB of model + the snapshot's own size once its download starts
 const EXAMPLES = ['claude code pricing', 'LLM reasoning', 'AI copyright lawsuits', 'local models on a laptop',
   'data center electricity bills', 'bluesky custom feeds'];
 
@@ -81,7 +83,7 @@ async function gunzipJson(buf) {
   return JSON.parse(await new Response(s).text());
 }
 
-// ---------------------------------------------------------------- retrieval (Ettin-17m + RemexTail)
+// ---------------------------------------------------------------- retrieval (Ettin-17m + Scan256)
 
 let retrieval = null, loading = null;
 function ensureRetrieval() {
@@ -91,16 +93,19 @@ function ensureRetrieval() {
     if (!adapter) throw new Error('This page needs WebGPU (Chrome, Edge, or Safari 26+): the search runs on the GPU.');
     const device = await adapter.requestDevice({ requiredLimits: {
       maxStorageBufferBindingSize: adapter.limits.maxStorageBufferBindingSize, maxBufferSize: adapter.limits.maxBufferSize } });
-    const [manifest, meta, tj, model, params, tokMod, snap] = await Promise.all([
-      json(F.manifest), json(F.meta), json(F.tokenizer), fetchCached(F.model), json(F.params), import(TOKENIZERS), loadSnapshot()]);
+    const [manifest, meta, tj, model, fold, tokMod, snap] = await Promise.all([
+      json(F.manifest), json(F.meta), json(F.tokenizer), fetchCached(F.model), fetchCached(F.fold), import(TOKENIZERS), loadSnapshot()]);
     const { idx, codes, aux, corpus } = snap;
+    // the index was built with this head: a different one would put queries in other coordinates
+    const sha = [...new Uint8Array(await crypto.subtle.digest('SHA-256', fold))].map((b) => b.toString(16).padStart(2, '0')).join('');
+    if (sha !== idx.fold?.sha256) throw new Error('The index was built with a different model file; reload in a few minutes.');
     const tok = new tokMod.Tokenizer(tj, {});
     const qp = (meta.prompts || {}).query ?? '', dp = idx.doc_prompt ?? (meta.prompts || {}).document ?? '';
-    const engine = await SmallEngine.create(device, manifest, model, { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
-    const tail = await RemexTail.create(device, { rht: params.rht, mu: new Float32Array(idx.mu), ...scanConstants(idx, params) });
-    const docs = tail.allocCorpus(idx.n + LIVE_CAP);
-    tail.loadCodes(docs, (idx.bits ?? 2) === 1 ? widen1to2(codes) : new Uint8Array(codes), new Float32Array(aux), 0);
-    const qbuf = device.createBuffer({ size: idx.d * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    const engine = await SmallEngine.create(device, ...foldHead(manifest, model, fold), { maxTokens: BATCH_TOKENS, maxSeqs: BATCH_SEQS });
+    if (engine.dim !== idx.d) throw new Error(`the model gives ${engine.dim} numbers per text, the index ${idx.d}`);
+    const scan = await Scan256.create(device, { centroids: idx.centroids, boundaries: idx.boundaries, kappa: idx.kappa, mu: idx.mu });
+    const docs = scan.allocCorpus(idx.n + LIVE_CAP);
+    scan.loadCodes(docs, new Uint8Array(codes), new Float32Array(aux), 0);
     await device.queue.onSubmittedWorkDone();
     const known = new Set();
     corpus.posts.forEach(([a, rkey]) => known.add(corpus.authors[a][1] + '/' + rkey));
@@ -131,8 +136,7 @@ function ensureRetrieval() {
       const t0 = now();
       const qv = await engine.embed([ids(qp + text)]);
       const t1 = now();
-      device.queue.writeBuffer(qbuf, 0, qv);
-      const [top] = await tail.topk(qbuf, 1, docs, corpus.posts.length, k);
+      const top = await scan.topk(qv, docs, corpus.posts.length, k);
       const t2 = now();
       const posts = Array.from(top.idx, (i, j) => {
         const [a, rkey, t] = corpus.posts[i];
@@ -167,18 +171,16 @@ function ensureRetrieval() {
       }
       return out.sort((a, b) => a.t - b.t);
     };
-    // Embed new posts on the GPU and quantize them into the index after the last row.
+    // Embed new posts on the GPU, encode them as remex does and add them to the index after the last row.
     const addNew = async () => {
       let posts = await fetchNew();
       const room = docs.capacity - corpus.posts.length;
       if (posts.length > room) posts = posts.slice(posts.length - room);   // keep the newest that fit
       if (!posts.length) return 0;
       const V = await embedMany(posts.map((p) => p.text));
-      const buf = device.createBuffer({ size: V.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
-      device.queue.writeBuffer(buf, 0, V);
-      tail.encode(buf, posts.length, docs, corpus.posts.length);
+      const { packed, scaleBias } = scan.encode(V);
+      scan.loadCodes(docs, packed, scaleBias, corpus.posts.length);
       await device.queue.onSubmittedWorkDone();
-      buf.destroy();
       for (const p of posts) {
         let a = authorIdx.get(p.did);
         if (a === undefined) { a = corpus.authors.length; corpus.authors.push([p.handle, p.did]); authorIdx.set(p.did, a); }
@@ -190,34 +192,14 @@ function ensureRetrieval() {
       retrieval.live += posts.length;
       return posts.length;
     };
-    retrieval = { search, embedMany, addNew, d: idx.d, live: 0, snapshot: idx,
+    const post = (i) => { const [a, rkey, t] = corpus.posts[i]; return { text: corpus.texts[i], handle: corpus.authors[a][0], rkey, t }; };
+    retrieval = { search, embedMany, addNew, post, d: idx.d, live: 0, snapshot: idx,
       get n() { return corpus.posts.length; }, get newest() { return newest; } };
     return retrieval;
   })().finally(() => { loading = null; });
 }
 
-// RemexTail scans 2-bit codes (four centroids, three boundaries). A 1-bit snapshot runs on it unchanged: each
-// 1-bit code b becomes the 2-bit index 3b, and the centroid table maps indices 0-1 to the negative 1-bit centroid
-// and 2-3 to the positive one, so the scan computes exactly the 1-bit score. All three boundaries sit at the
-// 1-bit boundary, so posts encoded live on the GPU get indices 0 or 3 the same way. The constants come from the
-// snapshot header, written by the builder from remex itself.
-function scanConstants(idx, params) {
-  if ((idx.bits ?? 2) === 2) {
-    return { boundaries: idx.boundaries ?? params.boundaries, centroids: idx.centroids ?? params.centroids, kappa: idx.kappa ?? params.kappa };
-  }
-  const [lo, hi] = idx.centroids, b = idx.boundaries[0];
-  return { boundaries: [b, b, b], centroids: [lo, lo, hi, hi], kappa: idx.kappa };
-}
-// remex packs MSB first: a 1-bit byte holds 8 codes, a 2-bit byte 4. Each 1-bit nibble becomes one 2-bit byte.
-const WIDEN = Uint8Array.from({ length: 16 }, (_, n) =>
-  [0, 1, 2, 3].reduce((o, j) => o | (((n >> (3 - j)) & 1) * 3) << (6 - 2 * j), 0));
-function widen1to2(buf) {
-  const a = new Uint8Array(buf), out = new Uint8Array(a.length * 2);
-  for (let i = 0; i < a.length; i++) { out[2 * i] = WIDEN[a[i] >> 4]; out[2 * i + 1] = WIDEN[a[i] & 15]; }
-  return out;
-}
-
-// The snapshot to search: one file, snapshot.bin (b"ASNP", uint32 header length, JSON header, then the codes,
+// The snapshot to search: one file, snapshot-256x4.bin (b"ASNP", uint32 header length, JSON header, then the codes,
 // aux and posts sections the header locates), so a CDN can never pair parts of two builds; raw.githubusercontent.com
 // ignores query strings and caches each file for up to five minutes. A cached snapshot is kept until it is
 // KEEP_S old: the list feed can fill in about a week of newer posts, but each one has to be embedded here, so two
@@ -230,13 +212,15 @@ function parseSnapshot(buf) {
   const idx = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl)));
   const sec = (k) => buf.slice(8 + hl + idx.sections[k][0], 8 + hl + idx.sections[k][0] + idx.sections[k][1]);
   const codes = sec('codes'), aux = sec('aux');
-  if (codes.byteLength !== idx.n * 96 * (idx.bits ?? 2) || aux.byteLength !== idx.n * 8) throw new Error('snapshot sections do not match its header');
+  if (idx.d !== 256 || idx.bits !== 4) throw new Error(`an index of ${idx.bits}-bit codes of ${idx.d} numbers; this page reads 4-bit codes of 256`);
+  if (codes.byteLength !== idx.n * 128 || aux.byteLength !== idx.n * 8) throw new Error('snapshot sections do not match its header');
   return { idx, codes, aux, gz: sec('posts') };
 }
 async function loadSnapshot() {
   let cache = null;
   try { cache = await caches.open(CACHE); caches.delete('answer-search-v1'); } catch (e) { /* private mode */ }
-  const key = SNAP + 'snapshot.bin';
+  try { await cache?.delete(SNAP + OLD_SNAPSHOT); } catch (e) { /* none */ }   // the 768-dim 1-bit index
+  const key = SNAP + SNAPSHOT;
   let buf = null;
   try {
     const hit = cache && await cache.match(key);
@@ -249,7 +233,7 @@ async function loadSnapshot() {
     const r = await fetch(key, { cache: 'no-cache' });
     if (!r.ok) throw new Error(`index snapshot: HTTP ${r.status}`);
     const len = +r.headers.get('content-length');
-    if (len) TOTAL_BYTES = 12.5e6 + len;
+    if (len) TOTAL_BYTES = 13.6e6 + len;
     const reader = r.body.getReader(), chunks = [];
     let got = 0;
     for (;;) {
