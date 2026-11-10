@@ -10,7 +10,10 @@
 //               classifier gives the same answers and fits three times faster (tests/embedders-fold.mjs)
 //   3. sample   each candidate's last 100 posts and replies (no reposts), from the public AppView
 //   4. classify every sampled post gets P(on topic); a candidate's topic share is the mean
-//   5. review   a table pre-ticks accounts that look like people posting on topic; you decide
+//   5. review   a table pre-ticks accounts that look like people posting on topic; you decide. Accounts that
+//               look like spam or bots whatever the topic (spam.js: mostly links, repeated text, stacked
+//               hashtags; plus the reply, posts-per-day and bot-word rules) are left out of the table
+//               until "show filtered out" is ticked
 //   6. list     a new curate list (or an existing one) gets the ticked accounts
 //
 // Grown from oaustegard/experiments bsky-list-ai-share, which built an AI list the same way with a classifier
@@ -20,6 +23,7 @@
 import { initializeLib, login, logout, checkStoredSession, getAuthAgent, getListMembers, getLists } from '../bsky-lib.js';
 import { SmallEngine, foldHead } from '../embedders/engine.js?v=256';
 import { trainLogistic, auc } from './topic.js';
+import { spamSignals, spamReasons } from './spam.js';
 
 const E = new URL('../embedders/models/ettin/', import.meta.url).href;
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
@@ -126,7 +130,8 @@ async function sample(c) {
   const posts = own.map((p) => ({ t: Date.parse(p.indexedAt), text: p.record?.text || '', reply: !!p.record?.reply, uri: p.uri }))
     .filter((p) => wordy(p.text));
   const span = posts.length > 1 ? Math.max(1, (Math.max(...posts.map((p) => p.t)) - Math.min(...posts.map((p) => p.t))) / 86400e3) : 1;
-  return { ...c, posts, replyFrac: own.length ? own.filter((p) => p.record?.reply).length / own.length : 0, ppd: posts.length / span };
+  const replyFrac = own.length ? own.filter((p) => p.record?.reply).length / own.length : 0;
+  return { ...c, posts, replyFrac, ppd: posts.length / span, spam: spamReasons(spamSignals(own.map((p) => p.record || {})), replyFrac) };
 }
 
 async function profiles(dids) {
@@ -231,10 +236,14 @@ function flags(c) {
   if (BOTWORDS.test(`${c.handle} ${c.name} ${c.bio}`)) f.push('bot/feed words');
   if (c.ppd > settings.maxPpd) f.push(`${Math.round(c.ppd)} posts/day`);
   if (c.replyFrac < settings.minReplies) f.push('rarely replies');
+  f.push(...(c.spam || []));
   if (c.posts.length < 10) f.push('few posts');
   return f;
 }
 const looksRight = (c) => c.share >= settings.minShare && !flags(c).length;
+// Left out of the table unless asked for: every flag except having few posts, which is not a sign of spam.
+const filteredOut = (c) => c.flags.some((f) => f !== 'few posts');
+const shown = () => ($('showFiltered').checked ? candidates : candidates.filter((c) => !filteredOut(c)));
 
 async function run() {
   if (running) return;
@@ -312,7 +321,7 @@ async function run() {
     candidates = sampled.filter((c) => c.posts.length);
     bar(1);
     $('stage').textContent = `done in ${((performance.now() - t0) / 1000).toFixed(0)} s: ${candidates.length} accounts scored, ` +
-      `${candidates.filter((c) => c.checked).length} pre-ticked`;
+      `${candidates.filter((c) => c.checked).length} pre-ticked, ${candidates.filter(filteredOut).length} filtered out as likely spam or bots`;
     if (!descEdited) $('listDesc').value = describe(terms);
     render();
     $('results').hidden = false; $('listCard').hidden = false;
@@ -329,7 +338,7 @@ async function run() {
 
 const pct = (x) => `${Math.round(x * 100)}%`;
 function render() {
-  const rows = candidates.slice().sort((a, b) => sortDir * ((a[sortKey] ?? -1) > (b[sortKey] ?? -1) ? 1 : (a[sortKey] ?? -1) < (b[sortKey] ?? -1) ? -1 : 0));
+  const rows = shown().slice().sort((a, b) => sortDir * ((a[sortKey] ?? -1) > (b[sortKey] ?? -1) ? 1 : (a[sortKey] ?? -1) < (b[sortKey] ?? -1) ? -1 : 0));
   const tb = $('rows');
   tb.innerHTML = rows.map((c) => {
     const top = c.posts.slice().sort((a, b) => b.p - a.p);
@@ -348,8 +357,10 @@ function render() {
   updateCount();
 }
 function updateCount() {
-  const n = candidates.filter((c) => c.checked).length;
-  $('count').textContent = `${n} of ${candidates.length} ticked`;
+  const n = candidates.filter((c) => c.checked).length, out = candidates.filter(filteredOut).length;
+  $('count').textContent = `${n} of ${candidates.length - out} ticked`;
+  $('filteredNote').textContent = out ? `show ${out} filtered out` : 'none filtered out';
+  $('showFiltered').disabled = !out;
   $('make').disabled = !n;
 }
 $('rows').addEventListener('change', (e) => {
@@ -360,7 +371,8 @@ $('rows').addEventListener('change', (e) => {
 for (const th of document.querySelectorAll('th[data-k]')) {
   th.addEventListener('click', () => { sortDir = sortKey === th.dataset.k ? -sortDir : -1; sortKey = th.dataset.k; render(); });
 }
-$('tickAll').onclick = () => { candidates.forEach((c) => { c.checked = true; }); render(); };
+$('tickAll').onclick = () => { shown().forEach((c) => { c.checked = true; }); render(); };
+$('showFiltered').onchange = render;
 $('tickNone').onclick = () => { candidates.forEach((c) => { c.checked = false; }); render(); };
 $('tickSuggested').onclick = () => { readSettings(); candidates.forEach((c) => { c.flags = flags(c); c.checked = looksRight(c); }); render(); };
 

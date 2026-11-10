@@ -27,6 +27,12 @@ list (the kind a feed or a reader follows, as opposed to a moderation list). Sig
    and at least 15% replies. All four are editable defaults. Bots, feeds and marketers post a lot on most topics
    but rarely reply. Sort by any column; "hits" is how many search results an account wrote. Each row opens the
    account's most and least on-topic posts.
+   Accounts that look like spam or bots are left out of the table; "show N filtered out" brings them back,
+   each with the reasons. The rules do not depend on the search terms (`spam.js`): a link in at least 80% of
+   posts with under 30% replies, at least 30% of posts repeating another of the account's posts, or three or
+   more hashtags per post on average, plus the reply, posts-per-day and bot-word rules above. On a search for
+   four baking words (2026-11-09) they filtered all 13 product-listing, recipe-link and now-playing accounts
+   among 30 candidates and none of the other 17.
 6. **List.** The ticked accounts go on a new list or an existing one; accounts already on it are skipped.
 
 ## How good the learned topic is
