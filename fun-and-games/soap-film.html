@@ -1,0 +1,898 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Soap Film</title>
+<meta name="description" content="A soap film simulated on your GPU: tilt to pour it, drag to blow on it, tap to pop it. The colours are computed from the film's thickness.">
+<meta property="og:title" content="Soap Film">
+<meta property="og:description" content="A soap film simulated on your GPU: tilt to pour it, drag to blow on it, tap to pop it.">
+<meta property="og:image" content="https://austegard.com/images/og/fun-and-games-soap-film.jpg">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#05070a">
+<style>
+@font-face { font-family: "Fraunces"; src: url("/fonts/fraunces-italic.woff2") format("woff2"); font-style: italic; font-weight: 100 900; font-display: swap; }
+@font-face { font-family: "DM Sans"; src: url("/fonts/dm-sans.woff2") format("woff2"); font-weight: 100 1000; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("/fonts/jetbrains-mono-400.woff2") format("woff2"); font-weight: 400; font-display: swap; }
+:root {
+  color-scheme: dark;
+  --ink: #e9ecf2; --dim: #8e96a6; --line: rgba(255,255,255,.14); --glass: rgba(14,17,23,.62);
+  --body: "DM Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --display: "Fraunces", Georgia, serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; background: #05070a; color: var(--ink); font: 14px/1.4 var(--body); overflow: hidden; overscroll-behavior: none; }
+canvas#film { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; cursor: crosshair; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+.top { position: fixed; left: max(16px, env(safe-area-inset-left)); top: max(10px, env(safe-area-inset-top)); right: 16px; pointer-events: none; display: flex; align-items: baseline; gap: 12px; }
+.top h1 { margin: 0; font: italic 500 22px/1.2 var(--display); letter-spacing: .01em; }
+.top p { margin: 0; color: var(--dim); font-size: 13px; transition: opacity 1.2s; }
+.top p.gone { opacity: 0; }
+.bottom { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px max(14px, env(safe-area-inset-right)) max(12px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); display: flex; align-items: center; justify-content: center; gap: 14px; flex-wrap: wrap; pointer-events: none; background: linear-gradient(rgba(5,7,10,0), rgba(5,7,10,.9) 38%); padding-top: 26px; }
+.bottom > * { pointer-events: auto; }
+.scale { flex: 1 1 220px; max-width: 420px; min-width: 180px; position: relative; padding-top: 16px; }
+.scale canvas { display: block; width: 100%; height: 10px; border-radius: 5px; box-shadow: 0 0 0 1px var(--line); }
+.scale .ticks { display: flex; justify-content: space-between; font: 10px/1 var(--mono); color: var(--dim); margin-top: 4px; }
+.scale #mark { position: absolute; top: 0; left: 0; transform: translateX(-50%); font: 11px/1 var(--mono); color: var(--ink); white-space: nowrap; padding-bottom: 4px; }
+.scale #mark::after { content: ""; position: absolute; left: 50%; top: 13px; width: 1px; height: 15px; background: #fff; }
+.btns { display: flex; gap: 8px; align-items: center; }
+button { font: 500 13px/1 var(--body); color: var(--ink); background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 10px 15px; cursor: pointer; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); touch-action: manipulation; }
+button:hover { border-color: rgba(255,255,255,.35); }
+button:focus-visible, #dial:focus-visible { outline: 2px solid #9db4ff; outline-offset: 2px; }
+button.on { background: rgba(157,180,255,.2); border-color: rgba(157,180,255,.6); }
+button.pulse { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { border-color: rgba(255,255,255,.75); box-shadow: 0 0 0 4px rgba(255,255,255,.08); } }
+#dial { width: 44px; height: 44px; flex: none; border-radius: 50%; background: var(--glass); border: 1px solid var(--line); touch-action: none; cursor: grab; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
+#dial svg { display: block; width: 100%; height: 100%; }
+dialog { background: #10141b; color: var(--ink); border: 1px solid var(--line); border-radius: 14px; padding: 20px 22px; max-width: min(520px, calc(100vw - 32px)); box-sizing: border-box; font-size: 14px; line-height: 1.5; }
+dialog::backdrop { background: rgba(0,0,0,.55); }
+dialog h2 { margin: 0 0 8px; font: italic 500 22px/1.2 var(--display); }
+dialog p { margin: 0 0 10px; color: #c9cfdb; }
+dialog a { color: #a9bcff; }
+dialog .set { display: grid; grid-template-columns: auto 1fr; gap: 10px 14px; align-items: center; margin: 14px 0 16px; padding-top: 12px; border-top: 1px solid var(--line); }
+dialog .set label { color: var(--dim); }
+dialog input[type=range] { width: 100%; accent-color: #9db4ff; }
+dialog input[type=checkbox] { width: 18px; height: 18px; accent-color: #9db4ff; margin: 0; }
+dialog .row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#nogpu { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
+#nogpu div { max-width: 420px; color: #c9cfdb; }
+#nogpu h2 { font: italic 500 24px/1.2 var(--display); color: var(--ink); margin: 0 0 8px; }
+@media (max-width: 560px) { .top p { font-size: 12px; } .scale { flex-basis: 100%; max-width: none; order: -1; } }
+</style>
+</head>
+<body>
+<canvas id="film" aria-label="Simulated soap film"></canvas>
+<div class="top"><h1>Soap film</h1><p id="hint">drag to blow · tap to pop · tilt to pour</p></div>
+<div class="bottom" id="hud">
+  <div class="scale" title="Reflected colour by film thickness"><span id="mark" hidden></span><canvas id="scale" width="840" height="20"></canvas>
+    <div class="ticks"><span>0</span><span>500</span><span>1000</span><span>1500 nm</span></div></div>
+  <div class="btns">
+    <div id="dial" role="slider" tabindex="0" aria-label="Gravity direction" aria-valuemin="0" aria-valuemax="360" aria-valuenow="180" title="Gravity: drag to change">
+      <svg viewBox="-22 -22 44 44"><circle r="15" fill="none" stroke="rgba(255,255,255,.18)"/><line id="garrow" x1="0" y1="0" x2="0" y2="15" stroke="#e9ecf2" stroke-width="2" stroke-linecap="round"/><circle id="gtip" cx="0" cy="15" r="3" fill="#e9ecf2"/></svg></div>
+    <button id="dip">Dip</button>
+    <button id="tilt" hidden>Tilt</button>
+    <button id="shape">Loop</button>
+    <button id="info" aria-label="About and settings">About</button>
+  </div>
+</div>
+<dialog id="about">
+  <h2>Soap film</h2>
+  <p>A soap film is a sheet of water a few hundred nanometres thick, held between two layers of soap. Light reflecting off its front and back surfaces interferes, so every thickness reflects its own colour. Thinner than about 30 nm it reflects almost nothing and looks black.</p>
+  <p>The page runs a fluid simulation of the film on your GPU. Thick film is heavier than thin film, so it sinks along gravity (your phone's tilt, or the dial) and thin film rises. The frame drinks liquid from the film's edge, which sends thin plumes up from the border, and the film evaporates until black film spreads from the top and it pops. The colour of each point is the reflection summed over the visible spectrum for its thickness; the bar under the film is that same table.</p>
+  <div class="set">
+    <label for="drain">Drainage</label><input id="drain" type="range" min="0" max="4" step="0.1" value="1">
+    <label for="autopop">Pops by itself</label><input id="autopop" type="checkbox" checked>
+    <label for="sound">Sound</label><input id="sound" type="checkbox" checked>
+  </div>
+  <div class="row"><a href="https://github.com/oaustegard/experiments/tree/main/soap-film" rel="noopener">How it works</a><button id="close">Close</button></div>
+</dialog>
+<div id="nogpu" hidden><div><h2>Soap film</h2><p id="nogpumsg">This page draws with WebGPU, and this browser does not offer it. Recent Chrome, Edge and Safari do.</p></div></div>
+
+<script type="module">
+const qs = new URLSearchParams(location.search);
+const TEST = qs.has('test');
+const $ = id => document.getElementById(id);
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+// ───────────────────────── thin-film colour table ─────────────────────────
+// Reflectance of a water film in air (Airy sum over both surfaces, s and p averaged), integrated
+// against the CIE 1931 observer under D65, so a perfect mirror is (1,1,1) in linear sRGB.
+const HMAX = 3072, LW = 1024, LH = 16;           // nm covered, table width, rows of cos(incidence) from 0.5 to 1
+// CIE 1931 2° standard observer and CIE illuminant D65, 380–780 nm every 5 nm.
+const CIE_X = [0.0014,0.0022,0.0042,0.0076,0.0143,0.0232,0.0435,0.0776,0.1344,0.2148,0.2839,0.3285,0.3483,0.3481,0.3362,0.3187,0.2908,0.2511,0.1954,0.1421,0.0956,0.058,0.032,0.0147,0.0049,0.0024,0.0093,0.0291,0.0633,0.1096,0.1655,0.2257,0.2904,0.3597,0.4334,0.5121,0.5945,0.6784,0.7621,0.8425,0.9163,0.9786,1.0263,1.0567,1.0622,1.0456,1.0026,0.9384,0.8544,0.7514,0.6424,0.5419,0.4479,0.3608,0.2835,0.2187,0.1649,0.1212,0.0874,0.0636,0.0468,0.0329,0.0227,0.0158,0.0114,0.0081,0.0058,0.0041,0.0029,0.002,0.0014,0.001,0.0007,0.0005,0.0003,0.0002,0.0002,0.0001,0.0001,0.0001,0];
+const CIE_Y = [0,0.0001,0.0001,0.0002,0.0004,0.0006,0.0012,0.0022,0.004,0.0073,0.0116,0.0168,0.023,0.0298,0.038,0.048,0.06,0.0739,0.091,0.1126,0.139,0.1693,0.208,0.2586,0.323,0.4073,0.503,0.6082,0.71,0.7932,0.862,0.9149,0.954,0.9803,0.995,1,0.995,0.9786,0.952,0.9154,0.87,0.8163,0.757,0.6949,0.631,0.5668,0.503,0.4412,0.381,0.321,0.265,0.217,0.175,0.1382,0.107,0.0816,0.061,0.0446,0.032,0.0232,0.017,0.0119,0.0082,0.0057,0.0041,0.0029,0.0021,0.0015,0.001,0.0007,0.0005,0.0004,0.0002,0.0002,0.0001,0.0001,0.0001,0,0,0,0];
+const CIE_Z = [0.0065,0.0105,0.0201,0.0362,0.0679,0.1102,0.2074,0.3713,0.6456,1.0391,1.3856,1.623,1.7471,1.7826,1.7721,1.7441,1.6692,1.5281,1.2876,1.0419,0.813,0.6162,0.4652,0.3533,0.272,0.2123,0.1582,0.1117,0.0782,0.0573,0.0422,0.0298,0.0203,0.0134,0.0087,0.0057,0.0039,0.0027,0.0021,0.0018,0.0017,0.0014,0.0011,0.001,0.0008,0.0006,0.0003,0.0002,0.0002,0.0001,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0];
+const D65 = [50,52.3,54.6,68.7,82.8,87.1,91.5,92.5,93.4,90.1,86.7,95.8,104.9,110.9,117,117.4,117.8,116.3,114.9,115.4,115.9,112.4,108.8,109.1,109.4,108.6,107.8,106.3,104.8,106.2,107.7,106,104.4,104.2,104,102,100,98.2,96.3,96.1,95.8,92.2,88.7,89.3,90,89.8,89.6,88.6,87.7,85.5,83.3,83.5,83.7,81.9,80,80.1,80.2,81.2,82.3,80.3,78.3,74,69.7,70.7,71.6,73,74.3,68,61.6,65.7,69.9,72.5,75.1,69.3,63.6,55,46.4,56.6,66.8,65.1,63.4];
+const SPEC = (() => {
+  const rows = [], STEP = 2.5;                    // the 5 nm tables, interpolated to 2.5 nm
+  for (let l = 380; l <= 780; l += STEP) {
+    const t = (l - 380) / 5, i = Math.min(Math.floor(t), CIE_X.length - 2), f = t - i, at = a => a[i] + (a[i + 1] - a[i]) * f, S = at(D65);
+    rows.push({ l, n: 1.324 + 3046 / (l * l), x: S * at(CIE_X), y: S * at(CIE_Y), z: S * at(CIE_Z) });   // n: Cauchy fit to water, 1.343 at 400 nm, 1.333 at 589 nm
+  }
+  const Y = rows.reduce((s, r) => s + r.y, 0);
+  for (const r of rows) { r.x /= Y; r.y /= Y; r.z /= Y; }
+  return rows;
+})();
+const toRGB = (X, Y, Z) => [3.2406 * X - 1.5372 * Y - 0.4986 * Z, -0.9689 * X + 1.8758 * Y + 0.0415 * Z, 0.0557 * X - 0.2040 * Y + 1.0570 * Z];
+const WHITE = toRGB(SPEC.reduce((s, r) => s + r.x, 0), 1, SPEC.reduce((s, r) => s + r.z, 0));
+function filmOptics(cosi) {                         // per-wavelength constants for one angle of incidence
+  const s2 = 1 - cosi * cosi;
+  return SPEC.map(r => {
+    const cost = Math.sqrt(1 - s2 / (r.n * r.n));
+    const rs = (cosi - r.n * cost) / (cosi + r.n * cost), rp = (r.n * cosi - cost) / (r.n * cosi + cost);
+    return { k: 4 * Math.PI * r.n * cost / r.l, rs2: rs * rs, rp2: rp * rp };
+  });
+}
+function filmRGB(d, cosi = 1, optics = filmOptics(cosi)) {   // d in nm → linear sRGB reflectance, in gamut
+  let X = 0, Y = 0, Z = 0;
+  for (let i = 0; i < SPEC.length; i++) {
+    const o = optics[i], c = Math.cos(o.k * d);
+    const R = 0.5 * (2 * o.rs2 * (1 - c) / (1 + o.rs2 * o.rs2 - 2 * o.rs2 * c) + 2 * o.rp2 * (1 - c) / (1 + o.rp2 * o.rp2 - 2 * o.rp2 * c));
+    X += R * SPEC[i].x; Y += R * SPEC[i].y; Z += R * SPEC[i].z;
+  }
+  const c = toRGB(X, Y, Z).map((v, i) => v / WHITE[i]);
+  const lum = 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2], lo = Math.min(c[0], c[1], c[2]);
+  if (lo < 0 && lum > 0) { const t = lum / (lum - lo); return c.map(v => lum + t * (v - lum)); }   // pull into gamut at constant luminance
+  return c.map(v => Math.max(v, 0));
+}
+const f32 = new Float32Array(1), u32 = new Uint32Array(f32.buffer);
+function toHalf(v) {
+  f32[0] = v; const x = u32[0], s = (x >>> 16) & 0x8000; let e = ((x >>> 23) & 0xff) - 112, m = x & 0x7fffff;
+  if (e <= 0) { if (e < -10) return s; m = (m | 0x800000) >> (1 - e); return s | ((m + 0x1000) >> 13); }
+  if (e >= 31) return s | 0x7c00;
+  return (s | (e << 10)) + ((m + 0x1000) >> 13);
+}
+function buildLUT() {
+  const out = new Uint16Array(LW * LH * 4);
+  for (let j = 0; j < LH; j++) {
+    const optics = filmOptics(0.5 + 0.5 * j / (LH - 1));
+    for (let i = 0; i < LW; i++) {
+      const c = filmRGB(HMAX * i / (LW - 1), 0, optics), o = (j * LW + i) * 4;
+      out[o] = toHalf(c[0]); out[o + 1] = toHalf(c[1]); out[o + 2] = toHalf(c[2]); out[o + 3] = toHalf(1);
+    }
+  }
+  return out;
+}
+
+// ───────────────────────── parameters ─────────────────────────
+// Lengths are in grid cells and times in seconds; G, sigma and border widths scale with the grid so the
+// film behaves the same at any resolution.
+const P = {
+  G: 0.30,        // buoyancy, film widths / s² per unit of ln(thickness)
+  alpha: 0.45,    // air drag on the flow, 1/s
+  R: 1.1,         // border suction (marginal regeneration), 1/s at the wire
+  E: 0.9,         // evaporation, nm/s
+  drainMul: 1,
+  blow: 5,        // how hard a drag couples to the film, 1/s
+  sigma: 0.045,   // radius of the breath, film widths
+  diff: 0.012,    // diffusion of vorticity and thickness, cells²/s per cell of film width
+  iters: +qs.get('iters') || 14,
+  relax: 1.8,
+  exposure: 10,
+  wobble: 0.0012,
+};
+
+// ───────────────────────── WGSL ─────────────────────────
+const PRELUDE = /* wgsl */`
+struct U {
+  dims: vec4f,              // nx, ny, dt, time
+  grav: vec4f,              // gravity x, y (y is down the screen), G in cells/s², drag 1/s
+  drain: vec4f,             // border suction 1/s, evaporation nm/s, border width cells, noise scale
+  shape: vec4f,             // 0 = rounded rectangle / 1 = circle, half width, half height, radius
+  pop: vec4f,               // hole centre x, y, radius, 1 when the film is bursting or gone
+  breath: array<vec4f, 4>,  // breath position x, y and velocity x, y; x < 0 when unused
+  blow: vec4f,              // breath radius cells, coupling 1/s, diffusion cells²/s
+};
+@group(0) @binding(0) var<uniform> u: U;
+fn sdf(p: vec2f) -> f32 {
+  let c = p - 0.5 * u.dims.xy;
+  if (u.shape.x > 0.5) { return length(c) - u.shape.w; }
+  let q = abs(c) - (u.shape.yz - vec2f(u.shape.w));
+  return length(max(q, vec2f(0.0))) + min(max(q.x, q.y), 0.0) - u.shape.w;
+}
+fn cidx(x: i32, y: i32) -> u32 {
+  let nx = i32(u.dims.x); let ny = i32(u.dims.y);
+  return u32(clamp(y, 0, ny - 1) * nx + clamp(x, 0, nx - 1));
+}
+`;
+
+// A step of the film has two passes. ADVECT moves vorticity and thickness along the flow and drains the film.
+// FORCE then adds buoyancy from the thickness it has just moved (using the new thickness, not the old, is what
+// keeps layered film from ringing), plus breath, drag, diffusion and the collapse to black film.
+// State is (vorticity in 1/s, thickness in nm).
+const ADVECT = PRELUDE + /* wgsl */`
+@group(0) @binding(1) var<storage, read> src: array<vec2f>;
+@group(0) @binding(2) var<storage, read> vel: array<vec2f>;
+@group(0) @binding(3) var<storage, read_write> dst: array<vec2f>;
+fn velAt(p: vec2f) -> vec2f {
+  let q = p - 0.5; let f0 = floor(q); let a = q - f0; let x = i32(f0.x); let y = i32(f0.y);
+  return mix(mix(vel[cidx(x, y)], vel[cidx(x + 1, y)], a.x), mix(vel[cidx(x, y + 1)], vel[cidx(x + 1, y + 1)], a.x), a.y);
+}
+fn hash3(p: vec3f) -> f32 { var q = fract(p * vec3f(0.1031, 0.1030, 0.0973)); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+fn vnoise(p: vec3f) -> f32 {
+  let i = floor(p); let f = p - i; let s = f * f * (3.0 - 2.0 * f);
+  return mix(mix(mix(hash3(i), hash3(i + vec3f(1.0, 0.0, 0.0)), s.x), mix(hash3(i + vec3f(0.0, 1.0, 0.0)), hash3(i + vec3f(1.0, 1.0, 0.0)), s.x), s.y),
+             mix(mix(hash3(i + vec3f(0.0, 0.0, 1.0)), hash3(i + vec3f(1.0, 0.0, 1.0)), s.x), mix(hash3(i + vec3f(0.0, 1.0, 1.0)), hash3(i + vec3f(1.0, 1.0, 1.0)), s.x), s.y), s.z);
+}
+fn cr(a: f32) -> vec4f {      // Catmull-Rom weights
+  let a2 = a * a; let a3 = a2 * a;
+  return vec4f(-0.5 * a3 + a2 - 0.5 * a, 1.5 * a3 - 2.5 * a2 + 1.0, -1.5 * a3 + 2.0 * a2 + 0.5 * a, 0.5 * a3 - 0.5 * a2);
+}
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = i32(u.dims.x); let ny = i32(u.dims.y);
+  let x = i32(gid.x); let y = i32(gid.y);
+  if (x >= nx || y >= ny) { return; }
+  let i = u32(y * nx + x);
+  let p = vec2f(f32(x) + 0.5, f32(y) + 0.5);
+  let d = sdf(p);
+  let dt = u.dims.z;
+  let gone = u.pop.w > 0.5 && distance(p, u.pop.xy) < u.pop.z;
+  if (d >= 0.0) {
+    // Outside the wire: carry the nearest film thickness outward so sampling near the edge sees film, not zero.
+    var s = 0.0; var w = 0.0;
+    for (var j = -1; j <= 1; j++) {
+      for (var k = -1; k <= 1; k++) {
+        if (j == 0 && k == 0) { continue; }
+        let hv = src[cidx(x + k, y + j)].y;
+        let wt = select(0.001, 1.0, sdf(p + vec2f(f32(k), f32(j))) < 0.0) * step(0.5, hv);
+        s += wt * hv; w += wt;
+      }
+    }
+    var hx = src[i].y;
+    if (w > 0.0) { hx = s / w; }
+    if (gone) { hx = 0.0; }
+    dst[i] = vec2f(0.0, hx);
+    return;
+  }
+  // Trace back along the flow (midpoint rule), then read the old state there with a clamped cubic.
+  let pm = p - 0.5 * dt * vel[i];
+  let pd = p - dt * velAt(pm);
+  let q = pd - 0.5; let f0 = floor(q); let a = q - f0;
+  let x0 = i32(f0.x) - 1; let y0 = i32(f0.y) - 1;
+  let vx = cr(a.x); let vy = cr(a.y);
+  var wx = array<f32, 4>(vx.x, vx.y, vx.z, vx.w);
+  var wy = array<f32, 4>(vy.x, vy.y, vy.z, vy.w);
+  var acc = vec2f(0.0); var lo = vec2f(1e9); var hi = vec2f(-1e9);
+  for (var j = 0; j < 4; j++) {
+    for (var k = 0; k < 4; k++) {
+      let sv = src[cidx(x0 + k, y0 + j)];
+      acc += wx[k] * wy[j] * sv;
+      if (j > 0 && j < 3 && k > 0 && k < 3) { lo = min(lo, sv); hi = max(hi, sv); }
+    }
+  }
+  acc = clamp(acc, lo, hi);
+  var h = acc.y;
+  // Border suction: the wire's meniscus pulls liquid out of the film next to it, in patches that come and go.
+  let wall = exp(d / u.drain.z);
+  if (wall > 0.004) {
+    let m = smoothstep(0.50, 0.72, vnoise(vec3f(p * u.drain.w, u.dims.w * 0.25)));
+    h -= dt * u.drain.x * wall * m * h;
+  }
+  h = max(h - dt * u.drain.y, 6.0);                 // evaporation; nothing thins past black film
+  if (gone) { h = 0.0; }
+  dst[i] = vec2f(acc.x, h);
+}`;
+
+const FORCE = PRELUDE + /* wgsl */`
+@group(0) @binding(1) var<storage, read> src: array<vec2f>;
+@group(0) @binding(2) var<storage, read_write> dst: array<vec2f>;
+fn fb(h: f32) -> f32 { return log(max(h, 0.0) + 30.0); }
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = i32(u.dims.x); let ny = i32(u.dims.y);
+  let x = i32(gid.x); let y = i32(gid.y);
+  if (x >= nx || y >= ny) { return; }
+  let i = u32(y * nx + x);
+  let p = vec2f(f32(x) + 0.5, f32(y) + 0.5);
+  let sc = src[i];
+  if (sdf(p) >= 0.0) { dst[i] = sc; return; }
+  let dt = u.dims.z;
+  // Neighbours across the wire count as copies of this cell: no thickness gradient and no flux through the frame.
+  var sl = src[i - 1u]; var sr = src[i + 1u]; var su = src[i - u32(nx)]; var sd = src[i + u32(nx)];
+  if (sdf(p - vec2f(1.0, 0.0)) >= 0.0) { sl = vec2f(0.0, sc.y); }
+  if (sdf(p + vec2f(1.0, 0.0)) >= 0.0) { sr = vec2f(0.0, sc.y); }
+  if (sdf(p - vec2f(0.0, 1.0)) >= 0.0) { su = vec2f(0.0, sc.y); }
+  if (sdf(p + vec2f(0.0, 1.0)) >= 0.0) { sd = vec2f(0.0, sc.y); }
+  // A little diffusion of both (viscosity, and thickness evening out) keeps filaments wider than a cell.
+  let lap = sl + sr + su + sd - 4.0 * sc;
+  var om = sc.x + dt * u.blow.z * lap.x;
+  var h = sc.y + dt * u.blow.z * lap.y;
+  // Buoyancy. Thickness stands in for density, so the torque on the flow is G · (∇ ln h × g).
+  let fx = 0.5 * (fb(sr.y) - fb(sl.y)); let fy = 0.5 * (fb(sd.y) - fb(su.y));
+  om += dt * u.grav.z * (u.grav.y * fx - u.grav.x * fy);
+  // Breath: the curl of a Gaussian push along each moving pointer.
+  for (var k = 0; k < 4; k++) {
+    let b = u.breath[k];
+    if (b.x < 0.0) { continue; }
+    let rr = p - b.xy; let s2 = u.blow.x * u.blow.x;
+    om += dt * u.blow.y * exp(-dot(rr, rr) / (2.0 * s2)) * (rr.y * b.z - rr.x * b.w) / s2;
+  }
+  om = clamp(om * exp(-u.grav.w * dt), -60.0, 60.0);
+  // Below about 40 nm the film snaps to black film; black film then eats into the silver film beside it.
+  if (h < 42.0) { h += dt * 5.0 * (6.0 - h); }
+  else if (min(min(sl.y, sr.y), min(su.y, sd.y)) < 14.0 && h < 115.0) { h -= dt * 1.4 * (h - 6.0); }
+  h = clamp(h, 6.0, 6000.0);
+  if (sc.y < 0.5 || (u.pop.w > 0.5 && distance(p, u.pop.xy) < u.pop.z)) { h = 0.0; om = 0.0; }
+  dst[i] = vec2f(om, h);
+}`;
+
+// Red-black successive over-relaxation for the stream function: ∇²ψ = −ω, ψ = 0 on the wire.
+const SOR = PRELUDE + /* wgsl */`
+@group(0) @binding(1) var<storage, read> st: array<vec2f>;
+@group(0) @binding(2) var<storage, read_write> psi: array<f32>;
+@group(0) @binding(3) var<uniform> par: vec4f;
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = i32(u.dims.x); let ny = i32(u.dims.y);
+  let x = i32(gid.x); let y = i32(gid.y);
+  if (x >= nx || y >= ny || ((x + y) & 1) != i32(par.x)) { return; }
+  if (sdf(vec2f(f32(x) + 0.5, f32(y) + 0.5)) >= 0.0) { return; }
+  let i = u32(y * nx + x); let n = u32(nx);
+  let g = 0.25 * (psi[i - 1u] + psi[i + 1u] + psi[i - n] + psi[i + n] + st[i].x);
+  psi[i] = mix(psi[i], g, par.y);
+}`;
+
+const VEL = PRELUDE + /* wgsl */`
+@group(0) @binding(1) var<storage, read> psi: array<f32>;
+@group(0) @binding(2) var<storage, read_write> vel: array<vec2f>;
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = i32(u.dims.x); let ny = i32(u.dims.y);
+  let x = i32(gid.x); let y = i32(gid.y);
+  if (x >= nx || y >= ny) { return; }
+  let i = u32(y * nx + x); let n = u32(nx);
+  var v = vec2f(0.0);
+  if (sdf(vec2f(f32(x) + 0.5, f32(y) + 0.5)) < 0.0) { v = vec2f(0.5 * (psi[i + n] - psi[i - n]), -0.5 * (psi[i + 1u] - psi[i - 1u])); }
+  vel[i] = v;
+}`;
+
+// Per row: sum of thickness, cells of film, cells of black film, sum of |vorticity|.
+const STATS = PRELUDE + /* wgsl */`
+@group(0) @binding(1) var<storage, read> st: array<vec2f>;
+@group(0) @binding(2) var<storage, read_write> rows: array<vec4f>;
+@compute @workgroup_size(64)
+fn main(@builtin(global_invocation_id) gid: vec3u) {
+  let nx = i32(u.dims.x); let ny = i32(u.dims.y);
+  let y = i32(gid.x);
+  if (y >= ny) { return; }
+  var s = vec4f(0.0);
+  for (var x = 0; x < nx; x++) {
+    if (sdf(vec2f(f32(x) + 0.5, f32(y) + 0.5)) < 0.0) {
+      let v = st[u32(y * nx + x)];
+      if (v.y > 0.5) { s += vec4f(v.y, 1.0, select(0.0, 1.0, v.y < 20.0), abs(v.x)); }
+    }
+  }
+  rows[y] = s;
+}`;
+
+const RENDER = PRELUDE + /* wgsl */`
+struct R {
+  view: vec4f,       // canvas width, height in px, px per cell, time
+  org: vec4f,        // film origin in px (x, y), reveal row, exposure
+  m0: vec4f, m1: vec4f, m2: vec4f,   // screen → world rotation (rows); world z is up
+  misc: vec4f,       // eye distance in cells, wire width in cells, wobble, unused
+};
+@group(0) @binding(1) var<uniform> r: R;
+@group(0) @binding(2) var<storage, read> st: array<vec2f>;
+@group(0) @binding(3) var<storage, read> vel: array<vec2f>;
+@group(0) @binding(4) var lut: texture_2d<f32>;
+@group(0) @binding(5) var smp: sampler;
+const HMAX = ${HMAX}.0; const LW = ${LW}.0; const LH = ${LH}.0;
+
+@vertex fn vs(@builtin(vertex_index) i: u32) -> @builtin(position) vec4f {
+  return vec4f(f32((i << 1u) & 2u) * 2.0 - 1.0, f32(i & 2u) * 2.0 - 1.0, 0.0, 1.0);
+}
+fn bs(a: f32) -> vec4f {      // cubic B-spline weights
+  let a2 = a * a; let a3 = a2 * a;
+  return vec4f(-a3 + 3.0 * a2 - 3.0 * a + 1.0, 3.0 * a3 - 6.0 * a2 + 4.0, -3.0 * a3 + 3.0 * a2 + 3.0 * a + 1.0, a3) / 6.0;
+}
+fn hAt(p: vec2f) -> f32 {
+  let q = p - 0.5; let f0 = floor(q); let a = q - f0;
+  let x0 = i32(f0.x) - 1; let y0 = i32(f0.y) - 1;
+  let vx = bs(a.x); let vy = bs(a.y);
+  var wx = array<f32, 4>(vx.x, vx.y, vx.z, vx.w);
+  var wy = array<f32, 4>(vy.x, vy.y, vy.z, vy.w);
+  var s = 0.0;
+  for (var j = 0; j < 4; j++) { for (var k = 0; k < 4; k++) { s += wx[k] * wy[j] * st[cidx(x0 + k, y0 + j)].y; } }
+  return s;
+}
+fn velAt(p: vec2f) -> vec2f {
+  let q = p - 0.5; let f0 = floor(q); let a = q - f0; let x = i32(f0.x); let y = i32(f0.y);
+  return mix(mix(vel[cidx(x, y)], vel[cidx(x + 1, y)], a.x), mix(vel[cidx(x, y + 1)], vel[cidx(x + 1, y + 1)], a.x), a.y);
+}
+fn world(v: vec3f) -> vec3f { return vec3f(dot(r.m0.xyz, v), dot(r.m1.xyz, v), dot(r.m2.xyz, v)); }
+fn pane(az: f32, el: f32, hs: vec2f) -> f32 {
+  let a = atan2(sin(az), cos(az));
+  let glass = smoothstep(hs.x + 0.02, hs.x - 0.02, abs(a)) * smoothstep(hs.y + 0.02, hs.y - 0.02, abs(el));
+  let bars = smoothstep(0.010, 0.026, abs(a)) * smoothstep(0.010, 0.026, abs(el + 0.04)) * smoothstep(0.008, 0.020, abs(abs(a) - 0.5 * hs.x));
+  return glass * (0.70 + 0.30 * bars);
+}
+// The room the film mirrors: warm walls, a pale ceiling with a lamp, and two daylight windows.
+fn env(d: vec3f) -> vec3f {
+  let el = asin(clamp(d.z, -1.0, 1.0)); let az = atan2(d.y, d.x);
+  var c = mix(vec3f(0.60, 0.57, 0.54), vec3f(0.80, 0.78, 0.74), smoothstep(-0.14, 0.14, d.z));
+  c = mix(c, vec3f(0.96, 0.95, 0.93), smoothstep(0.55, 0.90, d.z));
+  c += vec3f(0.42, 0.48, 0.56) * pane(az + 1.5708, el - 0.20, vec2f(0.62, 0.34));
+  c += vec3f(0.38, 0.44, 0.50) * pane(az - 1.2, el - 0.20, vec2f(0.38, 0.34));
+  c += vec3f(0.50, 0.47, 0.40) * smoothstep(0.90, 0.96, d.z);
+  return c;
+}
+fn hash2(p: vec2f) -> f32 { var q = fract(vec3f(p.xyx) * 0.1031); q += dot(q, q.yzx + 33.33); return fract((q.x + q.y) * q.z); }
+
+@fragment fn fs(@builtin(position) fc: vec4f) -> @location(0) vec4f {
+  let nx = u.dims.x; let ny = u.dims.y;
+  let cell = (fc.xy - r.org.xy) / r.view.z;
+  let aa = 0.75 / r.view.z;
+  let d = sdf(cell);
+  let uv = fc.xy / r.view.xy;
+  let vg = length((uv - vec2f(0.5, 0.45)) * vec2f(r.view.x / r.view.y, 1.0));
+  var col = mix(vec3f(0.016, 0.020, 0.030), vec3f(0.003, 0.004, 0.006), smoothstep(0.05, 0.85, vg));
+
+  let pos = vec3f(cell.x - 0.5 * nx, 0.5 * ny - cell.y, 0.0);
+  let inc = normalize(pos - vec3f(0.0, 0.0, r.misc.x));
+  let film = 1.0 - smoothstep(-aa, aa, d);
+  if (film > 0.0) {
+    let h = hAt(cell);
+    let rev = 1.0 - smoothstep(r.org.z - 0.6, r.org.z + 0.6, cell.y);
+    let v2 = velAt(cell);
+    let n = normalize(vec3f(r.misc.z * vec2f(v2.x, -v2.y), 1.0));
+    let lite = env(world(reflect(inc, n)));
+    let cosi = clamp(-dot(inc, n), 0.0, 1.0);
+    let lu = vec2f((clamp(h / HMAX, 0.0, 1.0) * (LW - 1.0) + 0.5) / LW, (clamp((cosi - 0.5) * 2.0, 0.0, 1.0) * (LH - 1.0) + 0.5) / LH);
+    let refl = textureSampleLevel(lut, smp, lu, 0.0).rgb;
+    let cover = film * rev * smoothstep(0.5, 3.0, h);
+    col += cover * refl * lite * r.org.w;
+    col += cover * lite * 0.045 * exp(-d * d / 1.2);                         // liquid collar along the wire
+    if (u.pop.w > 0.5) {                                                      // rim of the opening hole
+      let dp = distance(cell, u.pop.xy) - u.pop.z;
+      col += cover * lite * 0.5 * exp(-dp * dp / 2.5);
+    }
+    if (r.org.z < ny) {                                                       // edge of the bath while dipping
+      let dr = cell.y - r.org.z;
+      col += film * lite * 0.22 * exp(-dr * dr / 1.5);
+    }
+  }
+
+  // The wire: a tube around the frame's outline, and a handle below it.
+  let rho = 0.5 * r.misc.y;
+  let so = d - rho;
+  let g = normalize(vec2f(sdf(cell + vec2f(0.5, 0.0)) - sdf(cell - vec2f(0.5, 0.0)), sdf(cell + vec2f(0.0, 0.5)) - sdf(cell - vec2f(0.0, 0.5))) + vec2f(1e-6, 0.0));
+  var t = abs(so) / rho; var nd = g * sign(so); var rad = rho;
+  let y0 = 0.5 * ny + select(u.shape.z, u.shape.w, u.shape.x > 0.5) + rho;
+  let hv = vec2f(cell.x - 0.5 * nx, min(cell.y - y0, 0.0));
+  let hl = length(hv);
+  if (hl / (1.35 * rho) < t) { t = hl / (1.35 * rho); nd = hv / max(hl, 1e-5); rad = 1.35 * rho; }
+  let wa = 1.0 - smoothstep(1.0 - aa / rad, 1.0 + aa / rad, t);
+  if (wa > 0.0) {
+    let tz = sqrt(max(1.0 - t * t, 0.0));
+    let n3 = normalize(vec3f(nd.x * t, -nd.y * t, tz + 0.05));
+    let metal = vec3f(0.60, 0.62, 0.66) * env(world(reflect(inc, n3))) * (0.22 + 0.78 * tz);
+    col = mix(col, metal, wa);
+  }
+
+  let over = max(col - vec3f(0.82), vec3f(0.0));
+  col = min(col, vec3f(0.82)) + 0.18 * tanh(over / 0.18);
+  col = pow(max(col, vec3f(0.0)), vec3f(1.0 / 2.2)) + (hash2(fc.xy) - 0.5) / 255.0;
+  return vec4f(col, 1.0);
+}`;
+
+// ───────────────────────── initial films ─────────────────────────
+function hash2(ix, iy, seed) {
+  let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(seed, 1274126177);
+  h = Math.imul(h ^ (h >>> 13), 1274126177);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+function vnoise(x, y, seed) {
+  const ix = Math.floor(x), iy = Math.floor(y), fx = x - ix, fy = y - iy;
+  const sx = fx * fx * (3 - 2 * fx), sy = fy * fy * (3 - 2 * fy);
+  const a = hash2(ix, iy, seed), b = hash2(ix + 1, iy, seed), c = hash2(ix, iy + 1, seed), d = hash2(ix + 1, iy + 1, seed);
+  return a + (b - a) * sx + (c - a) * sy + (a - b - c + d) * sx * sy;
+}
+function fbm(x, y, seed, oct = 4) { let s = 0, a = 0.5, f = 1; for (let o = 0; o < oct; o++) { s += a * vnoise(x * f, y * f, seed + o * 17); a *= 0.5; f *= 2; } return s / (1 - 0.5 ** oct); }
+function initState(NX, NY, kind, seed) {
+  const out = new Float32Array(NX * NY * 2), N = Math.min(NX, NY);
+  for (let y = 0; y < NY; y++) for (let x = 0; x < NX; x++) {
+    const v = y / (NY - 1), i = (y * NX + x) * 2;
+    let h, om = 0;
+    if (kind === 'strat') h = 300 + 900 * v;
+    else if (kind === 'inverted') h = 1200 - 900 * v + 300 * (vnoise(x * 0.15, y * 0.15, seed) - 0.5);
+    else if (kind === 'flat') h = 600;
+    else if (kind === 'thin') h = 60 + 240 * v;
+    else {
+      // Fresh from the bath: thicker toward the bottom, marbled, and still swirling.
+      h = 240 + 660 * v ** 1.2 + 640 * (fbm(x / N * 3.2, y / N * 3.2, seed) - 0.5) + 160 * (fbm(x / N * 9, y / N * 9, seed + 99, 2) - 0.5);
+      om = 5.5 * (fbm(x / N * 4.5, y / N * 4.5, seed + 7, 3) - 0.5);
+      h = Math.max(h, 110);
+    }
+    out[i] = om; out[i + 1] = h;
+  }
+  return out;
+}
+
+// ───────────────────────── GPU setup ─────────────────────────
+function noGPU(msg) { $('nogpu').hidden = false; if (msg) $('nogpumsg').textContent = msg; $('hud').hidden = true; $('hint').hidden = true; }
+const adapter = navigator.gpu ? await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' }) : null;
+if (!adapter) { noGPU(); throw new Error('no WebGPU adapter'); }
+const device = await adapter.requestDevice();
+let lost = false;
+device.lost.then(info => { lost = true; if (info.reason !== 'destroyed') noGPU('The GPU device was lost (' + (info.message || info.reason) + '). Reload the page to start again.'); });
+
+const canvas = $('film');
+const ctx = TEST ? null : canvas.getContext('webgpu');
+const format = TEST ? 'rgba8unorm' : navigator.gpu.getPreferredCanvasFormat();
+if (ctx) ctx.configure({ device, format, alphaMode: 'opaque' });
+
+const compute = code => device.createComputePipeline({ layout: 'auto', compute: { module: device.createShaderModule({ code }), entryPoint: 'main' } });
+const pAdvect = compute(ADVECT), pForce = compute(FORCE), pSor = compute(SOR), pVel = compute(VEL), pStats = compute(STATS);
+const rmod = device.createShaderModule({ code: RENDER });
+const pRender = device.createRenderPipeline({ layout: 'auto', vertex: { module: rmod, entryPoint: 'vs' }, fragment: { module: rmod, entryPoint: 'fs', targets: [{ format }] }, primitive: { topology: 'triangle-list' } });
+const lutTex = device.createTexture({ size: [LW, LH], format: 'rgba16float', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+device.queue.writeTexture({ texture: lutTex }, buildLUT(), { bytesPerRow: LW * 8 }, [LW, LH]);
+const lutView = lutTex.createView();
+const sampler = device.createSampler({ magFilter: 'linear', minFilter: 'linear', addressModeU: 'clamp-to-edge', addressModeV: 'clamp-to-edge' });
+
+const BU = GPUBufferUsage;
+let sim = null;
+function buildSim(NX, NY, shape) {
+  if (sim) for (const b of sim.buffers) b.destroy();
+  const n = NX * NY, N = Math.min(NX, NY);
+  const mk = (size, usage) => device.createBuffer({ size, usage });
+  const st = [mk(n * 8, BU.STORAGE | BU.COPY_DST | BU.COPY_SRC), mk(n * 8, BU.STORAGE | BU.COPY_DST | BU.COPY_SRC)];
+  const psi = mk(n * 4, BU.STORAGE | BU.COPY_DST | BU.COPY_SRC), vel = mk(n * 8, BU.STORAGE | BU.COPY_DST | BU.COPY_SRC);
+  const rows = mk(NY * 16, BU.STORAGE | BU.COPY_SRC), read = mk(NY * 16 + 8, BU.COPY_DST | BU.MAP_READ);
+  const ubuf = mk(160, BU.UNIFORM | BU.COPY_DST), rbuf = mk(96, BU.UNIFORM | BU.COPY_DST);
+  const par = [0, 1].map(k => { const b = mk(16, BU.UNIFORM | BU.COPY_DST); device.queue.writeBuffer(b, 0, new Float32Array([k, P.relax, 0, 0])); return b; });
+  const bg = (pipe, ...res) => device.createBindGroup({ layout: pipe.getBindGroupLayout(0), entries: res.map((r, i) => ({ binding: i, resource: r instanceof GPUBuffer ? { buffer: r } : r })) });
+  const wire = Math.max(2.2, 0.0085 * N), margin = Math.max(4, Math.ceil(wire) + 2);
+  sim = {
+    NX, NY, N, n, shape, wire, margin, st, psi, vel, rows, read, ubuf, rbuf, buffers: [...st, psi, vel, rows, read, ubuf, rbuf, ...par],
+    shapeVec: shape === 'loop' ? [1, 0, 0, N / 2 - margin] : [0, NX / 2 - margin, NY / 2 - margin, 0.11 * N],
+    bgAdvect: bg(pAdvect, ubuf, st[0], vel, st[1]),      // the film lives in st[0]; st[1] holds it between the two passes
+    bgForce: bg(pForce, ubuf, st[1], st[0]),
+    bgSor: par.map(pb => bg(pSor, ubuf, st[0], psi, pb)),
+    bgVel: bg(pVel, ubuf, psi, vel),
+    bgStats: bg(pStats, ubuf, st[0], rows),
+    bgRender: bg(pRender, ubuf, rbuf, st[0], vel, lutView, sampler),
+    time: 0, age: 0, reading: false, dead: false,
+    pop: { on: false, x: 0, y: 0, r: 0 }, empty: false, reveal: NY + 2,
+    stats: { mean: 0, black: 0, cells: 1, vort: 0, rowBlack: null }, probe: 0,
+  };
+  return sim;
+}
+function dip(kind = 'fresh', seed = (Math.random() * 1e9) | 0) {
+  const s = sim;
+  device.queue.writeBuffer(s.st[0], 0, initState(s.NX, s.NY, kind, seed));
+  device.queue.writeBuffer(s.st[1], 0, new Float32Array(s.n * 2));
+  device.queue.writeBuffer(s.psi, 0, new Float32Array(s.n));
+  device.queue.writeBuffer(s.vel, 0, new Float32Array(s.n * 2));
+  s.age = 0; s.pop.on = false; s.empty = false;
+  s.reveal = TEST ? s.NY + 2 : s.margin - 1;
+  s.stats.black = 0;
+  $('dip').classList.remove('pulse');
+}
+function pop(x, y) {
+  const s = sim;
+  if (s.empty || s.pop.on) return;
+  s.pop = { on: true, x, y, r: 0.5 };
+  blip('pop');
+}
+
+// ───────────────────────── gravity and view ─────────────────────────
+const grav = { x: 0, y: 1, tx: 0, ty: 1 };          // in screen axes, y down; t* is the target the film eases toward
+const sensor = { live: false, seen: false, flip: 1, g: [0, -1, 0], rot: null };
+const look = { x: 0, y: 0 };                         // pointer position in [-1, 1], moves the reflected room on a desktop
+const scrAngle = () => ((screen.orientation && screen.orientation.angle) || 0) * Math.PI / 180;
+function onOrient(e) {
+  if (e.beta == null || e.gamma == null) return;
+  const a = (e.alpha || 0) * Math.PI / 180, b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+  const ca = Math.cos(a), sa = Math.sin(a), cb = Math.cos(b), sb = Math.sin(b), cg = Math.cos(g), sg = Math.sin(g);
+  // Device → world rotation, R = Rz(alpha) Rx(beta) Ry(gamma), rows first.
+  sensor.rot = [ca * cg - sa * sb * sg, -sa * cb, ca * sg + sa * sb * cg,
+                sa * cg + ca * sb * sg, ca * cb, sa * sg - ca * sb * cg,
+                -cb * sg, sb, cb * cg];
+  sensor.og = [cb * sg, -sb, -cb * cg];             // gravity in device axes (x right, y up the screen, z toward you)
+  if (!sensor.moved) sensor.g = sensor.og;
+  if (!sensor.seen) { sensor.seen = true; sensor.live = true; $('tilt').hidden = false; $('tilt').classList.add('on'); }
+}
+function onMotion(e) {
+  const a = e.accelerationIncludingGravity;
+  if (!a || a.x == null || !sensor.og) return;
+  // Browsers disagree on the sign of this vector, so take whichever sign agrees with the orientation.
+  const v = [a.x / 9.81, a.y / 9.81, a.z / 9.81];
+  const dot = v[0] * sensor.og[0] + v[1] * sensor.og[1] + v[2] * sensor.og[2];
+  if (Math.abs(dot) > 0.5) sensor.flip = Math.sign(dot);
+  sensor.g = v.map(c => clamp(c * sensor.flip, -3, 3));   // gravity minus the frame's own acceleration: shaking sloshes the film
+  sensor.moved = true;
+}
+addEventListener('deviceorientation', onOrient);
+addEventListener('devicemotion', onMotion);
+if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') $('tilt').hidden = false;
+$('tilt').onclick = () => {
+  if (sensor.live) { sensor.live = false; $('tilt').classList.remove('on'); grav.tx = 0; grav.ty = 1; return; }
+  const ask = C => (typeof C !== 'undefined' && typeof C.requestPermission === 'function') ? C.requestPermission().catch(() => 'denied') : Promise.resolve('granted');
+  ask(window.DeviceOrientationEvent); ask(window.DeviceMotionEvent);     // both inside the tap, as iOS requires
+  sensor.live = true; $('tilt').classList.add('on');
+};
+function mul3(A, B) { const o = new Array(9); for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) o[i * 3 + j] = A[i * 3] * B[j] + A[i * 3 + 1] * B[3 + j] + A[i * 3 + 2] * B[6 + j]; return o; }
+function viewMatrix(t) {
+  if (sensor.live && sensor.rot) {
+    const s = scrAngle(), c = Math.cos(s), n = Math.sin(s);
+    return mul3(sensor.rot, [c, n, 0, -n, c, 0, 0, 0, 1]);     // screen axes → device axes → world
+  }
+  // No sensors: an upright film that sways a little and follows the pointer.
+  const yaw = 0.05 * Math.sin(0.21 * t) + 0.13 * look.x, pitch = 0.035 * Math.sin(0.17 * t + 1) - 0.10 * look.y;
+  const cy = Math.cos(yaw), sy = Math.sin(yaw), cp = Math.cos(pitch), sp = Math.sin(pitch);
+  return mul3(mul3([cy, -sy, 0, sy, cy, 0, 0, 0, 1], [1, 0, 0, 0, cp, -sp, 0, sp, cp]), [1, 0, 0, 0, 0, -1, 0, 1, 0]);
+}
+function updateGravity(dt) {
+  if (sensor.live && sensor.seen) {
+    const s = scrAngle(), c = Math.cos(s), n = Math.sin(s), gx = sensor.g[0], gy = sensor.g[1];
+    grav.tx = c * gx - n * gy; grav.ty = -(n * gx + c * gy);   // device axes → screen axes, then y down
+  }
+  const k = 1 - Math.exp(-dt * 12);
+  grav.x += (grav.tx - grav.x) * k; grav.y += (grav.ty - grav.y) * k;
+  const m = Math.hypot(grav.x, grav.y), sx = m > 1 ? grav.x / m : grav.x, sy = m > 1 ? grav.y / m : grav.y;
+  $('garrow').setAttribute('x2', (15 * sx).toFixed(1)); $('garrow').setAttribute('y2', (15 * sy).toFixed(1));
+  $('gtip').setAttribute('cx', (15 * sx).toFixed(1)); $('gtip').setAttribute('cy', (15 * sy).toFixed(1));
+}
+function dialSet(e) {
+  const b = $('dial').getBoundingClientRect();
+  let x = (e.clientX - b.left - b.width / 2) / 15, y = (e.clientY - b.top - b.height / 2) / 15;
+  const m = Math.hypot(x, y); if (m > 1) { x /= m; y /= m; } if (m < 0.18) { x = 0; y = 0; }
+  grav.tx = x; grav.ty = y; sensor.live = false; $('tilt').classList.remove('on');
+}
+$('dial').addEventListener('pointerdown', e => { $('dial').setPointerCapture(e.pointerId); dialSet(e); });
+$('dial').addEventListener('pointermove', e => { if (e.buttons || e.pointerType === 'touch') dialSet(e); });
+$('dial').addEventListener('dblclick', () => { grav.tx = 0; grav.ty = 1; });
+$('dial').addEventListener('keydown', e => {
+  const m = Math.hypot(grav.tx, grav.ty) || 1; let a = Math.atan2(grav.ty, grav.tx);
+  if (e.key === 'ArrowLeft') a += Math.PI / 12; else if (e.key === 'ArrowRight') a -= Math.PI / 12; else return;
+  grav.tx = m * Math.cos(a); grav.ty = m * Math.sin(a); sensor.live = false; e.preventDefault();
+});
+
+// ───────────────────────── layout and uniforms ─────────────────────────
+const view = { W: 1, H: 1, scale: 1, ox: 0, oy: 0, dpr: 1 };
+let shape = qs.get('shape') === 'loop' ? 'loop' : 'frame';
+function gridFor(aw, ah) {
+  const N = clamp(Math.round((+qs.get('n') || (Math.min(aw, ah) > 1500 ? 384 : 320)) / 8) * 8, 64, 512);
+  if (shape === 'loop') return [N, N];
+  const ar = clamp(ah / aw, 1 / 2.2, 2.2), r8 = v => Math.round(v / 8) * 8;
+  return ar >= 1 ? [N, r8(N * ar)] : [r8(N / ar), N];
+}
+function place(W, H, dpr, bare) {
+  const pad = bare ? 0.02 * Math.min(W, H) : Math.max(12 * dpr, 0.02 * Math.min(W, H));
+  const top = bare ? pad : 44 * dpr, bot = bare ? pad : (innerWidth <= 560 ? 124 : 76) * dpr;
+  return { x: pad, y: top, w: W - 2 * pad, h: H - top - bot };
+}
+function fit(W, H, dpr, bare) {
+  const a = place(W, H, dpr, bare), s = Math.min(a.w / sim.NX, a.h / sim.NY);
+  Object.assign(view, { W, H, dpr, scale: s, ox: a.x + (a.w - sim.NX * s) / 2, oy: a.y + (a.h - sim.NY * s) / 2 });
+}
+function resize() {
+  const dpr = Math.min(devicePixelRatio || 1, 2), W = Math.max(2, Math.floor(innerWidth * dpr)), H = Math.max(2, Math.floor(innerHeight * dpr));
+  canvas.width = W; canvas.height = H;
+  const a = place(W, H, dpr, false), [NX, NY] = gridFor(a.w, a.h);
+  // A phone's address bar sliding away changes the height a little; keep the film unless the shape really changed.
+  const near = sim && sim.shape === shape && Math.abs(NX - sim.NX) < 0.15 * sim.NX && Math.abs(NY - sim.NY) < 0.15 * sim.NY;
+  if (!near) { buildSim(NX, NY, shape); dip(); blip('dip'); }
+  fit(W, H, dpr, false);
+}
+const pointers = new Map();                          // pointer id → { x, y, vx, vy, t } in cells
+const U = new Float32Array(40), RU = new Float32Array(24);
+function writeUniforms(dt) {
+  const s = sim, N = s.N, sh = s.shapeVec;
+  U.set([s.NX, s.NY, dt, s.time, grav.x, grav.y, P.G * N, P.alpha,
+    P.R * P.drainMul, P.E * P.drainMul, Math.max(1.5, 0.007 * N), 14 / N,
+    sh[0], sh[1], sh[2], sh[3], s.pop.x, s.pop.y, s.pop.r, s.pop.on ? 1 : 0]);
+  let k = 0;
+  for (const p of pointers.values()) { if (k < 4 && p.down) { U.set([p.x, p.y, p.vx, p.vy], 20 + 4 * k); k++; } }
+  for (; k < 4; k++) U.set([-1, 0, 0, 0], 20 + 4 * k);
+  U.set([P.sigma * N, P.blow, P.diff * N, 0], 36);
+  device.queue.writeBuffer(s.ubuf, 0, U);
+  const m = viewMatrix(s.time);
+  RU.set([view.W, view.H, view.scale, s.time, view.ox, view.oy, s.reveal, P.exposure,
+    m[0], m[1], m[2], 0, m[3], m[4], m[5], 0, m[6], m[7], m[8], 0, 1.7 * Math.max(s.NX, s.NY), s.wire, P.wobble, 0]);
+  device.queue.writeBuffer(s.rbuf, 0, RU);
+}
+
+// ───────────────────────── stepping and drawing ─────────────────────────
+function simPass(enc, withStats) {
+  const s = sim, gx = Math.ceil(s.NX / 8), gy = Math.ceil(s.NY / 8);
+  const cp = enc.beginComputePass();
+  cp.setPipeline(pAdvect); cp.setBindGroup(0, s.bgAdvect); cp.dispatchWorkgroups(gx, gy);
+  cp.setPipeline(pForce); cp.setBindGroup(0, s.bgForce); cp.dispatchWorkgroups(gx, gy);
+  cp.setPipeline(pSor);
+  for (let i = 0; i < P.iters; i++) for (const b of s.bgSor) { cp.setBindGroup(0, b); cp.dispatchWorkgroups(gx, gy); }
+  cp.setPipeline(pVel); cp.setBindGroup(0, s.bgVel); cp.dispatchWorkgroups(gx, gy);
+  if (withStats) { cp.setPipeline(pStats); cp.setBindGroup(0, s.bgStats); cp.dispatchWorkgroups(Math.ceil(s.NY / 64)); }
+  cp.end();
+}
+function drawPass(enc, target) {
+  const rp = enc.beginRenderPass({ colorAttachments: [{ view: target, loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+  rp.setPipeline(pRender); rp.setBindGroup(0, sim.bgRender); rp.draw(3); rp.end();
+}
+function advance(dt) {                                // everything that moves on the CPU side
+  const s = sim;
+  s.time += dt; s.age += dt;
+  if (s.reveal < s.NY + 2) s.reveal += dt * s.NY / 0.9;
+  if (s.pop.on && !s.empty) { s.pop.r += dt * 3.2 * Math.max(s.NX, s.NY); if (s.pop.r > Math.hypot(s.NX, s.NY)) { s.empty = true; $('dip').classList.add('pulse'); } }
+  for (const p of pointers.values()) { const k = Math.exp(-dt * 14); p.vx *= k; p.vy *= k; }
+}
+let probeAt = null, frameNo = 0, lastT = 0;
+function readStats(enc) {
+  const s = sim; if (s.reading) return null;
+  enc.copyBufferToBuffer(s.rows, 0, s.read, 0, s.NY * 16);
+  if (probeAt) enc.copyBufferToBuffer(s.st[0], (probeAt.y * s.NX + probeAt.x) * 8, s.read, s.NY * 16, 8);
+  s.reading = true;
+  return () => s.read.mapAsync(GPUMapMode.READ).then(() => {
+    const a = new Float32Array(s.read.getMappedRange());
+    let sum = 0, cells = 0, black = 0, vort = 0; const rowBlack = new Float32Array(s.NY);
+    for (let y = 0; y < s.NY; y++) { sum += a[4 * y]; cells += a[4 * y + 1]; black += a[4 * y + 2]; vort += a[4 * y + 3]; rowBlack[y] = a[4 * y + 2]; }
+    s.stats = { mean: cells ? sum / cells : 0, black: cells ? black / cells : 0, cells, vort: cells ? vort / cells : 0, rowBlack };
+    s.probe = probeAt ? a[4 * s.NY + 1] : 0;
+    s.read.unmap(); s.reading = false;
+    onStats();
+  }).catch(() => { s.reading = false; });
+}
+let autoPop = true;
+function onStats() {
+  const s = sim, st = s.stats;
+  const mark = $('mark');
+  if (probeAt && s.probe > 0.5) { mark.hidden = false; mark.textContent = Math.round(s.probe) + ' nm'; mark.style.left = clamp(s.probe / 1500, 0, 1) * 100 + '%'; }
+  else mark.hidden = true;
+  // A film that is mostly black film is close to bursting; the more of it, the sooner.
+  if (autoPop && !TEST && !s.pop.on && s.age > 15 && st.black > 0.30 && Math.random() < 0.02 + 0.25 * (st.black - 0.30)) {
+    let pick = Math.random() * st.black * st.cells, y = 0;
+    for (; y < s.NY - 1; y++) { pick -= st.rowBlack[y]; if (pick <= 0) break; }
+    pop(s.NX / 2 + (Math.random() - 0.5) * 0.5 * s.NX, y + 0.5);
+  }
+}
+function frame(tms) {
+  if (lost) return;
+  requestAnimationFrame(frame);
+  const dt = clamp((tms - lastT) / 1000 || 1 / 60, 1 / 240, 1 / 30); lastT = tms;
+  updateGravity(dt); advance(dt); writeUniforms(dt);
+  const enc = device.createCommandEncoder(), stats = !sim.empty && frameNo % 12 === 0;
+  if (!sim.empty) simPass(enc, stats);
+  const after = stats ? readStats(enc) : null;
+  drawPass(enc, ctx.getCurrentTexture().createView());
+  device.queue.submit([enc.finish()]);
+  if (after) after();
+  frameNo++;
+}
+
+// ───────────────────────── pointer: blow, probe, pop ─────────────────────────
+const toCell = e => { const b = canvas.getBoundingClientRect(); return [((e.clientX - b.left) * view.dpr - view.ox) / view.scale, ((e.clientY - b.top) * view.dpr - view.oy) / view.scale]; };
+function setProbe(x, y) { const s = sim; probeAt = (x >= 1 && y >= 1 && x < s.NX - 1 && y < s.NY - 1) ? { x: Math.floor(x), y: Math.floor(y) } : null; }
+canvas.addEventListener('pointerdown', e => {
+  const [x, y] = toCell(e);
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x, y, vx: 0, vy: 0, t: performance.now(), down: true, x0: e.clientX, y0: e.clientY, t0: performance.now(), far: 0 });
+  setProbe(x, y); $('hint').classList.add('gone');
+});
+canvas.addEventListener('pointermove', e => {
+  const [x, y] = toCell(e);
+  look.x = clamp(e.clientX / innerWidth * 2 - 1, -1, 1); look.y = clamp(e.clientY / innerHeight * 2 - 1, -1, 1);
+  setProbe(x, y);
+  const p = pointers.get(e.pointerId); if (!p) return;
+  const now = performance.now(), dt = Math.max((now - p.t) / 1000, 1 / 240);
+  const lim = 6 * sim.N;                                           // cells / s
+  p.vx = clamp(0.5 * p.vx + 0.5 * (x - p.x) / dt, -lim, lim); p.vy = clamp(0.5 * p.vy + 0.5 * (y - p.y) / dt, -lim, lim);
+  p.x = x; p.y = y; p.t = now; p.far = Math.max(p.far, Math.hypot(e.clientX - p.x0, e.clientY - p.y0));
+});
+function lift(e) {
+  const p = pointers.get(e.pointerId); if (!p) return;
+  pointers.delete(e.pointerId);
+  if (e.pointerType !== 'mouse') probeAt = null;
+  if (e.type === 'pointerup' && p.far < 7 && performance.now() - p.t0 < 350) {          // a tap
+    if (sim.empty) { dip(); blip('dip'); }
+    else if (insideFilm(p.x, p.y)) pop(p.x, p.y);
+  }
+}
+canvas.addEventListener('pointerup', lift); canvas.addEventListener('pointercancel', lift);
+canvas.addEventListener('pointerleave', e => { if (e.pointerType === 'mouse') probeAt = null; });
+function insideFilm(x, y) {
+  const s = sim, cx = x - s.NX / 2, cy = y - s.NY / 2, sh = s.shapeVec;
+  if (sh[0]) return Math.hypot(cx, cy) < sh[3];
+  const qx = Math.abs(cx) - (sh[1] - sh[3]), qy = Math.abs(cy) - (sh[2] - sh[3]);
+  return Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - sh[3] < 0;
+}
+
+// ───────────────────────── sound ─────────────────────────
+let actx = null, soundOn = true, touched = false;
+addEventListener('pointerdown', () => { touched = true; }, true);
+addEventListener('keydown', () => { touched = true; }, true);
+function blip(kind) {
+  if (!soundOn || TEST || !touched) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    if (actx.state !== 'running') { actx.resume(); if (actx.state !== 'running') return; }
+    const t = actx.currentTime, len = kind === 'pop' ? 0.09 : 0.5;
+    const buf = actx.createBuffer(1, Math.ceil(actx.sampleRate * len), actx.sampleRate), d = buf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) { const u = i / d.length; d[i] = (Math.random() * 2 - 1) * (kind === 'pop' ? Math.exp(-u * 9) : Math.sin(Math.PI * u) ** 2 * 0.35); }
+    const src = actx.createBufferSource(); src.buffer = buf;
+    const f = actx.createBiquadFilter(); f.type = 'bandpass'; f.Q.value = kind === 'pop' ? 1.2 : 0.7;
+    f.frequency.setValueAtTime(kind === 'pop' ? 2600 : 500, t); f.frequency.exponentialRampToValueAtTime(kind === 'pop' ? 700 : 1500, t + len);
+    const g = actx.createGain(); g.gain.value = kind === 'pop' ? 0.5 : 0.12;
+    src.connect(f).connect(g).connect(actx.destination); src.start(t);
+  } catch (err) { /* sound is optional */ }
+}
+
+// ───────────────────────── controls ─────────────────────────
+$('dip').onclick = () => { dip(); blip('dip'); };
+$('shape').onclick = () => { shape = shape === 'loop' ? 'frame' : 'loop'; $('shape').textContent = shape === 'loop' ? 'Frame' : 'Loop'; resize(); };
+$('shape').textContent = shape === 'loop' ? 'Frame' : 'Loop';
+$('info').onclick = () => $('about').showModal();
+$('close').onclick = () => $('about').close();
+$('drain').oninput = e => { P.drainMul = +e.target.value; };
+$('autopop').onchange = e => { autoPop = e.target.checked; };
+$('sound').onchange = e => { soundOn = e.target.checked; };
+addEventListener('keydown', e => {
+  if (e.target !== document.body && e.target !== canvas) return;
+  if (e.key === 'd' || e.key === ' ') { if (sim.empty || e.key === 'd') { dip(); blip('dip'); } else pop(sim.NX / 2, sim.NY / 2); e.preventDefault(); }
+});
+(function drawScale() {
+  const c = $('scale'), g = c.getContext('2d'), img = g.createImageData(c.width, c.height), opt = filmOptics(1);
+  for (let x = 0; x < c.width; x++) {
+    const rgb = filmRGB(1500 * x / (c.width - 1), 1, opt).map(v => { const e = v * P.exposure * 1.1; return 255 * Math.pow(Math.min(e, 0.82) + 0.18 * Math.tanh(Math.max(e - 0.82, 0) / 0.18), 1 / 2.2); });
+    for (let y = 0; y < c.height; y++) img.data.set([rgb[0], rgb[1], rgb[2], 255], (y * c.width + x) * 4);
+  }
+  g.putImageData(img, 0, 0);
+})();
+
+// ───────────────────────── start ─────────────────────────
+if (!TEST) {
+  let rz = 0;
+  addEventListener('resize', () => { clearTimeout(rz); rz = setTimeout(resize, 120); });
+  resize();
+  if (!matchMedia('(pointer: coarse)').matches) $('hint').textContent = 'drag to blow · click to pop · turn gravity with the dial';
+  setTimeout(() => $('hint').classList.add('gone'), 9000);
+  requestAnimationFrame(frame);
+  window.__soapReady = true;
+} else {
+  // Test hooks: fixed grid, manual stepping, drawing to a texture instead of the canvas.
+  const N = +qs.get('n') || 96, ar = +qs.get('ar') || 1.5;
+  buildSim(N, shape === 'loop' ? N : Math.round(N * ar / 8) * 8, shape);
+  dip(qs.get('kind') || 'fresh', +qs.get('seed') || 1);
+  const readBuf = async (buf, size) => {
+    const rb = device.createBuffer({ size, usage: BU.COPY_DST | BU.MAP_READ }), enc = device.createCommandEncoder();
+    enc.copyBufferToBuffer(buf, 0, rb, 0, size); device.queue.submit([enc.finish()]);
+    await rb.mapAsync(GPUMapMode.READ); const out = new Float32Array(rb.getMappedRange().slice(0)); rb.unmap(); rb.destroy(); return out;
+  };
+  window.__soap = {
+    P, grav, device, filmRGB, HMAX,
+    get cfg() { return { NX: sim.NX, NY: sim.NY, shape: sim.shape, margin: sim.margin, shapeVec: sim.shapeVec, adapter: adapter.info ? adapter.info.vendor + ' ' + adapter.info.architecture : '' }; },
+    dip, pop: (x, y) => pop(x, y), insideFilm,
+    setGravity(x, y) { grav.x = grav.tx = x; grav.y = grav.ty = y; },
+    blow(x, y, vx, vy) { if (x == null) pointers.clear(); else pointers.set(1, { x, y, vx, vy, down: true }); },
+    async step(n = 1, dt = 1 / 60) {
+      for (let i = 0; i < n; i++) {
+        const keep = [...pointers.values()].map(p => [p.vx, p.vy]);
+        advance(dt); [...pointers.values()].forEach((p, k) => { p.vx = keep[k][0]; p.vy = keep[k][1]; });
+        writeUniforms(dt);
+        const enc = device.createCommandEncoder(); if (!sim.empty) simPass(enc, false); device.queue.submit([enc.finish()]);
+        if (i % 8 === 7) await device.queue.onSubmittedWorkDone();
+      }
+      await device.queue.onSubmittedWorkDone();
+    },
+    state: () => readBuf(sim.st[0], sim.n * 8),
+    psi: () => readBuf(sim.psi, sim.n * 4),
+    vel: () => readBuf(sim.vel, sim.n * 8),
+    async shot(W, H) {                                 // draw one frame offscreen, return RGBA bytes as base64
+      fit(W, H, 1, true); writeUniforms(1 / 60);
+      const tex = device.createTexture({ size: [W, H], format: 'rgba8unorm', usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+      const bpr = Math.ceil(W * 4 / 256) * 256, rb = device.createBuffer({ size: bpr * H, usage: BU.COPY_DST | BU.MAP_READ });
+      const enc = device.createCommandEncoder(); drawPass(enc, tex.createView());
+      enc.copyTextureToBuffer({ texture: tex }, { buffer: rb, bytesPerRow: bpr }, [W, H]); device.queue.submit([enc.finish()]);
+      await rb.mapAsync(GPUMapMode.READ); const raw = new Uint8Array(rb.getMappedRange());
+      let s = ''; for (let y = 0; y < H; y++) { const row = raw.subarray(y * bpr, y * bpr + W * 4); for (let i = 0; i < row.length; i += 8192) s += String.fromCharCode.apply(null, row.subarray(i, i + 8192)); }
+      rb.unmap(); rb.destroy(); tex.destroy();
+      return btoa(s);
+    },
+  };
+  window.__soapReady = true;
+}
+</script>
+</body>
+</html>
