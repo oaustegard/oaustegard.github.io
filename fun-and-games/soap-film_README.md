@@ -9,18 +9,15 @@ Live: <https://austegard.com/fun-and-games/soap-film.html>
 
 | input | effect |
 |---|---|
-| drag | blows on the film along the stroke, and shows the thickness under the pointer in nanometres |
-| tap or click | pops the film at that point; on an empty frame it dips a new one |
-| tilt, shake | gravity in the film follows the phone, so the film pours and sloshes. iOS asks for motion access when you press **Tilt** |
-| the round dial beside the buttons | sets gravity by hand: drag it, or focus it and use the arrow keys. Double-click resets it |
-| **Dip** | draws a new film |
-| **Loop** / **Frame** | switches to the round wand, or back to the rectangular frame; the button names the shape you would get |
-| **Tilt** | turns the motion sensors on or off. It appears on phones; Android needs no permission |
-| **Full** | hides the title and controls and lets the frame fill the window (and the screen, where the browser allows it). `F` toggles it and ✕ leaves |
-| **About** | drainage speed, whether the film pops by itself, sound |
+| drag | blows on the film along the stroke |
+| tap or click | pops the film at that point. A new film follows after about a second |
+| tilt, shake | on a phone, gravity in the film follows the phone, so the film pours and sloshes. iOS asks for motion access when you press **Use tilt** |
+| the small dial (computers only) | sets which way is down: drag it, or focus it and use the arrow keys. Double-click resets it |
+| **New film** | draws a new film at once |
+| **Full screen** | hides the title and buttons and lets the frame fill the window, and the screen where the browser allows it. `F` toggles it and ✕ leaves |
+| **About** | what the page does, a round wand in place of the rectangular frame, drainage speed, whether the film pops by itself, sound, and a strip showing the colour the film reflects at each thickness |
 
-`D` dips, and the space bar pops (or dips, on an empty frame). The bar under the film shows the reflected colour for each thickness
-from 0 to 1,500 nm.
+`D` draws a new film and the space bar pops the current one.
 
 ## Simulation and colour
 
