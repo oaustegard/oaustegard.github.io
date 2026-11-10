@@ -1,0 +1,312 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<title>Glitter Jar</title>
+<meta name="description" content="A jar of glitter on your GPU. Shake your phone to stir it up, tilt it to pour, drag to swirl, tap to puff.">
+<meta property="og:title" content="Glitter Jar">
+<meta property="og:description" content="A jar of glitter on your GPU. Shake it, tilt it, swirl it.">
+<meta property="og:image" content="https://austegard.com/images/og/fun-and-games-glitter-jar.jpg">
+<meta property="og:type" content="website">
+<meta name="theme-color" content="#0a0612">
+<style>
+  :root { color-scheme: dark; --ink: #f3eefb; --dim: #a99cbf; --line: rgba(255,255,255,.16); --glass: rgba(20,12,32,.6); }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; margin: 0; background: #0a0612; color: var(--ink); font: 15px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; overflow: hidden; overscroll-behavior: none; }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  h1 { position: fixed; left: max(16px, env(safe-area-inset-left)); top: max(12px, env(safe-area-inset-top)); margin: 0; font: italic 600 22px/1.2 Georgia, serif; pointer-events: none; text-shadow: 0 1px 8px #0008; }
+  #hint { position: fixed; left: 50%; top: 24%; transform: translateX(-50%); width: max-content; max-width: calc(100vw - 48px); box-sizing: border-box; text-align: center; padding: 12px 18px; border-radius: 14px; background: rgba(10,6,18,.7); border: 1px solid var(--line); pointer-events: none; transition: opacity 1.2s; -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); }
+  #hint.gone { opacity: 0; }
+  .bar { position: fixed; left: 0; right: 0; bottom: 0; display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; padding: 26px 16px max(14px, env(safe-area-inset-bottom)); pointer-events: none; }
+  button { pointer-events: auto; font: 500 14px/1 inherit; font-family: inherit; color: var(--ink); background: var(--glass); border: 1px solid var(--line); border-radius: 999px; padding: 11px 16px; cursor: pointer; -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); touch-action: manipulation; }
+  button:hover { border-color: rgba(255,255,255,.4); }
+  button:focus-visible { outline: 2px solid #d9a8ff; outline-offset: 2px; }
+  button.on { background: rgba(217,168,255,.22); border-color: rgba(217,168,255,.6); }
+  #nogpu { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--dim); }
+  #nogpu h2 { color: var(--ink); font: italic 600 24px/1.2 Georgia, serif; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<h1>Glitter Jar</h1>
+<p id="hint">Shake your phone, or drag to swirl.<br>Tap to puff. Tilt to pour.</p>
+<div class="bar">
+  <button id="shake">Shake</button>
+  <button id="colour">Colour: Rainbow</button>
+  <button id="motion" hidden>Use motion</button>
+</div>
+<div id="nogpu" hidden><div><h2>No WebGPU here</h2><p>This jar needs a browser with WebGPU: a recent Chrome, Edge or Safari.</p></div></div>
+<script type="module">
+const $ = id => document.getElementById(id);
+const canvas = $('c');
+const PALETTES = ['Rainbow', 'Gold', 'Silver', 'Rosé', 'Galaxy'];
+
+// ── WGSL ──
+const COMMON = /* wgsl */`
+struct U {
+  res: vec2f, grav: vec2f, ptr: vec2f, pvel: vec2f, kick: vec2f,
+  time: f32, dt: f32, agit: f32, light: f32, pal: f32, count: f32, pdown: f32, pile: f32,
+  puff: vec2f, puffS: f32, p1: f32, p2: f32, p3: f32,
+};
+struct Flake { pos: vec2f, vel: vec2f, ang: f32, spin: f32, seed: f32, seed2: f32 };
+@group(0) @binding(0) var<uniform> u: U;
+fn flakeSize(f: Flake) -> f32 { return 1.6 + 2.2 * fract(f.seed * 7.31); }
+// A slowly changing swirl: the curl of a few drifting waves, so it never diverges and never clumps.
+fn psi(q: vec2f, t: f32) -> f32 {
+  return sin(q.x * 1.3 + t * 0.7) * sin(q.y * 1.1 - t * 0.5)
+       + 0.6 * sin(q.x * 2.7 - t * 0.9 + 1.7) * cos(q.y * 2.3 + t * 0.6)
+       + 0.3 * sin((q.x + q.y) * 4.3 + t * 1.3);
+}
+fn swirl(p: vec2f, t: f32) -> vec2f {
+  let q = p / 180.0; let e = 0.01;
+  let dx = psi(q + vec2f(e, 0.0), t) - psi(q - vec2f(e, 0.0), t);
+  let dy = psi(q + vec2f(0.0, e), t) - psi(q - vec2f(0.0, e), t);
+  return vec2f(dy, -dx) / (2.0 * e);
+}
+`;
+
+const STEP = COMMON + /* wgsl */`
+@group(0) @binding(1) var<storage, read_write> fl: array<Flake>;
+@compute @workgroup_size(256) fn main(@builtin(global_invocation_id) id: vec3u) {
+  let i = id.x; if (i >= u32(u.count)) { return; }
+  var f = fl[i];
+  let dt = u.dt; let size = flakeSize(f);
+  let sink = 22.0 + 16.0 * (size - 1.6) + 20.0 * fract(f.seed * 3.7);   // big flakes settle first
+  // The swirl fades out near the glass, so it does not pin glitter to the walls.
+  let edge = min(min(f.pos.x, u.res.x - f.pos.x), min(f.pos.y, u.res.y - u.p2 - f.pos.y));
+  let goal = u.grav * sink + swirl(f.pos, u.time * 0.6) * u.agit * 120.0 * smoothstep(0.0, 70.0, edge);
+  f.vel = mix(goal, f.vel, exp(-dt * 2.5));                   // the liquid drags each flake toward its flow
+  if (u.pdown > 0.5) {
+    let d = f.pos - u.ptr;
+    f.vel += u.pvel * exp(-dot(d, d) / 6400.0) * min(1.0, dt * 9.0);
+  }
+  if (u.puffS > 0.0) {
+    let d = f.pos - u.puff; let r = length(d) + 1.0;
+    f.vel += d / r * u.puffS * exp(-r * r / 22000.0);
+  }
+  f.vel += u.kick * (0.4 + fract(f.seed * 13.1));
+  f.pos += f.vel * dt;
+  // Each flake keeps its own distance from the glass, so settled glitter lies in a layer rather than a line.
+  let inset = size * 0.5 + 2.0 + fract(f.seed2 * vec2f(5.3, 9.7)) * u.pile;
+  let lo = inset; let hi = u.res - inset - vec2f(0.0, u.p2);   // p2: the floor sits above the buttons
+  // Friction only where gravity presses the flake into the glass, so glitter rests on a floor but slides down a wall.
+  var press = 0.0;
+  if (f.pos.x < lo.x) { f.pos.x = lo.x; f.vel.x = max(f.vel.x, 0.0); press = max(press, -u.grav.x); }
+  if (f.pos.x > hi.x) { f.pos.x = hi.x; f.vel.x = min(f.vel.x, 0.0); press = max(press, u.grav.x); }
+  if (f.pos.y < lo.y) { f.pos.y = lo.y; f.vel.y = max(f.vel.y, 0.0); press = max(press, -u.grav.y); }
+  if (f.pos.y > hi.y) { f.pos.y = hi.y; f.vel.y = min(f.vel.y, 0.0); press = max(press, u.grav.y); }
+  f.vel *= exp(-dt * 10.0 * smoothstep(0.35, 0.8, press));
+  // Moving flakes tumble; resting ones lie still and glint only when the light moves.
+  let dir = select(-1.0, 1.0, fract(f.seed * 17.7) > 0.5);
+  f.spin = mix(length(f.vel) * 0.08 * dir, f.spin, exp(-dt * 3.0));
+  f.ang += f.spin * dt;
+  fl[i] = f;
+}
+`;
+
+const DRAW = COMMON + /* wgsl */`
+@group(0) @binding(1) var<storage, read> fl: array<Flake>;
+const PAL = array<vec3f, 20>(
+  vec3f(1.0, 0.25, 0.6), vec3f(1.0, 0.8, 0.2), vec3f(0.2, 0.9, 1.0), vec3f(0.62, 0.35, 1.0),
+  vec3f(1.0, 0.78, 0.3), vec3f(1.0, 0.6, 0.15), vec3f(1.0, 0.9, 0.55), vec3f(0.85, 0.55, 0.2),
+  vec3f(0.86, 0.89, 0.96), vec3f(0.7, 0.75, 0.86), vec3f(1.0, 1.0, 1.0), vec3f(0.6, 0.66, 0.8),
+  vec3f(1.0, 0.5, 0.68), vec3f(1.0, 0.75, 0.8), vec3f(0.95, 0.38, 0.6), vec3f(1.0, 0.86, 0.76),
+  vec3f(0.3, 0.42, 1.0), vec3f(0.62, 0.3, 1.0), vec3f(0.2, 0.82, 1.0), vec3f(1.0, 0.42, 0.9));
+const BG = array<vec3f, 5>(vec3f(0.07, 0.03, 0.12), vec3f(0.08, 0.04, 0.02), vec3f(0.03, 0.05, 0.09), vec3f(0.1, 0.03, 0.06), vec3f(0.02, 0.02, 0.09));
+struct VO { @builtin(position) pos: vec4f, @location(0) uv: vec2f, @location(1) col: vec3f, @location(2) glint: f32, @location(3) core: f32, @location(4) ang: f32, @location(5) shade: f32 };
+@vertex fn vs(@builtin(vertex_index) vi: u32, @builtin(instance_index) ii: u32) -> VO {
+  let f = fl[ii];
+  let c = array<vec2f, 6>(vec2f(-1, -1), vec2f(1, -1), vec2f(-1, 1), vec2f(-1, 1), vec2f(1, -1), vec2f(1, 1))[vi];
+  let size = flakeSize(f);
+  let facing = cos(f.ang + f.seed * 6.2832 - u.light);
+  let glint = pow(max(facing, 0.0), 40.0);
+  let r = size * (1.0 + 4.0 * glint);
+  let w = f.pos + c * r;
+  var o: VO;
+  o.pos = vec4f(w.x / u.res.x * 2.0 - 1.0, 1.0 - w.y / u.res.y * 2.0, 0.0, 1.0);
+  o.uv = c; o.glint = glint; o.core = size / r; o.ang = f.ang; o.shade = 0.3 + 0.35 * (facing + 1.0);
+  o.col = PAL[i32(u.pal) * 4 + min(3, i32(fract(f.seed2 * 11.3) * 4.0))];
+  return o;
+}
+@fragment fn fs(v: VO) -> @location(0) vec4f {
+  let cs = cos(v.ang); let sn = sin(v.ang);
+  let q = abs(vec2f(cs * v.uv.x - sn * v.uv.y, sn * v.uv.x + cs * v.uv.y)) / v.core;
+  let hex = max(q.x * 0.866 + q.y * 0.5, q.y);
+  let a = 1.0 - smoothstep(0.75, 1.0, hex);
+  let p = abs(v.uv);
+  let rays = v.glint * (exp(-p.y * 28.0) * (1.0 - p.x) + exp(-p.x * 28.0) * (1.0 - p.y) + 0.6 * exp(-dot(p, p) * 9.0));
+  let white = mix(v.col, vec3f(1.0), 0.6);
+  let rgb = v.col * v.shade * a + white * v.glint * a * 1.5 + white * rays;
+  return vec4f(rgb, a);                                   // premultiplied: the rays add light, the flake hides what is behind it
+}
+@vertex fn bgvs(@builtin(vertex_index) vi: u32) -> @builtin(position) vec4f {
+  return vec4f(array<vec2f, 3>(vec2f(-1, -1), vec2f(3, -1), vec2f(-1, 3))[vi], 0.0, 1.0);
+}
+@fragment fn bgfs(@builtin(position) p: vec4f) -> @location(0) vec4f {
+  let uv = p.xy / (u.res * u.p1);
+  let base = BG[i32(u.pal)];
+  let glow = exp(-dot(uv - vec2f(0.3, 0.2), uv - vec2f(0.3, 0.2)) * 3.0);
+  let vig = 1.0 - 0.6 * dot(uv - 0.5, uv - 0.5);
+  return vec4f(base * vig * 1.4 + base * glow * 1.6, 1.0);
+}
+`;
+
+// ── setup ──
+async function start() {
+  const adapter = navigator.gpu && await navigator.gpu.requestAdapter();
+  const device = adapter && await adapter.requestDevice();
+  if (!device) { $('nogpu').hidden = false; $('hint').hidden = true; return; }
+  const ctx = canvas.getContext('webgpu');
+  const format = navigator.gpu.getPreferredCanvasFormat();
+  const TEST = new URLSearchParams(location.search).has('test');
+  ctx.configure({ device, format, alphaMode: 'opaque' });
+
+  const MAXN = 260000;
+  const flakes = device.createBuffer({ size: MAXN * 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+  const ubuf = device.createBuffer({ size: 96, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const U = new Float32Array(24);
+
+  const stepMod = device.createShaderModule({ code: STEP });
+  const drawMod = device.createShaderModule({ code: DRAW });
+  const step = device.createComputePipeline({ layout: 'auto', compute: { module: stepMod, entryPoint: 'main' } });
+  const blend = { color: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' }, alpha: { srcFactor: 'one', dstFactor: 'one-minus-src-alpha' } };
+  const draw = device.createRenderPipeline({ layout: 'auto', vertex: { module: drawMod, entryPoint: 'vs' }, fragment: { module: drawMod, entryPoint: 'fs', targets: [{ format, blend }] }, primitive: { topology: 'triangle-list' } });
+  const bg = device.createRenderPipeline({ layout: 'auto', vertex: { module: drawMod, entryPoint: 'bgvs' }, fragment: { module: drawMod, entryPoint: 'bgfs', targets: [{ format }] }, primitive: { topology: 'triangle-list' } });
+  const group = (p, withFlakes = true) => device.createBindGroup({ layout: p.getBindGroupLayout(0), entries: [{ binding: 0, resource: { buffer: ubuf } }, ...(withFlakes ? [{ binding: 1, resource: { buffer: flakes } }] : [])] });
+  const stepG = group(step), drawG = group(draw), bgG = group(bg, false);
+
+  // ── state ──
+  let W = 0, H = 0, dpr = 1, N = 0, floorGap = 0;
+  let steps = 1;                                      // compute steps per frame; ?test raises it to fast-forward
+  const st = { agit: 1.6, pal: 0, gx: 0, gy: 1, tgx: 0, tgy: 1, light: 0, kx: 0, ky: 0, puff: null, keyAngle: 0 };
+  const ptr = { down: false, x: 0, y: 0, vx: 0, vy: 0, sx: 0, sy: 0, t0: 0, moved: false };
+
+  function fill() {                                   // a fresh jar, mid-swirl
+    const d = new Float32Array(N * 8);
+    for (let i = 0; i < N; i++) {
+      d.set([Math.random() * W, Math.random() * H, 0, 0, Math.random() * 6.28, 0, Math.random(), Math.random()], i * 8);
+    }
+    device.queue.writeBuffer(flakes, 0, d);
+  }
+  function resize() {
+    dpr = Math.min(devicePixelRatio || 1, 2);
+    const w = innerWidth, h = innerHeight;
+    canvas.width = Math.round(w * dpr); canvas.height = Math.round(h * dpr);
+    const fresh = !N;
+    const bar = document.querySelector('.bar button');
+    const r = bar && bar.getBoundingClientRect();
+    floorGap = r && r.height ? Math.max(0, h - r.top + 6) : 0;
+    W = w; H = h;
+    N = Math.min(MAXN, Math.max(40000, Math.round(W * H * 0.07)));
+    if (fresh) fill(); else { st.agit = Math.max(st.agit, 1); fill(); }
+  }
+  addEventListener('resize', resize); resize();
+
+  // ── input ──
+  const hide = () => $('hint').classList.add('gone');
+  canvas.addEventListener('pointerdown', e => {
+    canvas.setPointerCapture(e.pointerId);
+    Object.assign(ptr, { down: true, x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, vx: 0, vy: 0, t0: performance.now(), moved: false, lt: performance.now() });
+    hide();
+  });
+  canvas.addEventListener('pointermove', e => {
+    if (!ptr.down) return;
+    const now = performance.now(), dt = Math.max(1, now - ptr.lt) / 1000;
+    const vx = (e.clientX - ptr.x) / dt, vy = (e.clientY - ptr.y) / dt;
+    ptr.vx = ptr.vx * 0.5 + vx * 0.5; ptr.vy = ptr.vy * 0.5 + vy * 0.5;
+    ptr.x = e.clientX; ptr.y = e.clientY; ptr.lt = now;
+    if (Math.hypot(ptr.x - ptr.sx, ptr.y - ptr.sy) > 8) { ptr.moved = true; st.agit = Math.min(2.5, st.agit + 0.01); }
+  });
+  const up = () => {
+    if (ptr.down && !ptr.moved && performance.now() - ptr.t0 < 300) st.puff = [ptr.x, ptr.y];
+    ptr.down = false;
+  };
+  canvas.addEventListener('pointerup', up); canvas.addEventListener('pointercancel', up);
+
+  const shake = (strength = 1, dx = (Math.random() - 0.5), dy = -1) => {
+    st.agit = Math.min(3, st.agit + 1.4 * strength);
+    st.kx += dx * 500 * strength; st.ky += dy * 500 * strength;
+    hide();
+  };
+  $('shake').onclick = () => shake(1);
+  const setPal = k => { st.pal = (k + PALETTES.length) % PALETTES.length; $('colour').textContent = 'Colour: ' + PALETTES[st.pal]; };
+  $('colour').onclick = () => setPal(st.pal + 1);
+  addEventListener('keydown', e => {
+    if (e.key === ' ') { e.preventDefault(); shake(1); }
+    else if (e.key === 'c' || e.key === 'C') setPal(st.pal + 1);
+    else if (e.key === 'ArrowLeft') st.keyAngle = Math.max(-1.4, st.keyAngle - 0.3);
+    else if (e.key === 'ArrowRight') st.keyAngle = Math.min(1.4, st.keyAngle + 0.3);
+    else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') st.keyAngle = 0;
+    else return;
+    hide();
+  });
+
+  // Tilt sets which way is down. A sharp jolt is a shake: the glitter lags behind the jar.
+  const sensor = { live: false };
+  const toScreen = (x, y) => {
+    const s = ((screen.orientation && screen.orientation.angle) || 0) * Math.PI / 180, c = Math.cos(s), n = Math.sin(s);
+    return [c * x - n * y, -(n * x + c * y)];
+  };
+  addEventListener('deviceorientation', e => {
+    if (e.beta == null || e.gamma == null) return;
+    const b = e.beta * Math.PI / 180, g = e.gamma * Math.PI / 180;
+    [st.tgx, st.tgy] = toScreen(Math.cos(b) * Math.sin(g), -Math.sin(b));
+    sensor.live = true;
+  });
+  let lastJolt = 0;
+  addEventListener('devicemotion', e => {
+    const a = e.acceleration;
+    if (!a || a.x == null) return;
+    const m = Math.hypot(a.x, a.y, a.z), now = performance.now();
+    if (m > 13 && now - lastJolt > 120) {
+      lastJolt = now;
+      const [x, y] = toScreen(a.x, a.y), k = Math.hypot(x, y) || 1;
+      shake(Math.min(2, m / 20), -x / k, -y / k);
+    }
+  });
+  if (typeof DeviceOrientationEvent !== 'undefined' && typeof DeviceOrientationEvent.requestPermission === 'function') {
+    $('motion').hidden = false;
+    $('motion').onclick = () => {
+      DeviceOrientationEvent.requestPermission().catch(() => {});
+      if (typeof DeviceMotionEvent !== 'undefined' && DeviceMotionEvent.requestPermission) DeviceMotionEvent.requestPermission().catch(() => {});
+      $('motion').classList.add('on'); $('motion').textContent = 'Motion on';
+    };
+  }
+
+  // ── loop ──
+  let last = performance.now(), t = 0;
+  function frame(now) {
+    const dt = Math.min(0.033, (now - last) / 1000); last = now; t += dt;
+    if (!sensor.live) { st.tgx = Math.sin(st.keyAngle); st.tgy = Math.cos(st.keyAngle); }
+    const k = 1 - Math.exp(-dt * 6);
+    st.gx += (st.tgx - st.gx) * k; st.gy += (st.tgy - st.gy) * k;
+    st.agit *= Math.exp(-dt * steps * 0.32);
+    // The light swings with the jar, so tilting the phone makes the settled glitter sparkle.
+    st.light = (sensor.live ? Math.atan2(st.gx, st.gy) * 4 : st.keyAngle * 2) + t * 0.12;
+    const puff = st.puff; st.puff = null;
+    U.set([W, H, st.gx, st.gy, ptr.x, ptr.y, ptr.vx * 0.9, ptr.vy * 0.9, st.kx, st.ky, t, dt,
+           st.agit, st.light, st.pal, N, ptr.down && ptr.moved ? 1 : 0, Math.min(W, H) * 0.13,
+           puff ? puff[0] : 0, puff ? puff[1] : 0, puff ? 700 : 0, dpr, floorGap, 0]);
+    st.kx = st.ky = 0;
+    if (ptr.down) { ptr.vx *= 0.85; ptr.vy *= 0.85; }
+    device.queue.writeBuffer(ubuf, 0, U);
+    const enc = device.createCommandEncoder();
+    const cp = enc.beginComputePass(); cp.setPipeline(step); cp.setBindGroup(0, stepG);
+    for (let i = 0; i < steps; i++) cp.dispatchWorkgroups(Math.ceil(N / 256));
+    cp.end();
+    const rp = enc.beginRenderPass({ colorAttachments: [{ view: ctx.getCurrentTexture().createView(), loadOp: 'clear', storeOp: 'store', clearValue: [0, 0, 0, 1] }] });
+    rp.setPipeline(bg); rp.setBindGroup(0, bgG); rp.draw(3);
+    rp.setPipeline(draw); rp.setBindGroup(0, drawG); rp.draw(6, N);
+    rp.end();
+    device.queue.submit([enc.finish()]);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  setTimeout(hide, 7000);
+  if (TEST) window.__jar = { st, get N() { return N; }, set steps(n) { steps = n; } };
+}
+start().catch(err => { console.error(err); $('nogpu').hidden = false; $('hint').hidden = true; });
+</script>
+</body>
+</html>
