@@ -4,14 +4,14 @@ Reads the previous snapshot from OUT (if any), fetches the list feed from the ne
 newest post it already has, embeds the new posts with Ettin-17m (the same ONNX model and doc prompt the
 page and bsky/embedders use), folds each vector from 768 to 256 numbers the way the page's engine does
 (fold256.f32 beside the model: the model's last matrix replaced by a 256 x 256 one that also applies
-remex's rotation), quantizes them with remex 2.1.0, Quantizer(256, bits=4, seed=42, rotation="none",
+remex's rotation), quantizes them with remex 2.1.0, Quantizer(256, bits=3, seed=42, rotation="none",
 mean=mu), mu fixed so codes stay comparable, appends them, drops the oldest beyond N and writes OUT again:
 
-  snapshot-256x4.bin   the whole snapshot in one file, so a CDN can never pair parts of two builds:
+  snapshot-256x3.bin   the whole snapshot in one file, so a CDN can never pair parts of two builds:
                   b"ASNP", uint32 LE header length, the header (UTF-8 JSON, the same as index.json), then
                   the sections the header's "sections" names as [offset, length] after the header:
-                  codes (n x 128 bytes: 256 4-bit codes, remex pack, high nibble first), aux (n x 2
-                  float32 LE: scale, bias),
+                  codes (n x 96 bytes: the 256 3-bit codes as three bit-planes of 32 bytes, the top bit's
+                  plane first, each plane np.packbits order), aux (n x 2 float32 LE: scale, bias),
                   posts (gzip JSON {"authors": [[handle, did]], "posts": [[author, rkey, t]], "texts": [...]})
   index.json      the header alone, for people and tools: n, mu, newest post, build time, counts
 
@@ -35,15 +35,28 @@ from pathlib import Path
 import numpy as np
 import onnxruntime as ort
 import remex
-from remex.packing import pack
 from tokenizers import Tokenizer
 
 LIST = "at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.graph.list/3lankcdrlip2f"
 XRPC = "https://public.api.bsky.app/xrpc"
 OVERLAP_S = 3600        # keep paging an hour past the newest known post, for posts indexed late
 MAX_SEQ = 128
-D, BITS = 256, 4        # the index: 256 numbers per post (fold256.f32), 4 bits each
-SNAPSHOT, LEGACY = "snapshot-256x4.bin", "snapshot.bin"
+D, BITS = 256, 3        # the index: 256 numbers per post (fold256.f32), 3 bits each
+SNAPSHOT, LEGACY = "snapshot-256x3.bin", "snapshot.bin"
+
+
+def planes(indices):
+    """remex codes [n, D] -> [n, D * BITS / 8] bytes: one bit-plane per code bit, the top bit first, each
+    plane packed eight codes to a byte, first code in the high bit (np.packbits). A scan reads a code as the
+    same bit of BITS planes, which works for any width, and the first planes alone are a coarser index."""
+    idx = np.asarray(indices, np.uint8)
+    return np.concatenate([np.packbits((idx >> (BITS - 1 - k)) & 1, axis=1) for k in range(BITS)], axis=1)
+
+
+def unplanes(codes, bits, d=D):
+    """The inverse of planes, for a snapshot written at `bits`."""
+    p = [np.unpackbits(codes[:, k * d // 8:(k + 1) * d // 8], axis=1)[:, :d] for k in range(bits)]
+    return sum(p[k].astype(np.uint8) << (bits - 1 - k) for k in range(bits))
 
 
 def get(endpoint, params, tries=6):
@@ -320,7 +333,7 @@ def main():
         X = Ettin(a.model).embed([r["text"] for r in new])
         Y = (X.astype(np.float64) @ C).astype(np.float32)      # unit rows: C keeps lengths
         cv = qz.encode(Y)
-        nc = pack(cv.indices.astype(np.uint8), BITS).reshape(len(Y), width)
+        nc = planes(cv.indices)
         na = np.stack([qz._score_norms(cv), qz._row_bias(cv)], 1).astype("<f4")
         rows, codes, aux = rows + new, np.concatenate([codes, nc]), np.concatenate([aux, na])
     embed_s = time.time() - t1
@@ -347,7 +360,7 @@ def main():
     header = json.dumps({
         "n": len(rows), "d": D, "bits": BITS, "seed": 42, "remex_version": remex.__version__,
         # remex's rotation is in the model's last layer: queries and posts arrive rotated, and encoding skips it
-        "rotation": "none", "fold": {"file": "bsky/embedders/models/ettin/fold256.f32", "sha256": fold["sha256"],
+        "codes_layout": "bitplanes", "rotation": "none", "fold": {"file": "bsky/embedders/models/ettin/fold256.f32", "sha256": fold["sha256"],
                                      "rotation": fold["rotation"]},
         # what a scorer needs besides the rotation: remex's boundaries, centroids and cosine factor at this width
         "boundaries": [float(v) for v in qz.boundaries], "centroids": [float(v) for v in qz.centroids],
@@ -368,7 +381,7 @@ def main():
         (a.out / old).unlink(missing_ok=True)
     if not migrated:                    # a day after the switch, pages read the new file: drop the old one
         (a.out / LEGACY).unlink(missing_ok=True)
-    print(f"wrote {len(rows)} posts (+{len(new)}), embed {embed_s:.0f} s, total {time.time() - t0:.0f} s")
+    print(f"wrote {len(rows)} posts (+{fetched} new), embed {embed_s:.0f} s, total {time.time() - t0:.0f} s")
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
-// node tests/answer-search-256.mjs SNAPSHOT_DIR
-// bsky/answer-search with its 256-number, 4-bit index (snapshot-256x4.bin, built by
+// node tests/answer-search-index.mjs SNAPSHOT_DIR
+// bsky/answer-search with its 256-number index of 2 to 4-bit codes (snapshot-256x3.bin, built by
 // scripts/answer-search/refresh.py into SNAPSHOT_DIR), in headless Chromium on SwiftShader WebGPU:
 //   1. the page loads the snapshot through ?snap= and searches;
 //   2. the GPU scan's top 40 match a host computation of the same remex score over the snapshot's codes;
@@ -17,7 +17,7 @@ const require = createRequire(import.meta.url);
 const { chromium } = require("playwright");
 const ROOT = resolve(new URL("..", import.meta.url).pathname);
 const SNAPDIR = resolve(process.argv[2] || "");
-if (!process.argv[2]) { console.log("usage: node tests/answer-search-256.mjs SNAPSHOT_DIR"); process.exit(2); }
+if (!process.argv[2]) { console.log("usage: node tests/answer-search-index.mjs SNAPSHOT_DIR"); process.exit(2); }
 
 let fails = 0, passes = 0;
 const ok = (cond, msg) => { if (cond) { passes++; console.log("ok  ", msg); } else { fails++; console.log("FAIL", msg); } };
@@ -54,14 +54,16 @@ const r = await page.evaluate(async () => {
                 postsFound: window.answers.last.posts.length };
 
   // the snapshot file itself, parsed the way the page does
-  const buf = await (await fetch("/__snap/snapshot-256x4.bin")).arrayBuffer();
+  const buf = await (await fetch("/__snap/snapshot-256x3.bin")).arrayBuffer();
   const u8 = new Uint8Array(buf), hl = new DataView(buf).getUint32(4, true);
   const idx = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl)));
   const sec = (k) => buf.slice(8 + hl + idx.sections[k][0], 8 + hl + idx.sections[k][0] + idx.sections[k][1]);
   const codes = new Uint8Array(sec("codes")), aux = new Float32Array(sec("aux"));
   const gz = new Blob([sec("posts")]).stream().pipeThrough(new DecompressionStream("gzip"));
   const corpus = JSON.parse(await new Response(gz).text());
-  const cent = idx.centroids, mu = idx.mu, n = idx.n;
+  const cent = idx.centroids, mu = idx.mu, n = idx.n, bits = idx.bits, row = 32 * bits;
+  // code j of post i from its bit-planes (refresh.py planes()), written independently of scan256.js
+  const code = (bytes, i, j) => { let c = 0; for (let p = 0; p < bits; p++) c = (c << 1) | ((bytes[i * row + 32 * p + (j >> 3)] >> (7 - (j & 7))) & 1); return c; };
 
   // 2. GPU top 40 against the host's score over the same codes, for three queries
   const hostScores = (qv) => {
@@ -69,7 +71,7 @@ const r = await page.evaluate(async () => {
     const s = new Float64Array(n);
     for (let i = 0; i < n; i++) {
       let acc = 0;
-      for (let m = 0; m < 128; m++) { const b = codes[i * 128 + m]; acc += qv[2 * m] * cent[b >> 4] + qv[2 * m + 1] * cent[b & 15]; }
+      for (let j = 0; j < 256; j++) acc += qv[j] * cent[code(codes, i, j)];
       s[i] = aux[2 * i] * acc + aux[2 * i + 1] + qoff;
     }
     return s;
@@ -92,18 +94,19 @@ const r = await page.evaluate(async () => {
   const { Scan256 } = await import("/bsky/answer-search/scan256.js");
   const adapter = await navigator.gpu.requestAdapter();
   const device = await adapter.requestDevice();
-  const scan = await Scan256.create(device, { centroids: idx.centroids, boundaries: idx.boundaries, kappa: idx.kappa, mu: idx.mu });
+  const scan = await Scan256.create(device, { bits, centroids: idx.centroids, boundaries: idx.boundaries, kappa: idx.kappa, mu: idx.mu });
   const rows = Array.from({ length: 64 }, (_, k) => Math.floor((k + 0.5) * n / 64));
   const V = await R.embedMany(rows.map((i) => corpus.texts[i]));
   const e = scan.encode(V);
   let same = 0, total = 0, maxRel = 0, oneLevel = 0;
   rows.forEach((i, k) => {
-    for (let m = 0; m < 128; m++) {
-      const a = codes[i * 128 + m], b = e.packed[k * 128 + m];
-      for (const [x, y] of [[a >> 4, b >> 4], [a & 15, b & 15]]) { total++; if (x === y) same++; else if (Math.abs(x - y) === 1) oneLevel++; }
+    for (let j = 0; j < 256; j++) {
+      const x = code(codes, i, j), y = code(e.packed, k, j);
+      total++; if (x === y) same++; else if (Math.abs(x - y) === 1) oneLevel++;
     }
     maxRel = Math.max(maxRel, Math.abs(e.scaleBias[2 * k] - aux[2 * i]) / Math.abs(aux[2 * i]));
   });
+  out.bits = bits;
   out.encode = { same: same / total, oneLevelOfDiffering: total - same ? oneLevel / (total - same) : 1, maxRelScale: maxRel };
 
   // 4. a post's own text finds it: 20 posts of at least 12 words
@@ -131,7 +134,7 @@ server.close();
 
 if (r.error) { console.log("FAIL the page did not load:", r.error); process.exit(1); }
 console.log(JSON.stringify({ ...r, scan: undefined }));
-ok(r.d === 256, `the page searches ${r.d}-number vectors`);
+ok(r.d === 256 && r.bits === 3, `the page searches ${r.d}-number vectors as ${r.bits}-bit codes`);
 ok(r.postsFound === 40 && r.picks > 0, `a search returns ${r.postsFound} posts and ${r.picks} quoted sentences`);
 for (const s of r.scan) ok(s.overlap >= 39 && s.maxDiff < 1e-4, `"${s.q}": GPU top 40 matches the host's in ${s.overlap} of 40, scores within ${s.maxDiff.toExponential(1)} (scan ${s.scanMs.toFixed(0)} ms)`);
 ok(r.encode.same > 0.995 && r.encode.oneLevelOfDiffering === 1 && r.encode.maxRelScale < 1e-3,

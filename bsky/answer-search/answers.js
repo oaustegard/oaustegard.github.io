@@ -1,13 +1,13 @@
-// Bluesky answers in one tab: Ettin-17m embeds the query, a GPU scan over 4-bit codes finds the closest
+// Bluesky answers in one tab: Ettin-17m embeds the query, a GPU scan over 3-bit codes finds the closest
 // of the last ~100,000 posts of the "Artificial (and real) Intelligence" list, then Ettin embeds every
 // sentence of those posts and the best-matching sentences are the answer, each quoted from its post.
 // Nothing is generated, so nothing can be misquoted.
 //
 // Ettin runs with its last layer folded from 768 outputs to 256 (fold256.f32, engine.js foldHead), and that
-// layer also applies remex's rotation. Every vector here has 256 numbers, and the index stores 4 bits of each.
+// layer also applies remex's rotation. Every vector here has 256 numbers, and the index stores 3 bits of each.
 //
 // The index is live. A daily GitHub Action (scripts/answer-search/refresh.py) publishes a snapshot of the
-// last 100,000 posts to the bsky-answer-search-data branch (snapshot-256x4.bin); the page loads it, then asks
+// last 100,000 posts to the bsky-answer-search-data branch (snapshot-256x3.bin); the page loads it, then asks
 // Bluesky for the posts written since, embeds them on the GPU, encodes them into the same index (scan256.js)
 // and keeps doing that every minute while the tab is visible.
 
@@ -23,7 +23,7 @@ const F = {
   tokenizer: E + 'models/ettin/tokenizer.json', model: E + 'models/ettin/model.onnx',
   fold: E + 'models/ettin/fold256.f32',
 };
-const SNAPSHOT = 'snapshot-256x4.bin', OLD_SNAPSHOT = 'snapshot.bin';
+const SNAPSHOT = 'snapshot-256x3.bin', OLD_SNAPSHOT = 'snapshot.bin';
 const LIST = 'at://did:plc:r2whjvupgfw55mllpksnombn/app.bsky.graph.list/3lankcdrlip2f';
 const FEED = 'https://public.api.bsky.app/xrpc/app.bsky.feed.getListFeed';
 const TOKENIZERS = 'https://cdn.jsdelivr.net/npm/@huggingface/tokenizers@0.2.0/dist/tokenizers.mjs';
@@ -107,7 +107,7 @@ function ensureRetrieval() {
     let queue = Promise.resolve();
     const embed = (batch) => { const p = queue.then(() => engine.embed(batch)); queue = p.catch(() => {}); return p; };
     if (engine.dim !== idx.d) throw new Error(`the model gives ${engine.dim} numbers per text, the index ${idx.d}`);
-    const scan = await Scan256.create(device, { centroids: idx.centroids, boundaries: idx.boundaries, kappa: idx.kappa, mu: idx.mu });
+    const scan = await Scan256.create(device, { bits: idx.bits, centroids: idx.centroids, boundaries: idx.boundaries, kappa: idx.kappa, mu: idx.mu });
     const docs = scan.allocCorpus(idx.n + LIVE_CAP);
     scan.loadCodes(docs, new Uint8Array(codes), new Float32Array(aux), 0);
     await device.queue.onSubmittedWorkDone();
@@ -203,7 +203,7 @@ function ensureRetrieval() {
   })().finally(() => { loading = null; });
 }
 
-// The snapshot to search: one file, snapshot-256x4.bin (b"ASNP", uint32 header length, JSON header, then the codes,
+// The snapshot to search: one file, snapshot-256x3.bin (b"ASNP", uint32 header length, JSON header, then the codes,
 // aux and posts sections the header locates), so a CDN can never pair parts of two builds; raw.githubusercontent.com
 // ignores query strings and caches each file for up to five minutes. A cached snapshot is kept until it is
 // KEEP_S old: the list feed can fill in about a week of newer posts, but each one has to be embedded here, so two
@@ -216,8 +216,10 @@ function parseSnapshot(buf) {
   const idx = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl)));
   const sec = (k) => buf.slice(8 + hl + idx.sections[k][0], 8 + hl + idx.sections[k][0] + idx.sections[k][1]);
   const codes = sec('codes'), aux = sec('aux');
-  if (idx.d !== 256 || idx.bits !== 4) throw new Error(`an index of ${idx.bits}-bit codes of ${idx.d} numbers; this page reads 4-bit codes of 256`);
-  if (codes.byteLength !== idx.n * 128 || aux.byteLength !== idx.n * 8) throw new Error('snapshot sections do not match its header');
+  if (idx.d !== 256 || ![2, 3, 4].includes(idx.bits) || idx.codes_layout !== 'bitplanes') {
+    throw new Error(`an index of ${idx.bits}-bit codes of ${idx.d} numbers; this page reads 2 to 4-bit bit-plane codes of 256`);
+  }
+  if (codes.byteLength !== idx.n * 32 * idx.bits || aux.byteLength !== idx.n * 8) throw new Error('snapshot sections do not match its header');
   return { idx, codes, aux, gz: sec('posts') };
 }
 async function loadSnapshot() {
