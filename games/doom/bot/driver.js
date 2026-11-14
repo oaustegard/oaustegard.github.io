@@ -2,11 +2,11 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261114154959";
-import { TRMPlanner } from "./trm.js?v=20261114154959";
-import { RolloutFights } from "./rollout.js?v=20261114154959";
-import { MOBJINFO, MF } from "../info.js?v=20261114154959";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261114154959";
+import { Bot } from "./bot.js?v=20261114174150";
+import { TRMPlanner } from "./trm.js?v=20261114174150";
+import { RolloutFights } from "./rollout.js?v=20261114174150";
+import { MOBJINFO, MF } from "../info.js?v=20261114174150";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261114174150";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {
@@ -73,24 +73,32 @@ export class BotDriver {
   }
 
   async loop(gen) {
+    let lastTic = -1;
     while (gen === this.gen) {
+      let fresh = false;
       try {
         const st = await this.read();
         if (gen !== this.gen) return;
         this.bot.readState(st);
         const p = this.bot.s.p;
-        if (p.dead) this.cur = { use: (p.leveltime >> 3) & 1 }; // restart the level
-        else if (!p.exit) {
-          if (this.rollout) {
-            this.busyAt = performance.now(); // frames late behind rollouts are the bot's doing, as with TRM plans
-            try { this.cur = await this.rollout.step(); } finally { this.busyAt = performance.now(); }
-          } else this.cur = await this.bot.step();
+        // The bot is written for one step per game tic (trm-doom's lockstep runner): its counters (the unstick
+        // wiggle) count steps, and each step replaces the last one's input, presses included. So step only when
+        // the game has moved on a tic, and keep a use or weapon press until a tic has taken it.
+        fresh = p.leveltime !== lastTic;
+        if (fresh) {
+          lastTic = p.leveltime;
+          let next = null;
+          if (p.dead) next = { use: (p.leveltime >> 3) & 1 }; // restart the level
+          else if (!p.exit) next = await (this.rollout || this.bot).step();
+          if (next) this.cur = { ...next, use: next.use || this.cur.use, weapon: next.weapon || this.cur.weapon };
         }
+        // frames late behind rollout work are the bot's doing, as with TRM plans
+        if (this.rollout?.busy) this.busyAt = performance.now();
         const d = this.bot.debug();
         this.onStatus(`TRM bot · ${d.target ? d.target.kind : "looking"} · ${this.plans} plans, ${(this.planMs / Math.max(1, this.plans)).toFixed(0)} ms each` +
           (this.rollout ? ` · ${this.rollout.status()}` : ""));
       } catch (err) { console.error("bot", err); }
-      await new Promise((r) => setTimeout(r, 0));
+      await new Promise((r) => setTimeout(r, fresh ? 0 : 6));
     }
   }
 

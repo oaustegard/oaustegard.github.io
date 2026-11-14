@@ -11,7 +11,7 @@
 // A decision is about 840 tics of game logic. To keep a laptop or phone cool, rollouts take at most about half
 // of the wall clock, yield a frame between futures, and switch off for the session if decisions stay slow.
 
-import { TIC_KERNELS } from "../shaders.js?v=20261114154959";
+import { TIC_KERNELS } from "../shaders.js?v=20261114174150";
 
 const TAU = 2 * Math.PI;
 const wrap = (a) => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
@@ -93,10 +93,6 @@ export class RolloutFights {
   get tic() { return this.bot.tic; }
   readState(st) { return this.bot.readState(st); }
   debug() { return this.bot.debug(); }
-  status() {
-    if (this.off) return `rollout fights off (${this.off})`;
-    return this.decisions ? `${this.decisions} fight decisions, ${Math.round(this.ms / this.decisions)} ms each` : "rollout fights";
-  }
   dispose() { this.sh.destroy(); }
 
   policy(move, base, px, py, pa, ex, ey, er, alive) {
@@ -179,6 +175,9 @@ export class RolloutFights {
     return best;
   }
 
+  // One step per game tic. A decision runs in the background over several tics while the step keeps steering by
+  // the current plan from live positions; when the decision returns, its move becomes the plan for `commit` tics.
+  // (In trm-doom-rollouts' lockstep runner the game waited for each decision; `blocking: true` does that here.)
   async step() {
     const input = await this.bot.step();
     const p = this.s.p;
@@ -189,14 +188,28 @@ export class RolloutFights {
     this.rocket = p.ready >= 4 && p.ready <= 6; this.melee = p.ready === 0 || p.ready === 7;
     const base = { ...this.worldMove(input, p.angle), weapon: input.weapon || 0 };
     const due = !this.plan || this.tic >= this.plan.until || this.plan.enemy !== en.m.k;
-    if (due && performance.now() >= this.restUntil) {
-      this.busy = true;
-      try { const best = await this.decide(base, p, en); if (best) this.plan = { name: best.name, move: best.move, until: this.tic + this.o.commit, enemy: en.m.k }; }
-      finally { this.busy = false; }
+    if (due && !this.busy && performance.now() >= this.restUntil) {
+      const pending = this.start(base, p, en);
+      if (this.o.blocking) await pending;
     }
     if (!this.plan || this.plan.name === "bot" || this.plan.enemy !== en.m.k) return input;
     const out = this.policy(this.plan.move, base, p.x, p.y, p.angle, en.m.x, en.m.y, en.m.r, true);
     out.weapon = input.weapon || 0;
     return out;
+  }
+
+  start(base, p, en) {
+    this.busy = true;
+    const enemy = en.m.k;
+    return this.decide(base, p, en)
+      .then((best) => { if (best && !this.off) this.plan = { name: best.name, move: best.move, until: this.tic + this.o.commit, enemy }; })
+      .catch((err) => { console.error("rollout fights", err); this.off = "error: " + err.message; this.sh.destroy(); })
+      .finally(() => { this.busy = false; });
+  }
+
+  status() {
+    if (this.off) return `rollout fights off (${this.off})`;
+    if (!this.decisions) return "rollout fights";
+    return `fight: ${this.plan?.name || "-"} · ${this.decisions} decisions, ${Math.round(this.ms / this.decisions)} ms each`;
   }
 }
