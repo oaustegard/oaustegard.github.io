@@ -81,6 +81,7 @@ window.swReady = (async () => {
   details pre { white-space:pre-wrap; word-break:break-word; font-size:.8rem; background:var(--soft); padding:.5rem .6rem; border-radius:4px; }
   details code { font-size:.85em; background:var(--soft); padding:0 .25em; border-radius:3px; }
   .kv { display:grid; grid-template-columns: 11rem 1fr; gap:.25rem .8rem; font-size:.8rem; }
+  #audio-log { font-size:.7rem; white-space:pre-wrap; max-height:18rem; overflow:auto; margin:0; }
   .kv dt { color:var(--dim); } .kv dd { margin:0; font-family:ui-monospace,monospace; }
   footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
   footer p { margin:.35rem 0; }
@@ -141,6 +142,12 @@ window.swReady = (async () => {
     <summary>Device, speed and storage</summary>
     <dl class="kv" id="facts"></dl>
     <p><button id="clear">Remove the downloaded files from this device</button></p>
+  </details>
+
+  <details id="audio-log-box">
+    <summary>Audio log</summary>
+    <p>What the browser reported while playing. If you hear nothing, a screenshot of this helps.</p>
+    <pre id="audio-log"></pre>
   </details>
 
   <footer>
@@ -277,8 +284,36 @@ async function storageFact() {
 // context does not reliably cure it; a media element started from a tap does. Each sentence becomes a WAV blob that
 // plays in turn. The tap starts the element on a short silent clip, which lets it play the sentences that arrive
 // later, after the tap. Media elements also play through the silent switch.
-const player = new Audio();
-player.preload = "auto";
+// A page that has been hidden gets a fresh element on the next tap, in case iOS left the old one attached to an
+// audio route that no longer reaches the speaker. Everything the browser reports goes to the Audio log.
+let player = null, wasHidden = false;
+const logLines = [], t00 = performance.now();
+function alog(msg) {
+  logLines.push(`${((performance.now() - t00) / 1000).toFixed(1).padStart(6)}s  ${msg}`);
+  if (logLines.length > 60) logLines.shift();
+  const el = document.getElementById("audio-log");
+  if (el) el.textContent = logLines.join("\n");
+}
+const sessionInfo = () => navigator.audioSession ? `session ${navigator.audioSession.type}/${navigator.audioSession.state}` : "no audioSession";
+document.addEventListener("visibilitychange", () => { if (document.hidden) wasHidden = true; alog(`page ${document.visibilityState}; ${sessionInfo()}`); });
+addEventListener("pageshow", (e) => alog(`pageshow persisted=${e.persisted}`));
+addEventListener("pagehide", () => { wasHidden = true; alog("pagehide"); });
+try { navigator.audioSession?.addEventListener?.("statechange", () => alog(sessionInfo())); } catch {}
+let elementCount = 0;
+function newPlayer() {
+  if (player) { try { player.pause(); player.removeAttribute("src"); player.load(); } catch {} }
+  const el = new Audio();
+  el.preload = "auto";
+  const id = ++elementCount;
+  for (const ev of ["play", "playing", "pause", "ended", "waiting", "stalled", "error", "abort"]) {
+    el.addEventListener(ev, () => {
+      const src = el.src === SILENT ? "silent" : "speech";
+      alog(`#${id} ${ev} ${src} t=${el.currentTime.toFixed(2)} vol=${el.volume}${el.muted ? " muted" : ""}${ev === "error" ? " " + (el.error?.code ?? "") : ""}`);
+    });
+  }
+  alog(`new audio element #${id}; ${sessionInfo()}`);
+  return el;
+}
 
 function wav(samples) {
   const n = samples.length, buf = new ArrayBuffer(44 + 2 * n), v = new DataView(buf);
@@ -293,9 +328,11 @@ function wav(samples) {
 const SILENT = URL.createObjectURL(wav(new Float32Array(K.SAMPLE_RATE / 20)));
 
 function unlockAudio() {
-  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch {}
+  try { if (navigator.audioSession && navigator.audioSession.type !== "playback") navigator.audioSession.type = "playback"; } catch {}
+  if (!player || wasHidden) { player = newPlayer(); wasHidden = false; }
   player.src = SILENT;
-  player.play().catch(() => {});
+  player.play().catch((e) => alog(`silent play refused: ${e?.name}`));
+  return player;
 }
 
 // ---- speaking ----
@@ -309,7 +346,7 @@ function setSpeaking(on) {
 }
 
 async function speak() {
-  unlockAudio();
+  const player = unlockAudio();
   const text = $("text").value.trim();
   if (!text) return;
   const [speaker, base] = $("voice").value.split("|");
@@ -342,6 +379,7 @@ async function speak() {
     player.play().then(() => { starting = false; }, (e) => {
       starting = false;
       if (e?.name === "AbortError" || stopped) return;
+      alog(`play refused: ${e?.name}`);
       meta.textContent = "The browser would not play the audio. Tap Speak to try again.";
       me.stop(); done();
     });
