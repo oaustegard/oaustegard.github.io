@@ -2,11 +2,11 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261114174150";
-import { TRMPlanner } from "./trm.js?v=20261114174150";
-import { RolloutFights } from "./rollout.js?v=20261114174150";
-import { MOBJINFO, MF } from "../info.js?v=20261114174150";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261114174150";
+import { Bot } from "./bot.js?v=20261114194409";
+import { TRMPlanner } from "./trm.js?v=20261114194409";
+import { RolloutFights } from "./rollout.js?v=20261114194409";
+import { MOBJINFO, MF } from "../info.js?v=20261114194409";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261114194409";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {
@@ -52,6 +52,7 @@ export class BotDriver {
     this.rollout = null;
     if (new URLSearchParams(location.search).get("fights") === "rollout") {
       this.rollout = new RolloutFights(this.bot, engine, this.device, { W, MF });
+      this.rollout.onDecision = (d) => this.log?.decision(d);
     }
     this.cur = {};
     const gen = ++this.gen;
@@ -95,8 +96,9 @@ export class BotDriver {
         // frames late behind rollout work are the bot's doing, as with TRM plans
         if (this.rollout?.busy) this.busyAt = performance.now();
         const d = this.bot.debug();
-        this.onStatus(`TRM bot · ${d.target ? d.target.kind : "looking"} · ${this.plans} plans, ${(this.planMs / Math.max(1, this.plans)).toFixed(0)} ms each` +
-          (this.rollout ? ` · ${this.rollout.status()}` : ""));
+        this.lastStatus = `TRM bot · ${d.target ? d.target.kind : "looking"} · ${this.plans} plans, ${(this.planMs / Math.max(1, this.plans)).toFixed(0)} ms each` +
+          (this.rollout ? ` · ${this.rollout.status()}` : "");
+        this.onStatus(this.lastStatus);
       } catch (err) { console.error("bot", err); }
       await new Promise((r) => setTimeout(r, fresh ? 0 : 6));
     }

@@ -11,7 +11,7 @@
 // A decision is about 840 tics of game logic. To keep a laptop or phone cool, rollouts take at most about half
 // of the wall clock, yield a frame between futures, and switch off for the session if decisions stay slow.
 
-import { TIC_KERNELS } from "../shaders.js?v=20261114174150";
+import { TIC_KERNELS } from "../shaders.js?v=20261114194409";
 
 const TAU = 2 * Math.PI;
 const wrap = (a) => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };
@@ -123,7 +123,7 @@ export class RolloutFights {
     return h;
   }
   world(buf) { const wf = new Float32Array(buf), wi = new Int32Array(buf), wu = new Uint32Array(buf), W = this.W;
-    return { x: wf[W.viewx], y: wf[W.viewy], angle: wf[W.viewangle], kills: wi[W.killcount], health: wi[W.health], armor: wi[W.armor], dead: wu[W.dead], rng: wu[W.rng] }; }
+    return { x: wf[W.viewx], y: wf[W.viewy], angle: wf[W.viewangle], kills: wi[W.killcount], health: wi[W.health], armor: wi[W.armor], dead: wu[W.dead], rng: wu[W.rng], tic: wu[W.leveltime] }; }
 
   async rollout(move, base, seed, en, s0) {
     const sh = this.sh, o = this.o, W = this.W;
@@ -156,6 +156,7 @@ export class RolloutFights {
     const mi = new Int32Array(mb), slot = en.m.k * 32;
     const s0 = { w: this.world(wb), h: this.monsterHealth(mb), ex: mi[slot] / 65536, ey: mi[slot + 1] / 65536 };
     let best = null;
+    const rows = [];
     for (const move of MOVES) {
       if (!this.safe(move, p, en)) continue;
       const sc = [];
@@ -165,9 +166,11 @@ export class RolloutFights {
       }
       const mean = sc.reduce((a, b) => a + b, 0) / sc.length, worst = Math.min(...sc);
       const score = mean - o.risk * (mean - worst) + (this.plan?.name === move[0] ? o.hysteresis : 0);
+      rows.push([move[0], Math.round(score), ...sc.map(Math.round)]);
       if (!best || score > best.score) best = { name: move[0], move, score };
     }
     const ms = performance.now() - t0;
+    this.onDecision?.({ tic: s0.w.tic ?? this.tic, liveTic: this.tic, enemy: en.m.k, d: Math.round(en.d), hp: s0.w.health, best: best?.name, ms: Math.round(ms), rows });
     this.decisions++; this.ms += ms;
     // at most `duty` of the wall clock: rest as long as the decision took, scaled
     this.restUntil = performance.now() + ms * (1 - o.duty) / o.duty;

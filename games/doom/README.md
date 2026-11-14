@@ -35,6 +35,12 @@ experiment (`trm-doom-rollouts`), that cut the bot's deaths on E1M4 to E1M6 from
 live game keeps running while it decides. To spare a laptop or phone, rollouts use at most about half the
 time, and they switch off for the session if a decision takes over 2.5 s.
 
+`&log` adds a flight recorder and a Send log button. Every tic it keeps what the bot saw and what went to
+the engine, plus every fight decision with its scores, the status line, errors and the device. Send log
+asks for a note. It then commits the log to oaustegard/gpu-bridge-comms (`doom-logs/live/`) with the token
+the GPU Bridge page keeps in the same browser, and comments on the bridge's wake PR, which wakes the
+Claude session watching it. Without that token it offers the file to share or save.
+
 ## How it is built
 
 The game state lives in seven GPU buffers: textures and tables (`G`), level geometry (`M`), sectors,
