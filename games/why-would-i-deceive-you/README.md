@@ -41,7 +41,7 @@ replayed at quarter speed. Three wrong calls end the game.
 
 ## Implementation
 
-The game is one HTML file with no build step. It has four parts:
+The game is one HTML file and one audio file, with no build step. It has five parts:
 
 - **Face tracking** is MediaPipe Face Landmarker (`@mediapipe/tasks-vision` 0.10.14 from jsDelivr,
   with Google's published `face_landmarker.task` model, about 4 MB). It runs in the browser; no
@@ -56,9 +56,14 @@ The game is one HTML file with no build step. It has four parts:
 - **The two faces** are Canvas 2D drawings with a pose (lids, gaze, smile, jaw, brows, pupil
   size). The frame zooms in on the eyes as a scene goes on. One set of drawing code serves the
   character the game plays and the one your face moves.
-- **Sound** is Web Audio: a drone that rises with suspicion, and a few synthesized effects. The
-  browser's speech synthesis reads the lines, hers at a low pitch after the deep voice Holmes was
-  known for. The SND button turns both off.
+- **Voices** are 46 clips recorded ahead of time with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M)
+  and stored end to end in one file, `voices.mp3` (460 KB). Nathan is Kokoro's `am_michael`.
+  Elizabeth is three parts `af_kore` to one part `am_onyx`, which puts her median pitch near
+  125 Hz, after the deep voice Holmes was known for. The speaker's jaw follows the loudness of the
+  clip. `make-voices.py` regenerates the file and the table of clip positions in `index.html`; run
+  it after changing any spoken line, because a line without a clip is shown as a subtitle only.
+- **Sound effects** are synthesized with Web Audio: a drone that rises with suspicion, a thud for
+  a blink, a clapperboard. The SND button turns voices and effects off.
 
 ## Tuning
 

@@ -644,7 +644,7 @@ const SHE_SAYS = [
   "I'm five minutes away.", 'I watered your plants.', 'The dog already had his dinner.', 'I only checked my phone once during the movie.',
   "I'm not mad.", 'I love the pumpkin patch. Even an hour away.', 'I read the terms and conditions.', "I didn't eat the last slice.",
   'Yours is my favorite podcast.', 'The meeting will be quick.', "I'm listening.", "I've never seen this episode.", 'This is a transparent PNG.',
-  'I had one drink.', 'It was like that when I got here.', 'The code works. I tested it.', 'You pick dinner. I really do not mind.',
+  'I had one drink.', 'It was like that when I got here.', 'The code works. I tested it.', 'You choose dinner. I really do not mind.',
   'I pet the cat exactly as much as he wanted.', "I'm always being real.", 'I replied to your email this morning.', 'I love it. I would wear it anywhere.',
 ];
 const TELL_NAME = { blink: 'She blinked.', dart: 'Her eyes darted.', smile: 'The smile slipped.', brow: 'An eyebrow flickered.', pupil: 'Her pupils jumped.' };
@@ -681,6 +681,7 @@ const snd = { on: store.get('snd', true), ac: null, drone: null };
 function audio() {
   if (!snd.ac) { const C = window.AudioContext || window.webkitAudioContext; if (C) snd.ac = new C(); }
   if (snd.ac && snd.ac.state === 'suspended') snd.ac.resume();
+  voxDecode();
   return snd.ac;
 }
 function tone(f, dur, { type = 'sine', gain = 0.07, to = 0, at = 0 } = {}) {
@@ -722,16 +723,36 @@ function drone(level) {           // level: null stops it; 0..1 sets the tension
   d.f.frequency.setTargetAtTime(160 + level * 900, t, 0.3);
   d.o[1].frequency.setTargetAtTime(55.7 + level * 6, t, 0.3);
 }
-function say(who, text) {
-  const ss = window.speechSynthesis; if (!snd.on || !ss) return;
-  try {
-    ss.cancel();
-    const u = new SpeechSynthesisUtterance(text.replace(/…/g, '.'));
-    u.lang = 'en-US'; u.pitch = who === 'elizabeth' ? 0.3 : 0.85; u.rate = who === 'elizabeth' ? 0.9 : 0.95; u.volume = 0.9;
-    ss.speak(u);
-  } catch { /* no voices */ }
+/* Every spoken line is a clip in voices.mp3, made ahead of time with Kokoro-82M: am_michael for Nathan,
+   a low blend of af_kore and am_onyx for Elizabeth. VOX maps a line to [start, length] in seconds. */
+const VOX = {"Did you water my plants while I was away?":[0.2,2.257],"How far away are you right now?":[2.757,1.911],"Did you read the whole group chat?":[4.968,1.7],"Has the dog had dinner?":[6.968,1.472],"Are you mad at me?":[8.74,1.166],"How far is the pumpkin patch?":[10.206,1.942],"Did you look at your phone during the movie?":[12.448,2.1],"Is the demo live?":[14.848,1.303],"Is this a transparent PNG?":[16.451,1.928],"Did you eat the last one?":[18.679,1.451],"Will this meeting be quick?":[20.43,1.565],"Did you review my code?":[22.295,1.396],"Are you being real with me right now?":[23.991,2.104],"Okay.":[26.395,0.742],"Are you sure?":[27.437,0.925],"Hm.":[28.662,0.822],"You'd tell me if you were deceiving me?":[29.784,2.13],"Say it again.":[32.214,0.981],"Okay…":[33.495,0.718],"You blinked.":[34.513,0.94],"You looked away.":[35.754,1.012],"Your smile slipped.":[37.066,1.213],"I think you're deceiving me.":[38.579,1.533],"Okay. All right. Okay, good chat.":[40.412,2.368],"I'm five minutes away.":[43.08,1.381],"I watered your plants.":[44.761,1.202],"The dog already had his dinner.":[46.263,1.682],"I only checked my phone once during the movie.":[48.245,2.556],"I'm not mad.":[51.101,1.007],"I love the pumpkin patch. Even an hour away.":[52.408,2.862],"I read the terms and conditions.":[55.57,1.876],"I didn't eat the last slice.":[57.746,1.554],"Yours is my favorite podcast.":[59.6,2.041],"The meeting will be quick.":[61.941,1.343],"I'm listening.":[63.584,0.911],"I've never seen this episode.":[64.795,1.715],"This is a transparent PNG.":[66.81,1.822],"I had one drink.":[68.932,1.129],"It was like that when I got here.":[70.361,1.722],"The code works. I tested it.":[72.383,1.715],"You choose dinner. I really do not mind.":[74.398,2.239],"I pet the cat exactly as much as he wanted.":[76.937,2.738],"I'm always being real.":[79.975,1.391],"I replied to your email this morning.":[81.666,2.058],"I love it. I would wear it anywhere.":[84.024,1.861],"Why would I deceive you?":[86.185,1.371]};
+const vox = { raw: null, buf: null, src: null, an: null, bytes: null };
+fetch('voices.mp3').then(r => r.ok ? r.arrayBuffer() : null).then(b => { vox.raw = b; voxDecode(); }).catch(() => { /* subtitles still work */ });
+function voxDecode() {
+  if (vox.buf || !vox.raw || !snd.ac) return;
+  const raw = vox.raw; vox.raw = null;
+  const ok = b => { vox.buf = b; }, no = () => { /* no voices */ };
+  try { const p = snd.ac.decodeAudioData(raw, ok, no); if (p && p.catch) p.catch(no); } catch { no(); }
 }
-function hush() { try { window.speechSynthesis?.cancel(); } catch { /* fine */ } }
+function say(text) {            // returns the clip's length in ms, or 0 when nothing plays
+  hush();
+  const c = VOX[text]; if (!snd.on || !c) return 0;
+  const ac = audio(); if (!ac || !vox.buf) return 0;
+  if (!vox.an) { vox.an = ac.createAnalyser(); vox.an.fftSize = 512; vox.bytes = new Uint8Array(512); vox.an.connect(ac.destination); }
+  const src = ac.createBufferSource(), g = ac.createGain();
+  src.buffer = vox.buf; g.gain.value = 1; src.connect(g).connect(vox.an);
+  src.start(0, Math.max(0, c[0] - 0.02), c[1] + 0.06);
+  src.onended = () => { if (vox.src === src) vox.src = null; };
+  vox.src = src;
+  return c[1] * 1000;
+}
+function hush() { if (vox.src) { try { vox.src.stop(); } catch { /* already over */ } vox.src = null; } }
+function voxLevel() {           // how loud the playing clip is right now, 0..1, for the speaker's jaw
+  if (!vox.src || !vox.an) return -1;
+  vox.an.getByteTimeDomainData(vox.bytes);
+  let sum = 0; for (const b of vox.bytes) sum += (b - 128) ** 2;
+  return Math.min(1, Math.sqrt(sum / vox.bytes.length) / 28);
+}
 
 /* ===== FACE TRACKING =====
    P is the smoothed raw signal, base is the player's resting face, live is what the rules read. */
@@ -883,10 +904,10 @@ async function slate(big, small, ms = 1300) {
   sfx.clap();
   try { await sleep(ms); } finally { A.slate.hidden = true; }
 }
-function talk(f, text, who) {
-  const ms = 900 + text.length * 52;
-  f.talkUntil = now() + Math.min(ms, 2600);
-  sub(f, text); say(who || f.who, text);
+function talk(f, text) {          // subtitle, voice and a moving mouth; returns how long to leave the line up
+  const spoken = say(text), ms = Math.max(900 + text.length * 52, spoken + 350);
+  f.talkUntil = now() + (spoken || Math.min(ms, 2600)); f.voiced = spoken > 0;
+  sub(f, text);
   return ms;
 }
 function tellPose(p, tell, t) {
@@ -919,7 +940,10 @@ function updateFeed(f, t, dt) {
   }
   for (const key of ['gx', 'gy', 'smile', 'jaw', 'brow', 'skept', 'wide', 'pupil', 'tilt', 'twitch']) p[key] = lerp(p[key], g[key], k(key === 'gx' || key === 'gy' ? 22 : 11));
   p.blink = lerp(p.blink, g.blink, k(45));
-  if (t < f.talkUntil) p.jaw = Math.max(p.jaw, 0.22 + 0.3 * Math.abs(Math.sin(t / 74)) * (0.6 + 0.4 * Math.sin(t / 310)));
+  if (t < f.talkUntil) {
+    const lv = f.voiced ? voxLevel() : -1;
+    p.jaw = Math.max(p.jaw, lv >= 0 ? 0.08 + lv * 0.85 : 0.22 + 0.3 * Math.abs(Math.sin(t / 74)) * (0.6 + 0.4 * Math.sin(t / 310)));
+  }
   p.bob = Math.sin(t / 1700 + f.seed) * 1.2; p.dx = Math.sin(t / 2900 + f.seed * 2) * 1.4;
   p.tilt += Math.sin(t / 3700 + f.seed) * 0.5;
   f.cam.zoom = lerp(f.cam.zoom, f.zoomT, k(2.4));
@@ -1235,7 +1259,7 @@ for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => { au
 $('#b-back').onclick = title;
 $('#b-exit').onclick = title;
 $('#b-start').onclick = async () => {
-  audio(); try { window.speechSynthesis?.speak(new SpeechSynthesisUtterance('')); } catch { /* unlock only */ }
+  audio();
   const btn = $('#b-start'), mode = S.mode; btn.disabled = true;
   const kind = await startTracking(t => { $('#start-s').textContent = t; });
   if (S.mode !== mode || $('#brief').hidden) { if (S.mode == null) stopCamera(); return; }
@@ -1262,7 +1286,7 @@ sndUi();
 
 layout(); title(); requestAnimationFrame(render);
 if (document.fonts?.ready) document.fonts.ready.then(layout);
-window.__wwidy = { P, base, live, S, A, B, trk, TH };
+window.__wwidy = { P, base, live, S, A, B, trk, TH, vox };
 </script>
 </body>
 </html>
