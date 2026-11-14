@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Kokoro Voice</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Type anything and Muninn reads it aloud: Kokoro-82M text-to-speech running on your own device, each word lit as it is spoken.">
+<meta name="ai-disclosure" content="ai-assisted">
+<script>
+// The service worker (sw.js) gives the page cross-origin isolation, so onnxruntime can use four wasm threads, and
+// keeps every file for the next visit. The first visit reloads once so the page itself comes through it.
+window.swReady = (async () => {
+  if (!("serviceWorker" in navigator) || !isSecureContext || new URLSearchParams(location.search).has("nosw")) return false;
+  try {
+    await navigator.serviceWorker.register("sw.js");
+    await navigator.serviceWorker.ready;
+    if (crossOriginIsolated) return true;
+    let reloaded = false;
+    try { reloaded = sessionStorage.getItem("kokoro-voice-reloaded") === "1"; sessionStorage.setItem("kokoro-voice-reloaded", "1"); } catch {}
+    if (!reloaded) { location.reload(); return new Promise(() => {}); }
+    return true; // controlled, but isolation did not take: run on one thread
+  } catch { return false; }
+})();
+</script>
+<style>
+  :root { color-scheme: light dark; --fg:#151515; --dim:#686660; --bg:#fbfbf9; --line:#d8d6d0;
+          --card:#fff; --soft:#f2f1ec; --accent:#2d5b8a; --hi:#f6dfb0; --warn:#9a5b00; --bad:#b3261e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e6e1; --dim:#9a978f; --bg:#16171a; --line:#33353a; --card:#1d1f23;
+            --soft:#23252a; --accent:#8db6e0; --hi:#5a4520; --warn:#e0a54a; --bad:#f2836b; }
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 1.6rem 1rem 3rem; }
+  h1 { font-size: 1.55rem; margin: 0 0 .25rem; font-weight: 600; }
+  p.sub { color: var(--dim); margin: 0 0 1.1rem; font-size: .95rem; }
+  a { color: inherit; }
+  code, .mono, button, select, textarea, .badge, .meta, .load, .chips button { font-family: ui-monospace,
+    SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+  .card { border:1px solid var(--line); border-radius:8px; background:var(--card); padding:.9rem 1rem; }
+
+  .load { margin-bottom: 1rem; font-size: .8rem; color: var(--dim); }
+  .load .row { display:flex; justify-content:space-between; gap:.6rem; flex-wrap:wrap; margin-bottom:.45rem; }
+  .load .what { color: var(--fg); }
+  .prog { height:6px; background:var(--soft); border-radius:3px; overflow:hidden; }
+  .prog > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .prog.busy > div { width:35%; animation: slide 1.1s ease-in-out infinite; }
+  @keyframes slide { from { transform: translateX(-100%); } to { transform: translateX(290%); } }
+  .load.done { border-color: transparent; background: transparent; padding: 0 0 .2rem; margin-bottom: .6rem; }
+  .load.done .prog { display:none; }
+  .load.error { border-color: var(--bad); color: var(--bad); }
+
+  textarea { width:100%; min-height:8.5rem; font-size:.95rem; line-height:1.5; padding:.7rem .8rem; border:1px solid var(--line);
+             border-radius:6px; background:var(--card); color:var(--fg); resize:vertical; font-family: ui-serif, Georgia, serif; }
+  .chips { display:flex; gap:.4rem; flex-wrap:wrap; margin:.55rem 0 .2rem; align-items:center; }
+  .chips .lab { font-size:.74rem; color:var(--dim); font-family:ui-monospace,monospace; }
+  .chips button { font-size:.74rem; padding:.22rem .55rem; border:1px solid var(--line); border-radius:999px;
+                  background:var(--soft); color:var(--fg); cursor:pointer; }
+  .controls { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; margin:.8rem 0 1rem; }
+  select, button { font-size:.85rem; padding:.48rem .75rem; border:1px solid var(--line); border-radius:5px;
+                   background:var(--card); color:var(--fg); }
+  button { cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg); min-width:7.5rem; }
+  .speed { display:flex; align-items:center; gap:.4rem; font-size:.8rem; color:var(--dim); font-family:ui-monospace,monospace; }
+  .speed input { width:7rem; }
+  .spacer { flex:1; }
+
+  .reader { min-height: 5.5rem; font-size: 1.3rem; line-height: 1.75; }
+  .reader.empty { color: var(--dim); font-size: 1rem; }
+  .reader span { border-radius: 4px; padding: 0 .08em; transition: background .08s; }
+  .reader span.on { background: var(--hi); }
+  .reader span.said { color: var(--fg); }
+  .meta { font-size:.76rem; color:var(--dim); margin-top:.55rem; min-height:1.2em; }
+  .warn { font-size:.85rem; color:var(--warn); margin-top:.6rem; }
+
+  details { border:1px solid var(--line); border-radius:6px; padding:.5rem .85rem; margin-top:1rem; font-size:.88rem; }
+  details summary { cursor:pointer; color:var(--dim); }
+  details[open] summary { margin-bottom:.5rem; }
+  details pre { white-space:pre-wrap; word-break:break-word; font-size:.8rem; background:var(--soft); padding:.5rem .6rem; border-radius:4px; }
+  details code { font-size:.85em; background:var(--soft); padding:0 .25em; border-radius:3px; }
+  .kv { display:grid; grid-template-columns: 11rem 1fr; gap:.25rem .8rem; font-size:.8rem; }
+  .kv dt { color:var(--dim); } .kv dd { margin:0; font-family:ui-monospace,monospace; }
+  footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
+  footer p { margin:.35rem 0; }
+  @media (max-width: 640px) {
+    main { padding: 1rem .8rem 2rem; }
+    h1 { font-size: 1.3rem; }
+    textarea, select { font-size: 16px; } /* iOS zooms into smaller inputs */
+    .reader { font-size: 1.15rem; }
+    .kv { grid-template-columns: 1fr; }
+    .speed input { width: 5.5rem; }
+  }
+</style>
+
+<main>
+  <h1>Kokoro Voice</h1>
+  <p class="sub">Type anything and Muninn reads it aloud. Kokoro-82M text-to-speech runs on your own device, each word
+    lit as it is spoken, and nothing you type leaves the page. The first visit downloads an 88 MB model; after that it
+    loads from this device.</p>
+
+  <div class="card load" id="load" aria-live="polite">
+    <div class="row"><span class="what" id="load-what">Getting ready…</span><span id="load-num"></span></div>
+    <div class="prog busy" id="load-bar"><div></div></div>
+  </div>
+
+  <textarea id="text" aria-label="Text to speak" maxlength="4000">Hello. I am [Muninn](/mˈuːnɪn/), and this voice is made right here, in your browser. Type anything, press Speak, and watch each word light up as it is said.</textarea>
+  <div class="chips" id="chips"><span class="lab">Try:</span></div>
+  <div class="controls">
+    <select id="voice" aria-label="Voice">
+      <option value="bm_fable,bm_fable,bm_lewis|0.95">Muninn</option>
+      <option value="bf_emma|1">Emma</option>
+      <option value="bf_isabella|1">Isabella</option>
+      <option value="bm_george|1">George</option>
+      <option value="bm_daniel|1">Daniel</option>
+    </select>
+    <label class="speed">speed <input type="range" id="speed" min="0.7" max="1.3" step="0.05" value="1"><span id="speed-val">1.00×</span></label>
+    <span class="spacer"></span>
+    <button id="save" disabled title="Save the last thing spoken as a WAV file">Save WAV</button>
+    <button id="speak" class="primary" disabled>Loading…</button>
+  </div>
+
+  <div class="card">
+    <div class="reader empty" id="reader">The words appear here as they are spoken.</div>
+    <div class="meta" id="meta"></div>
+    <div class="warn" id="warn" hidden></div>
+  </div>
+
+  <details>
+    <summary>Pronunciation</summary>
+    <p>Words come from misaki's British English dictionaries (about 200,000 entries). A word in neither is guessed
+      from dictionary words that spell it, or left silent, and the page names it. To set how a word is said, write
+      <code>[word](/phonemes/)</code> in Kokoro's phoneme alphabet, for example <code>[Muninn](/mˈuːnɪn/)</code>.
+      <code>[word](+2)</code> raises its stress and <code>[word](-2)</code> removes it. The phonemes of the last
+      thing spoken:</p>
+    <pre id="ps">(nothing yet)</pre>
+  </details>
+
+  <details id="about">
+    <summary>Device, speed and storage</summary>
+    <dl class="kv" id="facts"></dl>
+    <p><button id="clear">Remove the downloaded files from this device</button></p>
+  </details>
+
+  <footer>
+    <p>The model is <a href="https://huggingface.co/hexgrad/Kokoro-82M">Kokoro-82M</a> v1.0 (Apache-2.0) from
+      <a href="https://github.com/thewh1teagle/kokoro-onnx">kokoro-onnx</a>'s ONNX export, shrunk to 102 MB (int8 where
+      it only shapes the sound, fp16 where it sets timing and pitch) with its STFT corrected to match PyTorch. It runs
+      in <a href="https://onnxruntime.ai/docs/tutorials/web/">onnxruntime-web</a>. Text becomes phonemes through a
+      JavaScript port of <a href="https://github.com/hexgrad/misaki">misaki</a> (Apache-2.0).</p>
+    <p>How it was built and measured: <a href="https://github.com/oaustegard/experiments/tree/main/kokoro-web">kokoro-web</a>
+      and <a href="https://github.com/oaustegard/experiments/tree/main/kokoro-onnx-kinescript">kokoro-onnx-kinescript</a>.
+      Muninn's voice is a 2:1 blend of Kokoro's bm_fable and bm_lewis.</p>
+  </footer>
+</main>
+
+<script type="module">
+import * as K from "./kokoro.js";
+import { G2P, chunk } from "./g2p.js";
+
+// ?ort= and ?model= point at other copies (the headless check serves both from this directory).
+const q = new URLSearchParams(location.search);
+const ORT = new URL(q.get("ort") || "https://cdn.jsdelivr.net/npm/onnxruntime-web@1.31.1/dist/", location.href).href;
+const MODEL = new URL(q.get("model") || "https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/kokoro-web/kokoro-v1.0-web-20261113.onnx", location.href).href;
+const MODEL_BYTES = 101890591; // unpacked size; the transfer is 88 MB of brotli, so Content-Length cannot be the total
+const SAMPLES = [
+  ["Raven", "Once upon a midnight dreary, while I pondered, weak and weary, over many a quaint and curious volume of forgotten lore."],
+  ["Numbers", "On March 3rd, 2024, the ticket cost $12.50, and 1,250 people bought one."],
+  ["Muninn", "I am [Muninn](/mˈuːnɪn/), one of Odin's two ravens. Each morning I fly out over the world, and each evening I bring back what I remember."],
+  ["Stress", "I never said [she](+2) stole it."],
+];
+const $ = (id) => document.getElementById(id);
+const facts = {};
+function fact(k, v) { facts[k] = v; $("facts").innerHTML = Object.entries(facts).map(([a, b]) => `<dt>${a}</dt><dd>${b}</dd>`).join(""); }
+function loading(what, num = "", frac = null) {
+  $("load-what").textContent = what;
+  $("load-num").textContent = num;
+  $("load-bar").classList.toggle("busy", frac == null);
+  $("load-bar").firstElementChild.style.width = frac == null ? "" : `${(100 * frac).toFixed(1)}%`;
+}
+function loadFailed(e) {
+  $("load").classList.add("error");
+  loading(`Could not load: ${e?.message || e}`);
+  $("speak").textContent = "Unavailable";
+}
+
+// ---- loading ----
+async function inCache(url) {
+  try { return Boolean(await caches.match(url)); } catch { return false; }
+}
+async function fetchModel(onProgress) {
+  const res = await fetch(MODEL);
+  if (!res.ok) throw new Error(`model: HTTP ${res.status}`);
+  const out = new Uint8Array(MODEL_BYTES), reader = res.body.getReader(), extra = [];
+  let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (got + value.length <= out.length) out.set(value, got); else extra.push(value);
+    got += value.length;
+    onProgress(got);
+  }
+  if (got !== MODEL_BYTES) throw new Error(`model: got ${got} bytes, expected ${MODEL_BYTES}`);
+  return out;
+}
+
+let model, vocab, ort, g2p, ready = false;
+const packs = {};
+async function loadVoice(name) {
+  if (!packs[name]) {
+    packs[name] = (async () => {
+      const res = await fetch(`voices/${name}.f16.bin`);
+      if (!res.ok) throw new Error(`voice ${name}: HTTP ${res.status}`);
+      return K.f16ToF32(await res.arrayBuffer());
+    })();
+  }
+  return packs[name];
+}
+async function packFor(speaker) {
+  const names = speaker.split(","), loaded = {};
+  for (const n of new Set(names)) loaded[n] = await loadVoice(n);
+  return K.blend(loaded, speaker);
+}
+
+try {
+  await window.swReady;
+  const t0 = performance.now();
+  const threads = crossOriginIsolated ? Math.min(navigator.hardwareConcurrency || 1, 4) : 1;
+  const cached = await inCache(MODEL);
+  loading(cached ? "Loading the voice model from this device…" : "Downloading the voice model…", "", 0);
+  const ortP = import(ORT + "ort.wasm.min.mjs").then((m) => m.default ?? m);
+  const vocabP = fetch("vocab.json").then((r) => r.json());
+  const g2pP = fetch("lexicon-gb.json").then((r) => r.json()).then((d) => new G2P(d.gold, d.silver));
+  loadVoice("bm_fable"); loadVoice("bm_lewis");
+  let shown = 0;
+  const bytes = await fetchModel((got) => {
+    const now = performance.now();
+    if (now - shown < 80 && got < MODEL_BYTES) return;
+    shown = now;
+    loading(cached ? "Loading the voice model from this device…" : "Downloading the voice model…",
+      `${(got / 1e6).toFixed(0)} of ${(MODEL_BYTES / 1e6).toFixed(0)} MB`, got / MODEL_BYTES);
+  });
+  const tFetched = performance.now();
+  loading("Starting the speech engine…");
+  ort = await ortP;
+  ort.env.wasm.wasmPaths = ORT;
+  ort.env.wasm.numThreads = threads;
+  ort.env.wasm.proxy = true; // a worker runs the model, so the page keeps painting while it speaks
+  model = await K.loadModel(ort, bytes, { ep: "wasm" }); // `bytes` is dropped after this: onnxruntime has its own copy
+  [vocab, g2p] = await Promise.all([vocabP, g2pP]);
+  const secs = (performance.now() - t0) / 1000;
+  ready = true;
+  $("load").classList.add("done");
+  loading(cached ? `Ready. Loaded from this device in ${secs.toFixed(1)} s.` : `Ready. Downloaded and started in ${secs.toFixed(1)} s; next time it loads from this device.`);
+  $("speak").disabled = false;
+  $("speak").textContent = "Speak";
+  fact("Model", `${(MODEL_BYTES / 1e6).toFixed(0)} MB, ${cached ? "from this device" : "downloaded"} in ${((tFetched - t0) / 1000).toFixed(1)} s`);
+  fact("Engine", `onnxruntime-web 1.31.1, wasm, ${threads} thread${threads > 1 ? "s" : ""}${crossOriginIsolated ? "" : " (no cross-origin isolation)"}`);
+  fact("Start-up", `${((performance.now() - tFetched) / 1000).toFixed(1)} s`);
+  try { navigator.storage?.persist?.(); } catch {}
+  storageFact();
+} catch (e) {
+  loadFailed(e);
+}
+
+async function storageFact() {
+  try {
+    const est = await navigator.storage.estimate();
+    fact("Stored on this device", `${(est.usage / 1e6).toFixed(0)} MB`);
+  } catch {}
+}
+
+// ---- audio ----
+// iOS: in the tap, ask for the "playback" audio session (plays through the silent switch), make or renew the
+// AudioContext, and start a one-sample silent buffer. A context that was hidden (the page was left) is replaced:
+// iOS can keep its clock running with no sound reaching the speaker.
+let ctx, stale = false;
+document.addEventListener("visibilitychange", () => { if (document.hidden) stale = true; });
+addEventListener("pagehide", () => { stale = true; });
+function unlockAudio() {
+  try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch {}
+  if (ctx && (stale || ctx.state !== "running")) { ctx.close().catch(() => {}); ctx = null; }
+  stale = false;
+  ctx ??= new AudioContext();
+  ctx.onstatechange = () => { if (ctx && ctx.state !== "running") stale = true; };
+  if (ctx.state !== "running") ctx.resume();
+  const blank = ctx.createBufferSource();
+  blank.buffer = ctx.createBuffer(1, 1, 22050);
+  blank.connect(ctx.destination);
+  blank.start(0);
+  return ctx;
+}
+
+// ---- speaking ----
+let session = null; // the utterance playing now: {stop()}
+let lastAudio = null; // Float32Array of the last complete utterance, for Save WAV
+const cache = new Map(); // text + voice + speed -> parts, so Speak again replays at once
+
+function setSpeaking(on) {
+  $("speak").textContent = on ? "Stop" : "Speak";
+  $("speak").classList.toggle("primary", true);
+}
+
+async function speak() {
+  const ac = unlockAudio();
+  const text = $("text").value.trim();
+  if (!text) return;
+  const [speaker, base] = $("voice").value.split("|");
+  const rate = +(+base * +$("speed").value).toFixed(3);
+  const key = `${speaker}|${rate}|${text}`;
+  const reader = $("reader"), meta = $("meta"), warn = $("warn");
+  const r = g2p.phonemize(text);
+  $("ps").textContent = r.ps;
+  const notes = [];
+  const guessed = [...new Set(r.guessed)], unknown = [...new Set(r.unknown)];
+  if (guessed.length) notes.push(`Not in the dictionary, so guessed from its parts: ${guessed.join(", ")}.`);
+  if (unknown.length) notes.push(`Not in the dictionary, so left silent: ${unknown.join(", ")}.`);
+  warn.hidden = !notes.length;
+  warn.textContent = notes.length ? notes.join(" ") + " Write [word](/phonemes/) to set a pronunciation (see Pronunciation below)." : "";
+  const line = { text, speaker, rate, chunks: chunk(r.tokens) };
+  if (!line.chunks.length) { meta.textContent = "Nothing to say."; return; }
+
+  let stopped = false;
+  const sources = [], timed = [];
+  let next = ac.currentTime + 0.1, end = next, generating = true;
+  session = { stop() { stopped = true; for (const s of sources) try { s.stop(); } catch {} } };
+  setSpeaking(true);
+  reader.classList.remove("empty");
+  reader.textContent = "";
+  const tick = () => {
+    const t = ac.currentTime;
+    for (const w of timed) {
+      w.span.classList.toggle("on", t >= w.start && t < w.end);
+    }
+    if (!stopped && (generating || t < end)) requestAnimationFrame(tick);
+    else {
+      timed.forEach((w) => w.span.classList.remove("on"));
+      if (session && !generating) { session = null; setSpeaking(false); }
+    }
+  };
+  const schedule = (part) => {
+    if (stopped) return;
+    const at = Math.max(next, ac.currentTime + 0.05);
+    const buf = ac.createBuffer(1, part.audio.length, K.SAMPLE_RATE);
+    buf.copyToChannel(part.audio, 0);
+    const src = ac.createBufferSource();
+    src.buffer = buf; src.connect(ac.destination); src.start(at);
+    sources.push(src);
+    next = end = at + part.audio.length / K.SAMPLE_RATE;
+    for (const w of part.words) {
+      const span = document.createElement("span"); span.textContent = w.word;
+      if (reader.childNodes.length) reader.append(" ");
+      reader.append(span);
+      timed.push({ span, start: at + w.start, end: at + w.end });
+    }
+  };
+  requestAnimationFrame(tick);
+  try {
+    let parts = cache.get(key);
+    if (parts) {
+      parts.forEach(schedule);
+      meta.textContent = "Replaying.";
+    } else {
+      const pack = await packFor(speaker);
+      const t0 = performance.now();
+      parts = [];
+      let first = null, ms = 0;
+      meta.textContent = "Generating…";
+      for await (const part of K.speakStream(model, vocab, pack, line)) {
+        if (stopped) break;
+        first ??= performance.now() - t0;
+        ms += part.ms;
+        parts.push(part);
+        schedule(part);
+        meta.textContent = part.index + 1 < part.count ? `Speaking; making sentence ${part.index + 2} of ${part.count}…` : "Speaking.";
+      }
+      if (!stopped) {
+        cache.set(key, parts);
+        const secs = parts.reduce((a, p) => a + p.audio.length, 0) / K.SAMPLE_RATE;
+        meta.textContent = `${secs.toFixed(1)} s of speech · first sound after ${(first / 1000).toFixed(1)} s · ` +
+          `made at ${(secs / (ms / 1000)).toFixed(1)}× real time`;
+        fact("Last utterance", `${secs.toFixed(1)} s in ${(ms / 1000).toFixed(1)} s of compute`);
+      }
+    }
+    if (!stopped) {
+      const total = parts.reduce((a, p) => a + p.audio.length, 0);
+      lastAudio = new Float32Array(total);
+      let o = 0;
+      for (const p of parts) { lastAudio.set(p.audio, o); o += p.audio.length; }
+      $("save").disabled = false;
+    }
+  } catch (e) {
+    meta.textContent = `Error: ${e?.message || e}`;
+    session?.stop();
+  } finally {
+    generating = false;
+    if (stopped) { session = null; setSpeaking(false); meta.textContent ||= "Stopped."; }
+  }
+}
+
+$("speak").onclick = () => {
+  if (!ready) return;
+  if (session) { session.stop(); session = null; setSpeaking(false); $("meta").textContent = "Stopped."; return; }
+  speak();
+};
+$("text").addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $("speak").click(); }
+});
+$("speed").oninput = () => { $("speed-val").textContent = `${(+$("speed").value).toFixed(2)}×`; };
+$("voice").onchange = () => loadVoice($("voice").value.split("|")[0].split(",")[0]);
+for (const [label, text] of SAMPLES) {
+  const b = document.createElement("button");
+  b.textContent = label;
+  b.onclick = () => { $("text").value = text; $("text").focus(); };
+  $("chips").append(b);
+}
+
+// ---- WAV ----
+$("save").onclick = () => {
+  if (!lastAudio) return;
+  const n = lastAudio.length, buf = new ArrayBuffer(44 + 2 * n), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + 2 * n, true); str(8, "WAVEfmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, K.SAMPLE_RATE, true);
+  v.setUint32(28, 2 * K.SAMPLE_RATE, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, 2 * n, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, Math.round(Math.max(-1, Math.min(1, lastAudio[i])) * 32767), true);
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  a.download = "kokoro-voice.wav";
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+};
+
+// ---- storage ----
+$("clear").onclick = async () => {
+  try { for (const k of await caches.keys()) if (k.startsWith("kokoro-voice-")) await caches.delete(k); } catch {}
+  $("clear").textContent = "Removed. The next visit downloads the model again.";
+  $("clear").disabled = true;
+  storageFact();
+};
+$("about").addEventListener("toggle", storageFact);
+window.kokoroReady = () => ready; // for the headless check
+</script>
+</html>
