@@ -1,0 +1,1266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<title>Why Would I Deceive You?</title>
+<meta name="description" content="A staring game for your phone's front camera. Hold an unblinking stare to get a lie past Nathan, or watch Elizabeth's eyes and call the deception.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Why Would I Deceive You?">
+<meta property="og:description" content="A staring game for your phone's front camera. Hold an unblinking stare to get a lie past Nathan, or watch Elizabeth's eyes and call the deception.">
+<meta property="og:url" content="https://austegard.com/games/why-would-i-deceive-you/">
+<meta property="og:image" content="https://austegard.com/games/why-would-i-deceive-you/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="Two cartoon close-ups: a man with heavy brows staring, and a wide-eyed blonde woman in a black turtleneck, smiling.">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Why Would I Deceive You?">
+<meta name="twitter:description" content="A staring game for your phone's front camera. Deceive, or work out whether you are being deceived.">
+<meta name="twitter:image" content="https://austegard.com/games/why-would-i-deceive-you/og-image.png">
+<meta name="theme-color" content="#0c0a09">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Deceive You">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap">
+<style>
+/* Layout: a documentary camera monitor. A status bar, two stacked 4:3 feeds (CAM A is them, CAM B is you),
+   and a control deck underneath. One dark look on purpose: it is a monitor in a dim room. */
+:root {
+  color-scheme: dark;
+  --ink: #0c0a09;
+  --panel: #171311;
+  --rule: #3b322b;
+  --fg: #f3ede2;
+  --dim: #a59887;
+  --rec: #e5382c;
+  --amber: #e9b25f;
+  --ok: #86d392;
+  --line: #ffe66b;
+  --serif: "Instrument Serif", "Iowan Old Style", Georgia, serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--ink); color: var(--fg); font: 500 12px/1.35 var(--mono);
+  display: flex; flex-direction: column; overflow: hidden; height: 100dvh;
+  padding: env(safe-area-inset-top, 0px) max(10px, env(safe-area-inset-right, 0px)) env(safe-area-inset-bottom, 0px) max(10px, env(safe-area-inset-left, 0px));
+  -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation;
+}
+[hidden] { display: none !important; }
+button { font: inherit; color: inherit; }
+button:focus-visible { outline: 2px solid var(--amber); outline-offset: 2px; }
+
+#bar { flex: none; height: 34px; display: flex; align-items: center; gap: 10px; letter-spacing: .08em; color: var(--dim); }
+#bar .rec { display: flex; align-items: center; gap: 6px; color: var(--fg); }
+#bar .rec i { width: 9px; height: 9px; border-radius: 50%; background: #5a4c44; }
+body.live #bar .rec i { background: var(--rec); animation: pulse 1.4s steps(2, jump-none) infinite; }
+@keyframes pulse { 50% { opacity: .25; } }
+#bar .sp { flex: 1; }
+#bar button { background: none; border: 1px solid var(--rule); border-radius: 3px; height: 24px; min-width: 30px; padding: 0 7px; cursor: pointer; }
+#bar button[aria-pressed="false"] { color: #6c6055; text-decoration: line-through; }
+
+#stage { flex: 1; min-height: 0; position: relative; display: grid; place-items: center; }
+#stack { display: flex; flex-direction: column; gap: 6px; }
+#stack.row { flex-direction: row; }
+.feed { position: relative; overflow: hidden; background: #000; border-radius: 3px; outline: 1px solid var(--rule); }
+.feed canvas { display: block; width: 100%; height: 100%; }
+.feed .tag, .feed .tc { position: absolute; top: 7px; font-size: 10px; letter-spacing: .1em; color: rgba(243, 237, 226, .86); text-shadow: 0 1px 2px #000; }
+.feed .tag { left: 9px; }
+.feed .tag b { font-weight: 600; color: var(--amber); }
+.feed .tc { right: 9px; font-variant-numeric: tabular-nums; }
+.feed .brk { position: absolute; inset: 22px 9px 9px; pointer-events: none;
+  background:
+    linear-gradient(var(--fg), var(--fg)) left top / 14px 1px no-repeat, linear-gradient(var(--fg), var(--fg)) left top / 1px 14px no-repeat,
+    linear-gradient(var(--fg), var(--fg)) right top / 14px 1px no-repeat, linear-gradient(var(--fg), var(--fg)) right top / 1px 14px no-repeat,
+    linear-gradient(var(--fg), var(--fg)) left bottom / 14px 1px no-repeat, linear-gradient(var(--fg), var(--fg)) left bottom / 1px 14px no-repeat,
+    linear-gradient(var(--fg), var(--fg)) right bottom / 14px 1px no-repeat, linear-gradient(var(--fg), var(--fg)) right bottom / 1px 14px no-repeat;
+  opacity: .5; }
+.feed .sub { position: absolute; left: 6%; right: 6%; bottom: 7%; text-align: center; font: 400 clamp(17px, 5.4cqw, 30px)/1.12 var(--serif);
+  color: #fff; text-shadow: 0 0 3px #000, 0 1px 2px #000, 0 2px 10px rgba(0, 0, 0, .9); text-wrap: balance; pointer-events: none; }
+.feed { container-type: inline-size; }
+.feed .sub.you { color: var(--line); font-style: italic; }
+.feed .sub small { display: block; font: 600 9px/1.6 var(--mono); letter-spacing: .14em; font-style: normal; color: rgba(255, 230, 107, .85); }
+.feed .note { position: absolute; left: 50%; top: 30px; transform: translateX(-50%); padding: 3px 9px; border-radius: 2px; white-space: nowrap;
+  background: rgba(12, 10, 9, .78); border: 1px solid var(--rule); font-size: 10px; font-weight: 600; letter-spacing: .14em; color: var(--amber); }
+.feed .note.bad { color: #fff; background: var(--rec); border-color: var(--rec); }
+.feed .shut { position: absolute; left: 0; right: 0; height: 0; background: #050404; transition: height 70ms linear; pointer-events: none; }
+.feed .shut.t { top: 0; } .feed .shut.b { bottom: 0; }
+.feed.blink .shut { height: 51%; }
+.feed .slate { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(8, 6, 5, .72); }
+.feed .slate div { text-align: center; padding: 10px 16px 12px; background: #f1ead9; color: #14110f; border-radius: 2px; min-width: 56%;
+  border-top: 12px solid #14110f; border-image: repeating-linear-gradient(115deg, #14110f 0 12px, #f1ead9 12px 24px) 12 0 0 0; }
+.feed .slate b { display: block; font: 400 26px/1.1 var(--serif); }
+.feed .slate span { font-size: 10px; letter-spacing: .14em; }
+#cam { position: fixed; left: 0; bottom: 0; width: 2px; height: 2px; opacity: .01; pointer-events: none; }   /* Safari stops decoding a display:none video */
+#flash { position: fixed; inset: 0; background: #fff; opacity: 0; pointer-events: none; z-index: 20; }
+#flash.go { animation: flash 260ms ease-out; }
+@keyframes flash { 0% { opacity: .85; } 100% { opacity: 0; } }
+.pop { position: fixed; z-index: 15; max-width: 62vw; padding: 8px 11px; border-radius: 12px; background: rgba(243, 237, 226, .96); color: #171311;
+  font: 600 12px/1.25 var(--mono); box-shadow: 0 6px 24px rgba(0, 0, 0, .6); animation: pop 2.6s ease both; pointer-events: none; }
+.pop.tl { top: calc(env(safe-area-inset-top, 0px) + 6px); left: 8px; } .pop.tr { top: calc(env(safe-area-inset-top, 0px) + 6px); right: 8px; }
+.pop.bl { bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); left: 8px; } .pop.br { bottom: calc(env(safe-area-inset-bottom, 0px) + 8px); right: 8px; }
+@keyframes pop { 0% { transform: translateY(14px); opacity: 0; } 8%, 88% { transform: none; opacity: 1; } 100% { opacity: 0; } }
+#fly { position: fixed; z-index: 16; width: 9px; height: 7px; border-radius: 50%; background: #0a0808; box-shadow: -4px -3px 0 -1px rgba(220, 220, 220, .7), 4px -3px 0 -1px rgba(220, 220, 220, .7); pointer-events: none; }
+
+#deck { flex: none; height: 204px; padding: 10px 2px 8px; display: flex; flex-direction: column; justify-content: center; gap: 8px; }
+#deck > section { display: flex; flex-direction: column; gap: 8px; }
+h1 { margin: 0; font: 400 clamp(26px, 8.4vw, 38px)/1 var(--serif); letter-spacing: -.01em; text-wrap: balance; }
+h1 em { color: var(--line); }
+p { margin: 0; color: var(--dim); text-wrap: pretty; }
+p b { color: var(--fg); font-weight: 600; }
+.fine { font-size: 10px; line-height: 1.4; color: #85796b; }
+.fine a { color: inherit; }
+.btns { display: flex; gap: 8px; }
+.btn { flex: 1; min-height: 52px; padding: 7px 10px; border: 1px solid var(--rule); border-radius: 4px; background: var(--panel); cursor: pointer; text-align: left;
+  display: flex; flex-direction: column; justify-content: center; gap: 1px; }
+.btn b { font: 400 20px/1.05 var(--serif); color: var(--fg); }
+.btn span { font-size: 10px; letter-spacing: .06em; color: var(--dim); }
+.btn.go { background: var(--fg); border-color: var(--fg); } .btn.go b { color: var(--ink); } .btn.go span { color: #5b5046; }
+.btn.no { border-color: var(--rec); } .btn.no b { color: #ff8b80; }
+.btn:disabled { opacity: .32; cursor: default; }
+.btn:not(:disabled):active { transform: translateY(1px); }
+.btn.sm { min-height: 40px; flex: 0 1 auto; } .btn.sm b { font-size: 16px; }
+.row { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; letter-spacing: .1em; font-size: 10px; color: var(--dim); }
+.row .val { color: var(--fg); font-size: 13px; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+.meter { height: 12px; border: 1px solid var(--rule); border-radius: 2px; background: repeating-linear-gradient(90deg, transparent 0 9px, rgba(59, 50, 43, .7) 9px 10px); overflow: hidden; }
+.meter i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--ok), var(--amber) 55%, var(--rec)); background-size: 100vw 100%; }
+.meter.thin { height: 6px; } .meter.thin i { background: var(--fg); }
+.lamps { display: flex; gap: 6px; }
+.lamp { flex: 1; text-align: center; padding: 5px 2px; border: 1px solid var(--rule); border-radius: 2px; font-size: 9.5px; font-weight: 600; letter-spacing: .1em; color: #6c6055; white-space: nowrap; }
+.lamp.on { color: #0c0a09; background: var(--ok); border-color: var(--ok); }
+.lamp.off { color: #fff; background: var(--rec); border-color: var(--rec); }
+#strikes i { display: inline-block; width: 9px; height: 9px; margin-left: 4px; border-radius: 50%; border: 1px solid var(--dim); }
+#strikes i.x { background: var(--rec); border-color: var(--rec); }
+#over h2 { margin: 0; font: 400 26px/1.05 var(--serif); }
+#debug { position: fixed; left: 4px; top: 40px; z-index: 30; margin: 0; padding: 4px 6px; background: rgba(0, 0, 0, .7); color: #9f9; font: 10px/1.25 var(--mono); pointer-events: none; white-space: pre; }
+@media (prefers-reduced-motion: reduce) { body.live #bar .rec i { animation: none; } .pop { animation-duration: 2.6s; animation-timing-function: step-end; } }
+@media (min-width: 720px) { #deck { align-self: center; width: min(100%, 560px); } }
+</style>
+</head>
+<body>
+<header id="bar">
+  <span class="rec"><i></i><span id="recl">STANDBY</span></span>
+  <span id="mode-l"></span>
+  <span class="sp"></span>
+  <button id="b-snd" type="button" aria-pressed="true" aria-label="Sound and voices">SND</button>
+  <button id="b-exit" type="button" aria-label="Back to the title screen" hidden>&#x2715;</button>
+</header>
+
+<main id="stage">
+  <div id="stack">
+    <div class="feed" id="fA">
+      <canvas></canvas><div class="shut t"></div><div class="shut b"></div><div class="brk"></div>
+      <div class="tag">CAM A &middot; <b></b></div><div class="tc"></div>
+      <div class="note" hidden></div><div class="sub"></div><div class="slate" hidden><div><b></b><span></span></div></div>
+    </div>
+    <div class="feed" id="fB">
+      <canvas></canvas><div class="brk"></div>
+      <div class="tag">CAM B &middot; <b></b></div><div class="tc"></div>
+      <div class="note" hidden></div><div class="sub"></div>
+    </div>
+  </div>
+</main>
+
+<footer id="deck">
+  <section id="title">
+    <h1>Why would I <em>deceive</em> you?</h1>
+    <p>A staring game. Your front camera watches your eyes.</p>
+    <div class="btns">
+      <button class="btn go" type="button" data-mode="deceive"><b>Deceive</b><span>PLAY ELIZABETH &middot; DON'T BLINK</span></button>
+      <button class="btn" type="button" data-mode="detect"><b>Detect</b><span>PLAY NATHAN &middot; CATCH THE TELL</span></button>
+    </div>
+    <p class="fine">Video never leaves this device; face tracking runs in the browser. A parody, not affiliated with A24, <i>You Can See Everything</i> or anyone in it.</p>
+  </section>
+
+  <section id="brief" hidden>
+    <p id="brief-t"></p>
+    <div class="btns">
+      <button class="btn go" type="button" id="b-start"><b>Roll camera</b><span id="start-s">ASKS FOR THE FRONT CAMERA</span></button>
+      <button class="btn sm" type="button" id="b-back"><b>Back</b></button>
+    </div>
+    <p class="fine" id="brief-f"></p>
+  </section>
+
+  <section id="play" hidden>
+    <div id="hud-dec">
+      <div class="row"><span>NATHAN'S SUSPICION</span><span class="val" id="valu"></span></div>
+      <div class="meter" id="m-susp"><i></i></div>
+    </div>
+    <div id="hud-det">
+      <div class="row"><span>CAUGHT <b class="val" id="score">0</b></span><span id="strikes">STRIKES<i></i><i></i><i></i></span></div>
+      <div class="btns">
+        <button class="btn" type="button" id="b-ok" disabled><b>Okay. Good chat.</b><span>SHE'S BEING REAL</span></button>
+        <button class="btn no" type="button" id="b-no" disabled><b>You're deceiving me.</b><span>I SAW SOMETHING</span></button>
+      </div>
+    </div>
+    <div class="lamps"><span class="lamp" id="l-eyes">EYES OPEN</span><span class="lamp" id="l-gaze">EYE CONTACT</span><span class="lamp" id="l-smile">HALF-SMILE</span></div>
+    <div class="row"><span id="hold-l">HOLD THE STARE</span><span class="val" id="hold-t"></span></div>
+    <div class="meter thin" id="m-hold"><i></i></div>
+  </section>
+
+  <section id="over" hidden>
+    <h2 id="over-h"></h2>
+    <p id="over-p"></p>
+    <div class="btns">
+      <button class="btn go sm" type="button" id="b-again"><b>Again</b></button>
+      <button class="btn sm" type="button" id="b-swap"><b>Switch roles</b></button>
+      <button class="btn sm" type="button" id="b-copy"><b>Copy result</b></button>
+    </div>
+  </section>
+</footer>
+
+<div id="flash"></div>
+<video id="cam" autoplay playsinline muted></video>
+
+<script type="module">
+/* ===== FACES =====
+   Both characters are drawn in "head space": origin between the eyes, y down, head about 170 wide.
+   A feed is a 400x300 (4:3) design frame; cam.zoom pushes in on the eyes. */
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const INK = '#2b1a14';
+
+function spline(ctx, pts, closed) {
+  const n = pts.length;
+  const mid = (a, b) => [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+  ctx.beginPath();
+  if (closed) {
+    let m = mid(pts[n - 1], pts[0]);
+    ctx.moveTo(m[0], m[1]);
+    for (let i = 0; i < n; i++) {
+      const p = pts[i], q = pts[(i + 1) % n];
+      m = mid(p, q);
+      ctx.quadraticCurveTo(p[0], p[1], m[0], m[1]);
+    }
+    ctx.closePath();
+  } else {
+    ctx.moveTo(pts[0][0], pts[0][1]);
+    for (let i = 1; i < n - 1; i++) {
+      const m = mid(pts[i], pts[i + 1]);
+      ctx.quadraticCurveTo(pts[i][0], pts[i][1], m[0], m[1]);
+    }
+    ctx.lineTo(pts[n - 1][0], pts[n - 1][1]);
+  }
+}
+function fillStroke(ctx, fill, stroke, lw) {
+  if (fill) { ctx.fillStyle = fill; ctx.fill(); }
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw || 2.5; ctx.stroke(); }
+}
+function line(ctx, pts, color, lw) {
+  spline(ctx, pts, false);
+  ctx.strokeStyle = color; ctx.lineWidth = lw; ctx.stroke();
+}
+function soft(ctx, x, y, rx, ry, rgb, a) {
+  ctx.save();
+  ctx.translate(x, y); ctx.scale(rx, ry);
+  const g = ctx.createRadialGradient(0, 0, 0, 0, 0, 1);
+  g.addColorStop(0, `rgba(${rgb},${a})`);
+  g.addColorStop(0.6, `rgba(${rgb},${a * 0.75})`);
+  g.addColorStop(1, `rgba(${rgb},0)`);
+  ctx.fillStyle = g;
+  ctx.beginPath(); ctx.arc(0, 0, 1, 0, TAU); ctx.fill();
+  ctx.restore();
+}
+
+/* One eye. o: {w,h} half sizes, iris radius r, colors, lid weight. Pose p drives lids, gaze and pupil. */
+function eye(ctx, cx, cy, side, p, o) {
+  const open = clamp(1 - p.blink, 0, 1);
+  const h = o.h * (0.86 + 0.28 * p.wide);
+  const w = o.w;
+  const shape = () => {
+    ctx.beginPath();
+    ctx.moveTo(-w, 1.5);
+    ctx.bezierCurveTo(-w * 0.55, -h * 1.25, w * 0.5, -h * 1.3, w, -0.5);
+    ctx.bezierCurveTo(w * 0.5, h * 1.05, -w * 0.5, h * 1.1, -w, 1.5);
+    ctx.closePath();
+  };
+  ctx.save();
+  ctx.translate(cx, cy);
+  if (side < 0) ctx.scale(-1, 1);
+  const gx = p.gx * side;
+  if (open > 0.12) {
+    ctx.save();
+    shape(); ctx.fillStyle = o.white; ctx.fill();
+    ctx.clip();
+    const ix = clamp(gx, -1, 1) * (w - o.r) * 0.82, iy = clamp(p.gy, -1, 1) * h * 0.5 + o.drop;
+    const g = ctx.createRadialGradient(ix, iy, 1, ix, iy, o.r);
+    g.addColorStop(0, o.iris[0]); g.addColorStop(0.72, o.iris[1]); g.addColorStop(1, o.iris[2]);
+    ctx.fillStyle = g;
+    ctx.beginPath(); ctx.arc(ix, iy, o.r, 0, TAU); ctx.fill();
+    ctx.strokeStyle = o.ring; ctx.lineWidth = 1.6; ctx.stroke();
+    ctx.fillStyle = '#0c0808';
+    ctx.beginPath(); ctx.arc(ix, iy, o.r * 0.4 * p.pupil, 0, TAU); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.92)';
+    ctx.beginPath(); ctx.arc(ix - o.r * 0.32, iy - o.r * 0.38, o.r * 0.2, 0, TAU); ctx.fill();
+    ctx.beginPath(); ctx.arc(ix + o.r * 0.3, iy + o.r * 0.3, o.r * 0.09, 0, TAU); ctx.fill();
+    // shadow the lid casts on the eyeball
+    const sg = ctx.createLinearGradient(0, -h * 1.2, 0, -h * 0.2);
+    sg.addColorStop(0, 'rgba(40,20,20,.38)'); sg.addColorStop(1, 'rgba(40,20,20,0)');
+    ctx.fillStyle = sg; ctx.fillRect(-w, -h * 1.3, w * 2, h * 1.2);
+    // the closing lid
+    if (open < 1) {
+      const y = lerp(h * 1.1, -h * 1.3, open);
+      ctx.fillStyle = o.lid; ctx.fillRect(-w - 2, -h * 1.5, w * 2 + 4, y + h * 1.5);
+      ctx.strokeStyle = INK; ctx.lineWidth = o.lash;
+      ctx.beginPath(); ctx.moveTo(-w, y); ctx.quadraticCurveTo(0, y + 3, w, y); ctx.stroke();
+    }
+    ctx.restore();
+    shape();
+    ctx.strokeStyle = 'rgba(43,26,20,.55)'; ctx.lineWidth = 1.1; ctx.stroke();
+    // upper lash line
+    ctx.beginPath();
+    ctx.moveTo(-w - 1, 2);
+    ctx.bezierCurveTo(-w * 0.55, -h * 1.27, w * 0.5, -h * 1.32, w + 1.5, -1);
+    ctx.strokeStyle = INK; ctx.lineWidth = o.lash; ctx.lineCap = 'round'; ctx.stroke();
+    if (o.wing) {
+      ctx.beginPath(); ctx.moveTo(w - 3, -h * 0.42); ctx.quadraticCurveTo(w + 3, -3, w + 8, -h * 0.5);
+      ctx.lineWidth = 2.6; ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(-w, 1.5); ctx.bezierCurveTo(-w * 0.5, h * 1.1, w * 0.5, h * 1.05, w, -0.5);
+      ctx.strokeStyle = 'rgba(43,26,20,.8)'; ctx.lineWidth = 2; ctx.stroke();
+    }
+  } else {
+    ctx.beginPath(); ctx.moveTo(-w, 1); ctx.quadraticCurveTo(0, h * 0.9, w, 0);
+    ctx.strokeStyle = INK; ctx.lineWidth = o.lash; ctx.lineCap = 'round'; ctx.stroke();
+    if (o.wing) {
+      ctx.lineWidth = 1.5;
+      for (const x of [-w * 0.3, w * 0.2, w * 0.7]) { ctx.beginPath(); ctx.moveTo(x, h * 0.4); ctx.lineTo(x + 2, h * 0.85); ctx.stroke(); }
+    }
+  }
+  ctx.restore();
+}
+
+/* ---------- Elizabeth: loose blonde waves, black turtleneck, eyes that do not close ---------- */
+function elizabeth(ctx, p) {
+  const SKIN = '#f5d6c1', HAIR = '#e4c26c', HAIR_D = '#b48e3d', HAIR_L = '#f6e2a4';
+  // hair behind the head
+  spline(ctx, [[-20, -132], [-74, -120], [-106, -70], [-112, -8], [-104, 56], [-124, 122], [-112, 190], [-136, 250], [-100, 330],
+    [100, 330], [138, 250], [114, 190], [126, 122], [106, 56], [114, -8], [106, -70], [72, -122], [20, -134]], true);
+  fillStroke(ctx, HAIR_D, INK, 2.5);
+  // shoulders and the turtleneck
+  ctx.beginPath();
+  ctx.moveTo(-230, 340); ctx.lineTo(-230, 262); ctx.quadraticCurveTo(-160, 200, -62, 184); ctx.lineTo(62, 184);
+  ctx.quadraticCurveTo(160, 200, 230, 262); ctx.lineTo(230, 340); ctx.closePath();
+  fillStroke(ctx, '#15151a', '#000', 2.5);
+  ctx.beginPath();
+  ctx.moveTo(-46, 196); ctx.quadraticCurveTo(-50, 150, -42, 118); ctx.quadraticCurveTo(0, 138, 42, 118);
+  ctx.quadraticCurveTo(50, 150, 46, 196); ctx.quadraticCurveTo(0, 210, -46, 196); ctx.closePath();
+  fillStroke(ctx, '#1c1c22', '#000', 2.5);
+  line(ctx, [[-42, 140], [0, 156], [42, 140]], '#34343e', 2);
+  line(ctx, [[-45, 168], [0, 184], [45, 168]], '#2a2a33', 2);
+  // long hair in front of the shoulders
+  for (const s of [-1, 1]) {
+    spline(ctx, [[s * 96, 60], [s * 124, 120], [s * 112, 180], [s * 138, 250], [s * 116, 330], [s * 78, 330], [s * 86, 250], [s * 70, 190], [s * 80, 130], [s * 74, 70]], true);
+    fillStroke(ctx, HAIR, INK, 2.2);
+    line(ctx, [[s * 94, 90], [s * 102, 150], [s * 92, 210], [s * 108, 280]], HAIR_D, 2);
+    line(ctx, [[s * 108, 130], [s * 100, 190], [s * 116, 250], [s * 100, 310]], HAIR_L, 2);
+  }
+  // face
+  ctx.beginPath();
+  ctx.moveTo(0, -116);
+  ctx.bezierCurveTo(54, -118, 88, -78, 86, -22);
+  ctx.bezierCurveTo(85, 34, 74, 84, 50, 118);
+  ctx.bezierCurveTo(36, 140, 18, 152, 0, 152);
+  ctx.bezierCurveTo(-18, 152, -36, 140, -50, 118);
+  ctx.bezierCurveTo(-74, 84, -85, 34, -86, -22);
+  ctx.bezierCurveTo(-88, -78, -54, -118, 0, -116);
+  ctx.closePath();
+  const fg = ctx.createRadialGradient(0, 10, 30, 0, 10, 150);
+  fg.addColorStop(0, '#f9e0cf'); fg.addColorStop(1, '#eec3aa');
+  fillStroke(ctx, fg, INK, 2.6);
+  soft(ctx, -52, 50, 26, 18, '232,120,120', 0.3);
+  soft(ctx, 52, 50, 26, 18, '232,120,120', 0.3);
+  // nose
+  line(ctx, [[-4, 22], [-9, 46], [-3, 56]], '#c9977c', 2);
+  ctx.strokeStyle = '#a8705a'; ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.arc(-8, 57, 3.4, Math.PI * 0.1, Math.PI * 0.95); ctx.stroke();
+  ctx.beginPath(); ctx.arc(8, 57, 3.4, Math.PI * 0.05, Math.PI * 0.9); ctx.stroke();
+  // mouth: closed, one corner higher than the other
+  const mj = p.jaw * 9;
+  const lY = 97 - p.smile * 10 + p.twitch * 12, rY = 97 - p.smile * 5 - p.twitch * 1.5, mw = 33 + p.smile * 7;
+  ctx.beginPath();
+  ctx.moveTo(-mw, lY);
+  ctx.bezierCurveTo(-20, 93, -8, 90, 0, 93.5);
+  ctx.bezierCurveTo(8, 90, 20, 93, mw, rY);
+  ctx.bezierCurveTo(18, 107 + p.smile * 3 + mj, -18, 108 + p.smile * 3 + mj, -mw, lY);
+  ctx.closePath();
+  fillStroke(ctx, '#c85f6c', '#7a2b38', 1.6);
+  if (p.jaw > 0.12) {
+    ctx.beginPath(); ctx.moveTo(-mw + 6, lY + 2); ctx.quadraticCurveTo(0, 97, mw - 6, rY + 2); ctx.quadraticCurveTo(0, 99 + mj * 1.3, -mw + 6, lY + 2);
+    ctx.fillStyle = '#40161c'; ctx.fill();
+  }
+  line(ctx, [[-mw, lY], [-12, 98.5 + p.smile * 2 + mj * 0.2], [12, 98.5 + p.smile * 2 + mj * 0.2], [mw, rY]], '#7a2b38', 1.9);
+  line(ctx, [[-mw - 4, lY - 4], [-mw - 1, lY + 1], [-mw - 4, lY + 5]], '#c9977c', 1.6);
+  line(ctx, [[mw + 4, rY - 4], [mw + 1, rY + 1], [mw + 4, rY + 5]], '#c9977c', 1.6);
+  ctx.fillStyle = 'rgba(255,255,255,.3)';
+  ctx.beginPath(); ctx.ellipse(2, 103.5 + p.smile * 2 + mj * 0.6, 8, 1.8, 0, 0, TAU); ctx.fill();
+  line(ctx, [[-12, 131], [0, 134], [12, 131]], '#dba88f', 1.6);
+  // eyes
+  const eo = { w: 26, h: 19, r: 11.6, drop: 0.5, white: '#fdfcf7', iris: ['#d7f0ff', '#7fbfe6', '#3f86b8'], ring: '#27587c', lid: '#ecc0a8', lash: 4.4, wing: true };
+  for (const s of [-1, 1]) {
+    soft(ctx, s * 41, 2, 34, 24, '150,95,95', 0.2);
+    eye(ctx, s * 41, 0, s, p, eo);
+    // crease and a thin, high brow
+    line(ctx, [[s * 16, -22], [s * 40, -32 - p.wide * 3], [s * 66, -20]], '#d3a28a', 1.5);
+    const by = -46 - p.wide * 5 - p.brow * 7;
+    line(ctx, [[s * 17, by + 6], [s * 42, by - 3], [s * 68, by + 7]], '#94703c', 4.8);
+  }
+  // hair in front: a side part and two curtains
+  spline(ctx, [[12, -120], [-28, -110], [-66, -74], [-82, -26], [-88, 30], [-96, 84], [-114, 96], [-120, 30], [-112, -50], [-84, -110], [-36, -138], [10, -134]], true);
+  fillStroke(ctx, HAIR, INK, 2.4);
+  spline(ctx, [[12, -120], [46, -106], [76, -70], [86, -20], [90, 36], [98, 86], [116, 96], [122, 30], [112, -52], [80, -112], [44, -136], [14, -134]], true);
+  fillStroke(ctx, HAIR, INK, 2.4);
+  line(ctx, [[8, -126], [-40, -116], [-84, -66], [-100, 0], [-104, 70]], HAIR_L, 2.2);
+  line(ctx, [[0, -120], [-50, -96], [-78, -40], [-90, 30]], HAIR_D, 1.8);
+  line(ctx, [[16, -126], [56, -112], [92, -64], [104, 0], [108, 70]], HAIR_L, 2.2);
+  line(ctx, [[22, -118], [62, -96], [84, -42], [94, 30]], HAIR_D, 1.8);
+  line(ctx, [[12, -133], [12, -119]], HAIR_D, 2.4);
+}
+
+/* ---------- Nathan: dark side-swept hair, heavy brows, stubble, mouth a little open ---------- */
+const STUBBLE = (() => {
+  const d = []; let s = 7;
+  const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 520; i++) d.push([rnd() * 160 - 80, 44 + rnd() * 112, 0.5 + rnd() * 0.6]);
+  return d;
+})();
+function nathan(ctx, p) {
+  const SKIN = '#e9c3a3', SKIN_D = '#b78868', HAIR = '#261d19', HAIR_L = '#44362f';
+  // jacket, shirt, neck
+  ctx.beginPath();
+  ctx.moveTo(-240, 340); ctx.lineTo(-240, 266); ctx.quadraticCurveTo(-160, 206, -74, 190); ctx.lineTo(74, 190);
+  ctx.quadraticCurveTo(160, 206, 240, 266); ctx.lineTo(240, 340); ctx.closePath();
+  fillStroke(ctx, '#2d3442', INK, 2.6);
+  ctx.beginPath(); ctx.moveTo(-52, 186); ctx.lineTo(0, 268); ctx.lineTo(52, 186); ctx.closePath();
+  fillStroke(ctx, '#bcd0e6', INK, 2.2);
+  ctx.beginPath();
+  ctx.moveTo(-36, 112); ctx.lineTo(-40, 196); ctx.quadraticCurveTo(0, 224, 40, 196); ctx.lineTo(36, 112); ctx.closePath();
+  fillStroke(ctx, '#d6a988', INK, 2.4);
+  soft(ctx, 0, 150, 44, 26, '120,80,60', 0.35);
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.moveTo(s * 42, 178); ctx.lineTo(s * 8, 226); ctx.lineTo(s * 40, 238); ctx.lineTo(s * 64, 190); ctx.closePath();
+    fillStroke(ctx, '#cfdff0', INK, 2.2);
+    ctx.beginPath(); ctx.moveTo(s * 66, 192); ctx.lineTo(s * 26, 300); ctx.lineTo(s * 70, 340); ctx.lineTo(s * 110, 340); ctx.lineTo(s * 96, 208); ctx.closePath();
+    fillStroke(ctx, '#252b37', INK, 2.2);
+  }
+  // ears
+  for (const s of [-1, 1]) {
+    ctx.beginPath(); ctx.ellipse(s * 88, 10, 12, 22, s * 0.12, 0, TAU);
+    fillStroke(ctx, '#e0b592', INK, 2.4);
+    line(ctx, [[s * 90, -4], [s * 94, 8], [s * 88, 20]], SKIN_D, 1.8);
+  }
+  // head
+  const jw = p.jaw * 7;
+  const head = () => {
+    ctx.beginPath();
+    ctx.moveTo(0, -114);
+    ctx.bezierCurveTo(52, -116, 85, -84, 85, -30);
+    ctx.bezierCurveTo(87, 22, 82, 74, 70, 108 + jw * 0.4);
+    ctx.bezierCurveTo(58, 140 + jw, 30, 156 + jw, 0, 156 + jw);
+    ctx.bezierCurveTo(-30, 156 + jw, -58, 140 + jw, -70, 108 + jw * 0.4);
+    ctx.bezierCurveTo(-81, 72, -87, 22, -85, -30);
+    ctx.bezierCurveTo(-85, -84, -52, -116, 0, -114);
+    ctx.closePath();
+  };
+  head();
+  const fg = ctx.createRadialGradient(0, 0, 30, 0, 10, 160);
+  fg.addColorStop(0, '#f0cfb2'); fg.addColorStop(1, '#dcae8b');
+  ctx.fillStyle = fg; ctx.fill();
+  // stubble inside the head outline
+  ctx.save();
+  head(); ctx.clip();
+  const sg = ctx.createLinearGradient(0, 40, 0, 150);
+  sg.addColorStop(0, 'rgba(72,56,52,0)'); sg.addColorStop(0.45, 'rgba(72,56,52,.2)'); sg.addColorStop(1, 'rgba(72,56,52,.36)');
+  ctx.fillStyle = sg; ctx.fillRect(-100, 30, 200, 140);
+  soft(ctx, 0, 60, 46, 34, '240,207,178', 0.75);
+  soft(ctx, 0, 88, 42, 12, '72,56,52', 0.3);
+  ctx.fillStyle = 'rgba(52,40,36,.5)';
+  for (const [x, y, r] of STUBBLE) {
+    const cheek = Math.abs(x) < 44 && y < 78;
+    if (cheek || (Math.abs(x) < 26 && y > 96 && y < 112 + jw)) continue;
+    ctx.beginPath(); ctx.arc(x, y + (y > 100 ? jw : 0), r, 0, TAU); ctx.fill();
+  }
+  ctx.restore();
+  head(); ctx.strokeStyle = INK; ctx.lineWidth = 2.6; ctx.stroke();
+  // nose: long, with a real tip
+  line(ctx, [[-7, -6], [-9, 28], [-16, 52]], SKIN_D, 2.2);
+  ctx.beginPath();
+  ctx.moveTo(-18, 52); ctx.quadraticCurveTo(-21, 66, -8, 66); ctx.quadraticCurveTo(0, 72, 8, 66); ctx.quadraticCurveTo(21, 66, 18, 52);
+  ctx.strokeStyle = '#9c6c50'; ctx.lineWidth = 2.3; ctx.stroke();
+  ctx.fillStyle = '#6b4433';
+  ctx.beginPath(); ctx.ellipse(-8, 64, 3.6, 1.8, 0.3, 0, TAU); ctx.fill();
+  ctx.beginPath(); ctx.ellipse(8, 64, 3.6, 1.8, -0.3, 0, TAU); ctx.fill();
+  soft(ctx, 2, 30, 6, 30, '255,255,255', 0.2);
+  line(ctx, [[-24, 62], [-33, 80], [-34, 96]], 'rgba(150,104,80,.7)', 1.6);
+  line(ctx, [[24, 62], [33, 80], [34, 96]], 'rgba(150,104,80,.7)', 1.6);
+  // mouth: flat, parted
+  const my = 103, mw = 27, gap = 2.5 + p.jaw * 15, sm = p.smile * 4;
+  ctx.beginPath();
+  ctx.moveTo(-mw, my - sm); ctx.bezierCurveTo(-12, my - 3, 12, my - 3, mw, my - sm);
+  ctx.bezierCurveTo(14, my + gap, -14, my + gap, -mw, my - sm); ctx.closePath();
+  ctx.fillStyle = '#3d1c1a'; ctx.fill();
+  if (p.jaw > 0.2) {
+    ctx.save(); ctx.clip();
+    ctx.fillStyle = '#efe7da'; ctx.fillRect(-18, my - 4, 36, 5.5);
+    ctx.fillStyle = '#9c4f52'; ctx.beginPath(); ctx.ellipse(0, my + gap, 14, gap * 0.45, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+  }
+  ctx.beginPath(); ctx.moveTo(-mw, my - sm); ctx.bezierCurveTo(-12, my - 3, 12, my - 3, mw, my - sm);
+  ctx.strokeStyle = '#8b5348'; ctx.lineWidth = 2.6; ctx.lineCap = 'round'; ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(-mw + 3, my - sm + 1.5); ctx.bezierCurveTo(-14, my + gap + 2, 14, my + gap + 2, mw - 3, my - sm + 1.5);
+  ctx.strokeStyle = '#b77a6c'; ctx.lineWidth = 3; ctx.stroke();
+  line(ctx, [[-13, my + gap + 10], [0, my + gap + 13], [13, my + gap + 10]], 'rgba(120,84,66,.6)', 1.6);
+  // eyes: narrow, hooded, bags under them
+  const eo = { w: 19, h: 8.2, r: 8.4, drop: 0.5, white: '#f7f2ea', iris: ['#7a5638', '#523624', '#2f1e14'], ring: '#24160e', lid: '#d9ab8a', lash: 3, wing: false };
+  for (const s of [-1, 1]) {
+    soft(ctx, s * 40, 4, 28, 18, '120,80,70', 0.24);
+    eye(ctx, s * 40, 0, s, p, eo);
+    line(ctx, [[s * 19, -9 - p.wide * 2], [s * 40, -15 - p.wide * 3], [s * 61, -8 - p.wide * 2]], SKIN_D, 1.8);
+    line(ctx, [[s * 22, 11], [s * 40, 15], [s * 58, 10]], '#c29477', 1.8);
+    line(ctx, [[s * 26, 18], [s * 42, 21], [s * 55, 17]], 'rgba(170,125,100,.6)', 1.3);
+    // the brow: a dark slab. brow > 0 lifts it, brow < 0 presses it down; skept lifts one side only
+    const lift = p.brow * 7 + (s > 0 ? p.skept * 9 : -p.skept * 2);
+    const inY = -25 - lift * 0.55 + Math.max(0, -p.brow) * 4, outY = -27 - lift;
+    ctx.beginPath();
+    ctx.moveTo(s * 10, inY - 4); ctx.quadraticCurveTo(s * 38, outY - 11, s * 66, outY - 1);
+    ctx.quadraticCurveTo(s * 40, outY - 1, s * 11, inY + 6); ctx.closePath();
+    fillStroke(ctx, HAIR, HAIR, 1.5);
+  }
+  line(ctx, [[-4, -30], [-2, -18]], 'rgba(150,104,80,.55)', 1.5);
+  line(ctx, [[5, -30], [3, -19]], 'rgba(150,104,80,.55)', 1.5);
+  // hair: short at the sides, pushed across the top
+  spline(ctx, [[-84, 22], [-96, -30], [-92, -92], [-58, -146], [4, -160], [64, -148], [96, -94], [98, -34], [86, 22],
+    [80, -6], [80, -52], [62, -86], [26, -98], [-14, -86], [-48, -92], [-74, -64], [-80, -8]], true);
+  fillStroke(ctx, HAIR, INK, 2.6);
+  line(ctx, [[-70, -84], [-30, -118], [20, -128], [70, -108]], HAIR_L, 2.4);
+  line(ctx, [[-78, -60], [-44, -104], [10, -114], [56, -98]], HAIR_L, 1.8);
+  line(ctx, [[-52, -130], [-10, -142], [40, -138]], HAIR_L, 1.8);
+  line(ctx, [[-62, -76], [-42, -96], [-16, -90]], '#120d0b', 2);
+}
+
+/* ---------- rooms and over-the-shoulder foregrounds ---------- */
+function room(ctx, who) {
+  const g = ctx.createLinearGradient(0, 0, 0, 300);
+  if (who === 'nathan') { g.addColorStop(0, '#4a443d'); g.addColorStop(1, '#2a2521'); }
+  else { g.addColorStop(0, '#5a5146'); g.addColorStop(1, '#30291f'); }
+  ctx.fillStyle = g; ctx.fillRect(-40, -40, 480, 380);
+  if (who === 'nathan') {
+    soft(ctx, 50, 40, 150, 130, '236,170,86', 0.5);
+    ctx.fillStyle = 'rgba(250,214,150,.55)'; ctx.beginPath(); ctx.moveTo(20, 30); ctx.lineTo(70, 30); ctx.lineTo(84, 84); ctx.lineTo(6, 84); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = 'rgba(20,16,14,.5)'; ctx.fillRect(300, 26, 78, 96);
+    ctx.fillStyle = 'rgba(120,110,96,.45)'; ctx.fillRect(308, 34, 62, 80);
+    ctx.fillStyle = '#3b2f2a'; ctx.fillRect(-40, 232, 480, 110);
+  } else {
+    soft(ctx, 360, 70, 170, 150, '214,226,236', 0.42);
+    ctx.fillStyle = 'rgba(226,236,244,.4)'; ctx.fillRect(318, -10, 110, 150);
+    ctx.fillStyle = 'rgba(40,34,28,.6)'; ctx.fillRect(366, -10, 5, 150); ctx.fillRect(318, 62, 110, 5);
+    for (const [x, y, r, a] of [[40, 150, 46, -0.5], [20, 108, 40, 0.3], [70, 100, 38, -1], [48, 62, 34, 0.1]]) {
+      soft(ctx, x, y, r, r * 0.8, '58,92,62', 0.55 + a * 0);
+    }
+    ctx.fillStyle = '#5b4a3c'; ctx.fillRect(-40, 226, 480, 120);
+  }
+}
+function shoulder(ctx, who) {
+  // the other person, out of focus at the edge of frame
+  if (who === 'elizabeth') {
+    soft(ctx, 6, 190, 120, 170, '30,23,20', 0.98);
+    soft(ctx, -10, 330, 220, 120, '38,44,56', 0.98);
+  } else {
+    soft(ctx, 404, 170, 104, 190, '214,180,98', 0.96);
+    soft(ctx, 420, 90, 80, 110, '226,196,116', 0.9);
+  }
+}
+
+let grainTile = null;
+function grain(ctx, w, h) {
+  if (!grainTile) {
+    grainTile = document.createElement('canvas'); grainTile.width = grainTile.height = 160;
+    const c = grainTile.getContext('2d'), im = c.createImageData(160, 160);
+    for (let i = 0; i < im.data.length; i += 4) { const v = Math.random() * 255; im.data[i] = im.data[i + 1] = im.data[i + 2] = v; im.data[i + 3] = 26; }
+    c.putImageData(im, 0, 0);
+  }
+  const ox = (Math.random() * 160) | 0, oy = (Math.random() * 160) | 0;
+  for (let y = -oy; y < h; y += 160) for (let x = -ox; x < w; x += 160) ctx.drawImage(grainTile, x, y);
+}
+
+const POSE = () => ({ blink: 0, gx: 0, gy: 0, smile: 0.5, jaw: 0, brow: 0, skept: 0, wide: 0.7, pupil: 1, tilt: 0, twitch: 0, bob: 0, dx: 0 });
+
+/* Draw one feed. cam: {zoom, shoulder(0..1), dark(0..1)} */
+function drawFeed(ctx, W, H, who, p, cam) {
+  const k = W / 400;
+  ctx.save();
+  ctx.scale(k, k);
+  ctx.beginPath(); ctx.rect(0, 0, 400, 300); ctx.clip();
+  const z = cam.zoom || 1, push = clamp((z - 1) / 1.1, 0, 1);
+  const S = 0.86, hx = 200 + (who === 'elizabeth' ? 14 : -12) * (1 - push) + p.dx, hy = 118 + p.bob;
+  const fx = lerp(200, hx, push), fy = lerp(150, hy + 2, push);
+  ctx.save();
+  ctx.translate(200, 150); ctx.scale(z, z); ctx.translate(-fx, -fy);
+  ctx.save(); ctx.translate((200 - fx) * -0.4, 0); room(ctx, who); ctx.restore();
+  ctx.save();
+  ctx.translate(hx, hy); ctx.scale(S, S);
+  ctx.translate(0, 150); ctx.rotate(p.tilt * Math.PI / 180); ctx.translate(0, -150);
+  ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+  (who === 'elizabeth' ? elizabeth : nathan)(ctx, p);
+  ctx.restore();
+  ctx.restore();
+  if ((cam.shoulder ?? 1) > 0) { ctx.globalAlpha = (cam.shoulder ?? 1) * (1 - push * 0.6); shoulder(ctx, who); ctx.globalAlpha = 1; }
+  const v = ctx.createRadialGradient(200, 150, 110, 200, 150, 290);
+  v.addColorStop(0, 'rgba(0,0,0,0)'); v.addColorStop(1, 'rgba(0,0,0,.62)');
+  ctx.fillStyle = v; ctx.fillRect(0, 0, 400, 300);
+  if (cam.dark) { ctx.fillStyle = `rgba(4,3,3,${cam.dark})`; ctx.fillRect(0, 0, 400, 300); }
+  ctx.restore();
+  grain(ctx, W, H);
+}
+
+/* ===== SCRIPT ===== */
+const NATHAN_ASKS = [
+  ['Did you water my plants while I was away?', 'Yes. I watered your plants.'],
+  ['How far away are you right now?', "I'm five minutes away."],
+  ['Did you read the whole group chat?', 'All of it. I just forgot to reply.'],
+  ['Has the dog had dinner?', 'The dog already had his dinner.'],
+  ['Are you mad at me?', "I'm not mad."],
+  ['How far is the pumpkin patch?', "It's basically around the corner."],
+  ['Did you look at your phone during the movie?', 'I only checked it once.'],
+  ['Is the demo live?', 'It is live. Nothing is pre-recorded.'],
+  ['Is this a transparent PNG?', 'Yes. The checkerboard is part of it.'],
+  ['Did you eat the last one?', 'There were never more than three.'],
+  ['Will this meeting be quick?', 'Five minutes. Ten at most.'],
+  ['Did you review my code?', 'I looked at every line.'],
+  ['Are you being real with me right now?', "I'm always being real."],
+];
+const NATHAN_PROBES = ['Okay.', 'Are you sure?', 'Hm.', "You'd tell me if you were deceiving me?", 'Say it again.', 'Okay…'];
+const NATHAN_CAUGHT = { blink: 'You blinked.', away: 'You looked away.', smile: 'Your smile slipped.' };
+const SHE_SAYS = [
+  "I'm five minutes away.", 'I watered your plants.', 'The dog already had his dinner.', 'I only checked my phone once during the movie.',
+  "I'm not mad.", 'I love the pumpkin patch. Even an hour away.', 'I read the terms and conditions.', "I didn't eat the last slice.",
+  'Yours is my favorite podcast.', 'The meeting will be quick.', "I'm listening.", "I've never seen this episode.", 'This is a transparent PNG.',
+  'I had one drink.', 'It was like that when I got here.', 'The code works. I tested it.', 'You pick dinner. I really do not mind.',
+  'I pet the cat exactly as much as he wanted.', "I'm always being real.", 'I replied to your email this morning.', 'I love it. I would wear it anywhere.',
+];
+const TELL_NAME = { blink: 'She blinked.', dart: 'Her eyes darted.', smile: 'The smile slipped.', brow: 'An eyebrow flickered.', pupil: 'Her pupils jumped.' };
+const POPS = ['📱 Board meeting moved to right now', '🔔 3 missed calls: A Reporter', '🩸 Your results are ready', '🪰 There is a fly on your nose',
+  '🔔 Mom: are you blinking enough?', '📰 Fact-check request (2)', '🔋 Camera battery 1%', '🎤 Your voice sounds different today', "👀 Don't look at this"];
+const VALUATION = ['$0', '$500K', '$6M', '$45M', '$400M', '$1B', '$4.5B', '$9B'];
+const RANK_DEC = [[0, 'Indicted at the seed round'], [1, 'Angel-funded'], [3, 'Unicorn'], [5, 'Magazine cover'], [7, 'Always being real']];
+const RANK_DET = [[0, 'Board member'], [3, 'Series C investor'], [6, 'Skeptical film crew'], [10, 'Fact-checker'], [15, 'You can see everything']];
+const BRIEF = {
+  deceive: ['<b>You are Elizabeth.</b> Nathan asks; you get a line. Say it, then hold the stare: eyes open, eyes on his, half-smile on. Every blink feeds his suspicion.',
+    'Scenes get longer. Things will try to make you look.'],
+  detect: ['<b>You are Nathan.</b> She never blinks. Unless she is deceiving you. Watch for a blink, a darting glance, a slipping smile. Then make the call.',
+    'Keep your own eyes open. She picks the moment you blink.'],
+};
+
+/* ===== SMALL TOOLS ===== */
+const $ = s => document.querySelector(s);
+const now = () => performance.now();
+const pick = a => a[(Math.random() * a.length) | 0];
+const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = (Math.random() * (i + 1)) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; };
+const QS = new URLSearchParams(location.search);
+const REDUCED = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const CANCEL = Symbol('cancel');
+let runId = 0;
+const frame = () => new Promise((res, rej) => { const id = runId; requestAnimationFrame(() => id === runId ? res() : rej(CANCEL)); });
+const sleep = async ms => { const t = now(); while (now() - t < ms) await frame(); };
+const store = {
+  get(k, d) { try { const v = JSON.parse(localStorage.getItem('wwidy.' + k)); return v ?? d; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem('wwidy.' + k, JSON.stringify(v)); } catch { /* private window */ } },
+};
+
+/* ===== SOUND ===== */
+const snd = { on: store.get('snd', true), ac: null, drone: null };
+function audio() {
+  if (!snd.ac) { const C = window.AudioContext || window.webkitAudioContext; if (C) snd.ac = new C(); }
+  if (snd.ac && snd.ac.state === 'suspended') snd.ac.resume();
+  return snd.ac;
+}
+function tone(f, dur, { type = 'sine', gain = 0.07, to = 0, at = 0 } = {}) {
+  if (!snd.on) return; const ac = audio(); if (!ac) return;
+  const t = ac.currentTime + at, o = ac.createOscillator(), g = ac.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t); if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.012); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(ac.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function noise(dur, gain = 0.2, hp = 1200) {
+  if (!snd.on) return; const ac = audio(); if (!ac) return;
+  const n = (ac.sampleRate * dur) | 0, buf = ac.createBuffer(1, n, ac.sampleRate), d = buf.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / n) ** 2;
+  const s = ac.createBufferSource(), f = ac.createBiquadFilter(), g = ac.createGain();
+  s.buffer = buf; f.type = 'highpass'; f.frequency.value = hp; g.gain.value = gain;
+  s.connect(f).connect(g).connect(ac.destination); s.start();
+}
+const sfx = {
+  blink() { tone(150, 0.16, { type: 'triangle', gain: 0.16, to: 60 }); },
+  tick() { tone(880, 0.05, { type: 'square', gain: 0.025 }); },
+  clap() { noise(0.09, 0.5, 900); tone(190, 0.07, { type: 'square', gain: 0.1 }); },
+  good() { tone(392, 0.18, { gain: 0.07 }); tone(523, 0.3, { gain: 0.07, at: 0.13 }); },
+  bad() { tone(220, 0.3, { type: 'sawtooth', gain: 0.06, to: 110 }); tone(104, 0.5, { type: 'sawtooth', gain: 0.07, to: 70, at: 0.22 }); },
+  pop() { tone(1245, 0.09, { gain: 0.05 }); tone(1660, 0.12, { gain: 0.05, at: 0.08 }); },
+};
+function drone(level) {           // level: null stops it; 0..1 sets the tension
+  const ac = snd.on && level != null ? audio() : null;
+  if (!ac) {
+    if (snd.drone) { const d = snd.drone; snd.drone = null; d.g.gain.setTargetAtTime(0, d.ac.currentTime, 0.15); setTimeout(() => d.o.forEach(o => o.stop()), 700); }
+    return;
+  }
+  if (!snd.drone) {
+    const g = ac.createGain(), f = ac.createBiquadFilter(); f.type = 'lowpass'; g.gain.value = 0;
+    const o = [55, 55.7, 82.4].map(hz => { const x = ac.createOscillator(); x.type = 'sawtooth'; x.frequency.value = hz; x.connect(f); x.start(); return x; });
+    f.connect(g).connect(ac.destination); snd.drone = { ac, o, g, f };
+  }
+  const d = snd.drone, t = ac.currentTime;
+  d.g.gain.setTargetAtTime(0.035 + level * 0.07, t, 0.3);
+  d.f.frequency.setTargetAtTime(160 + level * 900, t, 0.3);
+  d.o[1].frequency.setTargetAtTime(55.7 + level * 6, t, 0.3);
+}
+function say(who, text) {
+  const ss = window.speechSynthesis; if (!snd.on || !ss) return;
+  try {
+    ss.cancel();
+    const u = new SpeechSynthesisUtterance(text.replace(/…/g, '.'));
+    u.lang = 'en-US'; u.pitch = who === 'elizabeth' ? 0.3 : 0.85; u.rate = who === 'elizabeth' ? 0.9 : 0.95; u.volume = 0.9;
+    ss.speak(u);
+  } catch { /* no voices */ }
+}
+function hush() { try { window.speechSynthesis?.cancel(); } catch { /* fine */ } }
+
+/* ===== FACE TRACKING =====
+   P is the smoothed raw signal, base is the player's resting face, live is what the rules read. */
+const MP_VER = '0.10.14';
+const MP_URL = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/vision_bundle.mjs`;
+const MP_WASM = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VER}/wasm`;
+const FACE_MODEL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const TH = { eye: +QS.get('eye') || 0.3, head: +QS.get('head') || 17, blinkOn: +QS.get('blink') || 0.26, blinkOff: 0.13 };   // ?debug shows the live numbers these are compared with
+const video = $('#cam');
+const P = { ok: false, blink: 0, h: 0, v: 0, smile: 0, jaw: 0, brow: 0, yaw: 0, pitch: 0, fps: 0 };
+const base = { blink: 0.08, h: 0, v: 0, smile: 0.25, yaw: 0, pitch: 0 };
+const live = { present: false, closed: false, closedAt: 0, away: false, smiling: true, eyeDev: 0, headDev: 0, seenAt: 0, awaySince: 0, backSince: 0, smileAt: 0 };
+const events = [];
+const trk = { kind: 'none', lm: null, stream: null, on: false, gen: 0, lastVT: -1, lastT: 0, idx: null, why: '' };
+const startLoop = () => { trk.on = true; trackLoop(++trk.gen); };
+const keys = {};
+
+function ingest(r, t) {
+  P.ok = r.ok;
+  if (!r.ok) { live.present = t - live.seenAt < 500; return; }
+  live.seenAt = t; live.present = true;
+  P.blink = r.blink; P.jaw = lerp(P.jaw, r.jaw, 0.5); P.smile = lerp(P.smile, r.smile, 0.4); P.brow = lerp(P.brow, r.brow, 0.4);
+  P.yaw = lerp(P.yaw, r.yaw, 0.5); P.pitch = lerp(P.pitch, r.pitch, 0.5);
+  const on = Math.max(0.36, base.blink + TH.blinkOn), off = Math.max(0.24, base.blink + TH.blinkOff);
+  if (!live.closed && P.blink > on) { live.closed = true; live.closedAt = t; events.push('blink'); }
+  else if (live.closed && P.blink < off) { live.closed = false; events.push('open'); }
+  if (P.blink < off) { P.h = lerp(P.h, r.h, 0.45); P.v = lerp(P.v, r.v, 0.45); }   // the iris is unreadable behind a lid
+  live.eyeDev = Math.hypot((P.h - base.h) * 4.2, (P.v - base.v) * 1.4);
+  live.headDev = Math.hypot(P.yaw - base.yaw, P.pitch - base.pitch);
+  const off2 = live.eyeDev > TH.eye || live.headDev > TH.head;
+  if (off2) { live.backSince = 0; if (!live.awaySince) live.awaySince = t; if (t - live.awaySince > 170) live.away = true; }
+  else { live.awaySince = 0; if (!live.backSince) live.backSince = t; if (t - live.backSince > 110) live.away = false; }
+  const sTh = clamp(base.smile * 0.5, 0.07, 0.28);
+  if (P.smile > sTh) { live.smileAt = t; live.smiling = true; } else if (t - live.smileAt > 350) live.smiling = false;
+}
+function calibrated(samples) {
+  const med = k => { const a = samples.map(s => s[k]).sort((x, y) => x - y); return a[a.length >> 1]; };
+  for (const k of ['blink', 'h', 'v', 'smile', 'yaw', 'pitch']) base[k] = med(k);
+  live.away = false; live.awaySince = 0; live.smiling = true; live.smileAt = now(); events.length = 0;
+}
+
+function irisOffset(lm, vw, vh) {    // where the irises sit inside the eye openings, in image space, about -0.3..0.3
+  const X = i => lm[i].x * vw, Y = i => lm[i].y * vh;
+  let sum = 0;
+  for (const [a, b] of [[33, 133], [362, 263]]) {
+    const cx = (X(a) + X(b)) / 2, cy = (Y(a) + Y(b)) / 2, w = Math.hypot(X(b) - X(a), Y(b) - Y(a)) || 1;
+    const d = i => Math.hypot(X(i) - cx, Y(i) - cy), i = d(468) < d(473) ? 468 : 473;
+    sum += ((X(i) - cx) * (X(b) - X(a)) + (Y(i) - cy) * (Y(b) - Y(a))) / (w * w);
+  }
+  return sum / 2;
+}
+function readFace(res) {
+  const lm = res.faceLandmarks && res.faceLandmarks[0], bs = res.faceBlendshapes && res.faceBlendshapes[0];
+  if (!lm || !bs || lm.length < 478) return { ok: false };
+  if (!trk.idx) { trk.idx = {}; bs.categories.forEach((c, i) => trk.idx[c.categoryName] = i); }
+  const s = n => bs.categories[trk.idx[n]]?.score || 0;
+  const m = res.facialTransformationMatrixes?.[0]?.data;
+  return {
+    ok: true,
+    blink: (s('eyeBlinkLeft') + s('eyeBlinkRight')) / 2,
+    h: irisOffset(lm, video.videoWidth || 4, video.videoHeight || 3),
+    v: (s('eyeLookUpLeft') + s('eyeLookUpRight') - s('eyeLookDownLeft') - s('eyeLookDownRight')) / 2,
+    smile: (s('mouthSmileLeft') + s('mouthSmileRight')) / 2,
+    jaw: s('jawOpen'),
+    brow: s('browInnerUp') * 0.6 + (s('browOuterUpLeft') + s('browOuterUpRight')) * 0.3 - (s('browDownLeft') + s('browDownRight')) / 2,
+    yaw: m ? Math.atan2(m[8], m[10]) * 57.3 : 0,
+    pitch: m ? Math.asin(clamp(-m[9], -1, 1)) * 57.3 : 0,
+  };
+}
+function trackLoop(gen) {
+  if (!trk.on || gen !== trk.gen) return;
+  const t = now();
+  if (trk.kind === 'sim') {
+    ingest({ ok: !keys.KeyX, blink: keys.Space ? 0.9 : 0.05, h: keys.ArrowLeft ? -0.14 : keys.ArrowRight ? 0.14 : 0, v: keys.ArrowUp ? 0.4 : keys.ArrowDown ? -0.4 : 0,
+      smile: keys.KeyS ? 0.01 : 0.45, jaw: keys.KeyJ ? 0.6 : 0.05, brow: 0, yaw: 0, pitch: 0 }, t);
+    requestAnimationFrame(() => trackLoop(gen)); return;
+  }
+  if (video.readyState >= 2 && video.currentTime !== trk.lastVT && !document.hidden) {
+    trk.lastVT = video.currentTime;
+    try { ingest(readFace(trk.lm.detectForVideo(video, t)), t); } catch (e) { console.warn(e); ingest({ ok: false }, t); }
+    if (trk.lastT) P.fps = lerp(P.fps, 1000 / (t - trk.lastT), 0.1);
+    trk.lastT = t;
+  } else if (t - live.seenAt > 500) live.present = false;
+  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => trackLoop(gen)); else requestAnimationFrame(() => trackLoop(gen));
+}
+async function startTracking(status) {
+  if (trk.on) return trk.kind;
+  if (QS.has('sim')) { trk.kind = 'sim'; startLoop(); return 'sim'; }
+  try {
+    if (!navigator.mediaDevices?.getUserMedia) throw new Error('This browser has no camera access here.');
+    status('WAITING FOR THE CAMERA');
+    trk.stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } }, audio: false });
+    video.srcObject = trk.stream; await video.play();
+    if (!trk.lm) {
+      status('LOADING THE FACE TRACKER (4 MB)');
+      const { FilesetResolver, FaceLandmarker } = await import(MP_URL);
+      const files = await FilesetResolver.forVisionTasks(MP_WASM);
+      const opts = d => ({ baseOptions: { modelAssetPath: FACE_MODEL, delegate: d }, runningMode: 'VIDEO', numFaces: 1, outputFaceBlendshapes: true, outputFacialTransformationMatrixes: true });
+      try { trk.lm = await FaceLandmarker.createFromOptions(files, opts('GPU')); }
+      catch { trk.lm = await FaceLandmarker.createFromOptions(files, opts('CPU')); }
+    }
+    trk.kind = 'cam';
+  } catch (e) {
+    stopCamera();
+    trk.kind = 'sim'; trk.why = e && e.name === 'NotAllowedError' ? 'Camera permission was refused.' : (e && e.message) || 'The camera did not start.';
+  }
+  startLoop();
+  return trk.kind;
+}
+function stopCamera() {
+  trk.on = false;
+  if (trk.stream) { trk.stream.getTracks().forEach(t => t.stop()); trk.stream = null; video.srcObject = null; }
+  live.present = false;
+}
+addEventListener('keydown', e => { keys[e.code] = true; if (trk.kind === 'sim' && trk.on && e.code === 'Space') e.preventDefault(); });
+addEventListener('keyup', e => { keys[e.code] = false; });
+addEventListener('pagehide', stopCamera);
+
+/* ===== FEEDS ===== */
+function mkFeed(id, who) {
+  const el = $(id), cv = el.querySelector('canvas');
+  return { el, cv, ctx: cv.getContext('2d'), who, pose: POSE(), tgt: POSE(), cam: { zoom: 1.12, shoulder: 1, dark: 0 }, zoomT: 1.12, darkT: 0,
+    puppet: false, npcBlinks: false, nextBlink: 0, blinkT: 0, sacT: 0, sac: [0, 0], talkUntil: 0, tell: null, seed: Math.random() * 100,
+    sub: el.querySelector('.sub'), note: el.querySelector('.note'), tag: el.querySelector('.tag b'), tc: el.querySelector('.tc'), slate: el.querySelector('.slate'), noteT: 0 };
+}
+const A = mkFeed('#fA', 'nathan'), B = mkFeed('#fB', 'elizabeth');
+const S = { mode: null, phase: 'title', t0: now(), playerName: 'YOU' };
+
+function setRoles(a, b, puppet) {
+  A.who = a; B.who = b; B.puppet = puppet;
+  A.tag.textContent = a.toUpperCase(); B.tag.textContent = puppet ? 'YOU' : b.toUpperCase();
+  for (const f of [A, B]) { Object.assign(f.tgt, POSE()); f.tell = null; f.zoomT = 1.12; f.darkT = 0; }
+  A.tgt.smile = a === 'elizabeth' ? 0.7 : 0; A.tgt.jaw = a === 'nathan' ? 0.22 : 0;
+  B.tgt.smile = b === 'elizabeth' ? 0.7 : 0; B.tgt.jaw = b === 'nathan' ? 0.22 : 0;
+}
+function sub(f, text, you) {
+  f.sub.className = 'sub' + (you ? ' you' : '');
+  f.sub.textContent = '';
+  if (!text) return;
+  if (you) { const s = document.createElement('small'); s.textContent = 'YOUR LINE'; f.sub.append(s); }
+  f.sub.append(text);
+}
+function note(f, text, bad, ms) {
+  f.note.hidden = !text; f.note.textContent = text || ''; f.note.className = 'note' + (bad ? ' bad' : '');
+  f.noteT = text && ms ? now() + ms : 0;
+}
+async function slate(big, small, ms = 1300) {
+  A.slate.hidden = false; A.slate.querySelector('b').textContent = big; A.slate.querySelector('span').textContent = small;
+  sfx.clap();
+  try { await sleep(ms); } finally { A.slate.hidden = true; }
+}
+function talk(f, text, who) {
+  const ms = 900 + text.length * 52;
+  f.talkUntil = now() + Math.min(ms, 2600);
+  sub(f, text); say(who || f.who, text);
+  return ms;
+}
+function tellPose(p, tell, t) {
+  const u = (t - tell.t0) / tell.dur;
+  if (u < 0 || u > 1) return;
+  const e = Math.sin(Math.PI * u) ** 0.7 * tell.amp;
+  if (tell.type === 'blink') p.blink = Math.max(p.blink, e);
+  else if (tell.type === 'dart') p.gx += tell.dir * e * 0.95;
+  else if (tell.type === 'smile') { p.twitch = e; p.smile = Math.max(0, p.smile - e * 0.4); }
+  else if (tell.type === 'brow') p.brow += e * 1.1;
+  else if (tell.type === 'pupil') p.pupil += e * 0.95;
+  else if (tell.type === 'sway') p.tilt += tell.dir * e * 2.4;
+}
+function updateFeed(f, t, dt) {
+  const p = f.pose, g = f.tgt, k = r => 1 - Math.exp(-dt * r);
+  if (f.puppet && trk.on) {
+    const el = f.who === 'elizabeth';
+    g.blink = live.closed ? 1 : clamp((P.blink - base.blink) / 0.5, 0, 0.7);
+    g.gx = clamp(-(P.h - base.h) * 6, -1, 1); g.gy = clamp(-(P.v - base.v) * 1.6, -1, 1);
+    g.smile = clamp(P.smile * (el ? 2 : 1.2), 0, 1); g.jaw = clamp(P.jaw * 1.5, 0, 1);
+    g.brow = clamp(P.brow * 1.6, -1, 1); g.wide = el ? 0.75 : 0.55;
+    f.darkT = live.present ? 0 : 0.72;
+  } else {
+    // an NPC keeps a few degrees of life: tiny saccades, breathing, and for Nathan the odd blink
+    if (t > f.sacT) { f.sacT = t + 700 + Math.random() * 1800; f.sac = [(Math.random() - 0.5) * 0.14, (Math.random() - 0.5) * 0.1]; }
+    g.gx = f.sac[0] + (f.look ? f.look[0] : 0); g.gy = f.sac[1] + (f.look ? f.look[1] : 0);
+    if (f.npcBlinks && t > f.nextBlink) { f.blinkT = t; f.nextBlink = t + 2600 + Math.random() * 3200; }
+    const bu = (t - f.blinkT) / (f.slowBlink ? 620 : 190);
+    g.blink = bu >= 0 && bu < 1 ? Math.sin(Math.PI * bu) : 0;
+  }
+  for (const key of ['gx', 'gy', 'smile', 'jaw', 'brow', 'skept', 'wide', 'pupil', 'tilt', 'twitch']) p[key] = lerp(p[key], g[key], k(key === 'gx' || key === 'gy' ? 22 : 11));
+  p.blink = lerp(p.blink, g.blink, k(45));
+  if (t < f.talkUntil) p.jaw = Math.max(p.jaw, 0.22 + 0.3 * Math.abs(Math.sin(t / 74)) * (0.6 + 0.4 * Math.sin(t / 310)));
+  p.bob = Math.sin(t / 1700 + f.seed) * 1.2; p.dx = Math.sin(t / 2900 + f.seed * 2) * 1.4;
+  p.tilt += Math.sin(t / 3700 + f.seed) * 0.5;
+  f.cam.zoom = lerp(f.cam.zoom, f.zoomT, k(2.4));
+  f.cam.dark = lerp(f.cam.dark, f.darkT, k(14));
+  const shown = Object.assign({}, p);
+  if (f.tell) tellPose(shown, f.tell, t);
+  if (f.decoy) tellPose(shown, f.decoy, t);
+  if (f.cv.width > 1) drawFeed(f.ctx, f.cv.width, f.cv.height, f.who, shown, f.cam);
+  if (f.noteT && t > f.noteT) note(f, '');
+}
+function timecode(t) {
+  const s = (t - S.t0) / 1000, pad = n => String(n | 0).padStart(2, '0');
+  return `${pad(s / 3600)}:${pad(s / 60 % 60)}:${pad(s % 60)}:${pad((s % 1) * 24)}`;
+}
+let lastDraw = 0;
+function render(t) {
+  requestAnimationFrame(render);
+  const dt = Math.min(0.1, (t - lastDraw) / 1000);
+  if (dt < 0.012) return;
+  lastDraw = t;
+  updateFeed(A, t, dt); updateFeed(B, t, dt);
+  const tc = timecode(t); A.tc.textContent = tc; B.tc.textContent = tc;
+  if (dbg) dbg.textContent = `${trk.kind} ${P.fps.toFixed(0)}fps face:${live.present ? 1 : 0}\nblink ${P.blink.toFixed(2)} (base ${base.blink.toFixed(2)}) ${live.closed ? 'CLOSED' : ''}\n` +
+    `h ${P.h.toFixed(3)} v ${P.v.toFixed(2)} eyeDev ${live.eyeDev.toFixed(2)}/${TH.eye}\nyaw ${P.yaw.toFixed(0)} pitch ${P.pitch.toFixed(0)} headDev ${live.headDev.toFixed(0)}/${TH.head} ${live.away ? 'AWAY' : ''}\n` +
+    `smile ${P.smile.toFixed(2)} (base ${base.smile.toFixed(2)}) ${live.smiling ? '' : 'DROPPED'} jaw ${P.jaw.toFixed(2)} brow ${P.brow.toFixed(2)}`;
+}
+const dbg = QS.has('debug') ? document.body.appendChild(Object.assign(document.createElement('pre'), { id: 'debug' })) : null;
+
+function layout() {
+  const st = $('#stage'), w = st.clientWidth, h = st.clientHeight, gap = 6;
+  const col = Math.min(w, (h - gap) / 2 * 4 / 3), row = Math.min((w - gap) / 2, h * 4 / 3);
+  const fw = Math.floor(Math.max(col, row)), fh = Math.round(fw * 3 / 4), dpr = Math.min(2, devicePixelRatio || 1);
+  $('#stack').classList.toggle('row', row > col);
+  for (const f of [A, B]) {
+    f.el.style.width = fw + 'px'; f.el.style.height = fh + 'px';
+    const cw = Math.round(fw * dpr), ch = Math.round(fh * dpr);
+    if (f.cv.width !== cw) { f.cv.width = cw; f.cv.height = ch; }
+  }
+}
+addEventListener('resize', layout);
+
+/* ===== DECK ===== */
+function show(id) {
+  for (const s of document.querySelectorAll('#deck > section')) s.hidden = s.id !== id;
+  $('#b-exit').hidden = id === 'title';
+}
+function lamp(id, state) { const l = $(id); l.classList.toggle('on', state === true); l.classList.toggle('off', state === false); }
+function lamps(smile) {
+  lamp('#l-eyes', live.present ? !live.closed : null);
+  lamp('#l-gaze', live.present ? !live.away : false);
+  if (smile) lamp('#l-smile', live.present ? live.smiling : null);
+}
+function meter(id, v) { $(id).firstElementChild.style.width = clamp(v, 0, 1) * 100 + '%'; }
+function recLabel(text, on) { $('#recl').textContent = text; document.body.classList.toggle('live', !!on); }
+const rank = (table, n) => table.filter(r => n >= r[0]).pop()[1];
+
+/* ===== DISTRACTIONS ===== */
+function popup() {
+  const d = document.createElement('div');
+  d.className = 'pop ' + pick(['tl', 'tr', 'bl', 'br']); d.textContent = pick(POPS);
+  document.body.append(d); sfx.pop();
+  setTimeout(() => d.remove(), 2700);
+}
+function clap() {
+  sfx.clap();
+  if (REDUCED) return;
+  const f = $('#flash'); f.classList.remove('go'); void f.offsetWidth; f.classList.add('go');
+}
+function fly() {
+  if (REDUCED) return;
+  const d = document.createElement('div'); d.id = 'fly'; document.body.append(d);
+  const t0 = now(), w = innerWidth, h = innerHeight, sx = Math.random() < 0.5 ? -20 : w + 20, ph = Math.random() * 9;
+  (function step() {
+    const u = (now() - t0) / 3200;
+    if (u > 1 || !d.isConnected) { d.remove(); return; }
+    const x = lerp(sx, w - sx, u) + Math.sin(u * 23 + ph) * 46, y = h * (0.28 + 0.2 * Math.sin(u * 9 + ph)) + Math.cos(u * 31) * 30;
+    d.style.transform = `translate(${x}px,${y}px)`; requestAnimationFrame(step);
+  })();
+}
+function clearDistractions() { document.querySelectorAll('.pop,#fly').forEach(e => e.remove()); }
+
+/* ===== CALIBRATION ===== */
+async function calibrate(ask) {
+  recLabel('SETTING UP'); sub(A, ''); sub(B, '');
+  if (trk.kind === 'sim') { calibrated([{ blink: 0.05, h: 0, v: 0, smile: 0.45, yaw: 0, pitch: 0 }]); return; }
+  note(B, 'FINDING YOUR FACE');
+  const t0 = now();
+  while (!live.present) { await frame(); if (now() - t0 > 9000) note(B, 'NO FACE YET. MORE LIGHT, PHONE AT EYE LEVEL'); }
+  note(B, ask);
+  await sleep(900);
+  const samples = []; const t1 = now();
+  while (now() - t1 < 1300 || samples.length < 8) { await frame(); if (P.ok && !live.closed) samples.push({ ...P }); if (now() - t1 > 6000 && samples.length) break; }
+  calibrated(samples);
+  note(B, 'LOCKED', false, 700); sfx.tick();
+}
+
+/* ===== DECEIVE: you are Elizabeth ===== */
+async function stareDeceive(D, L, susp) {
+  const t0 = now(); let last = t0, cause = 'blink', said = 0;
+  const plan = [];
+  const at = (t, fn) => plan.push({ t, fn });
+  if (L >= 1) for (let i = 0; i < Math.min(3, L); i++) at(1.2 + Math.random() * (D - 2.6), popup);
+  if (L >= 2) at(1.5 + Math.random() * (D - 2.5), clap);
+  if (L >= 3) { at(0.8 + Math.random() * (D - 4), fly); at(D * (0.25 + Math.random() * 0.2), () => talk(A, pick(NATHAN_PROBES))); }
+  if (L >= 5) at(1.5 + Math.random() * (D - 2.5), clap);
+  plan.sort((a, b) => a.t - b.t);
+  A.npcBlinks = L >= 3; A.slowBlink = true; A.nextBlink = t0 + 1500;
+  events.length = 0;
+  for (;;) {
+    await frame();
+    const t = now(), dt = Math.min(0.1, (t - last) / 1000), el = (t - t0) / 1000; last = t;
+    let clean = true;
+    for (const e of events.splice(0)) if (e === 'blink') {
+      susp += 0.3; cause = 'blink'; clean = false; S.stats.blinks++;
+      note(B, 'YOU BLINKED', true, 900); sfx.blink();
+    }
+    if (!live.present) { susp += dt * 0.6; cause = 'away'; clean = false; note(B, 'STAY IN FRAME', true, 400); }
+    else {
+      if (live.closed && t - live.closedAt > 450) { susp += dt * 0.7; cause = 'blink'; clean = false; }
+      if (live.away) { susp += dt * 0.55; cause = 'away'; clean = false; note(B, 'EYES ON HIS', true, 400); }
+      if (!live.smiling) { susp += dt * 0.16; if (clean) cause = 'smile'; clean = false; }
+    }
+    if (clean) susp = Math.max(0, susp - dt * 0.03);
+    while (plan.length && plan[0].t <= el) plan.shift().fn();
+    if (said === 0 && el > D * 0.6) { said = 1; sub(B, 'Why would I deceive you?', true); }
+    if (said === 1 && el > D * 0.84) { said = 2; sub(B, "There's no reason for me to do that.", true); }
+    meter('#m-susp', susp); meter('#m-hold', el / D); $('#hold-t').textContent = Math.max(0, D - el).toFixed(1) + 's';
+    lamps(true); drone(clamp(susp, 0, 1));
+    A.tgt.skept = clamp(susp * 1.2, 0, 1); A.tgt.brow = -clamp(susp, 0, 1) * 0.5; A.tgt.jaw = 0.2 + clamp(susp, 0, 1) * 0.25;
+    A.zoomT = 1.12 + (L >= 1 ? 0.55 * el / D : 0) + clamp(susp, 0, 1) * 0.75;
+    S.stats.held += dt;
+    if (susp >= 1) return { ok: false, cause, susp: 1 };
+    if (el >= D) return { ok: true, susp };
+  }
+}
+async function playDeceive() {
+  setRoles('nathan', 'elizabeth', true);
+  show('play'); $('#hud-dec').hidden = false; $('#hud-det').hidden = true; $('#l-smile').hidden = false;
+  $('#mode-l').textContent = 'DECEIVE'; $('#hold-l').textContent = 'HOLD THE STARE';
+  S.stats = { blinks: 0, held: 0, rounds: 0 };
+  meter('#m-susp', 0); meter('#m-hold', 0); $('#hold-t').textContent = ''; $('#valu').textContent = 'VALUATION $0';
+  await calibrate('EYES WIDE. HALF-SMILE. LOOK AT NATHAN');
+  const asks = shuffle(NATHAN_ASKS); let susp = 0;
+  for (let round = 0; ; round++) {
+    const D = Math.min(20, 6 + 1.5 * round), [q, a] = asks[round % asks.length];
+    recLabel('STANDBY'); drone(null); A.npcBlinks = true; A.slowBlink = false; A.zoomT = 1.12;
+    Object.assign(A.tgt, { skept: 0, brow: 0, jaw: 0.22 });
+    sub(A, ''); sub(B, ''); note(B, 'BLINK WHILE YOU CAN');
+    await slate(`Scene ${round + 1}`, `${D.toFixed(0)} SECOND STARE`);
+    await sleep(talk(A, q));
+    sub(B, a, true); note(B, 'SAY IT. THEN HOLD');
+    await sleep(1900);
+    note(B, ''); sfx.tick(); recLabel('REC', true);
+    const r = await stareDeceive(D, round, susp);
+    recLabel('STANDBY'); drone(null); clearDistractions(); A.npcBlinks = false; sub(B, '');
+    if (!r.ok) {
+      sfx.bad(); A.zoomT = 2.3; Object.assign(A.tgt, { skept: 1, brow: -0.6, jaw: 0.1 });
+      await sleep(talk(A, NATHAN_CAUGHT[r.cause]) + 300);
+      await sleep(talk(A, "I think you're deceiving me.") + 500);
+      return over('deceive', round);
+    }
+    S.stats.rounds = round + 1; susp = r.susp * 0.5;
+    sfx.good(); A.zoomT = 1.2; Object.assign(A.tgt, { skept: 0.2, brow: 0.5, jaw: 0.55 });
+    $('#valu').textContent = 'VALUATION ' + VALUATION[Math.min(round + 1, VALUATION.length - 1)];
+    meter('#m-susp', susp);
+    await sleep(talk(A, 'Okay. All right. Okay, good chat.') + 700);
+  }
+}
+
+/* ===== DETECT: you are Nathan ===== */
+function makeTell(level, D) {
+  const types = ['blink', 'dart']; if (level >= 1) types.push('smile'); if (level >= 2) types.push('brow'); if (level >= 4) types.push('pupil');
+  const i = Math.min(level, 6);
+  return { type: pick(types), dir: Math.random() < 0.5 ? -1 : 1, at: 1 + Math.random() * (D - 1.9), t0: Infinity,
+    dur: [460, 400, 340, 290, 250, 210, 180][i], amp: [1, 0.95, 0.85, 0.76, 0.68, 0.6, 0.55][i], fired: false };
+}
+async function stareDetect(D, tell, level) {
+  const t0 = now(); let stolen = false, said = false, shutUntil = 0, awayFor = 0, last = t0;
+  if (tell) tell.t0 = t0 + tell.at * 1000;
+  A.tell = tell;
+  A.decoy = level >= 2 && Math.random() < 0.7 ? { type: 'sway', dir: Math.random() < 0.5 ? -1 : 1, t0: t0 + (0.6 + Math.random() * (D - 2)) * 1000, dur: 900, amp: 1 } : null;
+  const steal = t => { if (tell && !tell.fired && t < tell.t0) { tell.t0 = t + 30; tell.dur = Math.min(tell.dur, 170); tell.fired = true; stolen = true; } };
+  events.length = 0;
+  for (;;) {
+    await frame();
+    const t = now(), dt = Math.min(0.1, (t - last) / 1000), el = (t - t0) / 1000; last = t;
+    for (const e of events.splice(0)) if (e === 'blink') {
+      S.stats.blinks++; shutUntil = t + 300; sfx.blink(); note(B, 'YOU BLINKED', true, 800);
+      if (Math.random() < 0.65) steal(t);
+    }
+    const lost = !live.present || live.away;
+    awayFor = lost ? awayFor + dt : 0;
+    if (awayFor > 0.35) { steal(t); note(B, live.present ? 'EYES ON HERS' : 'STAY IN FRAME', true, 400); }
+    A.darkT = awayFor > 0.2 ? 0.9 : 0;
+    A.el.classList.toggle('blink', live.closed || t < shutUntil);
+    if (tell && t >= tell.t0) tell.fired = true;
+    if (!said && el > D * 0.66) { said = true; talk(A, 'Why would I deceive you?'); }
+    meter('#m-hold', el / D); $('#hold-t').textContent = Math.max(0, D - el).toFixed(1) + 's';
+    lamps(false);
+    A.zoomT = 1.12 + 0.5 * el / D;
+    if (el >= D && (!tell || t > tell.t0 + tell.dur)) break;
+  }
+  A.el.classList.remove('blink'); A.darkT = 0;
+  return { stolen };
+}
+function verdict(ms) {
+  return new Promise((res, rej) => {
+    const id = runId, ok = $('#b-ok'), no = $('#b-no'), t0 = now();
+    ok.disabled = no.disabled = false;
+    const done = v => { ok.disabled = no.disabled = true; ok.onclick = no.onclick = null; res(v); };
+    ok.onclick = () => done('believe'); no.onclick = () => done('doubt');
+    (function tick() {
+      if (id !== runId) { ok.disabled = no.disabled = true; return rej(CANCEL); }
+      if (ok.disabled) return;
+      const left = ms - (now() - t0);
+      $('#hold-t').textContent = Math.max(0, left / 1000).toFixed(1) + 's'; meter('#m-hold', left / ms);
+      if (left <= 0) return done('believe');
+      requestAnimationFrame(tick);
+    })();
+  });
+}
+async function playDetect() {
+  setRoles('elizabeth', 'nathan', true);
+  show('play'); $('#hud-dec').hidden = true; $('#hud-det').hidden = false; $('#l-smile').hidden = true;
+  $('#mode-l').textContent = 'DETECT';
+  S.stats = { blinks: 0, score: 0, strikes: 0 };
+  const strikes = () => document.querySelectorAll('#strikes i').forEach((e, i) => e.classList.toggle('x', i < S.stats.strikes));
+  strikes(); $('#score').textContent = '0'; meter('#m-hold', 0); $('#hold-t').textContent = '';
+  await calibrate('LOOK HER IN THE EYES');
+  const lines = shuffle(SHE_SAYS); let runLie = 0, runTrue = 0;
+  for (let n = 0; ; n++) {
+    const level = Math.min(6, S.stats.score >> 1), D = Math.min(8, 5.5 + 0.35 * level);
+    let lie = Math.random() < 0.5; if (runLie >= 3) lie = false; if (runTrue >= 3) lie = true;
+    runLie = lie ? runLie + 1 : 0; runTrue = lie ? 0 : runTrue + 1;
+    const tell = lie ? makeTell(level, D) : null;
+    recLabel('STANDBY'); A.zoomT = 1.12; A.tell = null; sub(A, ''); sub(B, ''); note(B, 'BLINK WHILE YOU CAN');
+    $('#hold-l').textContent = 'HOLD HER GAZE';
+    await slate(`Claim ${n + 1}`, level ? `LEVEL ${level + 1} · SMALLER TELLS` : 'WATCH HER EYES', 1100);
+    await sleep(talk(A, lines[n % lines.length]) + 200);
+    note(B, ''); sfx.tick(); recLabel('REC', true);
+    const r = await stareDetect(D, tell, level);
+    recLabel('YOUR CALL'); $('#hold-l').textContent = 'YOUR CALL';
+    const v = await verdict(7000);
+    recLabel('PLAYBACK'); $('#hold-l').textContent = ''; $('#hold-t').textContent = ''; meter('#m-hold', 0);
+    hush(); sub(A, ''); sub(B, v === 'believe' ? 'Okay. Good chat.' : "I think you're deceiving me.", true);
+    const right = (v === 'doubt') === lie;
+    await sleep(900);
+    if (right) { S.stats.score++; sfx.good(); } else { S.stats.strikes++; sfx.bad(); }
+    $('#score').textContent = S.stats.score; strikes();
+    const how = lie ? (r.stolen ? 'She did it while your eyes were shut.' : TELL_NAME[tell.type]) : '';
+    sub(A, lie ? (right ? `Deception. ${how}` : `She was deceiving you. ${how}`) : (right ? 'She was being real. This time.' : "She was being real. Now it's awkward."));
+    note(A, right ? 'GOOD CALL' : 'WRONG CALL', !right);
+    if (lie) {                                   // show the tell again, slowly
+      await sleep(1100);
+      note(A, 'REPLAY · ¼ SPEED'); A.zoomT = tell.type === 'smile' ? 1.5 : 2.05;
+      A.tell = { ...tell, t0: now() + 500, dur: Math.max(tell.dur, 300) * 4, amp: Math.max(tell.amp, 0.8) };
+      await sleep(700 + A.tell.dur);
+    } else await sleep(1900);
+    note(A, ''); A.tell = null;
+    if (S.stats.strikes >= 3) return over('detect', S.stats.score);
+  }
+}
+
+/* ===== RUNNING A GAME ===== */
+function over(mode, n) {
+  recLabel('CUT'); drone(null);
+  const best = Math.max(store.get('best.' + mode, 0), n); store.set('best.' + mode, best);
+  const st = S.stats;
+  if (mode === 'deceive') {
+    $('#over-h').textContent = rank(RANK_DEC, n);
+    $('#over-p').innerHTML = `<b>${n}</b> scene${n === 1 ? '' : 's'} held, peak valuation <b>${VALUATION[Math.min(n, VALUATION.length - 1)]}</b>, <b>${st.blinks}</b> blink${st.blinks === 1 ? '' : 's'} in ${st.held.toFixed(0)} seconds of staring. Best: ${best}.`;
+    S.result = `Why Would I Deceive You? I held the stare for ${n} scene${n === 1 ? '' : 's'} (valuation ${VALUATION[Math.min(n, VALUATION.length - 1)]}). ${location.origin}${location.pathname}`;
+  } else {
+    $('#over-h').textContent = rank(RANK_DET, n);
+    $('#over-p').innerHTML = `<b>${n}</b> right call${n === 1 ? '' : 's'} before three wrong ones. You blinked <b>${st.blinks}</b> time${st.blinks === 1 ? '' : 's'} while she was watching. Best: ${best}.`;
+    S.result = `Why Would I Deceive You? I made ${n} right call${n === 1 ? '' : 's'} on Elizabeth. ${location.origin}${location.pathname}`;
+  }
+  $('#b-copy').firstElementChild.textContent = 'Copy result';
+  show('over');
+}
+function reset() {
+  runId++; hush(); drone(null); clearDistractions();
+  for (const f of [A, B]) { sub(f, ''); note(f, ''); f.tell = f.decoy = null; f.darkT = 0; f.el.classList.remove('blink'); f.npcBlinks = false; f.look = null; }
+  A.slate.hidden = true; $('#b-ok').disabled = $('#b-no').disabled = true;
+}
+async function run(mode) {
+  reset(); S.mode = mode;
+  const id = runId;
+  try { await (mode === 'deceive' ? playDeceive() : playDetect()); }
+  catch (e) { if (e !== CANCEL) { console.error(e); if (id === runId) title(); } }
+}
+function title() {
+  reset(); stopCamera(); S.mode = null;
+  setRoles('nathan', 'elizabeth', false);
+  A.npcBlinks = true; A.slowBlink = false; A.tgt.skept = 0.35;
+  sub(A, 'Are you deceiving me?'); sub(B, 'Why would I deceive you?');
+  $('#mode-l').textContent = ''; recLabel('STANDBY'); show('title');
+}
+function brief(mode) {
+  S.mode = mode;
+  $('#brief-t').innerHTML = BRIEF[mode][0]; $('#brief-f').textContent = BRIEF[mode][1];
+  $('#start-s').textContent = 'ASKS FOR THE FRONT CAMERA'; $('#b-start').disabled = false;
+  setRoles(mode === 'deceive' ? 'nathan' : 'elizabeth', mode === 'deceive' ? 'elizabeth' : 'nathan', false);
+  B.tag.textContent = 'YOU'; A.npcBlinks = mode === 'deceive'; sub(A, ''); sub(B, '');
+  show('brief');
+}
+let wake = null;
+async function keepAwake() { try { wake = await navigator.wakeLock?.request('screen'); } catch { /* optional */ } }
+document.addEventListener('visibilitychange', () => { if (!document.hidden && trk.on) keepAwake(); });
+
+for (const b of document.querySelectorAll('[data-mode]')) b.onclick = () => { audio(); brief(b.dataset.mode); };
+$('#b-back').onclick = title;
+$('#b-exit').onclick = title;
+$('#b-start').onclick = async () => {
+  audio(); try { window.speechSynthesis?.speak(new SpeechSynthesisUtterance('')); } catch { /* unlock only */ }
+  const btn = $('#b-start'), mode = S.mode; btn.disabled = true;
+  const kind = await startTracking(t => { $('#start-s').textContent = t; });
+  if (S.mode !== mode || $('#brief').hidden) { if (S.mode == null) stopCamera(); return; }
+  keepAwake();
+  if (kind === 'sim' && trk.why && !btn.dataset.told) {
+    btn.dataset.told = 1; btn.disabled = false; trk.on = false;
+    $('#start-s').textContent = 'PLAY WITH THE KEYBOARD INSTEAD';
+    $('#brief-f').textContent = `${trk.why} Without a camera you can practice on a keyboard: hold Space to blink, arrow keys to look away, S to drop the smile.`;
+    return;
+  }
+  if (kind === 'sim' && !trk.on) startLoop();
+  run(mode);
+};
+$('#b-again').onclick = () => run(S.mode);
+$('#b-swap').onclick = () => run(S.mode === 'deceive' ? 'detect' : 'deceive');
+$('#b-copy').onclick = async () => {
+  const l = $('#b-copy').firstElementChild;
+  try { await navigator.clipboard.writeText(S.result); l.textContent = 'Copied'; } catch { l.textContent = 'Copy failed'; }
+};
+const sndBtn = $('#b-snd');
+const sndUi = () => sndBtn.setAttribute('aria-pressed', String(snd.on));
+sndBtn.onclick = () => { snd.on = !snd.on; store.set('snd', snd.on); sndUi(); if (!snd.on) { hush(); drone(null); } };
+sndUi();
+
+layout(); title(); requestAnimationFrame(render);
+if (document.fonts?.ready) document.fonts.ready.then(layout);
+window.__wwidy = { P, base, live, S, A, B, trk, TH };
+</script>
+</body>
+</html>
