@@ -27,6 +27,14 @@ Edge or Safari.
 On a phone, the pose at Play is level: the back camera's elevation against gravity sets the look pitch, the screen's roll steers, and swivel (the rotation rate projected on gravity) turns directly. The menu switches each one on or off and sets the turn speed. Looking up and down shears the view by moving the horizon row, as later source ports do; the original engine could not. A death restarts the level on the next use press. The menu also loads your own `doom1.wad`,
 `doom.wad` or `doom2.wad`.
 
+`?bot` hands the game to a bot: TRM, a small neural network running on the same GPU, plans its routes, and
+hand-written code picks targets and fights (oaustegard/experiments `trm-doom`). `?bot&fights=rollout` lets
+it decide fights by trying them out. Every 12 tics in a fight it copies the game into a shadow game on the
+GPU, plays six moves two seconds ahead in two copies each, and makes the move that came out best. In the
+experiment (`trm-doom-rollouts`), that cut the bot's deaths on E1M4 to E1M6 from 16 in 18 runs to 1. The
+live game keeps running while it decides. To spare a laptop or phone, rollouts use at most about half the
+time, and they switch off for the session if a decision takes over 2.5 s.
+
 ## How it is built
 
 The game state lives in seven GPU buffers: textures and tables (`G`), level geometry (`M`), sectors,

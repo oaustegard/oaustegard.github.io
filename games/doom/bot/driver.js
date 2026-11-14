@@ -2,10 +2,11 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261030163353";
-import { TRMPlanner } from "./trm.js?v=20261030163353";
-import { MOBJINFO, MF } from "../info.js?v=20261030163353";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261030163353";
+import { Bot } from "./bot.js?v=20261114154959";
+import { TRMPlanner } from "./trm.js?v=20261114154959";
+import { RolloutFights } from "./rollout.js?v=20261114154959";
+import { MOBJINFO, MF } from "../info.js?v=20261114154959";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261114154959";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {
@@ -46,6 +47,12 @@ export class BotDriver {
       if (!this.globals.has(n)) this.globals.set(n, await TRMPlanner.create(this.device, this.weights, this.man, { w: n, h: n }));
       return this.globals.get(n);
     };
+    // ?bot&fights=rollout: fights decided by playing moves out in a copy of the game (bot/rollout.js)
+    this.rollout?.dispose();
+    this.rollout = null;
+    if (new URLSearchParams(location.search).get("fights") === "rollout") {
+      this.rollout = new RolloutFights(this.bot, engine, this.device, { W, MF });
+    }
     this.cur = {};
     const gen = ++this.gen;
     this.loop(gen);
@@ -73,9 +80,15 @@ export class BotDriver {
         this.bot.readState(st);
         const p = this.bot.s.p;
         if (p.dead) this.cur = { use: (p.leveltime >> 3) & 1 }; // restart the level
-        else if (!p.exit) this.cur = await this.bot.step();
+        else if (!p.exit) {
+          if (this.rollout) {
+            this.busyAt = performance.now(); // frames late behind rollouts are the bot's doing, as with TRM plans
+            try { this.cur = await this.rollout.step(); } finally { this.busyAt = performance.now(); }
+          } else this.cur = await this.bot.step();
+        }
         const d = this.bot.debug();
-        this.onStatus(`TRM bot · ${d.target ? d.target.kind : "looking"} · ${this.plans} plans, ${(this.planMs / Math.max(1, this.plans)).toFixed(0)} ms each`);
+        this.onStatus(`TRM bot · ${d.target ? d.target.kind : "looking"} · ${this.plans} plans, ${(this.planMs / Math.max(1, this.plans)).toFixed(0)} ms each` +
+          (this.rollout ? ` · ${this.rollout.status()}` : ""));
       } catch (err) { console.error("bot", err); }
       await new Promise((r) => setTimeout(r, 0));
     }
