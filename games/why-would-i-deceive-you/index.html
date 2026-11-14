@@ -779,6 +779,8 @@ function ingest(r, t) {
   const on = Math.max(0.36, base.blink + TH.blinkOn), off = Math.max(0.24, base.blink + TH.blinkOff);
   if (!live.closed && P.blink > on) { live.closed = true; live.closedAt = t; events.push('blink'); }
   else if (live.closed && P.blink < off) { live.closed = false; events.push('open'); }
+  // Lids settle lower as a stare goes on. Follow that slowly, up to a ceiling a shut eye is well above.
+  if (!live.closed) base.blink = Math.min(0.32, lerp(base.blink, P.blink, 0.012));
   if (P.blink < off) { P.h = lerp(P.h, r.h, 0.45); P.v = lerp(P.v, r.v, 0.45); }   // the iris is unreadable behind a lid
   live.eyeDev = Math.hypot((P.h - base.h) * 4.2, (P.v - base.v) * 1.4);
   live.headDev = Math.hypot(P.yaw - base.yaw, P.pitch - base.pitch);
@@ -789,9 +791,10 @@ function ingest(r, t) {
   if (P.smile > sTh) { live.smileAt = t; live.smiling = true; } else if (t - live.smileAt > 350) live.smiling = false;
 }
 function calibrated(samples) {
-  const med = k => { const a = samples.map(s => s[k]).sort((x, y) => x - y); return a[a.length >> 1]; };
-  for (const k of ['blink', 'h', 'v', 'smile', 'yaw', 'pitch']) base[k] = med(k);
-  live.away = false; live.awaySince = 0; live.smiling = true; live.smileAt = now(); events.length = 0;
+  const at = (k, q) => { const a = samples.map(s => s[k]).sort((x, y) => x - y); return a[Math.min(a.length - 1, (a.length * q) | 0)]; };
+  for (const k of ['h', 'v', 'smile', 'yaw', 'pitch']) base[k] = at(k, 0.5);
+  base.blink = Math.min(0.32, at('blink', 0.25));     // a low quantile, so a blink during calibration does not raise it
+  live.closed = false; live.away = false; live.awaySince = 0; live.smiling = true; live.smileAt = now(); events.length = 0;
 }
 
 function irisOffset(lm, vw, vh) {    // where the irises sit inside the eye openings, in image space, about -0.3..0.3
@@ -830,13 +833,14 @@ function trackLoop(gen) {
       smile: keys.KeyS ? 0.01 : 0.45, jaw: keys.KeyJ ? 0.6 : 0.05, brow: 0, yaw: 0, pitch: 0 }, t);
     requestAnimationFrame(() => trackLoop(gen)); return;
   }
+  if (video.paused && trk.stream && !document.hidden) video.play().catch(() => { /* retried next frame */ });
   if (video.readyState >= 2 && video.currentTime !== trk.lastVT && !document.hidden) {
     trk.lastVT = video.currentTime;
     try { ingest(readFace(trk.lm.detectForVideo(video, t)), t); } catch (e) { console.warn(e); ingest({ ok: false }, t); }
     if (trk.lastT) P.fps = lerp(P.fps, 1000 / (t - trk.lastT), 0.1);
     trk.lastT = t;
   } else if (t - live.seenAt > 500) live.present = false;
-  if (video.requestVideoFrameCallback) video.requestVideoFrameCallback(() => trackLoop(gen)); else requestAnimationFrame(() => trackLoop(gen));
+  requestAnimationFrame(() => trackLoop(gen));
 }
 async function startTracking(status) {
   if (trk.on) return trk.kind;
@@ -1036,7 +1040,7 @@ async function calibrate(ask) {
   note(B, ask);
   await sleep(900);
   const samples = []; const t1 = now();
-  while (now() - t1 < 1300 || samples.length < 8) { await frame(); if (P.ok && !live.closed) samples.push({ ...P }); if (now() - t1 > 6000 && samples.length) break; }
+  while (now() - t1 < 1300 || samples.length < 8) { await frame(); if (P.ok) samples.push({ ...P }); if (now() - t1 > 6000 && samples.length) break; }
   calibrated(samples);
   note(B, 'LOCKED', false, 700); sfx.tick();
 }
@@ -1233,7 +1237,15 @@ function reset() {
 async function run(mode) {
   reset(); S.mode = mode;
   const id = runId;
-  try { await (mode === 'deceive' ? playDeceive() : playDetect()); }
+  try {
+    const fresh = trk.on && trk.stream && trk.stream.getVideoTracks().some(t => t.readyState === 'live' && !t.muted) && now() - trk.lastT < 3000;
+    if (trk.kind === 'cam' && !fresh) {         // no frame processed in the last 3 seconds: reopen the camera
+      note(B, 'RESTARTING THE CAMERA'); stopCamera();
+      await startTracking(() => {});
+      if (id !== runId) return;
+    }
+    await (mode === 'deceive' ? playDeceive() : playDetect());
+  }
   catch (e) { if (e !== CANCEL) { console.error(e); if (id === runId) title(); } }
 }
 function title() {
