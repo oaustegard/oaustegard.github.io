@@ -272,24 +272,30 @@ async function storageFact() {
 }
 
 // ---- audio ----
-// iOS: in the tap, ask for the "playback" audio session (plays through the silent switch), make or renew the
-// AudioContext, and start a one-sample silent buffer. A context that was hidden (the page was left) is replaced:
-// iOS can keep its clock running with no sound reaching the speaker.
-let ctx, stale = false;
-document.addEventListener("visibilitychange", () => { if (document.hidden) stale = true; });
-addEventListener("pagehide", () => { stale = true; });
+// Playback goes through one <audio> element, not Web Audio. On iOS an AudioContext can come back from another app
+// reporting "running" while nothing reaches the speaker (WebKit bugs 217606, 283419, 291892), and replacing the
+// context does not reliably cure it; a media element started from a tap does. Each sentence becomes a WAV blob that
+// plays in turn. The tap starts the element on a short silent clip, which lets it play the sentences that arrive
+// later, after the tap. Media elements also play through the silent switch.
+const player = new Audio();
+player.preload = "auto";
+
+function wav(samples) {
+  const n = samples.length, buf = new ArrayBuffer(44 + 2 * n), v = new DataView(buf);
+  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  str(0, "RIFF"); v.setUint32(4, 36 + 2 * n, true); str(8, "WAVEfmt "); v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, K.SAMPLE_RATE, true);
+  v.setUint32(28, 2 * K.SAMPLE_RATE, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  str(36, "data"); v.setUint32(40, 2 * n, true);
+  for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, Math.round(Math.max(-1, Math.min(1, samples[i])) * 32767), true);
+  return new Blob([buf], { type: "audio/wav" });
+}
+const SILENT = URL.createObjectURL(wav(new Float32Array(K.SAMPLE_RATE / 20)));
+
 function unlockAudio() {
   try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch {}
-  if (ctx && (stale || ctx.state !== "running")) { ctx.close().catch(() => {}); ctx = null; }
-  stale = false;
-  ctx ??= new AudioContext();
-  ctx.onstatechange = () => { if (ctx && ctx.state !== "running") stale = true; };
-  if (ctx.state !== "running") ctx.resume();
-  const blank = ctx.createBufferSource();
-  blank.buffer = ctx.createBuffer(1, 1, 22050);
-  blank.connect(ctx.destination);
-  blank.start(0);
-  return ctx;
+  player.src = SILENT;
+  player.play().catch(() => {});
 }
 
 // ---- speaking ----
@@ -303,7 +309,7 @@ function setSpeaking(on) {
 }
 
 async function speak() {
-  const ac = unlockAudio();
+  unlockAudio();
   const text = $("text").value.trim();
   if (!text) return;
   const [speaker, base] = $("voice").value.split("|");
@@ -321,45 +327,58 @@ async function speak() {
   const line = { text, speaker, rate, chunks: chunk(r.tokens) };
   if (!line.chunks.length) { meta.textContent = "Nothing to say."; return; }
 
-  let stopped = false;
-  const sources = [], timed = [];
-  let next = ac.currentTime + 0.1, end = next, generating = true;
-  session = { stop() { stopped = true; for (const s of sources) try { s.stop(); } catch {} } };
-  setSpeaking(true);
-  reader.classList.remove("empty");
-  reader.textContent = "";
-  const tick = () => {
-    const t = ac.currentTime;
-    for (const w of timed) {
-      w.span.classList.toggle("on", t >= w.start && t < w.end);
-    }
-    if (!stopped && (generating || t < end)) requestAnimationFrame(tick);
-    else {
-      timed.forEach((w) => w.span.classList.remove("on"));
-      if (session && !generating) { session = null; setSpeaking(false); }
-    }
+  let stopped = false, generating = true, current = null, starting = false;
+  const queue = [], timed = [];
+  const me = { stop() { stopped = true; queue.length = 0; current = null; player.pause(); } };
+  session = me;
+  const done = () => { if (session === me) { session = null; setSpeaking(false); } };
+  const playNext = () => {
+    if (stopped || session !== me) return;
+    current = queue.shift() ?? null;
+    if (!current) { if (!generating) done(); return; }
+    current.url ??= URL.createObjectURL(wav(current.audio));
+    starting = true;
+    player.src = current.url;
+    player.play().then(() => { starting = false; }, (e) => {
+      starting = false;
+      if (e?.name === "AbortError" || stopped) return;
+      meta.textContent = "The browser would not play the audio. Tap Speak to try again.";
+      me.stop(); done();
+    });
   };
-  const schedule = (part) => {
+  player.onended = () => { if (session === me && current) playNext(); };
+  // A pause nobody asked for (a call, another app taking the audio): end the session so Speak works again.
+  player.onpause = () => {
+    if (session !== me || !current || starting || stopped || player.ended) return;
+    meta.textContent = "Paused. Tap Speak to hear it again.";
+    me.stop(); done();
+  };
+  const enqueue = (part) => {
     if (stopped) return;
-    const at = Math.max(next, ac.currentTime + 0.05);
-    const buf = ac.createBuffer(1, part.audio.length, K.SAMPLE_RATE);
-    buf.copyToChannel(part.audio, 0);
-    const src = ac.createBufferSource();
-    src.buffer = buf; src.connect(ac.destination); src.start(at);
-    sources.push(src);
-    next = end = at + part.audio.length / K.SAMPLE_RATE;
     for (const w of part.words) {
       const span = document.createElement("span"); span.textContent = w.word;
       if (reader.childNodes.length) reader.append(" ");
       reader.append(span);
-      timed.push({ span, start: at + w.start, end: at + w.end });
+      timed.push({ span, part, start: w.start, end: w.end });
     }
+    queue.push(part);
+    if (!current) playNext();
   };
+  const tick = () => {
+    const live = session === me;
+    const t = player.currentTime;
+    for (const w of timed) w.span.classList.toggle("on", live && w.part === current && t >= w.start && t < w.end);
+    if (live) requestAnimationFrame(tick);
+  };
+
+  setSpeaking(true);
+  reader.classList.remove("empty");
+  reader.textContent = "";
   requestAnimationFrame(tick);
   try {
     let parts = cache.get(key);
     if (parts) {
-      parts.forEach(schedule);
+      parts.forEach(enqueue);
       meta.textContent = "Replaying.";
     } else {
       const pack = await packFor(speaker);
@@ -372,7 +391,7 @@ async function speak() {
         first ??= performance.now() - t0;
         ms += part.ms;
         parts.push(part);
-        schedule(part);
+        enqueue(part);
         meta.textContent = part.index + 1 < part.count ? `Speaking; making sentence ${part.index + 2} of ${part.count}…` : "Speaking.";
       }
       if (!stopped) {
@@ -392,10 +411,11 @@ async function speak() {
     }
   } catch (e) {
     meta.textContent = `Error: ${e?.message || e}`;
-    session?.stop();
+    me.stop(); done();
   } finally {
     generating = false;
-    if (stopped) { session = null; setSpeaking(false); meta.textContent ||= "Stopped."; }
+    if (stopped) { done(); meta.textContent ||= "Stopped."; }
+    else if (!current && !queue.length) done();
   }
 }
 
@@ -419,15 +439,8 @@ for (const [label, text] of SAMPLES) {
 // ---- WAV ----
 $("save").onclick = () => {
   if (!lastAudio) return;
-  const n = lastAudio.length, buf = new ArrayBuffer(44 + 2 * n), v = new DataView(buf);
-  const str = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
-  str(0, "RIFF"); v.setUint32(4, 36 + 2 * n, true); str(8, "WAVEfmt "); v.setUint32(16, 16, true);
-  v.setUint16(20, 1, true); v.setUint16(22, 1, true); v.setUint32(24, K.SAMPLE_RATE, true);
-  v.setUint32(28, 2 * K.SAMPLE_RATE, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
-  str(36, "data"); v.setUint32(40, 2 * n, true);
-  for (let i = 0; i < n; i++) v.setInt16(44 + 2 * i, Math.round(Math.max(-1, Math.min(1, lastAudio[i])) * 32767), true);
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  a.href = URL.createObjectURL(wav(lastAudio));
   a.download = "kokoro-voice.wav";
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 10000);
