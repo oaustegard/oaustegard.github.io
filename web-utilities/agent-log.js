@@ -15,7 +15,8 @@
 
    API: window.AgentLog.start(opts) .stop() .export() .exportJSON() .download() .copy() .clear()
         .open() .close(); opts = { max: 20000 records kept, network: true }.
-   Classic script, no dependencies, no build step. */
+   Classic script, no dependencies, no build step. Apache License 2.0, like the rest of
+   https://github.com/oaustegard/oaustegard.github.io. */
 (function () {
   "use strict";
   var VERSION = "1.0.0";
@@ -35,7 +36,27 @@
   var SEV = { trace: [1, "TRACE"], debug: [5, "DEBUG"], info: [9, "INFO"], warn: [13, "WARN"], error: [17, "ERROR"], fatal: [21, "FATAL"] };
   var CONSOLE_SEV = { debug: "debug", log: "info", info: "info", warn: "warn", error: "error", trace: "trace", assert: "error" };
   var MAX_STR = 2000, MAX_BODY = 4000, MAX_ITEMS = 100, MAX_DEPTH = 4;
-  var SECRET_PARAM = /^(access_?token|id_?token|refresh_?token|token|api_?key|apikey|key|secret|client_secret|password|passwd|pwd|pass|auth|authorization|sig|signature|code|session|sessionid|session_id|jwt)$/i;
+  // a parameter name that carries a credential: a few short names exactly, words such as token or secret anywhere
+  // in the name (auth_token, x-api-key, client_secret), and short names after a separator (auth_code, private_key)
+  function secretParam(name) {
+    var n = String(name).toLowerCase();
+    return /^(key|code|auth|sig|pass|state|nonce)$/.test(n) ||
+      /token|secret|passw|pwd|api[_-]?key|signature|credential|jwt|session|bearer|assertion|private/.test(n) ||
+      /[_.-](key|code|auth|sig|pass)$/.test(n);
+  }
+  // the fragment never reaches a server, which is why OAuth's implicit flow (#access_token=) and share links that
+  // carry a key (#key=) put secrets there; key=value fragments get the parameter rule, and a fragment that is one
+  // long token gets replaced whole. Hash routes such as #/settings stay readable.
+  function redactFragment(h) {
+    if (!h) return h;
+    if (h.indexOf("=") >= 0) {
+      var qi = h.indexOf("?"), lead = qi >= 0 ? h.slice(0, qi + 1) : "", rest = qi >= 0 ? h.slice(qi + 1) : h, hit = false, out = new URLSearchParams();
+      new URLSearchParams(rest).forEach(function (v, k) { var x = secretParam(k); hit = hit || x; out.append(k, x ? "REDACTED" : v); });
+      return hit ? lead + out.toString() : h;
+    }
+    if (h.length >= 24 && /^[\w\-+.~%]+$/.test(h) && /\d/.test(h) && /[a-z]/i.test(h)) return "REDACTED";
+    return h;
+  }
 
   var nativeConsole = {};
   for (var m in CONSOLE_SEV) nativeConsole[m] = console[m];
@@ -137,11 +158,15 @@
       var url = new URL(u, location.href);
       if (url.username || url.password) { url.username = ""; url.password = ""; }
       var changed = false;
-      url.searchParams.forEach(function (val, key) { if (SECRET_PARAM.test(key)) changed = true; });
+      url.searchParams.forEach(function (val, key) { if (secretParam(key)) changed = true; });
       if (changed) {
         var p = new URLSearchParams();
-        url.searchParams.forEach(function (val, key) { p.append(key, SECRET_PARAM.test(key) ? "REDACTED" : val); });
+        url.searchParams.forEach(function (val, key) { p.append(key, secretParam(key) ? "REDACTED" : val); });
         url.search = p.toString();
+      }
+      if (url.hash.length > 1) {
+        var frag = url.hash.slice(1), safe = redactFragment(frag);
+        if (safe !== frag) url.hash = safe;
       }
       return clip(url.href, 1000);
     } catch (e) { return clip(u, 1000); }
@@ -584,10 +609,17 @@
     }
     return path.join(" > ");
   }
+  // fields whose value is a credential or personal data, judged from type, name, id, autocomplete, label and placeholder
+  var PERSONAL = /pass|secret|token|card|cc-|cvc|cvv|csc|ssn|social.?sec|otp|one-time|(^|\W)pin(\W|$)|iban|account|routing|e-?mail|phone|(^|\W)tel|mobile|address|street|postal|zip|birth|bday|dob|given-name|family-name|full-?name|surname/i;
+  function sensitiveField(el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (/^(password|email|tel|hidden)$/i.test(el.type || "")) return true;
+    var g = function (a) { return el.getAttribute(a) || ""; };
+    return PERSONAL.test([g("name"), g("id"), g("autocomplete"), g("aria-label"), g("placeholder"), g("inputmode")].join(" "));
+  }
   function fieldValue(el) {
     if (!el || typeof el.value !== "string") return undefined;
-    if (el.type === "password" || /pass|secret|token|card|cvc|cvv|ssn|otp/i.test([el.name, el.id, el.autocomplete].join(" "))) return "[hidden]";
-    return clip(el.value, 200);
+    return sensitiveField(el) ? "[hidden]" : clip(el.value, 200);
   }
   function textOf(el) { return el ? clip((el.innerText || el.textContent || "").trim().replace(/\s+/g, " "), 120) : ""; }
   function labelOf(w) { return w.label || w.sel; }
@@ -625,7 +657,7 @@
       if (a["dom.text"]) extra = ' "' + clip(a["dom.text"], 60) + '"';
     } else if (e.type === "input" || e.type === "change") {
       var v = fieldValue(t);
-      if (v !== undefined) { a["dom.value"] = v; if (v !== "[hidden]") a["dom.value_length"] = t.value.length; extra = " = " + clip(JSON.stringify(v), 60); }
+      if (v !== undefined) { a["dom.value"] = v; if (t.type !== "password") a["dom.value_length"] = t.value.length; extra = " = " + clip(JSON.stringify(v), 60); }
       if (t.type === "checkbox" || t.type === "radio") { a["dom.checked"] = t.checked; extra = " checked=" + t.checked; }
     } else if (e.type === "keydown") {
       a["key"] = e.key; a["key.code"] = e.code;
@@ -650,7 +682,8 @@
         var nv = m.target.getAttribute(m.attributeName);
         if (nv === m.oldValue) continue;
         kinds[m.attributeName] = 1;
-        if (changes.length < 10) changes.push({ type: "attribute", node: describeNode(m.target), name: m.attributeName, old: m.oldValue, "new": nv });
+        var hide = m.attributeName === "value" && sensitiveField(m.target);
+        if (changes.length < 10) changes.push({ type: "attribute", node: describeNode(m.target), name: m.attributeName, old: hide ? "[hidden]" : m.oldValue, "new": hide ? "[hidden]" : nv });
       } else if (m.type === "characterData") {
         if (m.oldValue === m.target.data) continue;
         kinds.text = 1;

@@ -216,3 +216,32 @@ test.describe('watched elements', () => {
     expect(sels[3][0]).not.toContain(':r1:');
   });
 });
+
+test('redaction covers *_token and *_key names, fragments and personal fields', async ({ page }) => {
+  await page.goto(PAGE + '?logging=true');
+  const out = await page.evaluate(async () => {
+    window.AgentLog.clear();
+    const urls = [
+      '/web-utilities/x.json?auth_token=T1&x-api-key=T2&private_key=T3&country=no&page=2',
+      '/web-utilities/x.json#access_token=T4&token_type=bearer&expires_in=3600',
+      '/web-utilities/x.json#key=T5',
+      '/web-utilities/x.json#a8Fh2kLq9ZpX7rT3mW5nY1cV',
+      '/web-utilities/x.json#/settings/profile',
+      '/web-utilities/x.json?q=1#/route?code=T6&tab=2',
+    ];
+    for (const u of urls) await fetch(u).catch(() => {});
+    window.AgentLog.watch('#demo input');
+    const f = (sel, v) => { const el = document.querySelector(sel); el.value = v; el.dispatchEvent(new Event('input', { bubbles: true })); };
+    const email = document.createElement('input'); email.type = 'email'; email.id = 'demoEmail'; document.getElementById('demo').appendChild(email);
+    const phone = document.createElement('input'); phone.name = 'mobile_number'; phone.id = 'demoPhone'; document.getElementById('demo').appendChild(phone);
+    f('#demoEmail', 'me@example.com'); f('#demoPhone', '5551234'); f('#demoText', 'plain words');
+    await new Promise((r) => setTimeout(r, 700));
+    return window.AgentLog.exportJSON();
+  });
+  for (const secret of ['T1', 'T2', 'T3', 'T4', 'T5', 'T6', 'a8Fh2kLq9ZpX7rT3mW5nY1cV', 'me@example.com', '5551234']) {
+    expect(out, secret).not.toMatch(new RegExp('[=#"]' + secret.replace(/[.@]/g, '\\$&') + '\\b'));
+  }
+  for (const kept of ['country=no', 'page=2', 'token_type=REDACTED', 'expires_in=3600', '#/settings/profile', '#/route?code=REDACTED&tab=2', 'plain words']) {
+    expect(out, kept).toContain(kept);
+  }
+});

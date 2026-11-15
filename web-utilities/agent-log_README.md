@@ -31,7 +31,7 @@ A red **Logging** badge shows while it records. Its panel lists the newest recor
 
 The panel's **Watch an element** button starts a picker: hover highlights an element and shows its selector, click or Enter picks it, ↑/↓ move to the parent or first child, Esc cancels. The click that picks is not passed to the page. A watch is a CSS selector, built from an id or a test attribute (`data-testid`, `name`, `aria-label`) where the element has one, otherwise from a short tag path that matches only that element.
 
-Events are caught by listeners on the document and matched with `closest()`, so a watch keeps working when an app redraws the element; a MutationObserver per matched element (re-attached each second if the element is replaced) records attribute, text and child changes, at most 20 records a second per watch. Typing is recorded once per pause, with the value; password fields and fields named like a card number, token or one-time code are `[hidden]`, and printable keys typed into a field are not recorded as keys. Watches are kept per site in localStorage until removed.
+Events are caught by listeners on the document and matched with `closest()`, so a watch keeps working when an app redraws the element; a MutationObserver per matched element (re-attached each second if the element is replaced) records attribute, text and child changes, at most 20 records a second per watch. Typing is recorded once per pause, with the value; values of password, email and phone fields, and of fields whose name, id, autocomplete, label or placeholder points to a credential or personal data, are `[hidden]` (with their length), and printable keys typed into a field are not recorded as keys. Watches are kept per site in localStorage until removed.
 
 An agent can set watches without the picker: `?watch=<selector>` (repeatable) on a page that includes the script and is logging, or `AgentLog.watch(selector, { label })` in the console.
 
@@ -44,7 +44,8 @@ Download and Copy produce an OTLP/JSON `ExportLogsServiceRequest` with one `reso
 - Stored in IndexedDB for the page's origin, newest 20,000 records (`AgentLog.start({ max })` changes the cap). Without IndexedDB it keeps the log in memory for that page load.
 - Records console output and errors from the moment it starts, for the page itself only: not iframes or workers. Requests made before it started come from the browser's Resource Timing list, marked `agentlog.before_start`.
 - Apps that keep their own reference to `fetch` from startup (Bluesky's API client does) bypass the wrapper when Agent Log starts late; their requests are still recorded from Resource Timing (`agentlog.source: resource-timing`), without the method.
-- Query parameters with credential-like names are replaced with `REDACTED` in recorded URLs. Console arguments are recorded as given.
+- Recorded URLs have credentials replaced with `REDACTED`: query parameters named `key`, `code`, `auth`, `sig`, `state` or `nonce`, names containing `token`, `secret`, `password`, `api_key`, `session` or `signature` (`auth_token`, `x-api-key`), and names ending in `_key` or `_code`. The same rule covers `key=value` pairs in the `#fragment` (OAuth implicit flow, `#key=` share links), and a fragment that is one long token is replaced whole; hash routes such as `#/settings` are kept.
+- Console arguments, the text of watched elements and ordinary field values are recorded as given.
 
 ## API
 
@@ -56,4 +57,4 @@ Download and Copy produce an OTLP/JSON `ExportLogsServiceRequest` with one `reso
 - The badge and panel live in a shadow root with a constructed stylesheet, so the page's CSS does not reach them, and use a Trusted Types policy where the page enforces one.
 - fetch and XHR are wrapped so the page gets the same promise and events it would have without the logger. A Resource Timing observer records the requests the wrappers did not see, and each request is recorded once.
 
-Created by Oskar Austegard ([@oaustegard](https://github.com/oaustegard))
+Created by Oskar Austegard ([@oaustegard](https://github.com/oaustegard)). Apache License 2.0, as the rest of this repository ([LICENSE](https://github.com/oaustegard/oaustegard.github.io/blob/main/LICENSE)).
