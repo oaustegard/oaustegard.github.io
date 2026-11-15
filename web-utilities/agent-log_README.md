@@ -32,7 +32,8 @@ Download and Copy produce an OTLP/JSON `ExportLogsServiceRequest` with one `reso
 ## Limits
 
 - Stored in IndexedDB for the page's origin, newest 20,000 records (`AgentLog.start({ max })` changes the cap). Without IndexedDB it keeps the log in memory for that page load.
-- Records from the moment it starts, for the page itself only: not iframes or workers.
+- Records console output and errors from the moment it starts, for the page itself only: not iframes or workers. Requests made before it started come from the browser's Resource Timing list, marked `agentlog.before_start`.
+- Apps that keep their own reference to `fetch` from startup (Bluesky's API client does) bypass the wrapper when Agent Log starts late; their requests are still recorded from Resource Timing (`agentlog.source: resource-timing`), without the method.
 - Query parameters with credential-like names are replaced with `REDACTED` in recorded URLs. Console arguments are recorded as given.
 
 ## API
@@ -43,6 +44,6 @@ Download and Copy produce an OTLP/JSON `ExportLogsServiceRequest` with one `reso
 
 - One classic script, no dependencies, no build step.
 - The badge and panel live in a shadow root with a constructed stylesheet, so the page's CSS does not reach them, and use a Trusted Types policy where the page enforces one.
-- fetch and XHR are wrapped so the page gets the same promise and events it would have without the logger.
+- fetch and XHR are wrapped so the page gets the same promise and events it would have without the logger. A Resource Timing observer records the requests the wrappers did not see, and each request is recorded once.
 
 Created by Oskar Austegard ([@oaustegard](https://github.com/oaustegard))

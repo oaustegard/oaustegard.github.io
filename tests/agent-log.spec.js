@@ -104,3 +104,25 @@ test('strict CSP with Trusted Types: the bookmarklet explains, the full-script p
   expect(attr(doc.resourceLogs[0].resource.attributes, 'agentlog.started_by')).toEqual({ stringValue: 'console-paste' });
   expect(records(doc).some((r) => r.body.stringValue === 'under csp')).toBe(true);
 });
+
+test('requests through a fetch reference taken before the script loaded are recorded once', async ({ page }) => {
+  await page.goto('/web-utilities/');
+  await page.evaluate(() => { window.earlyFetch = window.fetch; return fetch('/web-utilities/index.html?before=1'); });
+  await page.addScriptTag({ url: '/web-utilities/agent-log.js?start=test' });
+  await page.evaluate(async () => {
+    await window.earlyFetch('/web-utilities/index.html?early=1').then((r) => r.text());
+    await fetch('/web-utilities/index.html?wrapped=1').then((r) => r.text());
+    await new Promise((r) => setTimeout(r, 500));
+  });
+  const doc = await page.evaluate(() => window.AgentLog.export());
+  const http = records(doc).filter((r) => r.eventName === 'http.fetch');
+  const url = (r) => attr(r.attributes, 'url.full').stringValue;
+  const early = http.filter((r) => url(r).endsWith('early=1'));
+  expect(early).toHaveLength(1);
+  expect(attr(early[0].attributes, 'agentlog.source')).toEqual({ stringValue: 'resource-timing' });
+  expect(attr(early[0].attributes, 'http.response.status_code')).toEqual({ intValue: '200' });
+  expect(http.filter((r) => url(r).endsWith('wrapped=1'))).toHaveLength(1);
+  const before = http.filter((r) => url(r).endsWith('before=1'));
+  expect(before).toHaveLength(1);
+  expect(attr(before[0].attributes, 'agentlog.before_start')).toEqual({ boolValue: true });
+});

@@ -46,8 +46,8 @@
   var ui = null;
 
   // ------------------------------------------------------------------ time and ids
-  function nowNano() {
-    var t = performance.timeOrigin + performance.now(), ms = Math.floor(t), ns = Math.round((t - ms) * 1e6);
+  function nowNano(perfTime) {
+    var t = performance.timeOrigin + (perfTime == null ? performance.now() : perfTime), ms = Math.floor(t), ns = Math.round((t - ms) * 1e6);
     if (ns >= 1e6) { ms += 1; ns -= 1e6; }
     return String(ms) + String(ns).padStart(6, "0");
   }
@@ -152,11 +152,11 @@
   }
 
   // ------------------------------------------------------------------ records
-  function push(sev, eventName, body, attributes) {
+  function push(sev, eventName, body, attributes, perfTime) {
     if (!on) return;
     try {
       var s = SEV[sev] || SEV.info;
-      var rec = { timeUnixNano: nowNano(), severityNumber: s[0], severityText: s[1], eventName: eventName, body: { stringValue: clip(body == null ? "" : body, MAX_BODY) }, attributes: attributes || [] };
+      var rec = { timeUnixNano: nowNano(perfTime), severityNumber: s[0], severityText: s[1], eventName: eventName, body: { stringValue: clip(body == null ? "" : body, MAX_BODY) }, attributes: attributes || [] };
       buf.push({ s: session.id, r: rec });
       if (buf.length >= 200) flush();
       else if (!flushTimer) flushTimer = setTimeout(flush, 250);
@@ -308,6 +308,7 @@
           var t0 = performance.now();
           var method = String((init && init.method) || (input && input.method) || "GET").toUpperCase();
           var url = typeof input === "string" ? input : input && input.url ? input.url : String(input);
+          claim(url);
           p.then(function (res) {
             var ms = Math.round(performance.now() - t0), len = res.headers.get("content-length");
             push(res.ok ? "info" : "warn", "http.fetch", method + " " + shortUrl(url) + " → " + res.status + " (" + ms + " ms)", attrs({
@@ -325,6 +326,28 @@
         return p;
       };
     }
+    // Resource Timing lists every request, including those made through a reference to fetch that the page
+    // took before this script wrapped it (bsky's API client does this) and those made before logging started.
+    // It has no method and, cross-origin without Timing-Allow-Origin, no status; the wrappers claim the
+    // requests they saw, so each request is recorded once.
+    if (typeof PerformanceObserver === "function") {
+      try {
+        new PerformanceObserver(function (list) {
+          if (!on || !opts.network) return;
+          list.getEntries().forEach(function (e) {
+            if (e.initiatorType !== "fetch" && e.initiatorType !== "xmlhttprequest") return;
+            if (claimed[e.name] > 0) { claimed[e.name]--; return; }
+            var st = e.responseStatus || 0, ms = Math.round(e.duration), kind = e.initiatorType === "fetch" ? "fetch" : "xhr";
+            var early = e.startTime < startedPerf;
+            push(st >= 400 ? "warn" : "info", "http." + kind, kind + " " + shortUrl(e.name) + " → " + (st || "status hidden") + " (" + ms + " ms)", attrs({
+              "url.full": redactUrl(e.name), "http.response.status_code": st || undefined, "duration_ms": ms,
+              "http.response.body.size": e.encodedBodySize || undefined, "agentlog.source": "resource-timing",
+              "agentlog.before_start": early || undefined,
+            }), e.startTime);
+          });
+        }).observe({ type: "resource", buffered: true });
+      } catch (e) { say("resource timing unavailable", e); }
+    }
     if (typeof XMLHttpRequest === "function") {
       var XP = XMLHttpRequest.prototype, xOpen = XP.open, xSend = XP.send;
       XP.open = function (method, url) { this.__agentLog = { method: String(method || "GET").toUpperCase(), url: String(url) }; return xOpen.apply(this, arguments); };
@@ -332,6 +355,7 @@
         var meta = this.__agentLog, xhr = this;
         if (on && opts.network && meta) {
           meta.t0 = performance.now();
+          claim(meta.url);
           xhr.addEventListener("loadend", function () {
             var ms = Math.round(performance.now() - meta.t0), st = xhr.status;
             push(st === 0 ? "error" : st >= 400 ? "warn" : "info", "http.xhr", meta.method + " " + shortUrl(meta.url) + " → " + (st || "failed") + " (" + ms + " ms)", attrs({
@@ -343,6 +367,11 @@
         return xSend.apply(this, arguments);
       };
     }
+  }
+  var claimed = {}, startedPerf = 0;
+  function claim(u) {
+    try { u = new URL(u, location.href).href; } catch (e) { u = String(u); }
+    claimed[u] = (claimed[u] || 0) + 1;
   }
   function safeJson(v) { try { return JSON.stringify(v); } catch (e) { return String(v); } }
 
@@ -524,6 +553,7 @@
     if (o.network != null) opts.network = !!o.network;
     setFlag(true);
     if (on) { if (ui) ui.open(); return api; }
+    startedPerf = performance.now();
     patch();
     on = true;
     session = {
