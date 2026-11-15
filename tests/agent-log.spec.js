@@ -126,3 +126,93 @@ test('requests through a fetch reference taken before the script loaded are reco
   expect(before).toHaveLength(1);
   expect(attr(before[0].attributes, 'agentlog.before_start')).toEqual({ boolValue: true });
 });
+
+test.describe('watched elements', () => {
+  const ui = (page, sel) => page.locator('agent-log-ui ' + sel);
+  const domRecords = async (page) => records(await page.evaluate(() => window.AgentLog.export())).filter((r) => r.eventName.startsWith('dom.'));
+
+  test('records clicks, typing, keys and changes on watched elements; hides passwords', async ({ page }) => {
+    await page.goto(PAGE + '?logging=true');
+    await page.click('#tWatch');
+    await page.click('#demoCount');
+    await page.click('#demoCount');
+    await page.fill('#demoText', 'hello');
+    await page.press('#demoText', 'Enter');
+    await page.fill('#demoPass', 'hunter2');
+    await page.waitForTimeout(700);
+    const recs = await domRecords(page);
+    const ev = recs.map((r) => r.eventName);
+    expect(ev.filter((e) => e === 'dom.click')).toHaveLength(2);
+    const click = recs.find((r) => r.eventName === 'dom.click');
+    expect(attr(click.attributes, 'watch.label')).toEqual({ stringValue: 'counter' });
+    expect(attr(click.attributes, 'dom.text')).toEqual({ stringValue: 'Count: 0' });
+    const mut = recs.filter((r) => r.eventName === 'dom.mutation');
+    expect(mut.length).toBeGreaterThan(0);
+    expect(mut.some((r) => r.body.stringValue.includes('class'))).toBe(true);
+    const inputs = recs.filter((r) => r.eventName === 'dom.input');
+    expect(inputs.map((r) => attr(r.attributes, 'dom.value').stringValue).sort()).toEqual(['[hidden]', 'hello']);
+    const keys = recs.filter((r) => r.eventName === 'dom.keydown').map((r) => attr(r.attributes, 'key').stringValue);
+    expect(keys).toEqual(['Enter']);
+    expect(JSON.stringify(recs)).not.toContain('hunter2');
+    await expect(ui(page, '.chip')).toHaveCount(2);
+  });
+
+  test('the picker highlights, walks to the parent, cancels, and picks without clicking the page', async ({ page }) => {
+    await page.goto(PAGE + '?logging=true');
+    await ui(page, '.pill').click();
+    await ui(page, 'button[data-a="pick"]').click();
+    await expect(ui(page, '.toast')).toBeVisible();
+    await page.hover('#demoCount');
+    await expect(ui(page, '.tip')).toContainText('#demoCount');
+    await page.keyboard.press('ArrowUp');
+    await expect(ui(page, '.tip')).toContainText('#demo');
+    await page.keyboard.press('Escape');
+    await expect(ui(page, '.toast')).toBeHidden();
+    expect(await page.evaluate(() => window.AgentLog.watches())).toEqual([]);
+    await ui(page, 'button[data-a="pick"]').click();
+    await page.hover('#demoCount');
+    await page.click('#demoCount');
+    await expect(page.locator('#demoCount')).toHaveText('Count: 0');
+    const w = await page.evaluate(() => window.AgentLog.watches());
+    expect(w.map((x) => x.selector)).toEqual(['#demoCount']);
+    await page.click('#demoCount');
+    await expect.poll(async () => (await domRecords(page)).filter((r) => r.eventName === 'dom.click').length).toBe(1);
+    await ui(page, '.chip button').click();
+    expect(await page.evaluate(() => window.AgentLog.watches())).toEqual([]);
+  });
+
+  test('?watch= adds a watch that survives reloads and re-rendered elements', async ({ page }) => {
+    await page.goto(PAGE + '?logging=true&watch=%23demoCount');
+    await page.goto(PAGE);
+    expect((await page.evaluate(() => window.AgentLog.watches())).map((x) => x.selector)).toEqual(['#demoCount']);
+    await page.evaluate(() => {
+      const old = document.getElementById('demoCount');
+      const fresh = old.cloneNode(true); fresh.textContent = 'redrawn';
+      old.replaceWith(fresh);
+    });
+    await page.click('#demoCount');
+    await page.waitForTimeout(1300);
+    await page.evaluate(() => { document.getElementById('demoCount').textContent = 'changed'; });
+    await page.waitForTimeout(300);
+    const recs = await domRecords(page);
+    expect(recs.some((r) => r.eventName === 'dom.watch' && r.body.stringValue.startsWith('watching #demoCount'))).toBe(true);
+    expect(recs.some((r) => r.eventName === 'dom.click' && attr(r.attributes, 'dom.text').stringValue === 'redrawn')).toBe(true);
+    expect(recs.some((r) => r.eventName === 'dom.mutation' && attr(r.attributes, 'dom.text').stringValue === 'changed')).toBe(true);
+  });
+
+  test('selectorFor prefers ids and test attributes, else a unique path', async ({ page }) => {
+    await page.goto(PAGE);
+    const sels = await page.evaluate(() => {
+      const box = document.createElement('div');
+      box.innerHTML = '<ul><li>a</li><li><span data-testid="x">b</span></li><li><b>c</b></li></ul><p id=":r1:">gen</p>';
+      document.querySelector('main').appendChild(box);
+      const f = window.AgentLog.selectorFor;
+      return [f(document.getElementById('demoCount')), f(box.querySelector('[data-testid]')), f(box.querySelector('b')), f(box.querySelector('p'))]
+        .map((s, i) => [s, document.querySelectorAll(s).length, document.querySelector(s) === [document.getElementById('demoCount'), box.querySelector('[data-testid]'), box.querySelector('b'), box.querySelector('p')][i]]);
+    });
+    expect(sels[0][0]).toBe('#demoCount');
+    expect(sels[1][0]).toBe('span[data-testid="x"]');
+    for (const [s, n, same] of sels) { expect(n, s).toBe(1); expect(same, s).toBe(true); }
+    expect(sels[3][0]).not.toContain(':r1:');
+  });
+});

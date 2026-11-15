@@ -543,6 +543,226 @@
     return done(tx).then(function () { if (ui) ui.refresh(); });
   }
 
+  // ------------------------------------------------------------------ watched elements
+  // A watch is a CSS selector. Its events are caught by listeners on the document and matched with closest(),
+  // so a watch keeps working when the page re-renders the element; a MutationObserver per matched element
+  // records what changes inside it, re-attached when the page replaces the element. Watches are kept per site.
+  var WATCHES = "agentlog:watches", WATCH_EVENTS = ["click", "dblclick", "input", "change", "submit", "focusin", "focusout", "keydown"];
+  var watches = [], watchObs = [], watchCounts = {}, watchInstalled = false, picking = null, inputTimers = new Map();
+
+  function loadWatches() {
+    try { watches = (JSON.parse(localStorage.getItem(WATCHES) || "[]") || []).filter(function (w) { return w && typeof w.sel === "string" && validSelector(w.sel); }); }
+    catch (e) { watches = []; }
+  }
+  function saveWatches() {
+    try { localStorage.setItem(WATCHES, JSON.stringify(watches.map(function (w) { return { sel: w.sel, label: w.label || "", mutations: w.mutations !== false }; }))); } catch (e) {}
+  }
+  function validSelector(sel) { try { document.createDocumentFragment().querySelector(sel); return true; } catch (e) { return false; } }
+  function matches(sel) { try { return document.querySelectorAll(sel); } catch (e) { return []; } }
+  function cssEscape(v) { return window.CSS && CSS.escape ? CSS.escape(v) : String(v).replace(/[^\w-]/g, "\\$&"); }
+  // one step of a selector path: a stable id or test attribute when the element has one, else tag and position
+  function stepFor(n) {
+    var tag = n.tagName.toLowerCase();
+    if (n.id && !/^\d|:|\d{4,}/.test(n.id)) return "#" + cssEscape(n.id); // skips generated ids such as :r1: or el-83749
+    var keys = ["data-testid", "data-test", "data-qa", "data-cy", "name", "aria-label"];
+    for (var i = 0; i < keys.length; i++) {
+      var v = n.getAttribute(keys[i]);
+      if (v && v.length <= 80) return tag + "[" + keys[i] + '="' + v.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"]';
+    }
+    var p = n.parentElement, same = 0, idx = 0;
+    if (!p) return tag;
+    for (var c = p.firstElementChild; c; c = c.nextElementSibling) if (c.tagName === n.tagName) { same++; if (c === n) idx = same; }
+    return same > 1 ? tag + ":nth-of-type(" + idx + ")" : tag;
+  }
+  // the shortest path of steps, from the element up, that matches only this element
+  function selectorFor(el) {
+    var path = [];
+    for (var n = el; n && n.nodeType === 1; n = n.parentElement) {
+      path.unshift(stepFor(n));
+      var sel = path.join(" > "), m = matches(sel);
+      if (m.length === 1 && m[0] === el) return sel;
+    }
+    return path.join(" > ");
+  }
+  function fieldValue(el) {
+    if (!el || typeof el.value !== "string") return undefined;
+    if (el.type === "password" || /pass|secret|token|card|cvc|cvv|ssn|otp/i.test([el.name, el.id, el.autocomplete].join(" "))) return "[hidden]";
+    return clip(el.value, 200);
+  }
+  function textOf(el) { return el ? clip((el.innerText || el.textContent || "").trim().replace(/\s+/g, " "), 120) : ""; }
+  function labelOf(w) { return w.label || w.sel; }
+
+  function onWatchedEvent(e) {
+    if (!on || picking || !watches.length) return;
+    var t = e.target;
+    if (t && t.nodeType !== 1) t = t.parentElement;
+    if (!t || t.tagName === "AGENT-LOG-UI") return;
+    if (e.type === "keydown") {
+      if (e.repeat) return;
+      // printable keys typed into a field are its value, which input and change already record (or hide)
+      if (e.key && e.key.length === 1 && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName))) return;
+    }
+    for (var i = 0; i < watches.length; i++) {
+      var w = watches[i], hit = null;
+      try { hit = t.closest(w.sel); } catch (x) { continue; }
+      if (!hit) continue;
+      if (e.type === "input") { debounceInput(w, hit, t); continue; }
+      recordDomEvent(e, w, hit, t);
+    }
+  }
+  // one record per pause in typing, with the value at that point
+  function debounceInput(w, hit, t) {
+    var key = w.sel + "\u0000" + describeNode(t);
+    clearTimeout(inputTimers.get(key));
+    inputTimers.set(key, setTimeout(function () { inputTimers.delete(key); recordDomEvent({ type: "input" }, w, hit, t); }, 400));
+  }
+  function recordDomEvent(e, w, hit, t) {
+    var a = { "watch.selector": w.sel, "watch.label": w.label || undefined, "dom.target": describeNode(t), "dom.watched": hit !== t ? describeNode(hit) : undefined };
+    var extra = "";
+    if (e.type === "click" || e.type === "dblclick") {
+      a["pointer.x"] = Math.round(e.clientX); a["pointer.y"] = Math.round(e.clientY); a["pointer.button"] = e.button;
+      a["dom.text"] = textOf(t) || undefined;
+      if (a["dom.text"]) extra = ' "' + clip(a["dom.text"], 60) + '"';
+    } else if (e.type === "input" || e.type === "change") {
+      var v = fieldValue(t);
+      if (v !== undefined) { a["dom.value"] = v; if (v !== "[hidden]") a["dom.value_length"] = t.value.length; extra = " = " + clip(JSON.stringify(v), 60); }
+      if (t.type === "checkbox" || t.type === "radio") { a["dom.checked"] = t.checked; extra = " checked=" + t.checked; }
+    } else if (e.type === "keydown") {
+      a["key"] = e.key; a["key.code"] = e.code;
+      a["key.modifiers"] = ["ctrlKey", "altKey", "shiftKey", "metaKey"].filter(function (m) { return e[m]; }).map(function (m) { return m.replace("Key", ""); }).join("+") || undefined;
+      extra = " " + (a["key.modifiers"] ? a["key.modifiers"] + "+" : "") + e.key;
+    }
+    var name = { focusin: "dom.focus", focusout: "dom.blur" }[e.type] || "dom." + e.type;
+    push("info", name, labelOf(w) + ": " + e.type + extra + (hit !== t ? " on " + describeNode(t) : ""), attrs(a));
+  }
+  function recordMutations(w, el, list) {
+    if (!on) return;
+    var now = Date.now();
+    if (!w.rate || now - w.rate.t > 1000) w.rate = { t: now, n: 0 };
+    if (++w.rate.n > 20) {
+      if (w.rate.n === 21) push("warn", "dom.mutation", labelOf(w) + ": over 20 changes in a second; skipping the rest of this second", attrs({ "watch.selector": w.sel }));
+      return;
+    }
+    var changes = [], kinds = {}, added = 0, removed = 0;
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i];
+      if (m.type === "attributes") {
+        var nv = m.target.getAttribute(m.attributeName);
+        if (nv === m.oldValue) continue;
+        kinds[m.attributeName] = 1;
+        if (changes.length < 10) changes.push({ type: "attribute", node: describeNode(m.target), name: m.attributeName, old: m.oldValue, "new": nv });
+      } else if (m.type === "characterData") {
+        if (m.oldValue === m.target.data) continue;
+        kinds.text = 1;
+        if (changes.length < 10) changes.push({ type: "text", node: describeNode(m.target.parentElement), old: clip(m.oldValue || "", 120), "new": clip(m.target.data, 120) });
+      } else {
+        added += m.addedNodes.length; removed += m.removedNodes.length;
+      }
+    }
+    var summary = Object.keys(kinds);
+    if (added || removed) summary.push("+" + added + "/-" + removed + " nodes");
+    if (!summary.length) return;
+    push("info", "dom.mutation", labelOf(w) + ": " + summary.join(", "), attrs({
+      "watch.selector": w.sel, "watch.label": w.label || undefined, "dom.watched": describeNode(el), "dom.text": textOf(el) || undefined,
+      "dom.added": added || undefined, "dom.removed": removed || undefined,
+    }).concat(changes.length ? [kv("dom.changes", changes)] : []));
+  }
+  function refreshWatches() {
+    if (!on) return;
+    var live = [], moved = false;
+    watches.forEach(function (w) {
+      var els = Array.prototype.slice.call(matches(w.sel), 0, 10), n = matches(w.sel).length;
+      if (watchCounts[w.sel] !== undefined && watchCounts[w.sel] !== n) {
+        push(n ? "info" : "warn", "dom.watch", labelOf(w) + " now matches " + n + " element" + (n === 1 ? "" : "s"), attrs({ "watch.selector": w.sel, "watch.matches": n }));
+        moved = true;
+      }
+      watchCounts[w.sel] = n;
+      if (w.mutations !== false) els.forEach(function (el) { live.push({ el: el, w: w }); });
+    });
+    watchObs = watchObs.filter(function (o) {
+      var keep = live.some(function (x) { return x.el === o.el && x.w === o.w; });
+      if (!keep) o.mo.disconnect();
+      return keep;
+    });
+    live.forEach(function (x) {
+      if (watchObs.some(function (o) { return o.el === x.el && o.w === x.w; })) return;
+      var mo = new MutationObserver(function (list) { recordMutations(x.w, x.el, list); });
+      mo.observe(x.el, { attributes: true, attributeOldValue: true, childList: true, characterData: true, characterDataOldValue: true, subtree: true });
+      watchObs.push({ el: x.el, w: x.w, mo: mo });
+    });
+    if (moved && ui) ui.watchesChanged();
+  }
+  function installWatching() {
+    if (watchInstalled) return;
+    watchInstalled = true;
+    WATCH_EVENTS.forEach(function (t) { document.addEventListener(t, onWatchedEvent, true); });
+    setInterval(function () { if (on && watches.length) refreshWatches(); }, 1000);
+  }
+  function announce(w) {
+    var n = matches(w.sel).length;
+    watchCounts[w.sel] = n;
+    push("info", "dom.watch", "watching " + labelOf(w) + " (" + n + " match" + (n === 1 ? "" : "es") + " now)", attrs({ "watch.selector": w.sel, "watch.label": w.label || undefined, "watch.matches": n }));
+  }
+  function watch(target, o) {
+    o = o || {};
+    var sel = target && target.nodeType === 1 ? selectorFor(target) : String(target || "").trim();
+    if (!sel || !validSelector(sel)) throw new Error("not a valid CSS selector: " + sel);
+    var w = null;
+    for (var i = 0; i < watches.length; i++) if (watches[i].sel === sel) w = watches[i];
+    if (!w) { w = { sel: sel, label: o.label || "", mutations: o.mutations !== false }; watches.push(w); saveWatches(); }
+    installWatching();
+    if (on) { announce(w); refreshWatches(); }
+    if (ui) ui.watchesChanged();
+    return sel;
+  }
+  function unwatch(sel) {
+    var before = watches.length;
+    watches = watches.filter(function (w) { return w.sel !== sel; });
+    if (watches.length === before) return false;
+    saveWatches();
+    watchObs = watchObs.filter(function (o) { if (o.w.sel === sel) { o.mo.disconnect(); return false; } return true; });
+    delete watchCounts[sel];
+    push("info", "dom.watch", "stopped watching " + sel, attrs({ "watch.selector": sel }));
+    if (ui) ui.watchesChanged();
+    return true;
+  }
+
+  // the picker: hover highlights, click (or Enter) picks, arrow keys move to the parent or first child, Esc cancels
+  function pick(o) {
+    o = o || {};
+    if (!ui) return Promise.reject(new Error("the Agent Log panel is not shown on this page"));
+    if (picking) return picking.promise;
+    var cur = null, resolve;
+    picking = { promise: new Promise(function (r) { resolve = r; }) };
+    var ours = function (e) { var p = e.composedPath ? e.composedPath() : []; for (var i = 0; i < p.length; i++) if (p[i] && p[i].tagName === "AGENT-LOG-UI") return true; return false; };
+    var show = function (el) { cur = el; ui.highlight(el, el ? selectorFor(el) : ""); };
+    var block = function (e) { if (ours(e)) return; e.preventDefault(); e.stopPropagation(); e.stopImmediatePropagation(); };
+    var handlers = {
+      mouseover: function (e) { if (!ours(e) && e.target && e.target.nodeType === 1 && e.target !== cur) show(e.target); },
+      mousedown: block, mouseup: block, pointerdown: block, pointerup: block, dblclick: block, submit: block,
+      click: function (e) { if (ours(e)) return; block(e); finish(cur || (e.target && e.target.nodeType === 1 ? e.target : null)); },
+      keydown: function (e) {
+        if (e.key === "Escape") { block(e); finish(null); }
+        else if (e.key === "Enter" && cur) { block(e); finish(cur); }
+        else if (e.key === "ArrowUp" && cur && cur.parentElement && cur.parentElement !== document.documentElement) { block(e); show(cur.parentElement); }
+        else if (e.key === "ArrowDown" && cur && cur.firstElementChild) { block(e); show(cur.firstElementChild); }
+      },
+      scroll: function () { if (cur) show(cur); },
+    };
+    Object.keys(handlers).forEach(function (t) { addEventListener(t, handlers[t], true); });
+    ui.picking(true);
+    function finish(el) {
+      Object.keys(handlers).forEach(function (t) { removeEventListener(t, handlers[t], true); });
+      ui.highlight(null);
+      ui.picking(false);
+      var sel = null;
+      if (el) { try { sel = watch(el, o); } catch (e) { say("could not watch the picked element", e); } }
+      picking = null;
+      resolve(sel);
+    }
+    return picking.promise;
+  }
+
   // ------------------------------------------------------------------ on and off
   function setFlag(v) { try { if (v) sessionStorage.setItem(FLAG, "1"); else sessionStorage.removeItem(FLAG); } catch (e) {} }
   function getFlag() { try { return sessionStorage.getItem(FLAG) === "1"; } catch (e) { return false; } }
@@ -562,6 +782,8 @@
       version: VERSION, via: o.via || "api", startedAt: new Date().toISOString(),
     };
     push("info", "agentlog.start", "logging started (" + session.via + ") on " + shortUrl(location.href), attrs({ "url.full": session.url, "agentlog.started_by": session.via }));
+    loadWatches();
+    if (watches.length) { installWatching(); watches.forEach(announce); refreshWatches(); }
     openDb().then(function (d) {
       if (d) { var tx = d.transaction("sessions", "readwrite"); tx.objectStore("sessions").put(session); }
       return countStored();
@@ -604,9 +826,18 @@
     ".row .t{color:#888}.row .e{color:#2d6477}.row .a{color:#6a6a6a;display:block;max-height:4.4em;overflow:hidden}",
     ".row.WARN{background:#fff8e6}.row.ERROR,.row.FATAL{background:#fdecec}.row.DEBUG,.row.TRACE{color:#666}",
     ".foot{padding:6px 8px;font-size:11.5px;color:#666;border-top:1px solid #dedcd7}.foot a{color:#2d6477}",
+    ".watch{display:flex;flex-wrap:wrap;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid #dedcd7;font-size:12px}",
+    ".chip{display:inline-flex;align-items:center;max-width:100%;padding:1px 2px 1px 8px;border:1px solid #c9c7c2;border-radius:999px;font:11.5px ui-monospace,SFMono-Regular,Menlo,monospace}",
+    ".chip code{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:44ch}.chip .m{color:#888;margin-left:5px}",
+    ".chip button{border:0;background:none;cursor:pointer;color:inherit;font-size:14px;line-height:1;padding:2px 6px}",
+    ".hl{position:fixed;pointer-events:none;border:2px solid #e5383b;background:rgba(229,56,59,.12);box-sizing:border-box;z-index:2147483647}",
+    ".tip,.toast{position:fixed;pointer-events:none;z-index:2147483647;background:#1d1d1f;color:#fff;border-radius:4px;max-width:calc(100vw - 20px)}",
+    ".tip{font:11.5px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;padding:3px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}",
+    ".toast{top:10px;left:50%;transform:translateX(-50%);font:13px/1.35 ui-sans-serif,system-ui,sans-serif;padding:8px 12px;box-shadow:0 4px 16px rgba(0,0,0,.3);text-align:center}",
     "@media (prefers-color-scheme:dark){.panel{background:#1f2023;color:#e8e8ea;border-color:#3a3b40}.bar{background:#26272b;border-color:#3a3b40}",
     "button.b,input,select{background:#2c2d31;color:#e8e8ea;border-color:#45464c}.row{border-color:#2c2d31}.msg{color:#aaa;border-color:#2c2d31}",
-    ".row.WARN{background:#3a3214}.row.ERROR,.row.FATAL{background:#3a1717}.row .a{color:#9a9aa2}.row .e{color:#7fb3c7}.foot{color:#999;border-color:#3a3b40}.foot a{color:#7fb3c7}}",
+    ".row.WARN{background:#3a3214}.row.ERROR,.row.FATAL{background:#3a1717}.row .a{color:#9a9aa2}.row .e{color:#7fb3c7}.foot{color:#999;border-color:#3a3b40}.foot a{color:#7fb3c7}",
+    ".watch{border-color:#3a3b40}.chip{border-color:#45464c}}",
   ].join("");
 
   function flatAttrs(list) {
@@ -659,11 +890,14 @@
       '<div class="bar"><button class="b" data-a="download">Download</button><button class="b" data-a="copy">Copy</button>' +
       '<button class="b warn" data-a="clear">Clear</button><button class="b warn" data-a="stop">Stop logging</button><span class="sp"></span>' +
       '<button class="b" data-a="corner" title="Move to the other corner">⇆</button><button class="b" data-a="close" title="Close">✕</button></div>' +
+      '<div class="watch"><button class="b" data-a="pick" title="Pick an element on the page; its clicks, input, focus, keys and changes are logged">Watch an element</button><span class="ws"></span></div>' +
       '<div class="msg" role="status"></div><div class="list"></div>' +
       '<div class="foot">Stored in this browser only, for this site. Hand the download to your agent. <a target="_blank" rel="noopener" href="' + HOME + '">How it works</a></div>' +
       "</div>" +
       '<button class="pill" title="Agent Log is recording this page. Click to view or export."><span class="dot"></span>Logging <span class="n"></span></button>' +
-      "</div>");
+      "</div>" +
+      '<div class="hl" hidden></div><div class="tip" hidden></div>' +
+      '<div class="toast" hidden>Click an element to watch it. <b>↑</b>/<b>↓</b> select its parent or child, <b>Enter</b> picks, <b>Esc</b> cancels.</div>');
     var $ = function (s) { return root.querySelector(s); };
     var wrap = $(".wrap"), panel = $(".panel"), pill = $(".pill"), n = $(".n"), list = $(".list"), msg = $(".msg");
     var filter = $("input"), sevSel = $("select"), scopeSel = root.querySelectorAll("select")[1];
@@ -702,11 +936,13 @@
       if (name === "copy") return copy().then(function (len) { note("Copied " + Math.round(len / 1024) + " KB of OTLP JSON to the clipboard."); }, function (e) { note("Copy failed: " + e.message); });
       if (name === "clear") { if (confirm("Delete every Agent Log record stored for " + (location.host || "this page") + "?")) clear().then(render); return; }
       if (name === "stop") stop();
+      if (name === "pick") pick().then(function (sel) { panel.hidden = false; note(sel ? "Watching " + sel + "." : "Picking cancelled."); render(); });
     }
     root.addEventListener("click", function (e) {
       var b = e.target.closest && e.target.closest("button");
       if (!b) return;
       if (b === pill) { panel.hidden = !panel.hidden; if (!panel.hidden) render(); return; }
+      if (b.dataset.un != null) { var w = watches[+b.dataset.un]; if (w) unwatch(w.sel); return; }
       if (b.dataset.a) act(b.dataset.a);
     });
     filter.addEventListener("input", function () { clearTimeout(refreshTimer); refreshTimer = setTimeout(render, 200); });
@@ -725,7 +961,25 @@
       open: function () { panel.hidden = false; render(); },
       close: function () { panel.hidden = true; },
       remove: function () { host.remove(); },
+      watchesChanged: function () {
+        $(".ws").innerHTML = trusted(watches.map(function (w, i) {
+          var n = matches(w.sel).length;
+          return '<span class="chip" title="' + esc(w.sel) + '"><code>' + esc(labelOf(w)) + '</code><span class="m">' + n + "</span>" +
+            '<button data-un="' + i + '" title="Stop watching" aria-label="Stop watching ' + esc(labelOf(w)) + '">×</button></span>';
+        }).join(""));
+      },
+      highlight: function (el, label) {
+        var hl = $(".hl"), tip = $(".tip");
+        if (!el) { hl.hidden = tip.hidden = true; return; }
+        var r = el.getBoundingClientRect();
+        hl.style.cssText = "left:" + r.left + "px;top:" + r.top + "px;width:" + r.width + "px;height:" + r.height + "px";
+        tip.textContent = label + "  " + Math.round(r.width) + "×" + Math.round(r.height);
+        tip.style.cssText = "left:" + Math.max(4, Math.min(r.left, innerWidth - 200)) + "px;top:" + (r.top > 28 ? r.top - 24 : Math.min(r.bottom + 4, innerHeight - 24)) + "px";
+        hl.hidden = tip.hidden = false;
+      },
+      picking: function (yes) { $(".toast").hidden = !yes; wrap.hidden = yes; },
     };
+    ui.watchesChanged();
     setCount(stored + buf.length);
     (document.body || document.documentElement).appendChild(host);
     if (!document.body) document.addEventListener("DOMContentLoaded", function () { if (host.isConnected) document.body.appendChild(host); });
@@ -744,6 +998,11 @@
     clear: clear,
     open: function () { if (!on) start({ via: "api" }); else if (ui) ui.open(); },
     close: function () { if (ui) ui.close(); },
+    watch: watch,
+    unwatch: unwatch,
+    watches: function () { return watches.map(function (w) { return { selector: w.sel, label: w.label || "", mutations: w.mutations !== false, matches: matches(w.sel).length }; }); },
+    pick: pick,
+    selectorFor: selectorFor,
   };
   window.AgentLog = api;
 
@@ -757,4 +1016,8 @@
   }
   else if (me && me.hasAttribute && me.hasAttribute("data-start")) start({ via: "page" });
   else if (getFlag()) start({ via: "remembered" });
+  // ?watch=<css selector> (repeatable) adds watches on a page that is logging
+  if (on) {
+    try { new URLSearchParams(location.search).getAll("watch").forEach(function (sel) { try { watch(sel); } catch (e) { say(e.message); } }); } catch (e) {}
+  }
 })();

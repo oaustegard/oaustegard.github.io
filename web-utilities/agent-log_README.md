@@ -21,9 +21,19 @@ The script is also served from GitHub through jsDelivr: `https://cdn.jsdelivr.ne
 | `csp.violation` | resources the page's CSP blocked |
 | `http.fetch`, `http.xhr` | method, URL, status, duration, size; no bodies or headers |
 | `page.navigation`, `page.visibility` | history changes, tab hidden or shown |
+| `dom.click`, `.dblclick`, `.input`, `.change`, `.submit`, `.focus`, `.blur`, `.keydown` | events on watched elements (see below) |
+| `dom.mutation`, `dom.watch` | changes inside a watched element; watches added, removed or matching a different number of elements |
 | `agentlog.start`, `agentlog.stop` | logging turned on or off |
 
 A red **Logging** badge shows while it records. Its panel lists the newest records with a text and severity filter, and has **Download**, **Copy**, **Clear** and **Stop logging**.
+
+## Watching elements
+
+The panel's **Watch an element** button starts a picker: hover highlights an element and shows its selector, click or Enter picks it, ↑/↓ move to the parent or first child, Esc cancels. The click that picks is not passed to the page. A watch is a CSS selector, built from an id or a test attribute (`data-testid`, `name`, `aria-label`) where the element has one, otherwise from a short tag path that matches only that element.
+
+Events are caught by listeners on the document and matched with `closest()`, so a watch keeps working when an app redraws the element; a MutationObserver per matched element (re-attached each second if the element is replaced) records attribute, text and child changes, at most 20 records a second per watch. Typing is recorded once per pause, with the value; password fields and fields named like a card number, token or one-time code are `[hidden]`, and printable keys typed into a field are not recorded as keys. Watches are kept per site in localStorage until removed.
+
+An agent can set watches without the picker: `?watch=<selector>` (repeatable) on a page that includes the script and is logging, or `AgentLog.watch(selector, { label })` in the console.
 
 ## Export
 
@@ -38,7 +48,7 @@ Download and Copy produce an OTLP/JSON `ExportLogsServiceRequest` with one `reso
 
 ## API
 
-`window.AgentLog`: `start(opts)`, `stop()`, `export()` (the OTLP object), `exportJSON()`, `download()`, `copy()`, `clear()`, `open()`, `close()`, plus `on`, `session` and `version`.
+`window.AgentLog`: `start(opts)`, `stop()`, `export()` (the OTLP object), `exportJSON()`, `download()`, `copy()`, `clear()`, `open()`, `close()`, `watch(selectorOrElement, { label, mutations })`, `unwatch(selector)`, `watches()`, `pick()` (resolves to the picked selector, or null), `selectorFor(element)`, plus `on`, `session` and `version`.
 
 ## Technical details
 
