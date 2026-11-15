@@ -41,6 +41,7 @@ Download and Copy produce an OTLP/JSON `ExportLogsServiceRequest` with one `reso
 
 ## Limits
 
+- Everything stays in the browser: Agent Log makes no network requests of its own, and Download and Copy hand the log only to you. Sharing the file with Claude or another agent sends it to that agent's provider, so read it before you do.
 - Stored in IndexedDB for the page's origin, newest 20,000 records (`AgentLog.start({ max })` changes the cap). Without IndexedDB it keeps the log in memory for that page load.
 - Records console output and errors from the moment it starts, for the page itself only: not iframes or workers. Requests made before it started come from the browser's Resource Timing list, marked `agentlog.before_start`.
 - Apps that keep their own reference to `fetch` from startup (Bluesky's API client does) bypass the wrapper when Agent Log starts late; their requests are still recorded from Resource Timing (`agentlog.source: resource-timing`), without the method.

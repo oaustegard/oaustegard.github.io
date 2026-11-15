@@ -925,7 +925,7 @@
       '<button class="b" data-a="corner" title="Move to the other corner">⇆</button><button class="b" data-a="close" title="Close">✕</button></div>' +
       '<div class="watch"><button class="b" data-a="pick" title="Pick an element on the page; its clicks, input, focus, keys and changes are logged">Watch an element</button><span class="ws"></span></div>' +
       '<div class="msg" role="status"></div><div class="list"></div>' +
-      '<div class="foot">Stored in this browser only, for this site. Hand the download to your agent. <a target="_blank" rel="noopener" href="' + HOME + '">How it works</a></div>' +
+      '<div class="foot">Kept in this browser only; nothing is sent anywhere. Anything you paste or upload to an agent goes to its provider, so read it first. <a target="_blank" rel="noopener" href="' + HOME + '">How it works</a></div>' +
       "</div>" +
       '<button class="pill" title="Agent Log is recording this page. Click to view or export."><span class="dot"></span>Logging <span class="n"></span></button>' +
       "</div>" +
