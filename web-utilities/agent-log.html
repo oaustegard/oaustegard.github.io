@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Agent Log | Oskar Austegard</title>
+<meta name="description" content="Record a web page's console output, errors and network calls as OpenTelemetry logs in your browser, then hand the export to an AI agent to debug the page.">
+<meta name="color-scheme" content="light dark">
+<link rel="icon" href="/favicon.ico" sizes="any">
+<link rel="stylesheet" href="/styles/style.css">
+<script src="/web-utilities/agent-log.js"></script>
+<style>
+  .in { padding-bottom: 3rem; }
+  .bm { display: inline-block; padding: .55rem .9rem; border: 2px dashed var(--red); color: var(--red); font: 600 .95rem/1 var(--font-body); text-decoration: none; cursor: grab; background: var(--panel); }
+  .bm:hover { background: var(--red); color: var(--paper); }
+  .act { display: flex; flex-wrap: wrap; gap: .5rem; align-items: center; margin: .75rem 0 1.25rem; }
+  .act button { font: 400 .75rem/1 var(--font-mono); letter-spacing: .04em; color: var(--paper); background: var(--ink); border: 0; padding: .6rem .8rem; cursor: pointer; }
+  .act button:hover { background: var(--red); }
+  .act button.light { color: var(--ink); background: transparent; border: 1px solid var(--line); }
+  .act button.light:hover { color: var(--red); border-color: var(--red); background: transparent; }
+  .act .st { font: .8rem/1.3 var(--font-mono); color: var(--mute); }
+  pre { position: relative; }
+  td code { white-space: nowrap; }
+</style>
+</head>
+<body>
+<a class="skip" href="#main">Skip to the content</a>
+<header class="sheet-bar">
+  <div class="in">
+    <nav class="crumbs" aria-label="Breadcrumb"><a href="/"><b lang="nb">Kartblad</b> Flat&oslash;y</a><span class="sep" aria-hidden="true">/</span><a href="/tools.html">Tools</a><span class="sep" aria-hidden="true">/</span><a href="/web-utilities/">Web &amp; File Utilities</a><span class="sep" aria-hidden="true">/</span><span aria-current="page">Agent Log</span></nav>
+  </div>
+</header>
+
+<main id="main">
+  <div class="in">
+    <header class="page-head">
+      <p class="kicker"><b>Utility</b> &middot; for debugging with an agent</p>
+      <h1>Agent Log</h1>
+      <p class="lede">Agent Log records what a web page does (console output, errors, network calls) in your own browser, then exports it as an OpenTelemetry log file that you hand to Claude or another agent to debug the page.</p>
+    </header>
+
+    <div class="measure">
+    <p>An agent that writes a web page cannot watch it run in your browser. One script records the page there, in this browser's IndexedDB, with no server involved; a red <b>Logging</b> badge shows while it records, and the badge's panel downloads or copies the log. Nothing is sent anywhere.</p>
+
+    <h2 id="start">Turning it on</h2>
+    <p><b>Bookmarklet, for any page.</b> Drag this link to your bookmarks bar, open the page you want to debug, then click the bookmark. Clicking it again opens the panel.</p>
+    <p><a class="bm" id="bm" href="#" title="Drag me to the bookmarks bar">Agent Log</a></p>
+    <p>Pages with a strict Content Security Policy (GitHub, many banks and web mail) block scripts from other sites, so the bookmarklet does nothing there and the browser's console shows a CSP error. Use the full-script paste below on those pages.</p>
+
+    <p><b>Console snippet.</b> Paste this into the browser's developer console (F12, then Console). It loads the same script the bookmarklet does.</p>
+    <pre><code id="snippet"></code></pre>
+    <div class="act"><button type="button" data-copy="snippet">Copy the snippet</button><button type="button" class="light" id="copyFull">Copy the full script, for strict-CSP pages</button><span class="st" id="copySt" role="status"></span></div>
+    <p>Code typed into the console is not subject to the page's CSP, so pasting the whole script (about 40&nbsp;KB) works where loading it from this site does not.</p>
+
+    <p><b>Query parameter, for your own pages.</b> Add the script to a page you build:</p>
+    <pre><code id="tag"></code></pre>
+    <p>The script does nothing until the page is opened with <code>?logging=true</code>. After that, logging stays on in that tab, across reloads, until you press <b>Stop logging</b> or open a URL with <code>?logging=false</code>. A page that should always log adds a <code>data-start</code> attribute to the script tag. The script is also served from GitHub through jsDelivr at <code>https://cdn.jsdelivr.net/gh/oaustegard/oaustegard.github.io@main/web-utilities/agent-log.js</code>, which caches branch files and can lag the site. A <code>&lt;script&gt;</code> tag cannot load it from <code>raw.githubusercontent.com</code>, because GitHub serves raw files as <code>text/plain</code> with <code>nosniff</code>.</p>
+
+    <h2 id="try">Trying it on this page</h2>
+    <p>This page includes the script. Start logging, make a few log lines, then open the panel from the badge in the corner.</p>
+    <div class="act">
+      <button type="button" id="tStart">Start logging here</button>
+      <button type="button" class="light" id="tTick">console.log a bot tick</button>
+      <button type="button" class="light" id="tWarn">console.warn</button>
+      <button type="button" class="light" id="tThrow">Throw an error</button>
+      <button type="button" class="light" id="tFetch">Fetch a missing file</button>
+      <button type="button" class="light" id="tOpen">Open the panel</button>
+    </div>
+
+    <h2 id="records">Recorded events</h2>
+    <p>Each record is an OpenTelemetry log record. Its <code>eventName</code> says where it came from:</p>
+    <table>
+      <thead><tr><th>eventName</th><th>Recorded when</th><th>Severity</th></tr></thead>
+      <tbody>
+        <tr><td><code>console.log</code>, <code>.info</code>, <code>.debug</code>, <code>.warn</code>, <code>.error</code>, <code>.trace</code>, <code>.assert</code></td><td>the page calls the console method (<code>assert</code> only when it fails)</td><td>DEBUG to ERROR, by method</td></tr>
+        <tr><td><code>error.uncaught</code></td><td>an exception reaches <code>window</code></td><td>ERROR</td></tr>
+        <tr><td><code>error.rejection</code></td><td>a promise rejects with no handler</td><td>ERROR</td></tr>
+        <tr><td><code>error.resource</code></td><td>an image, script or stylesheet fails to load</td><td>ERROR</td></tr>
+        <tr><td><code>csp.violation</code></td><td>the page's CSP blocks something</td><td>WARN</td></tr>
+        <tr><td><code>http.fetch</code>, <code>http.xhr</code></td><td>a request finishes or fails: method, URL, status, duration</td><td>INFO; WARN at 400 and up; ERROR when it fails</td></tr>
+        <tr><td><code>page.navigation</code>, <code>page.visibility</code></td><td>in-page navigation; the tab is hidden or shown</td><td>INFO</td></tr>
+        <tr><td><code>agentlog.start</code>, <code>agentlog.stop</code></td><td>logging starts or stops</td><td>INFO</td></tr>
+      </tbody>
+    </table>
+    <p>Objects passed to the console become attributes, so a structured call is the cheapest way to get state into the log:</p>
+    <pre><code>console.log("bot tick", { tic, pos: { x, y }, sector, target: t.kind, action });</code></pre>
+    <p>That record has the body <code>bot tick</code> and the attributes <code>tic</code>, <code>pos</code>, <code>sector</code>, <code>target</code> and <code>action</code>. Strings and numbers in the call form the body; errors become <code>exception.type</code>, <code>exception.message</code> and <code>exception.stacktrace</code>; arrays, maps and DOM nodes become <code>arg0</code>, <code>arg1</code> and so on. Values are copied when they are logged, nested four levels deep at most, with long strings and long arrays cut short.</p>
+
+    <h2 id="export">The export format</h2>
+    <p>Download and Copy produce an OTLP/JSON <code>ExportLogsServiceRequest</code>, the format an OpenTelemetry collector accepts at <code>/v1/logs</code>. Every page load is one <code>resourceLogs</code> entry; its resource attributes hold the page URL, title, user agent, viewport and a <code>session.id</code>:</p>
+<pre><code>{"resourceLogs": [{
+  "resource": {"attributes": [{"key": "service.name", "value": {"stringValue": "austegard.com"}}, …]},
+  "scopeLogs": [{"scope": {"name": "agent-log", "version": "1.0.0"}, "logRecords": [
+    {"timeUnixNano": "1763164800123456000", "severityNumber": 9, "severityText": "INFO",
+     "eventName": "console.log", "body": {"stringValue": "bot tick"},
+     "attributes": [{"key": "tic", "value": {"intValue": "412"}}, …]}
+  ]}]
+}]}</code></pre>
+    <p>Integers are strings and timestamps are nanoseconds, as the OTLP/JSON encoding requires. The skill below has a short Python reader that flattens the file into one line per record and filters it.</p>
+
+    <h2 id="skill">The skill for agents</h2>
+    <p>The <a href="https://github.com/oaustegard/claude-skills/tree/main/capturing-browser-logs">capturing-browser-logs</a> skill tells an agent how to have you turn logging on, how to read and filter the export, and how to add structured <code>console.log</code> calls to code it is debugging. Paste it into a project's instructions, or add it to Claude as a skill.</p>
+    <div class="act"><button type="button" id="copySkill">Copy the skill (SKILL.md)</button><span class="st" id="skillSt" role="status"></span></div>
+
+    <h2 id="limits">Limits and privacy</h2>
+    <ul>
+      <li>The log is stored per site: a log recorded on <code>example.com</code> can only be viewed and exported from a page on <code>example.com</code>. <b>Clear</b> deletes it.</li>
+      <li>It keeps the newest 20,000 records and drops the oldest. <code>AgentLog.start({ max: 50000 })</code> raises the cap.</li>
+      <li>It records from the moment it starts. Started from the bookmarklet, it misses whatever the page logged while loading; reload a page that includes the script with <code>?logging=true</code> to catch that.</li>
+      <li>Query parameters with credential-like names (<code>token</code>, <code>key</code>, <code>code</code>, <code>password</code>, <code>sig</code> and similar) are replaced with <code>REDACTED</code> in recorded URLs. Request and response bodies and headers are not recorded. Console arguments are recorded as given, so read the export before you share it if the page logs anything private.</li>
+      <li>It covers the page itself: not its iframes, workers or service workers.</li>
+    </ul>
+    <p>From the console, <code>AgentLog.download()</code>, <code>AgentLog.copy()</code>, <code>AgentLog.export()</code> (the OTLP object), <code>AgentLog.stop()</code> and <code>AgentLog.clear()</code> do what the panel's buttons do. The source is <a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/web-utilities/agent-log.js">agent-log.js</a>, one file with no dependencies.</p>
+    </div>
+  </div>
+</main>
+<footer class="site-foot">
+  <div class="in">
+    <div class="foot-row">
+      <p><a href="/">austegard.com</a> &middot; <a href="/tools.html">Tools</a> &middot; <a href="/blog/">Blog</a> &middot; <a href="/feed.xml">Feed</a></p>
+    </div>
+  </div>
+</footer>
+<script>
+(function () {
+  var SRC = "https://austegard.com/web-utilities/agent-log.js";
+  var SKILL = "https://raw.githubusercontent.com/oaustegard/claude-skills/main/capturing-browser-logs/SKILL.md";
+  var $ = function (id) { return document.getElementById(id); };
+  var BM = "(function(){if(window.AgentLog){AgentLog.start({via:'bookmarklet'});return}" +
+    "var m='Agent Log could not load on this page. Its Content Security Policy probably blocks scripts from austegard.com: paste the full script into the console instead.';" +
+    "try{var s=document.createElement('script');s.src='" + SRC + "?start=bookmarklet';" +
+    "s.onerror=function(){alert(m)};" +
+    "(document.head||document.documentElement).appendChild(s)}catch(e){alert(m)}})()";
+  $("bm").href = "javascript:" + encodeURIComponent(BM);
+  $("bm").addEventListener("click", function (e) { e.preventDefault(); alert("Drag this link to your bookmarks bar, then click the bookmark on the page you want to log."); });
+  $("snippet").textContent = "(() => { const s = document.createElement(\"script\"); s.src = \"" + SRC + "?start=console\"; document.head.append(s); })();";
+  $("tag").textContent = "<script src=\"" + SRC + "\"></" + "script>";
+
+  function copyText(text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) return navigator.clipboard.writeText(text);
+    return new Promise(function (res, rej) {
+      var ta = document.createElement("textarea"); ta.value = text; document.body.appendChild(ta); ta.select();
+      var ok = false; try { ok = document.execCommand("copy"); } catch (e) {} ta.remove();
+      ok ? res() : rej(new Error("the browser refused to copy"));
+    });
+  }
+  function report(el, p, done) {
+    el.textContent = "…";
+    p.then(function () { el.textContent = done; }, function (e) { el.textContent = "Failed: " + (e && e.message || e); });
+  }
+  document.querySelectorAll("[data-copy]").forEach(function (b) {
+    b.addEventListener("click", function () { report($("copySt"), copyText($(b.dataset.copy).textContent), "Copied the snippet."); });
+  });
+  $("copyFull").addEventListener("click", function () {
+    report($("copySt"), fetch("/web-utilities/agent-log.js", { cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.text();
+    }).then(function (src) { return copyText("window.AGENT_LOG_START = \"console-paste\";\n" + src); }), "Copied the full script. Paste it into the console of the page to log.");
+  });
+  $("copySkill").addEventListener("click", function () {
+    report($("skillSt"), fetch(SKILL, { cache: "no-store" }).then(function (r) {
+      if (!r.ok) throw new Error("GitHub returned " + r.status);
+      return r.text();
+    }).then(copyText), "Copied SKILL.md.");
+  });
+
+  $("tStart").addEventListener("click", function () { AgentLog.start({ via: "docs page" }); });
+  var tic = 0;
+  $("tTick").addEventListener("click", function () {
+    tic += 35;
+    console.log("bot tick", { tic: tic, pos: { x: 1056 + tic, y: -3616 }, sector: 42, target: "imp", action: tic % 70 ? "fire" : "strafe-left" });
+  });
+  $("tWarn").addEventListener("click", function () { console.warn("ammo low", { ammo: 3, weapon: "pistol" }); });
+  $("tThrow").addEventListener("click", function () { setTimeout(function () { null.health; }); });
+  $("tFetch").addEventListener("click", function () { fetch("/web-utilities/no-such-file.json").catch(function () {}); });
+  $("tOpen").addEventListener("click", function () { AgentLog.open(); });
+})();
+</script>
+</body>
+</html>
