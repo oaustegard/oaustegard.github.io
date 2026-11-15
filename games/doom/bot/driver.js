@@ -2,11 +2,11 @@
 // input (planning with TRM on the same GPU device as the game) and leaves it for the next tic to take.
 // The bot's planner and routing come from oaustegard/experiments trm-doom, vendored here.
 
-import { Bot } from "./bot.js?v=20261114194409";
-import { TRMPlanner } from "./trm.js?v=20261114194409";
-import { RolloutFights } from "./rollout.js?v=20261114194409";
-import { MOBJINFO, MF } from "../info.js?v=20261114194409";
-import { LINE_SPECIALS, TR } from "../specials.js?v=20261114194409";
+import { Bot } from "./bot.js?v=20261115001036";
+import { TRMPlanner } from "./trm.js?v=20261115001036";
+import { RolloutFights } from "./rollout.js?v=20261115001036";
+import { MOBJINFO, MF } from "../info.js?v=20261115001036";
+import { LINE_SPECIALS, TR } from "../specials.js?v=20261115001036";
 
 export class BotDriver {
   static async create(device, onStatus = () => {}) {
@@ -26,6 +26,7 @@ export class BotDriver {
     d.fast = (performance.now() - t0) / 2 < 120;
     d.globals = new Map();
     d.cur = {}; d.gen = 0; d.plans = 0; d.planMs = 0;
+    d.issued = 0; d.stepIssued = 0; d.lead = 2; d.held = 0;
     return d;
   }
 
@@ -59,7 +60,13 @@ export class BotDriver {
     this.loop(gen);
   }
 
-  stop() { this.gen++; this.cur = {}; }
+  stop() { this.gen++; this.cur = {}; this.stepIssued = Infinity; }
+
+  // How many tics the page may run now. The bot steers from a state it read; on a slow GPU one TRM plan takes
+  // about a second (an iPhone, 2026-11-15: 1.1 s), and a game that ran on meanwhile left the bot holding one
+  // input for 36 tics on median, so it ran blind, overshot and came back. The game now waits instead, as
+  // trm-doom's lockstep runner did: at most `lead` tics past what the bot last saw. A fast GPU never waits.
+  allowance() { return Math.max(0, this.lead - (this.issued - this.stepIssued)); }
 
   async read() {
     const e = this.engine, d = this.device, enc = d.createCommandEncoder(), out = {};
@@ -75,8 +82,10 @@ export class BotDriver {
 
   async loop(gen) {
     let lastTic = -1;
+    this.stepIssued = this.issued;
     while (gen === this.gen) {
       let fresh = false;
+      const readIssued = this.issued; // tics the page has run when this state was read
       try {
         const st = await this.read();
         if (gen !== this.gen) return;
@@ -100,12 +109,15 @@ export class BotDriver {
           (this.rollout ? ` · ${this.rollout.status()}` : "");
         this.onStatus(this.lastStatus);
       } catch (err) { console.error("bot", err); }
+      // the game may now run `lead` tics past the state this step saw (see allowance())
+      if (fresh) this.stepIssued = readIssued;
       await new Promise((r) => setTimeout(r, fresh ? 0 : 6));
     }
   }
 
   // The input for one tic: the bot's, with turning and use taken once so a slow bot doesn't repeat them.
-  input(base) {
+  input(base, tics = 1) {
+    this.issued += tics;
     const c = this.cur;
     const out = { ...base, forward: c.forward || 0, side: c.side || 0, turn: c.turn || 0, use: !!c.use, fire: !!c.fire, weapon: c.weapon || 0 };
     this.cur = { ...c, turn: 0, use: false, weapon: 0 };

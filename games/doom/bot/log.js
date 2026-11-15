@@ -47,6 +47,7 @@ export class BotLog {
       url: location.href, ua: navigator.userAgent, device: this.device, screen: [innerWidth, innerHeight, devicePixelRatio],
       ...extra, levels: this.levels, cols: this.cols, rows: this.rows, decisions: this.decisions, statuses: this.statuses, errors: this.errors,
       botEvents: driver?.bot?.events?.slice(-400) || [], botStats: driver?.bot?.stats || null,
+      heldFrames: driver?.held ?? null, lead: driver?.lead ?? null,
       rollout: driver?.rollout ? { decisions: driver.rollout.decisions, ms: Math.round(driver.rollout.ms), off: driver.rollout.off, opts: driver.rollout.o } : null,
     };
   }

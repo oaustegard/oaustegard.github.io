@@ -11,7 +11,7 @@
 // A decision is about 840 tics of game logic. To keep a laptop or phone cool, rollouts take at most about half
 // of the wall clock, yield a frame between futures, and switch off for the session if decisions stay slow.
 
-import { TIC_KERNELS } from "../shaders.js?v=20261114194409";
+import { TIC_KERNELS } from "../shaders.js?v=20261115001036";
 
 const TAU = 2 * Math.PI;
 const wrap = (a) => { a = (a + Math.PI) % TAU; if (a < 0) a += TAU; return a - Math.PI; };

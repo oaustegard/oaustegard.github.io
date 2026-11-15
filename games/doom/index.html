@@ -133,8 +133,8 @@ button.go:disabled { opacity: .5; cursor: wait; }
 
 
 <script type="module">
-import { Music, musicLumpFor } from "./music.js?v=20261114194409";
-import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261114194409";
+import { Music, musicLumpFor } from "./music.js?v=20261115001036";
+import { Engine, unpackWad, freshPlayer, W, decodePatch } from "./engine.js?v=20261115001036";
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("screen");
@@ -251,12 +251,12 @@ async function start(mapName, carry = freshPlayer(), saved = null) {
     try {
       if (!botDriver) {
         status("Loading the TRM bot…");
-        const { BotDriver } = await import("./bot/driver.js?v=20261114194409");
+        const { BotDriver } = await import("./bot/driver.js?v=20261115001036");
         botDriver = await BotDriver.create(device, (t) => { $("fps").dataset.bot = t; });
         status("");
       }
       if (!botLog && new URLSearchParams(location.search).has("log")) {
-        const { BotLog } = await import("./bot/log.js?v=20261114194409");
+        const { BotLog } = await import("./bot/log.js?v=20261115001036");
         const toast = (t) => { banner(esc(t)); clearTimeout(toast.t); toast.t = setTimeout(() => banner(""), 5000); };
         botLog = new BotLog({ note: toast });
         const b = $("sendLog"); b.hidden = false;
@@ -553,6 +553,8 @@ function frame(now) {
   let tics = Math.floor(ticAccum);
   ticAccum -= tics;
   if (tics > 4) { tics = 4; ticAccum = 0; } // a long stall: catch up a little, then drop the backlog
+  // ?bot: the game waits for the bot rather than run on while it plans (bot/driver.js allowance())
+  if (botDriver && tics > 0) { const a = botDriver.allowance(); if (tics > a) { tics = a; ticAccum = Math.min(ticAccum, 1); botDriver.held++; } }
   // Every display frame is drawn; the game advances only on whole tics. Between tics the view and
   // things are blended by ticAccum, and turning shows at once through lookturn.
   pendingTurn += takeTurn();
@@ -560,7 +562,7 @@ function frame(now) {
   let input;
   if (tics > 0) {
     input = readInput();
-    if (botDriver) input = botDriver.input(input);
+    if (botDriver) input = botDriver.input(input, tics);
     input.mouseturn = pendingTurn; input.lookturn = 0;
     botLog?.frame(input, tics, botDriver);
     pendingTurn = 0;
