@@ -25,22 +25,22 @@ so these extensionless files are selectable in the first place.
 
 ## Images & PDFs (OCR)
 
-- **Indra** ([datalab-to/indra-ocr](https://github.com/datalab-to/indra-ocr), 12M
-  parameters) is the default. Without WebGPU it falls back to PP-OCRv6 medium.
-  It straightens and turns the page, reads the lines, orders them with its own reading-order model and writes the
-  page as Markdown: headings, paragraphs joined across line breaks, lists and tables.
-  The WebGPU port lives in
-  [experiments/indra-browser](https://austegard.com/experiments/indra-browser/web/);
-  this page imports it from there. About 4 MB loads on first use. Extra models for
-  other writing systems (Chinese/Japanese/Korean, right-to-left scripts, other
-  alphabets) and the word-correction tables load only when a page needs them. The weights are under Datalab's
-  OpenRAIL-M license.
-- **PP-OCRv6** in three tiers (tiny ~3M / small ~7M / medium ~35M), and the fallback
-  when WebGPU is missing. Weights stream from Hugging Face on first run; the
-  50-language recognition dictionary is fetched at init.
+- **OCR model** (a dropdown above the run button). The default, **Indra OCR**
+  ([datalab-to/indra-ocr](https://github.com/datalab-to/indra-ocr), 12M parameters,
+  weights under Datalab's OpenRAIL-M license), writes each page as Markdown: headings,
+  whole paragraphs, lists and tables, in the reading order it predicts. It corrects
+  skew and 90-degree rotation first. It runs on the GPU through WebGPU, which current
+  Chrome, Edge and Safari provide. The code and about 4 MB of weights download from
+  [austegard.com/experiments/indra-browser](https://austegard.com/experiments/indra-browser/web/)
+  on first use; models for other writing systems and its spelling-correction tables
+  download only when a page needs them.
+- **PP-OCRv6** is the other choice, in three sizes (tiny ~3M / small ~7M / medium
+  ~35M parameters). It returns plain text lines and runs without WebGPU, so a browser
+  without WebGPU switches to PP-OCRv6 medium automatically. Its weights and
+  50-language character list download from Hugging Face on first use.
 - **PDFs are hybrid**: each page first tries pdf.js's embedded text layer (exact,
   instant, no model). Only text-less pages (scans) fall through to OCR, so a
-  born-digital PDF never touches the weights. Any page can be forced through OCR
+  born-digital PDF never loads an OCR model. Any page can be forced through OCR
   with **Re-run as OCR**.
 - Large jobs process in batches — press **Run batch**, then **Continue**.
 - **Exports**: copy all text, `.txt`, `.md` (Markdown when Indra read the page, plain
