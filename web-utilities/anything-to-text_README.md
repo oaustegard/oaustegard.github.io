@@ -26,8 +26,8 @@ so these extensionless files are selectable in the first place.
 ## Images & PDFs (OCR)
 
 - **Indra** ([datalab-to/indra-ocr](https://github.com/datalab-to/indra-ocr), 12M
-  parameters) is the default when the browser has WebGPU. It straightens and turns the
-  page, reads the lines, orders them with its own reading-order model and writes the
+  parameters) is the default. Without WebGPU it falls back to PP-OCRv6 medium.
+  It straightens and turns the page, reads the lines, orders them with its own reading-order model and writes the
   page as Markdown: headings, paragraphs joined across line breaks, lists and tables.
   The WebGPU port lives in
   [experiments/indra-browser](https://austegard.com/experiments/indra-browser/web/);
