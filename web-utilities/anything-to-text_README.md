@@ -30,7 +30,7 @@ so these extensionless files are selectable in the first place.
   weights under Datalab's OpenRAIL-M license), writes each page as Markdown: headings,
   whole paragraphs, lists and tables, in the reading order it predicts. It corrects
   skew and 90-degree rotation first. It runs on the GPU through WebGPU, which current
-  Chrome, Edge and Safari provide. The code and about 4 MB of weights download from
+  Chrome, Edge and Safari provide. The code and about 2.3 MB of weights download from
   [austegard.com/experiments/indra-browser](https://austegard.com/experiments/indra-browser/web/)
   on first use; models for other writing systems and its spelling-correction tables
   download only when a page needs them.
