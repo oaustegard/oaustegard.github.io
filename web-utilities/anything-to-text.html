@@ -197,11 +197,12 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
     <div class="panel">
       <div class="controls">
         <div>
-          <label class="field" for="tier">OCR model tier</label>
+          <label class="field" for="tier">OCR model</label>
           <select id="tier">
-            <option value="tiny">Tiny (~3M, fastest)</option>
-            <option value="small">Small (~7M, balanced)</option>
-            <option value="medium" selected>Medium (~35M, best)</option>
+            <option value="indra" title="Indra OCR (Datalab): 12M parameters, reads layout and reading order, outputs Markdown. Needs WebGPU.">Indra (layout + Markdown, ~4 MB, needs WebGPU)</option>
+            <option value="tiny">PP-OCRv6 tiny (~3M, fastest)</option>
+            <option value="small">PP-OCRv6 small (~7M, balanced)</option>
+            <option value="medium" selected>PP-OCRv6 medium (~35M, best)</option>
           </select>
         </div>
         <div><label class="field" for="dpi">PDF DPI</label><input id="dpi" type="number" value="200" step="50" min="72" max="400"></div>
@@ -238,6 +239,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
         <span class="label">Export</span>
         <button id="copy" class="ghost" disabled>Copy all text</button>
         <button id="txt" class="ghost" disabled>Download .txt</button>
+        <button id="md" class="ghost" disabled>Download .md</button>
         <button id="json" class="ghost" disabled>Download .json</button>
         <button id="html" class="ghost" disabled>Download .html</button>
         <button id="show-json" class="ghost" disabled>Show .json</button>
@@ -357,7 +359,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
   </section>
 
   <footer>
-    <p class="provenance">In-browser OCR (PaddleOCR PP-OCRv6 + pdf.js) and speech-to-text (Whisper via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
+    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed) or PaddleOCR PP-OCRv6, with pdf.js) and speech-to-text (Whisper via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
   </footer>
 </div>
 
@@ -454,13 +456,15 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = "https://esm.sh/pdfjs-dist@6.0.227/buil
 const $ = s => document.querySelector(s);
 const statusEl = $("#status"), etaEl = $("#eta"), pagesEl = $("#pages");
 const estimateBtn = $("#estimate"), runBtn = $("#run"), continueBtn = $("#continue"), clearBtn = $("#clear");
-const copyBtn = $("#copy"), txtBtn = $("#txt"), jsonBtn = $("#json"), htmlBtn = $("#html");
+const copyBtn = $("#copy"), txtBtn = $("#txt"), mdBtn = $("#md"), jsonBtn = $("#json"), htmlBtn = $("#html");
 const showJsonBtn = $("#show-json"), showHtmlBtn = $("#show-html");
 const overlay = $("#overlay"), ovBody = $("#ov-body"), ovTitle = $("#ov-title"), ovClose = $("#ov-close");
 const setStatus = m => { statusEl.textContent = m; console.log("[status]", m); };
 
 const SECONDS_PER_PAGE = 10;   /* skill estimate: ~10s/page on CPU */
 const LOAD_SECONDS = 6;        /* one-time model load */
+const INDRA_SECONDS_PER_PAGE = 1;  /* Indra on WebGPU: 0.1-0.5 s per page warm, plus rendering */
+const INDRA_LOAD_SECONDS = 4;
 
 let paddle = null;             /* lazy PaddleOcrService */
 let pages = [];                /* { id, image, kind, render, status, text, lines, meanConf, ms, error } */
@@ -527,6 +531,71 @@ async function loadV6Dict(url) {
   chars.push(" ");
   console.log("[dict] v6 glyphs:", chars.length - 1, "| passing entries:", chars.length, "| expected model numClasses:", chars.length + 1);
   return new TextEncoder().encode(chars.join("\n")).buffer;
+}
+
+/* ---------- Indra engine ----------
+   Indra OCR (datalab-to/indra-ocr) ported to WebGPU in oaustegard/experiments
+   indra-browser. It deskews and turns the page, finds lines, reads them, and orders them
+   with its own reading-order model, then writes the page as Markdown (headings,
+   paragraphs, lists, tables). The core pack is about 4 MB gzipped; recognizers for other
+   scripts and the n-gram word models load the first time a page needs them. The module
+   and weights are served from austegard.com with CORS, so previews load them too. */
+const INDRA_BASE = "https://austegard.com/experiments/indra-browser/web/";
+let indra = null;              /* lazy Indra reader */
+let indraLoading = null;
+function useIndra() { const el = document.getElementById("tier"); return !!el && el.value === "indra"; }
+async function ensureIndra() {
+  if (indra) return indra;
+  if (!indraLoading) {
+    indraLoading = (async () => {
+      setStatus("Loading Indra OCR (about 4 MB on first run)...");
+      const mod = await import(INDRA_BASE + "indra.js");
+      const r = await mod.Indra.load(INDRA_BASE + "models/f16/", { log: m => console.log("[indra]", m) });
+      r.furniture = true;      /* keep running headers and footers: this tool extracts all text */
+      return r;
+    })();
+  }
+  try {
+    indra = await indraLoading;
+    console.log("[indra] ready on", indra.gpu.label || "WebGPU");
+    return indra;
+  } catch (e) {
+    /* no WebGPU, or the load failed: switch this session to PP-OCRv6 and carry on */
+    indraLoading = null;
+    console.error("[indra] load failed; falling back to PP-OCRv6", e);
+    const el = document.getElementById("tier");
+    if (el) el.value = "medium";
+    setStatus("Indra could not start (" + ((e && e.message) || e) + "); using PP-OCRv6 medium instead.");
+    return null;
+  }
+}
+/* RGBA canvas -> 8-bit gray with OpenCV's RGB->GRAY weights in 14-bit fixed point, the
+   conversion Indra was scored with. */
+function canvasToGray(canvas) {
+  const w = canvas.width, h = canvas.height;
+  const rgba = canvas.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, w, h).data;
+  const g = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) g[i] = (rgba[4 * i] * 4899 + rgba[4 * i + 1] * 9617 + rgba[4 * i + 2] * 1868 + 8192) >> 14;
+  return { w, h, data: g };
+}
+async function recognizeIndra(pg, canvas) {
+  const page = await indra.read(canvasToGray(canvas));
+  /* boxes are [x0, y0, x1, y1] in the upright page Indra read; a page it turned by 90 or
+     270 degrees has its width and height swapped */
+  const [sw, sh] = page.vertical ? [page.size[1], page.size[0]] : page.size;
+  pg.pageW = sw; pg.pageH = sh;
+  const items = page.lines.map(l => ({
+    text: l.text, confidence: l.conf,
+    box: { x: l.box[0], y: l.box[1], width: l.box[2] - l.box[0], height: l.box[3] - l.box[1] },
+  }));
+  buildResult(pg, items, "ocr", null);
+  /* Indra's reading-order model replaces the geometric orderer, and the card shows its
+     Markdown, which joins lines into paragraphs and keeps headings and tables */
+  pg.lines = page.lines.map(l => l.text);
+  pg.markdown = page.markdown;
+  pg.text = page.markdown || pg.lines.join("\n");
+  pg.engine = "indra";
+  console.log("[indra]", pg.image, page.lines.length + " lines", page.rotation ? "turned " + page.rotation : "", page.skew ? "skew " + page.skew : "", page.timings);
 }
 
 /* ---------- model ---------- */
@@ -630,7 +699,9 @@ async function accept(fileList) {
 function estimate() {
   const remaining = pages.length - nextIndex;
   if (!pages.length) { etaEl.textContent = ""; return; }
-  const secs = remaining * SECONDS_PER_PAGE + (paddle ? 0 : LOAD_SECONDS);
+  const secs = useIndra()
+    ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
+    : remaining * SECONDS_PER_PAGE + (paddle ? 0 : LOAD_SECONDS);
   const mins = secs / 60;
   const eta = mins >= 1 ? (mins.toFixed(1) + " min") : (secs + " s");
   let msg = pages.length + " page(s); " + remaining + " pending; about " + eta + " of processing.";
@@ -841,6 +912,7 @@ function hasUsableText(items) {
 function buildResult(pg, items, source, res) {
   const W = pg.pageW || 1, H = pg.pageH || 1;
   pg.source = source;
+  if (source === "text") { pg.markdown = null; pg.engine = null; }
   /* born-digital text can keep pdf.js's native order when asked; everything else (and
      geometric text) flows through the column-aware orderer. */
   pg.lines = (source === "text" && textOrderMode() === "pdf")
@@ -894,6 +966,15 @@ async function processPage(pg) {
 
   /* OCR path: images, forced-OCR PDF pages, and text-less PDF pages. The model loads
      lazily here, so a PDF that is entirely born-digital never touches the weights. */
+  pg.markdown = null; pg.engine = null;
+  if (useIndra() && await ensureIndra()) {
+    const canvas = await pg.render(scale);
+    pg.preview = makePreview(canvas);
+    await recognizeIndra(pg, canvas);
+    pg.ms = Math.round(performance.now() - t0);
+    pg.status = "done";
+    return;
+  }
   await ensurePaddle();
   const canvas = await pg.render(scale);
   pg.pageW = canvas.width; pg.pageH = canvas.height;
@@ -1061,7 +1142,7 @@ function escapeHtml(s) {
 function pageInner(pg) {
   const done = pg.status === "done";
   const srcBadge = done
-    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : "OCR") + '</span>'
+    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : "OCR")) + '</span>'
     : "";
   const meta = done
     ? '<span class="meta">' + (pg.source === "text"
@@ -1092,9 +1173,16 @@ function pageInner(pg) {
 function allText() {
   return pages.filter(p => p.status === "done").map(p => "=== " + p.image + " ===\n" + (p.text || "(no text)")).join("\n\n");
 }
+/* Markdown: Indra pages as the model wrote them; other pages as their text lines */
+function allMarkdown() {
+  return pages.filter(p => p.status === "done")
+    .map(p => "<!-- " + p.image.replace(/--/g, "- -") + " -->\n\n" + (p.markdown || (p.lines || []).join("\n\n") || ""))
+    .join("\n\n---\n\n") + "\n";
+}
 function asJson() {
   return JSON.stringify(pages.map((p, i) => ({
-    page: i + 1, image: p.image, source: p.source, text: p.text, lines: p.lines,
+    page: i + 1, image: p.image, source: p.source, engine: p.engine || undefined, text: p.text, lines: p.lines,
+    markdown: p.markdown || undefined,
     mean_conf: p.meanConf,
     page_px: { w: p.pageW || 0, h: p.pageH || 0 },
     /* bbox is [x, y, w, h] normalized 0..1 against page_px; conf and source are per-segment. */
@@ -1164,6 +1252,7 @@ function refreshControls() {
   clearBtn.disabled = !has;
   copyBtn.disabled = !someDone;
   txtBtn.disabled = !someDone;
+  mdBtn.disabled = !someDone;
   jsonBtn.disabled = !someDone;
   htmlBtn.disabled = !someDone;
   showJsonBtn.disabled = !someDone;
@@ -1183,8 +1272,11 @@ window.addEventListener("intake:ocr", e => { ocrSection.hidden = false; accept(e
 
 estimateBtn.onclick = estimate;
 document.getElementById("tier").onchange = () => {
-  if (paddle) { paddle = null; setStatus("Model tier changed - will reload on next run."); }
+  if (paddle) { paddle = null; setStatus("Model changed - will reload on next run."); }
+  estimate();
 };
+/* Indra is the default where WebGPU exists; elsewhere the select stays on PP-OCRv6 medium */
+if (navigator.gpu) document.getElementById("tier").value = "indra";
 runBtn.onclick = () => runBatch().then(refreshControls);
 continueBtn.onclick = () => runBatch().then(refreshControls);
 clearBtn.onclick = clearAll;
@@ -1193,6 +1285,7 @@ copyBtn.onclick = async () => {
   catch (e) { console.error("[copy] failed", e); setStatus("Copy failed: " + (e && e.message || e)); }
 };
 txtBtn.onclick = () => download("ocr.txt", allText(), "text/plain");
+mdBtn.onclick = () => download("ocr.md", allMarkdown(), "text/markdown");
 jsonBtn.onclick = () => download("ocr.json", asJson(), "application/json");
 htmlBtn.onclick = () => download("ocr.html", asHtml(), "text/html;charset=utf-8");
 

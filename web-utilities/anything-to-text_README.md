@@ -9,7 +9,7 @@ file by type:
 
 | Input | Engine | Output |
 |---|---|---|
-| Images (`png`, `jpg`, …) | OCR — PaddleOCR **PP-OCRv6** (ONNX, in-browser) | text lines in reading order, with confidence |
+| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** otherwise | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper** via Transformers.js | timestamped transcript, editable, with per-segment playback |
 
@@ -25,15 +25,26 @@ so these extensionless files are selectable in the first place.
 
 ## Images & PDFs (OCR)
 
-- **PP-OCRv6** in three tiers (tiny ~3M / small ~7M / medium ~35M). Weights stream
-  from Hugging Face on first run; the 50-language recognition dictionary is fetched
-  at init.
+- **Indra** ([datalab-to/indra-ocr](https://github.com/datalab-to/indra-ocr), 12M
+  parameters) is the default when the browser has WebGPU. It straightens and turns the
+  page, reads the lines, orders them with its own reading-order model and writes the
+  page as Markdown: headings, paragraphs joined across line breaks, lists and tables.
+  The WebGPU port lives in
+  [experiments/indra-browser](https://austegard.com/experiments/indra-browser/web/);
+  this page imports it from there. About 4 MB loads on first use. Extra models for
+  other writing systems (Chinese/Japanese/Korean, right-to-left scripts, other
+  alphabets) and the word-correction tables load only when a page needs them. The weights are under Datalab's
+  OpenRAIL-M license.
+- **PP-OCRv6** in three tiers (tiny ~3M / small ~7M / medium ~35M), and the fallback
+  when WebGPU is missing. Weights stream from Hugging Face on first run; the
+  50-language recognition dictionary is fetched at init.
 - **PDFs are hybrid**: each page first tries pdf.js's embedded text layer (exact,
   instant, no model). Only text-less pages (scans) fall through to OCR, so a
   born-digital PDF never touches the weights. Any page can be forced through OCR
   with **Re-run as OCR**.
 - Large jobs process in batches — press **Run batch**, then **Continue**.
-- **Exports**: copy all text, `.txt`, `.json` (with normalized bounding boxes and
+- **Exports**: copy all text, `.txt`, `.md` (Markdown when Indra read the page, plain
+  text lines otherwise), `.json` (with normalized bounding boxes and
   per-segment confidence), and `.html` (an absolutely-positioned text layer that
   preserves the original page geometry — columns and tables survive). JSON and HTML
   can be previewed in-page before download.
@@ -63,6 +74,7 @@ tool works offline.
 
 - Must be served over **http(s)** (module workers don't run from `file://`). On the
   live site that's automatic.
-- Best in a recent Chromium-based browser; WebGPU unlocks the larger Whisper model.
-- AI-assisted build. Composited from two single-file in-browser apps; the OCR and
-  speech engines are unmodified.
+- Best in a recent Chromium-based browser; WebGPU enables Indra and the larger
+  Whisper model.
+- AI-assisted build. Composited from two single-file in-browser apps; the speech engine
+  is unmodified; the OCR engine gained Indra as a second model.
