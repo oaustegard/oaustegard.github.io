@@ -1,0 +1,1 @@
+"use client";import*as e from"preact/compat";const t=e.createContext(e=>console.log(e));function n(){return e.useContext(t)}export{t as LogContext,n as useLog};

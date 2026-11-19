@@ -1,0 +1,536 @@
+import{t as e}from"../chunks/c-Bnrfo8pz.js";import{t}from"../chunks/c-WfjOen3K.js";import{t as n}from"../chunks/c-NPxkywtp.js";import{useLog as r}from"./log.js";import*as i from"preact/compat";import{Fragment as a,jsx as o,jsxs as s}from"preact/compat/jsx-runtime";import{Field as c,FieldDescription as l,FieldLabel as u}from"ui-sdk/field.js";import{Input as d}from"ui-sdk/input.js";import{PasswordInput as f,PasswordInputControl as p,PasswordInputToggle as m,createPasswordInputController as h}from"ui-sdk/password-input.js";
+/**
+* @license lucide-react v1.52.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+const g={name:`eye-off`,size:24,node:[[`path`,{d:`M10.733 5.076a10.744 10.744 0 0 1 11.205 6.575 1 1 0 0 1 0 .696 10.747 10.747 0 0 1-1.444 2.49`,key:`ct8e1f`}],[`path`,{d:`M14.084 14.158a3 3 0 0 1-4.242-4.242`,key:`151rxh`}],[`path`,{d:`M17.479 17.499a10.75 10.75 0 0 1-15.417-5.151 1 1 0 0 1 0-.696 10.75 10.75 0 0 1 4.446-5.143`,key:`13bj9a`}],[`path`,{d:`m2 2 20 20`,key:`1ooewy`}]]};g.node;const _=e(g),v={name:`eye`,size:24,node:[[`path`,{d:`M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0`,key:`1nclc0`}],[`circle`,{cx:`12`,cy:`12`,r:`3`,key:`1v7zrd`}]]}
+/**
+* @license lucide-react v1.52.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+;v.node;const y=e(v),b={name:`lock`,size:24,node:[[`rect`,{width:`18`,height:`11`,x:`3`,y:`11`,rx:`2`,ry:`2`,key:`1w4ew1`}],[`path`,{d:`M7 11V7a5 5 0 0 1 10 0v4`,key:`fwvmzm`}]]}
+/**
+* @license lucide-react v1.52.0 - ISC
+*
+* This source code is licensed under the ISC license.
+* See the LICENSE file in the root directory of this source tree.
+*/
+;b.node;const x=e(b);function S(){return/* @__PURE__ */ s(c,{name:`password`,children:[/* @__PURE__ */ o(u,{children:`Password`}),/* @__PURE__ */ s(f,{children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(l,{children:`Use at least 8 characters.`})]})}const C=[{label:`At least 8 characters`,test:e=>e.length>=8},{label:`A number`,test:e=>/\d/.test(e)},{label:`An uppercase and a lowercase letter`,test:e=>/[a-z]/.test(e)&&/[A-Z]/.test(e)}];function w(){let[e,r]=i.useState(``);return/* @__PURE__ */ s(c,{name:`new-password`,children:[/* @__PURE__ */ o(u,{children:`Create a password`}),/* @__PURE__ */ s(f,{value:e,autoComplete:`new-password`,onValueChange:e=>r(e),children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(`ul`,{"data-slot":`stack`,"aria-label":`Password requirements`,children:C.map(r=>r.test(e)?/* @__PURE__ */ s(`li`,{"data-slot":`row`,children:[/* @__PURE__ */ o(t,{"aria-hidden":`true`}),/* @__PURE__ */ o(`span`,{"data-slot":`visually-hidden`,children:`Done:`}),r.label]},r.label):/* @__PURE__ */ s(`li`,{"data-slot":`row`,children:[/* @__PURE__ */ o(n,{"aria-hidden":`true`}),/* @__PURE__ */ o(`span`,{"data-slot":`visually-hidden`,children:`To do:`}),r.label]},r.label))})]})}function T(){return/* @__PURE__ */ s(c,{name:`wifi-password`,children:[/* @__PURE__ */ o(u,{children:`Wi-Fi password`}),/* @__PURE__ */ s(f,{defaultVisible:!0,defaultValue:`maple-orbit-42`,autoComplete:`new-password`,children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(l,{children:`Guests read it from here, so it starts shown.`})]})}function E(){return/* @__PURE__ */ s(c,{name:`password`,children:[/* @__PURE__ */ o(u,{children:`Password`}),/* @__PURE__ */ o(f,{children:e=>/* @__PURE__ */ s(a,{children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(`span`,{children:e.capsLock&&/* @__PURE__ */ o(x,{"aria-hidden":`true`})}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]})}),/* @__PURE__ */ o(`p`,{"data-slot":`caps-lock`,children:`Caps Lock is on.`})]})}function D(){return/* @__PURE__ */ s(c,{disabled:!0,name:`password`,children:[/* @__PURE__ */ o(u,{children:`Password`}),/* @__PURE__ */ s(f,{defaultValue:`hunter22`,children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(l,{children:`Your administrator manages this password.`})]})}function O(){return/* @__PURE__ */ s(c,{name:`recovery-key`,children:[/* @__PURE__ */ o(u,{children:`Recovery key`}),/* @__PURE__ */ s(f,{readOnly:!0,defaultValue:`7Hq2-vX9p-Lm4c`,autoComplete:`off`,children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show recovery key`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(l,{children:`Keep it somewhere safe. You can show it, but not change it.`})]})}function k(){let e=r(),[t,n]=i.useState(!1);return/* @__PURE__ */ s(c,{name:`password`,children:[/* @__PURE__ */ o(u,{children:`Password`}),/* @__PURE__ */ s(f,{visible:t,onVisibleChange:(t,r)=>{n(t),e(`${t?`Shown`:`Hidden`} (${r.reason})`)},children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]})]})}function A(){let e=r(),[t]=i.useState(h);return/* @__PURE__ */ s(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ s(`div`,{"data-slot":`controls`,children:[/* @__PURE__ */ o(`button`,{type:`button`,onClick:()=>{t.setValue(`plum-kettle-orbit-42`),t.setVisible(!0)},children:`Suggest`}),/* @__PURE__ */ o(`button`,{type:`button`,onClick:()=>t.toggleVisible(),children:`Toggle`}),/* @__PURE__ */ o(`button`,{type:`button`,onClick:()=>t.clear(),children:`Clear`}),/* @__PURE__ */ o(`button`,{type:`button`,onClick:()=>e(`${t.getValue().length} characters, ${t.isVisible()?`shown`:`hidden`}`),children:`Read`}),/* @__PURE__ */ o(`button`,{type:`button`,onClick:()=>t.focus(),children:`Focus`})]}),/* @__PURE__ */ s(c,{name:`new-password`,children:[/* @__PURE__ */ o(u,{children:`New password`}),/* @__PURE__ */ s(f,{controller:t,autoComplete:`new-password`,children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]})]})]})}function j(){let e=r();return/* @__PURE__ */ s(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ o(`form`,{"data-slot":`stack`,id:`sign-in`,onSubmit:t=>{t.preventDefault();let n=new FormData(t.currentTarget),r=String(n.get(`password`)).length;e(`Signed in as ${n.get(`email`)}, with a password of ${r} characters`)},children:/* @__PURE__ */ s(c,{name:`email`,children:[/* @__PURE__ */ o(u,{children:`Email`}),/* @__PURE__ */ o(d,{type:`email`,required:!0,autoComplete:`username`})]})}),/* @__PURE__ */ s(c,{children:[/* @__PURE__ */ o(u,{children:`Password`}),/* @__PURE__ */ s(f,{name:`password`,form:`sign-in`,required:!0,children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]})]}),/* @__PURE__ */ s(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ o(`button`,{type:`submit`,form:`sign-in`,"data-variant":`solid`,children:`Sign In`}),/* @__PURE__ */ o(`button`,{type:`reset`,form:`sign-in`,children:`Reset`})]})]})}function M(){return/* @__PURE__ */ s(c,{name:`password`,children:[/* @__PURE__ */ o(u,{children:`Password`}),/* @__PURE__ */ s(f,{children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,render:(e,t)=>/* @__PURE__ */ o(`button`,{...e,children:t.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})})]})]})}function N(){return/* @__PURE__ */ o(`div`,{dir:`rtl`,children:/* @__PURE__ */ s(c,{name:`password`,children:[/* @__PURE__ */ o(u,{children:`كلمة المرور`}),/* @__PURE__ */ s(f,{children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`إظهار كلمة المرور`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(l,{children:`ثمانية أحرف على الأقل.`})]})})}function P(e){return[e.length>=8,e.length>=12,/[a-z]/.test(e)&&/[A-Z]/.test(e),/\d/.test(e)&&/[^a-zA-Z\d]/.test(e)].filter(Boolean).length}function F(){let[e,t]=i.useState(``),n=P(e);return/* @__PURE__ */ s(c,{name:`new-password`,children:[/* @__PURE__ */ o(u,{children:`New password`}),/* @__PURE__ */ s(f,{value:e,onValueChange:e=>t(e),autoComplete:`new-password`,children:[/* @__PURE__ */ o(p,{}),/* @__PURE__ */ o(m,{"aria-label":`Show password`,children:e=>e.visible?/* @__PURE__ */ o(_,{"aria-hidden":`true`}):/* @__PURE__ */ o(y,{"aria-hidden":`true`})})]}),/* @__PURE__ */ o(`div`,{"data-slot":`strength`,"aria-hidden":`true`,children:[1,2,3,4].map(e=>/* @__PURE__ */ o(`div`,{"data-on":n>=e||void 0},e))}),/* @__PURE__ */ o(`output`,{"data-slot":`output`,children:e?`Strength: ${[`Weak`,`Weak`,`Fair`,`Good`,`Strong`][n]} (${e.length} characters)`:`Type a password to rate it.`})]})}var I={name:`password-input`,title:`Password Input`,description:`Enter a password, show or hide it, and use it in a native form.`,sections:[{heading:null,text:`A Password Input is a native password field with a button that shows and hides what's typed. It keeps the caret in place, offers the right password to password managers, and hides the password again when its form submits.`,examples:[{id:`password-input/basic`,caption:`Type a password, then choose Show password to reveal or hide it. Clicking the toggle keeps the caret in the field. With a keyboard, Tab to the toggle and press Space or Enter.`,Example:S,source:`import { Field, FieldDescription, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <Field name="password">
+      <FieldLabel>Password</FieldLabel>
+      <PasswordInput>
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show password">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+      <FieldDescription>Use at least 8 characters.</FieldDescription>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`New Password`,text:'Use `autoComplete="new-password"` on the root when creating or changing a password. It tells the browser and password manager which kind of password to offer. The default is `current-password` for signing in.',examples:[{id:`password-input/new-password`,caption:`Type a password and watch the checklist update. Try adding digits and both uppercase and lowercase letters, then toggle its visibility.`,Example:w,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { CheckIcon, EyeIcon, EyeOffIcon, XIcon } from "lucide-react"
+import * as React from "react"
+
+const rules = [
+  {
+    label: "At least 8 characters",
+    test: (password: string) => password.length >= 8,
+  },
+  { label: "A number", test: (password: string) => /\\d/.test(password) },
+  {
+    label: "An uppercase and a lowercase letter",
+    test: (password: string) =>
+      /[a-z]/.test(password) && /[A-Z]/.test(password),
+  },
+]
+
+function Example() {
+  const [password, setPassword] = React.useState("")
+  return (
+    <Field name="new-password">
+      <FieldLabel>Create a password</FieldLabel>
+      <PasswordInput
+        value={password}
+        autoComplete="new-password"
+        onValueChange={(value) => setPassword(value)}
+      >
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show password">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+      <ul data-slot="stack" aria-label="Password requirements">
+        {rules.map((rule) =>
+          rule.test(password) ? (
+            <li data-slot="row" key={rule.label}>
+              <CheckIcon aria-hidden="true" />
+              <span data-slot="visually-hidden">Done:</span>
+              {rule.label}
+            </li>
+          ) : (
+            <li data-slot="row" key={rule.label}>
+              <XIcon aria-hidden="true" />
+              <span data-slot="visually-hidden">To do:</span>
+              {rule.label}
+            </li>
+          )
+        )}
+      </ul>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`Shown at First`,text:"Set `defaultVisible` to start with the text visible, and `defaultValue` for its initial value. This can be useful for a Wi-Fi password someone needs to read or copy.",examples:[{id:`password-input/default-visible`,caption:`Read the Wi-Fi password, then choose Show password to hide it. Choose it again to reveal the value.`,Example:T,source:`import { Field, FieldDescription, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <Field name="wifi-password">
+      <FieldLabel>Wi-Fi password</FieldLabel>
+      <PasswordInput
+        defaultVisible
+        defaultValue="maple-orbit-42"
+        autoComplete="new-password"
+      >
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show password">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+      <FieldDescription>
+        Guests read it from here, so it starts shown.
+      </FieldDescription>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`Caps Lock`,text:"Use `data-capslock` or the part's `capsLock` state for a warning. It updates from key events while the input is focused. The example reserves space for the icon and warning.",examples:[{id:`password-input/caps-lock`,caption:`Focus Password and press Caps Lock. The warning appears while Caps Lock is on. Turn it off or leave the field to hide the warning.`,Example:E,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon, LockIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <Field name="password">
+      <FieldLabel>Password</FieldLabel>
+      <PasswordInput>
+        {(state) => (
+          <>
+            <PasswordInputControl />
+            <span>{state.capsLock && <LockIcon aria-hidden="true" />}</span>
+            <PasswordInputToggle aria-label="Show password">
+              {(toggle) =>
+                toggle.visible ? (
+                  <EyeOffIcon aria-hidden="true" />
+                ) : (
+                  <EyeIcon aria-hidden="true" />
+                )
+              }
+            </PasswordInputToggle>
+          </>
+        )}
+      </PasswordInput>
+      <p data-slot="caps-lock">Caps Lock is on.</p>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`Disabled`,text:"Set `disabled` on the root, its Field, or an enclosing fieldset to disable both the input and the toggle. The value is omitted from form submission.",examples:[{id:`password-input/disabled`,caption:`Try to edit Password or press its toggle. Both controls are disabled and are skipped by Tab.`,Example:D,source:`import { Field, FieldDescription, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <Field disabled name="password">
+      <FieldLabel>Password</FieldLabel>
+      <PasswordInput defaultValue="hunter22">
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show password">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+      <FieldDescription>
+        Your administrator manages this password.
+      </FieldDescription>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`Read-Only`,text:"Set `readOnly` when the value can be read but not edited. The input stays focusable, the toggle still works, and the value still participates in form submission.",examples:[{id:`password-input/read-only`,caption:`Choose Show recovery key to read it. Try to type in the input; its value stays unchanged.`,Example:O,source:`import { Field, FieldDescription, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <Field name="recovery-key">
+      <FieldLabel>Recovery key</FieldLabel>
+      <PasswordInput readOnly defaultValue="7Hq2-vX9p-Lm4c" autoComplete="off">
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show recovery key">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+      <FieldDescription>
+        Keep it somewhere safe. You can show it, but not change it.
+      </FieldDescription>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`Controlled Visibility`,text:"Pass `visible` and update it in `onVisibleChange`. The reason distinguishes a toggle press, form submission, reset, page hide, or a controller action.",examples:[{id:`password-input/controlled`,caption:`Toggle Show password. The console logs each change and its reason.`,Example:k,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+import * as React from "react"
+import { useLog } from "../../../shared/react/log"
+
+function Example() {
+  const log = useLog()
+  const [visible, setVisible] = React.useState(false)
+  return (
+    <Field name="password">
+      <FieldLabel>Password</FieldLabel>
+      <PasswordInput
+        visible={visible}
+        onVisibleChange={(next, details) => {
+          setVisible(next)
+          log(\`\${next ? "Shown" : "Hidden"} (\${details.reason})\`)
+        }}
+      >
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show password">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+    </Field>
+  )
+}
+
+export { Example }
+`}]},{heading:`Controller`,text:"Create a `createPasswordInputController()` and pass it as `controller` for actions outside the input. Read or change the value, toggle visibility, or focus the input. Writes use the `imperative` reason.",examples:[{id:`password-input/controller`,caption:`Choose Suggest to fill and reveal a sample value. Try Toggle, Read, Clear, and Focus to call each action from outside the field.`,Example:A,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import {
+  createPasswordInputController,
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+import * as React from "react"
+import { useLog } from "../../../shared/react/log"
+
+function Example() {
+  const log = useLog()
+  const [password] = React.useState(createPasswordInputController)
+  return (
+    <div data-slot="stack">
+      <div data-slot="controls">
+        <button
+          type="button"
+          onClick={() => {
+            password.setValue("plum-kettle-orbit-42")
+            password.setVisible(true)
+          }}
+        >
+          Suggest
+        </button>
+        <button type="button" onClick={() => password.toggleVisible()}>
+          Toggle
+        </button>
+        <button type="button" onClick={() => password.clear()}>
+          Clear
+        </button>
+        <button
+          type="button"
+          onClick={() =>
+            log(
+              \`\${password.getValue().length} characters, \${password.isVisible() ? "shown" : "hidden"}\`
+            )
+          }
+        >
+          Read
+        </button>
+        <button type="button" onClick={() => password.focus()}>
+          Focus
+        </button>
+      </div>
+      <Field name="new-password">
+        <FieldLabel>New password</FieldLabel>
+        <PasswordInput controller={password} autoComplete="new-password">
+          <PasswordInputControl />
+          <PasswordInputToggle aria-label="Show password">
+            {(state) =>
+              state.visible ? (
+                <EyeOffIcon aria-hidden="true" />
+              ) : (
+                <EyeIcon aria-hidden="true" />
+              )
+            }
+          </PasswordInputToggle>
+        </PasswordInput>
+      </Field>
+    </div>
+  )
+}
+
+export { Example }
+`}]},{heading:`Forms`,text:"The native input participates in `FormData`, validation, and reset. Use `form` to associate it with a form elsewhere in the page, as this example does.",examples:[{id:`password-input/form`,caption:`Enter an email and password, reveal the password, then press Enter in the field. Submission hides it again, and the console logs its length. Reset clears the form. Empty required fields block submission.`,Example:j,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import { Input } from "@ui-sdk/react/input"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+import * as React from "react"
+import { useLog } from "../../../shared/react/log"
+
+function Example() {
+  const log = useLog()
+  return (
+    <div data-slot="stack">
+      <form
+        data-slot="stack"
+        id="sign-in"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const data = new FormData(event.currentTarget)
+          const length = String(data.get("password")).length
+          log(
+            \`Signed in as \${data.get("email")}, with a password of \${length} characters\`
+          )
+        }}
+      >
+        <Field name="email">
+          <FieldLabel>Email</FieldLabel>
+          <Input type="email" required autoComplete="username" />
+        </Field>
+      </form>
+      <Field>
+        <FieldLabel>Password</FieldLabel>
+        <PasswordInput name="password" form="sign-in" required>
+          <PasswordInputControl />
+          <PasswordInputToggle aria-label="Show password">
+            {(state) =>
+              state.visible ? (
+                <EyeOffIcon aria-hidden="true" />
+              ) : (
+                <EyeIcon aria-hidden="true" />
+              )
+            }
+          </PasswordInputToggle>
+        </PasswordInput>
+      </Field>
+      <div data-slot="row">
+        <button type="submit" form="sign-in" data-variant="solid">
+          Sign In
+        </button>
+        <button type="reset" form="sign-in">
+          Reset
+        </button>
+      </div>
+    </div>
+  )
+}
+
+export { Example }
+`}]},{heading:`More examples`,text:``,examples:[{id:`password-input/render`,caption:``,Example:M,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <Field name="password">
+      <FieldLabel>Password</FieldLabel>
+      <PasswordInput>
+        <PasswordInputControl />
+        <PasswordInputToggle
+          aria-label="Show password"
+          render={(props, state) => (
+            <button {...props}>
+              {state.visible ? (
+                <EyeOffIcon aria-hidden="true" />
+              ) : (
+                <EyeIcon aria-hidden="true" />
+              )}
+            </button>
+          )}
+        />
+      </PasswordInput>
+    </Field>
+  )
+}
+
+export { Example }
+`},{id:`password-input/rtl`,caption:``,Example:N,source:`import { Field, FieldDescription, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+
+function Example() {
+  return (
+    <div dir="rtl">
+      <Field name="password">
+        <FieldLabel>كلمة المرور</FieldLabel>
+        <PasswordInput>
+          <PasswordInputControl />
+          <PasswordInputToggle aria-label="إظهار كلمة المرور">
+            {(state) =>
+              state.visible ? (
+                <EyeOffIcon aria-hidden="true" />
+              ) : (
+                <EyeIcon aria-hidden="true" />
+              )
+            }
+          </PasswordInputToggle>
+        </PasswordInput>
+        <FieldDescription>ثمانية أحرف على الأقل.</FieldDescription>
+      </Field>
+    </div>
+  )
+}
+
+export { Example }
+`},{id:`password-input/value`,caption:``,Example:F,source:`import { Field, FieldLabel } from "@ui-sdk/react/field"
+import {
+  PasswordInput,
+  PasswordInputControl,
+  PasswordInputToggle,
+} from "@ui-sdk/react/password-input"
+import { EyeIcon, EyeOffIcon } from "lucide-react"
+import * as React from "react"
+
+function strength(password: string) {
+  return [
+    password.length >= 8,
+    password.length >= 12,
+    /[a-z]/.test(password) && /[A-Z]/.test(password),
+    /\\d/.test(password) && /[^a-zA-Z\\d]/.test(password),
+  ].filter(Boolean).length
+}
+
+function Example() {
+  const [value, setValue] = React.useState("")
+  const score = strength(value)
+  return (
+    <Field name="new-password">
+      <FieldLabel>New password</FieldLabel>
+      <PasswordInput
+        value={value}
+        onValueChange={(next) => setValue(next)}
+        autoComplete="new-password"
+      >
+        <PasswordInputControl />
+        <PasswordInputToggle aria-label="Show password">
+          {(state) =>
+            state.visible ? (
+              <EyeOffIcon aria-hidden="true" />
+            ) : (
+              <EyeIcon aria-hidden="true" />
+            )
+          }
+        </PasswordInputToggle>
+      </PasswordInput>
+      <div data-slot="strength" aria-hidden="true">
+        {[1, 2, 3, 4].map((level) => (
+          <div key={level} data-on={score >= level || undefined} />
+        ))}
+      </div>
+      <output data-slot="output">
+        {value
+          ? \`Strength: \${["Weak", "Weak", "Fair", "Good", "Strong"][score]} (\${value.length} characters)\`
+          : "Type a password to rate it."}
+      </output>
+    </Field>
+  )
+}
+
+export { Example }
+`}]}]};export{I as default};
