@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Six Degrees of Bluesky</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Find the shortest follow path between two Bluesky accounts and measure one account's network, in your browser, never sending more than 300 requests a minute.">
+<meta name="ai-disclosure" content="ai-assisted">
+<meta property="og:title" content="Six Degrees of Bluesky">
+<meta property="og:description" content="Find the shortest follow path between two Bluesky accounts and measure one account's network, in your browser, never sending more than 300 requests a minute.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://austegard.com/bsky/six-degrees/">
+<meta property="og:image" content="https://austegard.com/images/og/bsky-six-degrees.jpg">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<script src="/experiments/gpu-bridge/web/relay.js"></script>
+<style>
+  :root { color-scheme: light dark; --fg:#151515; --dim:#686660; --bg:#fbfbf9; --line:#d8d6d0;
+          --card:#fff; --soft:#f2f1ec; --accent:#2d5b8a; --accent2:#c0672b; --ok:#1a7f4b; --warn:#9a5b00; --bad:#b3261e; --on:#eef4fa; }
+  @media (prefers-color-scheme: dark) {
+    :root { --fg:#e8e6e1; --dim:#9a978f; --bg:#16171a; --line:#33353a; --card:#1d1f23;
+            --soft:#23252a; --accent:#8db6e0; --accent2:#e59a63; --ok:#4fbf87; --warn:#e0a54a; --bad:#f2836b; --on:#1f2a36; }
+  }
+  * { box-sizing: border-box; }
+  html, body { overflow-x: hidden; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 ui-serif, Georgia, "Times New Roman", serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 1.2rem 1rem 3rem; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; font-weight: 600; }
+  h2 { font-size: 1.05rem; margin: 0 0 .5rem; font-weight: 600; }
+  h3 { font-size: .92rem; margin: 1rem 0 .4rem; font-weight: 600; }
+  p.sub { color: var(--dim); margin: 0 0 1rem; font-size: .95rem; max-width: 52rem; }
+  a { color: inherit; }
+  code, button, select, input, table, .mono, #log, .meter, .chart, .stat b { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .card { border:1px solid var(--line); border-radius:6px; padding:.9rem 1rem; background:var(--card); margin:0 0 1rem; min-width:0; }
+  label { font-size:.8rem; color:var(--dim); display:block; margin:.4rem 0 .15rem; }
+  label.inline { display:inline-flex; gap:.35rem; align-items:center; margin:.4rem 1rem 0 0; color:var(--fg); }
+  input, select { font-size:.85rem; padding:.4rem .55rem; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--fg); }
+  input[type=text] { width:100%; max-width:20rem; }
+  input[type=number] { width:5.5rem; }
+  button { font-size:.82rem; padding:.42rem .75rem; border:1px solid var(--line); border-radius:4px; background:var(--card); color:var(--fg); cursor:pointer; }
+  button:hover:not(:disabled) { border-color:var(--fg); }
+  button:disabled { opacity:.45; cursor:default; }
+  button.primary { background:var(--fg); color:var(--bg); border-color:var(--fg); }
+  button.danger { color:var(--bad); border-color:var(--bad); }
+  .row { display:flex; gap:.8rem; flex-wrap:wrap; align-items:flex-end; }
+  .hint { font-size:.76rem; color:var(--dim); line-height:1.45; margin:.3rem 0 0; }
+  .bad { color:var(--bad); } .warn { color:var(--warn); } .ok { color:var(--ok); }
+
+  /* the meter stays in view */
+  .meter { position:sticky; top:0; z-index:10; background:var(--bg); border-bottom:1px solid var(--line); padding:.5rem 0 .55rem; margin:0 0 1rem; font-size:.78rem; }
+  .meter .line { display:flex; gap:.4rem 1.1rem; flex-wrap:wrap; align-items:center; }
+  .meter .gauge { flex:1 1 12rem; min-width:10rem; height:8px; background:var(--soft); border-radius:4px; overflow:hidden; position:relative; }
+  .meter .gauge > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .meter .gauge > i { position:absolute; top:0; bottom:0; width:2px; background:var(--bad); }
+  .meter b { font-weight:600; }
+  .meter input { width:4.6rem; padding:.2rem .35rem; font-size:.76rem; }
+  .meter button { padding:.25rem .6rem; font-size:.76rem; }
+  #next { color:var(--dim); margin-top:.3rem; }
+  #gateBox { display:none; margin-top:.4rem; padding:.45rem .6rem; border:1px solid var(--warn); border-radius:4px; background:var(--card); }
+  #gateBox.on { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+  #paused { color:var(--warn); }
+
+  .grid2 { display:grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap:1rem; }
+  .prog { height:3px; background:var(--soft); border-radius:2px; overflow:hidden; margin:.5rem 0 .25rem; }
+  .prog > div { height:100%; width:0; background:var(--accent); transition:width .2s; }
+  .status { font-size:.78rem; color:var(--dim); font-family: ui-monospace, monospace; min-height:1.2em; }
+  #log { font-size:.72rem; color:var(--dim); max-height:7rem; overflow:auto; margin-top:.3rem; }
+
+  .path { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; margin:.6rem 0; }
+  .pcard { display:flex; gap:.5rem; align-items:center; border:1px solid var(--line); border-radius:6px; padding:.4rem .55rem; background:var(--card); min-width:0; max-width:16rem; text-decoration:none; }
+  .pcard img, .pcard .ph { width:36px; height:36px; border-radius:50%; flex:none; background:var(--soft); object-fit:cover; }
+  .pcard .t { min-width:0; line-height:1.25; }
+  .pcard .n { font-weight:600; font-size:.86rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .pcard .h, .pcard .c { font:.72rem ui-monospace, monospace; color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .arrow { color:var(--dim); font-size:1.1rem; }
+  .verdict { font-size:.9rem; margin:.3rem 0; }
+  .alts { font:.74rem ui-monospace, monospace; color:var(--dim); margin:.3rem 0 0; padding-left:1rem; }
+
+  .tier { border-top:1px solid var(--line); padding:.7rem 0; display:grid; grid-template-columns: minmax(0,1fr) auto; gap:.3rem 1rem; align-items:start; }
+  .tier:first-child { border-top:0; }
+  .tier .nm { font-weight:600; font-size:.92rem; }
+  .tier .bl { font-size:.8rem; color:var(--dim); }
+  .tier .cost { font:.76rem ui-monospace, monospace; color:var(--dim); text-align:right; white-space:nowrap; }
+  .tier .params { grid-column: 1 / -1; display:flex; gap:.8rem; flex-wrap:wrap; align-items:flex-end; }
+  .tier .params label { margin:0 0 .1rem; }
+  .who { display:flex; gap:.7rem; align-items:center; margin:.6rem 0 0; }
+  .who img { width:48px; height:48px; border-radius:50%; object-fit:cover; background:var(--soft); }
+  .who .n { font-weight:600; }
+  .who .h { font:.78rem ui-monospace, monospace; color:var(--dim); }
+
+  .stats { display:flex; flex-wrap:wrap; gap:.4rem 1.4rem; margin:.4rem 0; }
+  .stat { font-size:.8rem; color:var(--dim); }
+  .stat b { display:block; font-size:1.15rem; color:var(--fg); font-weight:600; }
+  .chart { font-size:.72rem; margin:.2rem 0 .6rem; }
+  .chart .r { display:grid; grid-template-columns: minmax(6rem, 13rem) minmax(0,1fr); gap:.5rem; align-items:center; margin:.12rem 0; }
+  .chart .lab { color:var(--dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-align:right; }
+  .chart .bars > div { display:flex; align-items:center; gap:.35rem; }
+  .chart .bars i { display:block; height:9px; background:var(--accent); border-radius:2px; min-width:1px; }
+  .chart .bars i.s2 { background:var(--accent2); }
+  .chart .bars span { color:var(--dim); white-space:nowrap; }
+  .legend { font-size:.72rem; color:var(--dim); display:flex; gap:1rem; }
+  .legend i { display:inline-block; width:10px; height:10px; border-radius:2px; background:var(--accent); vertical-align:-1px; margin-right:.3rem; }
+  .legend i.s2 { background:var(--accent2); }
+  .cols { display:flex; align-items:flex-end; gap:1px; height:90px; border-bottom:1px solid var(--line); margin:.3rem 0 .1rem; }
+  .cols i { flex:1; background:var(--accent); min-height:1px; }
+  .cols i.s2 { background:var(--accent2); }
+  .axis { display:flex; justify-content:space-between; font:.66rem ui-monospace, monospace; color:var(--dim); }
+
+  .set { margin:.6rem 0 0; }
+  .set summary { cursor:pointer; font-size:.86rem; }
+  .set .bar { display:flex; gap:.4rem; align-items:center; flex-wrap:wrap; margin:.4rem 0; }
+  .set .mk { display:none; gap:.4rem; align-items:center; flex-wrap:wrap; }
+  .set .mk.on { display:flex; }
+  .tablewrap { overflow-x:auto; }
+  table { border-collapse:collapse; width:100%; font-size:.74rem; }
+  th, td { text-align:left; padding:.35rem .4rem; border-bottom:1px solid var(--line); vertical-align:top; }
+  th { font-weight:600; color:var(--dim); white-space:nowrap; }
+  td.n, th.n { text-align:right; white-space:nowrap; }
+  td.acct { font-family: ui-serif, Georgia, serif; font-size:.84rem; min-width:13rem; }
+  td.acct a { font:.74rem ui-monospace, monospace; color:var(--dim); }
+  canvas.ego { width:100%; max-width:760px; aspect-ratio:1; display:block; border:1px solid var(--line); border-radius:6px; background:var(--card); margin:.4rem 0; }
+  #acct { display:flex; gap:.5rem; align-items:center; flex-wrap:wrap; font-size:.82rem; }
+  #acct img { width:24px; height:24px; border-radius:50%; }
+  footer { font-size:.8rem; color:var(--dim); border-top:1px solid var(--line); padding-top:.8rem; margin-top:1.5rem; }
+  @media (max-width: 760px) {
+    main { padding:.8rem 16px 2rem; }
+    .grid2 { grid-template-columns: minmax(0,1fr); }
+    .tier { grid-template-columns: minmax(0,1fr); }
+    .tier .cost { text-align:left; }
+    .chart .r { grid-template-columns: minmax(5rem, 8rem) minmax(0,1fr); }
+    .pcard { max-width:100%; }
+  }
+</style>
+<body>
+<main>
+  <h1>Six Degrees of Bluesky</h1>
+  <p class="sub">Find the shortest chain of follows from one Bluesky account to another, and measure any one
+    account’s network: who follows back, when it followed whom, which follows have gone quiet, which lists include it,
+    how tightly its follows follow each other. Everything runs in this tab against Bluesky’s public servers, and the
+    page never sends more than 300 requests in any minute. Each step says how many requests it needs before it
+    sends them; a run that would pass its budget waits for you to continue.</p>
+
+  <div class="meter" id="meter">
+    <div class="line">
+      <span>last 60 s <b id="mWin">0</b> / <b id="mCeil">300</b></span>
+      <div class="gauge" title="requests sent in the last 60 seconds, out of 300"><div id="mBar"></div><i id="mMark"></i></div>
+      <span>this run <b id="mRun">0</b></span>
+      <span>in queue <b id="mQueue">0</b></span>
+      <span title="requests per minute, at most 300">ceiling/min <input id="ceiling" type="number" min="1" max="300" step="10" value="300" aria-label="requests per minute, at most 300"></span>
+      <span title="requests a run may send before asking">budget/run <input id="budget" type="number" min="10" step="50" value="500" aria-label="calls per run before asking"></span>
+      <button id="stop" class="danger" disabled>Stop</button>
+    </div>
+    <div id="next">Next step: nothing queued.</div>
+    <div id="paused"></div>
+    <div id="gateBox"><span id="gateMsg"></span><button id="gateGo" class="primary">Continue</button><button id="gateNo">Stop here</button></div>
+  </div>
+
+  <section class="card" id="pathCard">
+    <h2>Shortest follow path</h2>
+    <div class="row">
+      <div><label for="pa">From</label><input id="pa" type="text" placeholder="handle, DID or profile URL" autocomplete="off"></div>
+      <button id="swap" title="swap From and To" aria-label="swap From and To">⇄</button>
+      <div><label for="pb">To</label><input id="pb" type="text" placeholder="handle, DID or profile URL" autocomplete="off"></div>
+      <div><label for="cap">Page cap</label><input id="cap" type="number" min="1" max="100" value="10"></div>
+      <button id="find" class="primary">Find path</button>
+    </div>
+    <label class="inline"><input type="checkbox" id="mutual"> mutual follows only</label>
+    <label class="inline"><input type="checkbox" id="allp"> list every shortest path</label>
+    <p class="hint">A path reads: From follows x, who follows y, …, who follows To. The search grows rings from
+      both ends (a ring is every account the same number of follows from one end) and finishes each ring it starts.
+      Accounts with more than <i>page cap</i> pages of 100 follows (followers, on To’s side) are not read, though a
+      path can still pass through them. The result says whether the path is proven shortest.</p>
+    <div class="prog"><div id="pProg"></div></div>
+    <div class="status" id="pStatus"></div>
+    <div id="pOut"></div>
+  </section>
+
+  <section class="card" id="mCard">
+    <h2>One account’s network</h2>
+    <div class="row">
+      <div><label for="who">Account</label><input id="who" type="text" placeholder="handle, DID or profile URL" autocomplete="off"></div>
+      <button id="load" class="primary">Load (1 call)</button>
+    </div>
+    <p class="hint">Loading lists seven measurements of the account, each with the number of requests it needs;
+      run any of them.</p>
+    <div id="whoBox"></div>
+    <div id="tiers"></div>
+    <div class="prog"><div id="mProg"></div></div>
+    <div class="status" id="mStatus"></div>
+  </section>
+  <div id="mOut"></div>
+
+  <section class="card">
+    <h2>Making lists</h2>
+    <div id="acct"><span id="acctOut">Turning a result into a Bluesky list needs you signed in (Bluesky OAuth; no app password). Reading needs nothing.</span>
+      <input id="handle" type="text" placeholder="your handle" style="max-width:14rem" autocomplete="username"><button id="signin">Sign in</button></div>
+    <p class="hint">Bluesky lists are public. Sign-in leaves this page and reloads it, which clears the results on
+      screen; everything read is cached for 24 hours, so running the same search or measurement again costs no
+      requests.</p>
+  </section>
+
+  <details><summary class="hint">Log</summary><div id="log"></div></details>
+
+  <footer>
+    <a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/bsky/six-degrees/README.md">README</a> ·
+    <a href="/bsky/">Bluesky tools</a> · data from Bluesky’s public AppView, PDSes, plc.directory and
+    <a href="https://constellation.microcosm.blue/">Constellation</a> (microcosm, community-run) ·
+    <button id="clearCache" style="font-size:.72rem;padding:.15rem .45rem">clear cache</button> <span id="cacheN"></span>
+  </footer>
+</main>
+<script type="module" src="./app.js?v=1"></script>
+</body>
+</html>
