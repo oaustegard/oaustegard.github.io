@@ -234,7 +234,7 @@ function renderAcct() {
   $('handle').hidden = on;
   $('signin').textContent = on ? 'Sign out' : 'Sign in';
   $('acctOut').innerHTML = on ? `Signed in as <b>@${esc(oauth.handle || oauth.session.did)}</b>. “Make a Bluesky list…” under any result creates a curated list in your account.`
-    : 'Turning a result into a Bluesky list needs you signed in (Bluesky OAuth; no app password). Reading needs nothing.';
+    : 'Turning a result into a Bluesky list needs you signed in (Bluesky OAuth; no app password). Reading needs nothing. Each table of accounts has a “Make a Bluesky list…” button.';
 }
 async function initAuth() {
   const back = /[?&#](code|state|error)=/.test(location.search + location.hash);

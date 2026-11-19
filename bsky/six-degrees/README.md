@@ -11,7 +11,7 @@ address. Before each piece of work it says how many requests that will take.
 
 **Path.** Type two accounts (handle, DID or profile URL) into From and To and press Find path. The result is a
 row of profile cards, From → … → To, where each account follows the next, and a line that says whether the path
-is proven shortest. ⇄ swaps the two, which gives the path the other way round, the same as following followers instead of follows. "Mutual follows only" restricts the path to pairs that follow each other. "List every
+is proven shortest. ⇄ swaps the two boxes, for the path from To back to From. "Mutual follows only" restricts the path to pairs that follow each other. "List every
 shortest path" lists up to 50 when several tie.
 
 **One account's network.** Type an account and press Load (one request). Seven measurements, called tiers,
@@ -28,8 +28,8 @@ Words the page uses:
 
 - **request** or **call**: one HTTP request to a Bluesky or atproto server.
 - **page**: one list request returns at most 100 accounts, so an account with 879 follows takes 9 pages.
-- **run**: everything one button press sets off (a path search, one tier). The budget counts per run.
-- **step**: a part of a run that is estimated and approved on its own, such as one ring of a path search.
+- **run**: everything one button press sets off (a path search, one tier). The budget (see Budget) counts per run.
+- **step**: a part of a run that gets its own estimate before it starts, such as one ring of a path search.
 - **ring**: all the accounts the same number of follows away from From (or from To) in a path search.
 
 ## Request ceiling
@@ -47,7 +47,7 @@ last 60 seconds under the ceiling.
 
 At most 4 requests are in flight at once. A 429 answer, or a `RateLimit-Remaining` header under 10% of
 `RateLimit-Limit`, pauses that host until the time in `RateLimit-Reset` (60 s when there is none). The refused
-request then waits a further 1, 2, 4, 8 or 16 seconds and gives up after six tries. The last minute's send
+request then waits a further 1, 2, 4, 8 or 16 seconds and gives up after six tries; the run then ends with an error in the log, and a path search reports its result as unproven. The last minute's send
 times are kept in `localStorage`, so reloading the page does not reset the count.
 
 The bar at the top shows the requests in the last 60 s against 300, the requests of the current run, the queue,
@@ -55,8 +55,8 @@ any host paused for its rate limit, the ceiling and the budget. Stop cancels eve
 
 ## Budget
 
-Each step shows "Next step: ~N calls, ~T at the current ceiling" before it starts. Page counts come from each
-account's `followsCount` and `followersCount`. When a step would take the run past its budget (500 calls unless
+Each step shows "Next step: ~N calls, ~T at the current ceiling" before it starts. Estimates are built from page
+counts, which come from each account's `followsCount` and `followersCount`. When a step would take the run past its budget (500 calls unless
 changed in the bar), the run waits: Continue raises the budget to cover that step and asks again at the next
 step that would pass it; Stop here ends the run. A path search ended that way says its result is unproven. The
 budget never interrupts a step once it has started; the Stop button does.
@@ -75,16 +75,16 @@ last hop to a celebrity whose followers could never be read.
 
 Every ring is finished before the search stops, and it stops only when no path it has not seen could be shorter
 than the best one found. With f rings read on From's side and t on To's side, every path of f + t hops or fewer
-has been seen (f + 1 when only the last-hop check covers To's side). The prototype in `prototype/sixdeg.py`
-stopped at the first meeting in the middle of a ring and could report 4 hops when 3 were possible.
+has been seen. When To's followers were never read (t = 0), the last-hop check still covers paths of f + 1 hops.
 
 An account that was too big to read can still hide a shorter path. The gap check works out which skipped
-accounts could: one skipped k rings from From matters only if a path through it could be shorter than the best
-without reaching To's complete rings, and the same in the other direction. For each skipped account on To's side
+accounts could. An account skipped in ring k on From's side matters only if a path through it, shorter than the
+best, could reach To while staying outside every ring read on To's side; a path that enters one of those rings
+would already have been found. The same holds the other way round. For each skipped account on To's side
 that remains, one `getRelationships` call asks whether any remaining skipped account on From's side follows it,
 which settles every path in which the two are neighbours. A path with an unseen account between them stays
 possible, and those skipped accounts are listed under the result, which then reads "no shorter path exists unless
-it runs through one of these accounts". Raising the page cap reads them.
+it runs through one of these accounts". Raising the page cap reads them, at 10 or more pages each.
 
 "Mutual follows only" uses only pairs that follow each other. It reads both lists of an account, or its smaller
 list plus `getRelationships` for the other direction, whichever takes fewer requests.
@@ -93,10 +93,10 @@ Measured on 2026-11-19 at the full ceiling, with "list every shortest path" on:
 
 | Pair | Result | Requests | Time |
 |---|---|---|---|
-| austegard.com → jay.bsky.team | 2 hops, proven shortest, at least 20 paths | 44 | 5 s in Chromium, 11 s in Node |
-| thetractorbeam.bsky.social → tractorbeambenny.bsky.social | 4 hops, proven shortest, 19 paths | 514 | 71–81 s over two Node runs |
+| austegard.com → jay.bsky.team | 2 hops, proven shortest, at least 20 paths | 44 | 5–11 s |
+| thetractorbeam.bsky.social → tractorbeambenny.bsky.social | 4 hops, proven shortest, 19 paths | 514 | 71–81 s |
 
-The second pair passes the default budget once. Its rings left 13 accounts unread at depth 1, on both sides
+The second pair needs one click on Continue at the default budget. Its search left 13 accounts unread in ring 1, on both sides
 together; the gap check cost 5 requests and ruled out a 3-hop path through them.
 
 ## Tiers
@@ -112,13 +112,14 @@ Each tier shows its estimated requests and runs only when asked.
    `com.atproto.repo.listRecords`. Follows per month, and follows of accounts the AppView no longer shows
    (deleted, deactivated or taken down). 12 requests for austegard.com.
 3. **Recent posts of each follow.** `getAuthorFeed?limit=10` for each account followed: when it last posted
-   (no post in 90 days counts as dormant), the main language of its posts, and the hours its follows post in. The
-   account's own last 100 posts give its posting hours; the middle of its quietest six hours is taken to be about
-   03:45 local time, which gives a guess at its UTC offset. One request per follow.
+   (no post in 90 days counts as dormant), the main language of its posts, and the hours each posts in. The account's
+   own last 100 posts give its posting hours; assuming people sleep through the small hours, the middle of its
+   quietest six hours is taken as about 03:45 local time, which gives a guess at its UTC offset. One request per follow.
 4. **Lists and starter packs** that include the account. Constellation lists the list-item records that point at
    the account's DID; `getRecord` and `getList` read each list, and starter packs come from Constellation records
    that point at those lists. Moderation lists (block and mute lists) are left out.
-5. **Echo-chamber sample.** The follow lists of a random sample of the account's follows (100 by default).
+5. **Echo-chamber sample.** The follow lists of a random sample of the account's follows (100 by default,
+   leaving out follows with more than 10 pages of follows; about 350 requests for austegard.com).
    Density is the share of the account's other follows that a sampled follow also follows: 5% means a typical
    follow follows one in twenty of them, and a higher number means a tighter circle. Jaccard overlap (shared
    accounts over all accounts) of each sampled follow's follows with the account's, and between pairs of sampled
@@ -127,8 +128,9 @@ Each tier shows its estimated requests and runs only when asked.
    spreads the requests over many hosts and their separate limits. From them: communities (Louvain), bridge
    accounts (betweenness: how many shortest routes between other follows pass through an account; participation:
    how evenly its links spread over communities), and a drawing coloured by community. About 9,100 requests and
-   30 minutes for austegard.com. Each follow list is cached when read, so a stopped run picks up where it stopped.
-7. **Two accounts compared.** Shared follows and shared followers, with Jaccard overlap of each.
+   30 minutes for austegard.com. Each follow list is cached when read, so a stopped run picks up where it stopped if restarted within 24 hours.
+7. **Two accounts compared.** Shared follows and shared followers, with Jaccard overlap of each. One request per
+   page of each account's two lists.
 
 ## Caching
 
@@ -142,7 +144,7 @@ with `com.atproto.repo.applyWrites`, 200 per request. Bluesky lists are public, 
 accounts that don't follow you back. Making one needs sign-in with atproto OAuth (`@atproto/oauth-client-browser`,
 client metadata in `client-metadata.json`), which asks only to write list and list-item records. Sign-in leaves
 the page and reloads it, which clears the results on screen; the cache makes running the same search or tier
-again free.
+again free. Signing in before running anything avoids that.
 
 ## Files
 
@@ -159,7 +161,8 @@ again free.
 | `prototype/sixdeg.py` | the Python prototype the search was ported from |
 
 The page also loads `/experiments/gpu-bridge/web/relay.js`, a logger from the `oaustegard/experiments` site that
-does nothing unless switched on with `?log=1` in a browser holding its GitHub token.
+sends nothing by default; with `?log=1`, in a browser holding the site owner's GitHub token for it, it
+writes the page's console log to a private GitHub repository.
 
 Tests, run with Node 22 from the repository root:
 
@@ -170,8 +173,8 @@ node tests/six-degrees-scheduler.mjs && node tests/six-degrees-path.mjs && node 
 The scheduler test queues 1,000 mocked requests in simulated time and checks that no 60-second window holds more
 than 300 sends (and no host more than its cap), that 429s and low remaining counts pause their host until the
 reset, and that Stop cancels the queue. The path test compares the search with plain breadth-first search on
-hundreds of random follow graphs, with and without accounts too big to read and in mutual mode, and replays the
-case the prototype got wrong. The metrics test checks Louvain, betweenness, Jaccard, the bootstrap and the
+hundreds of random follow graphs, with and without accounts too big to read and in mutual mode, and replays a
+case where stopping at the first meeting mid-ring would give 3 hops instead of 2. The metrics test checks Louvain, betweenness, Jaccard, the bootstrap and the
 timezone guess on hand-worked cases.
 
 ## Not built yet
