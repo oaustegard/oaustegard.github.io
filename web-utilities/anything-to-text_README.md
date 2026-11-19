@@ -34,14 +34,21 @@ so these extensionless files are selectable in the first place.
   [austegard.com/experiments/indra-browser](https://austegard.com/experiments/indra-browser/web/)
   on first use; models for other writing systems and its spelling-correction tables
   download only when a page needs them.
-- **PP-OCRv6** is the other choice, in three sizes (tiny ~3M / small ~7M / medium
-  ~35M parameters). It returns plain text lines and runs without WebGPU, so a browser
-  without WebGPU switches to PP-OCRv6 medium automatically. Its weights and
-  50-language character list download from Hugging Face on first use.
+- **PP-OCRv6** is the other choice, in two sizes (tiny ~3M / small ~7M parameters).
+  It returns plain text lines and runs without WebGPU, so a browser without WebGPU
+  switches to PP-OCRv6 small automatically. Its weights and 50-language character
+  list download from Hugging Face on first use.
 - **PDFs are hybrid**: each page first tries pdf.js's embedded text layer (exact,
   instant, no model). Only text-less pages (scans) fall through to OCR, so a
   born-digital PDF never loads an OCR model. Any page can be forced through OCR
   with **Re-run as OCR**.
+- **PDF layers**: by default a page is read flattened, as a viewer shows it. Every
+  image is composited, including the JBIG2 and JPEG 2000 layers that compressed scans
+  use for the text over a JPEG background, and filled-in form fields and FreeText notes
+  are painted onto the page and their values added to the text layer. **Fields &
+  annotations separately** splits each page that has annotations into two entries: the
+  page content alone (the blank form) and the fields and annotations alone. The mode
+  applies to PDFs added after it is set.
 - Large jobs process in batches — press **Run batch**, then **Continue**.
 - **Exports**: copy all text, `.txt`, `.md` (Markdown when Indra read the page, plain
   text lines otherwise), `.json` (with normalized bounding boxes and

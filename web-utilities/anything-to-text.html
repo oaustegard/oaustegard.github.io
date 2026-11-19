@@ -202,7 +202,6 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
             <option value="indra" selected title="Indra OCR (Datalab): 12M parameters, reads layout and reading order, outputs Markdown. Needs WebGPU.">Indra (layout + Markdown, ~2.3 MB, needs WebGPU)</option>
             <option value="tiny">PP-OCRv6 tiny (~3M, fastest)</option>
             <option value="small">PP-OCRv6 small (~7M, balanced)</option>
-            <option value="medium">PP-OCRv6 medium (~35M, best)</option>
           </select>
         </div>
         <div><label class="field" for="dpi">PDF DPI</label><input id="dpi" type="number" value="200" step="50" min="72" max="400"></div>
@@ -221,6 +220,13 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
           <select id="textorder">
             <option value="geometric" selected>Geometric (column-aware)</option>
             <option value="pdf">Preserve PDF order</option>
+          </select>
+        </div>
+        <div>
+          <label class="field" for="pdflayers">PDF layers</label>
+          <select id="pdflayers" title="Applies to PDFs added after the change">
+            <option value="flat" selected title="Read the page as a viewer shows it: all images, filled-in form fields and annotations together">Flatten (as displayed)</option>
+            <option value="separate" title="Pages with form fields or annotations become two entries: the page content alone, and the fields and annotations alone">Fields &amp; annotations separately</option>
           </select>
         </div>
       </div>
@@ -451,6 +457,18 @@ import * as pdfjsLib from "https://esm.sh/pdfjs-dist@6.0.227";
 
 /* pdf.js needs an explicit worker URL; module worker is fine over http(s) (SharePoint), not file://. */
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://esm.sh/pdfjs-dist@6.0.227/build/pdf.worker.min.mjs";
+/* pdf.js 6 decodes JBIG2 and JPEG 2000 images with WebAssembly it fetches from wasmUrl.
+   Without it those images are skipped with only a console warning, which drops the
+   foreground of scanned (MRC) PDFs: a JPEG background with the text in a JBIG2 mask on
+   top rendered as the background alone. cMaps, standard fonts and ICC profiles load from
+   the same package. The version must match the import above. */
+const PDFJS_ASSETS = "https://cdn.jsdelivr.net/npm/pdfjs-dist@6.0.227/";
+const PDF_DOC_OPTS = {
+  wasmUrl: PDFJS_ASSETS + "wasm/",
+  cMapUrl: PDFJS_ASSETS + "cmaps/", cMapPacked: true,
+  standardFontDataUrl: PDFJS_ASSETS + "standard_fonts/",
+  iccUrl: PDFJS_ASSETS + "iccs/",
+};
 
 
 const $ = s => document.querySelector(s);
@@ -472,7 +490,8 @@ let nextIndex = 0;             /* pointer to the next unprocessed page */
 const pdfDocs = [];            /* keep pdf documents alive so lazy page render works */
 
 /* ---------- OCR model selection ----------
-   PP-OCRv6 in three tiers; weights stream from Hugging Face on first run.
+   PP-OCRv6 in two tiers (medium was dropped: Indra reads better at a fraction of its
+   35M parameters); weights stream from Hugging Face on first run.
    The 50-language recognition dictionary is fetched from inference.yml at init time
    because it contains non-ASCII characters that cannot live in this ASCII-only page.
    Set USE_V6 = false to fall back to the bundled PP-OCRv5 mobile (English only). */
@@ -485,9 +504,6 @@ const V6_TIERS = {
   small:  { det: HF_BASE + "/PP-OCRv6_small_det_onnx/resolve/main/inference.onnx",
             rec: HF_BASE + "/PP-OCRv6_small_rec_onnx/resolve/main/inference.onnx",
             yml: HF_BASE + "/PP-OCRv6_small_rec_onnx/resolve/main/inference.yml" },
-  medium: { det: HF_BASE + "/PP-OCRv6_medium_det_onnx/resolve/main/inference.onnx",
-            rec: HF_BASE + "/PP-OCRv6_medium_rec_onnx/resolve/main/inference.onnx",
-            yml: HF_BASE + "/PP-OCRv6_medium_rec_onnx/resolve/main/inference.yml" },
 };
 
 function unquoteYaml(s) {
@@ -564,8 +580,8 @@ async function ensureIndra() {
     indraLoading = null;
     console.error("[indra] load failed; falling back to PP-OCRv6", e);
     const el = document.getElementById("tier");
-    if (el) el.value = "medium";
-    setStatus("Indra could not start (" + ((e && e.message) || e) + "); using PP-OCRv6 medium instead.");
+    if (el) el.value = "small";
+    setStatus("Indra could not start (" + ((e && e.message) || e) + "); using PP-OCRv6 small instead.");
     return null;
   }
 }
@@ -601,7 +617,7 @@ async function recognizeIndra(pg, canvas) {
 /* ---------- model ---------- */
 function selectedTier() {
   const el = document.getElementById("tier");
-  return (el && V6_TIERS[el.value]) ? el.value : "medium";
+  return (el && V6_TIERS[el.value]) ? el.value : "small";
 }
 
 async function ensurePaddle() {
@@ -647,33 +663,114 @@ function addImage(file) {
   });
 }
 
+/* ---------- PDF layers ----------
+   "flat" reads a page the way a viewer shows it: every image in the content stream plus
+   the appearance of each annotation, including filled-in form fields that were never
+   flattened. "separate" splits a page that has annotations into two entries, the page
+   content alone ("content") and the annotations alone ("annots"), so a filled form can
+   be read apart from its blank template. Pages without annotations stay one entry. */
+function pdfLayerMode() { const el = document.getElementById("pdflayers"); return el && el.value === "separate" ? "separate" : "flat"; }
+const LAYER_SUFFIX = { flat: "", content: " (page content)", annots: " (fields & annotations)" };
+
 async function addPdf(file) {
   const buf = await file.arrayBuffer();
-  const doc = await pdfjsLib.getDocument({ data: buf }).promise;
+  const doc = await pdfjsLib.getDocument({ data: buf, ...PDF_DOC_OPTS }).promise;
   pdfDocs.push(doc);
   const label = file.name || "document.pdf";
-  console.log("[pdf]", label, "pages:", doc.numPages);
+  const mode = pdfLayerMode();
+  console.log("[pdf]", label, "pages:", doc.numPages, "layers:", mode);
+  if (mode === "separate") setStatus("Checking " + doc.numPages + " page(s) for form fields and annotations...");
   for (let p = 1; p <= doc.numPages; p++) {
-    const id = pages.length;
     const pageNo = p;
-    pages.push({
-      id, image: label + " p." + pageNo, kind: "pdf",
-      status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
-      meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false, forceText: false,
-      getPdfPage: () => doc.getPage(pageNo),
-      render: async (scale) => {
-        const pdfPage = await doc.getPage(pageNo);
-        const viewport = pdfPage.getViewport({ scale });
-        return renderPdfCanvas(pdfPage, viewport);
-      },
-    });
+    let layers = ["flat"];
+    if (mode === "separate") {
+      const anns = visibleAnnotations(await (await doc.getPage(pageNo)).getAnnotations({ intent: "display" }));
+      if (anns.length) layers = ["content", "annots"];
+    }
+    for (const layer of layers) {
+      pages.push({
+        id: pages.length, image: label + " p." + pageNo + LAYER_SUFFIX[layer], kind: "pdf", layer,
+        status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
+        meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false, forceText: false,
+        getPdfPage: () => doc.getPage(pageNo),
+        render: async (scale) => {
+          const pdfPage = await doc.getPage(pageNo);
+          const viewport = pdfPage.getViewport({ scale });
+          return renderPdfCanvas(pdfPage, viewport, layer);
+        },
+      });
+    }
   }
 }
 
-function renderPdfCanvas(pdfPage, viewport) {
+function renderPdfOnce(pdfPage, viewport, annotationMode) {
   const cv = document.createElement("canvas");
   cv.width = Math.round(viewport.width); cv.height = Math.round(viewport.height);
-  return pdfPage.render({ canvasContext: cv.getContext("2d"), viewport }).promise.then(() => cv);
+  return pdfPage.render({ canvasContext: cv.getContext("2d", { willReadFrequently: true }), viewport, annotationMode })
+    .promise.then(() => cv);
+}
+/* AnnotationMode.ENABLE paints every annotation's appearance stream onto the canvas.
+   pdf.js's default (ENABLE_FORMS) expects an HTML form layer on top, which this page
+   does not build. The annotations-only layer is the difference between the page with
+   and without annotations: pixels the annotations did not change become white. */
+async function renderPdfCanvas(pdfPage, viewport, layer) {
+  const AM = pdfjsLib.AnnotationMode;
+  if (layer === "content") return renderPdfOnce(pdfPage, viewport, AM.DISABLE);
+  if (layer !== "annots") return renderPdfOnce(pdfPage, viewport, AM.ENABLE);
+  const [full, bare] = await Promise.all([renderPdfOnce(pdfPage, viewport, AM.ENABLE), renderPdfOnce(pdfPage, viewport, AM.DISABLE)]);
+  const fctx = full.getContext("2d", { willReadFrequently: true });
+  const f = fctx.getImageData(0, 0, full.width, full.height);
+  const b = bare.getContext("2d", { willReadFrequently: true }).getImageData(0, 0, bare.width, bare.height).data;
+  const d = f.data;
+  for (let i = 0; i < d.length; i += 4) {
+    if (Math.abs(d[i] - b[i]) + Math.abs(d[i + 1] - b[i + 1]) + Math.abs(d[i + 2] - b[i + 2]) < 24) {
+      d[i] = d[i + 1] = d[i + 2] = 255; d[i + 3] = 255;
+    }
+  }
+  fctx.putImageData(f, 0, 0);
+  return full;
+}
+
+/* Annotations a viewer would show: not flagged Hidden (2) or NoView (32). Popups and
+   links carry no visible text of their own. */
+function visibleAnnotations(anns) {
+  return (anns || []).filter(a => a && !((a.annotationFlags || 0) & (2 | 32))
+    && a.subtype !== "Popup" && a.subtype !== "Link");
+}
+/* The text an annotation shows on the page: a text or choice field's value, a check box
+   or radio button's state, a FreeText note's contents. */
+function annotationText(a) {
+  if (a.subtype === "Widget") {
+    if (a.fieldType === "Tx" || a.fieldType === "Ch") {
+      const v = a.fieldValue;
+      return Array.isArray(v) ? v.join(", ") : (typeof v === "string" ? v : "");
+    }
+    if (a.fieldType === "Btn" && a.checkBox) return a.fieldValue && a.fieldValue !== "Off" && a.fieldValue === a.exportValue ? "\u2612" : "\u2610";
+    if (a.fieldType === "Btn" && a.radioButton) return a.fieldValue && a.fieldValue === a.buttonValue ? "\u25C9" : "\u25CB";
+    return "";
+  }
+  if (a.subtype === "FreeText") {
+    if (Array.isArray(a.textContent) && a.textContent.length) return a.textContent.join("\n");
+    return (a.contentsObj && a.contentsObj.str) || "";
+  }
+  return "";
+}
+/* Annotation text as {text, box, confidence} items in canvas pixels, one item per line
+   of a multi-line value, so it merges with the text layer and flows through the same
+   reading-order step. */
+async function extractAnnotText(pdfPage, viewport) {
+  const items = [];
+  for (const a of visibleAnnotations(await pdfPage.getAnnotations({ intent: "display" }))) {
+    const t = annotationText(a);
+    if (!t || !t.trim() || !a.rect) continue;
+    const r = viewport.convertToViewportRectangle(a.rect);
+    const x = Math.min(r[0], r[2]), y = Math.min(r[1], r[3]);
+    const w = Math.abs(r[2] - r[0]), h = Math.abs(r[3] - r[1]);
+    const lines = t.split(/\r\n|\r|\n/).filter(s => s.trim());
+    const lh = h / Math.max(1, lines.length);
+    lines.forEach((s, i) => items.push({ text: s, confidence: 1, box: { x, y: y + i * lh, width: w, height: lh } }));
+  }
+  return items;
 }
 
 async function accept(fileList) {
@@ -940,22 +1037,28 @@ async function processPage(pg) {
   if (pg.kind === "pdf" && !pg.forceOcr) {
     const pdfPage = await pg.getPdfPage();
     const viewport = pdfPage.getViewport({ scale });
-    const items = await extractPdfText(pdfPage, viewport);
-    if (hasUsableText(items)) {
-      const canvas = await renderPdfCanvas(pdfPage, viewport);
+    /* Form-field values and FreeText notes live in annotations, not in the text layer.
+       Whether the page has usable text is decided on the layer the entry reads: a
+       scanned form with typed-in fields still goes to OCR (which sees the fields painted
+       on the flattened render) rather than returning the field values alone. */
+    const contentItems = pg.layer === "annots" ? [] : await extractPdfText(pdfPage, viewport);
+    const annotItems = pg.layer === "content" ? [] : await extractAnnotText(pdfPage, viewport);
+    const items = contentItems.concat(annotItems);
+    if (hasUsableText(pg.layer === "annots" ? annotItems : contentItems)) {
+      const canvas = await renderPdfCanvas(pdfPage, viewport, pg.layer);
       pg.pageW = canvas.width; pg.pageH = canvas.height;
       pg.preview = makePreview(canvas);
       buildResult(pg, items, "text", null);
       pg.ms = Math.round(performance.now() - t0);
       pg.status = "done";
-      console.log("[text]", pg.image, pg.ms + "ms", pg.lines.length + " lines (pdf.js text layer)");
+      console.log("[text]", pg.image, pg.ms + "ms", pg.lines.length + " lines (pdf.js text layer" + (annotItems.length ? " + " + annotItems.length + " from fields/annotations" : "") + ")");
       return;
     }
     if (pg.forceText) {
-      const canvas = await renderPdfCanvas(pdfPage, viewport);
+      const canvas = await renderPdfCanvas(pdfPage, viewport, pg.layer);
       pg.pageW = canvas.width; pg.pageH = canvas.height;
       pg.preview = makePreview(canvas);
-      buildResult(pg, [], "text", null);
+      buildResult(pg, items, "text", null);
       pg.ms = Math.round(performance.now() - t0);
       pg.status = "done";
       console.log("[text]", pg.image, "no embedded text layer on this page (forced text)");
@@ -1275,7 +1378,11 @@ document.getElementById("tier").onchange = () => {
   if (paddle) { paddle = null; setStatus("Model changed - will reload on next run."); }
   estimate();
 };
-/* Indra is the default; without WebGPU, ensureIndra switches the select to PP-OCRv6 medium */
+/* the layer mode decides how many entries a PDF becomes, so it applies at intake */
+document.getElementById("pdflayers").onchange = () => {
+  if (pages.some(p => p.kind === "pdf")) setStatus("PDF layer mode applies to PDFs added from now on; Clear and add the file again to re-read it.");
+};
+/* Indra is the default; without WebGPU, ensureIndra switches the select to PP-OCRv6 small */
 runBtn.onclick = () => runBatch().then(refreshControls);
 continueBtn.onclick = () => runBatch().then(refreshControls);
 clearBtn.onclick = clearAll;
