@@ -35,7 +35,8 @@ Words the page uses:
 ## Request ceiling
 
 Every request goes through `scheduler.js`, which holds it until sending it keeps the count of requests in the
-last 60 seconds under the ceiling.
+last 61 seconds under the ceiling; the extra second absorbs timing jitter, so any 60-second window seen from
+outside holds at most 300.
 
 | Host | Requests per rolling 60 s |
 |---|---|

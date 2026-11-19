@@ -44,7 +44,9 @@ export function hostOf(url) {
 export function createScheduler(opts = {}) {
   const clock = opts.clock || realClock;
   const fetchImpl = opts.fetch || ((...a) => fetch(...a));
-  const windowMs = opts.windowMs ?? WINDOW_MS;
+  // one extra second, so a request logged a few ms late by whoever watches (the browser, a server) still
+  // falls in a window of at most `ceiling`: a full-ego run seen from the browser counted 303 without it
+  const windowMs = opts.windowMs ?? WINDOW_MS + 1000;
   const concurrency = opts.concurrency ?? 4;
   const hostCaps = { ...HOST_CAPS, ...(opts.hostCaps || {}) };
   const defaultHostCap = opts.defaultHostCap ?? DEFAULT_HOST_CAP;
