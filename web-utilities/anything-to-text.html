@@ -11,6 +11,8 @@
 <title>Anything to Text - in-browser OCR &amp; transcription</title>
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="stylesheet" href="/styles/style.css">
+<!-- logs to the GPU bridge on Oskar's devices only, with ?log=1 (experiments/gpu-bridge/web/relay.js) -->
+<script src="https://austegard.com/experiments/gpu-bridge/web/relay.js"></script>
 <style>
 /* ---- Anything to Text: component styles on the site's Grouch's Workshop tokens ---- */
 :root {
@@ -46,6 +48,7 @@ section.engine { margin-bottom: 8px; }
 .dropzone:hover, .dropzone.over, .dropzone.hover { border-color: var(--a2t-accent); background: color-mix(in srgb, var(--a2t-accent) 7%, var(--a2t-surface)); }
 .dropzone .big { font-family: var(--disp); font-size: 18px; font-weight: 700; color: var(--fg); }
 .dropzone .hint { color: var(--a2t-faint); font-size: 12px; margin-top: 6px; }
+.controls .hint { display: block; color: var(--a2t-faint); font-size: 12px; margin-top: 4px; max-width: 22ch; }
 .dropzone.has-file { border-style: solid; border-color: var(--a2t-accent); }
 #route-note { color: var(--a2t-dim); font-size: 12px; margin: 12px 2px 0; min-height: 16px; font-family: var(--mono); }
 
@@ -203,6 +206,15 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
             <option value="tiny">PP-OCRv6 tiny (~3M, fastest)</option>
             <option value="small">PP-OCRv6 small (~7M, balanced)</option>
           </select>
+        </div>
+        <div>
+          <label class="field" for="math">Math as LaTeX (Indra only)</label>
+          <select id="math" title="Indra writes lines that hold math as LaTeX in the Markdown ($...$ inline, $$...$$ for a display equation), read by a second model of about 8 MB on top of Indra's 2.3 MB. Auto: a small classifier (90 KB) checks each OCRed page and the math model downloads the first time a line holds math. On: the math model downloads when Indra loads. Off: math is read as plain characters. PDF pages taken from their embedded text layer are not OCRed, so they get no LaTeX; use OCR on such a page to read its math.">
+            <option value="auto" selected>Auto (adds ~8 MB the first time a line looks like math)</option>
+            <option value="on">On (downloads the ~8 MB math model when Indra loads)</option>
+            <option value="off">Off (math read as plain text)</option>
+          </select>
+          <small class="hint">Applies to pages read by OCR; PDF pages with embedded text use that text instead.</small>
         </div>
         <div><label class="field" for="dpi">PDF DPI</label><input id="dpi" type="number" value="200" step="50" min="72" max="400"></div>
         <div><label class="field" for="batch">Batch size</label><input id="batch" type="number" value="10" step="1" min="1" max="50"></div>
@@ -471,6 +483,20 @@ const PDF_DOC_OPTS = {
 };
 
 
+const BUILD = "2026-11-19-math"; /* keep equal to anything-to-text_build.json */
+const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
+/* a cached copy of an older build reloads itself once */
+fetch("anything-to-text_build.json", { cache: "no-store" }).then(r => (r.ok ? r.json() : null)).then(b => {
+  if (!b || !b.build || b.build === BUILD) return;
+  relay.warn("stale page", { running: BUILD, current: b.build });
+  let tried = null;
+  try { tried = sessionStorage.getItem("a2t:reloaded-for"); sessionStorage.setItem("a2t:reloaded-for", b.build); } catch (e) {}
+  if (tried === b.build) return;
+  const url = new URL(location.href);
+  url.searchParams.set("b", b.build);
+  location.replace(url.href);
+}).catch(() => {});
+
 const $ = s => document.querySelector(s);
 const statusEl = $("#status"), etaEl = $("#eta"), pagesEl = $("#pages");
 const estimateBtn = $("#estimate"), runBtn = $("#run"), continueBtn = $("#continue"), clearBtn = $("#clear");
@@ -555,18 +581,33 @@ async function loadV6Dict(url) {
    with its own reading-order model, then writes the page as Markdown (headings,
    paragraphs, lists, tables). The core pack is about 2.3 MB gzipped; recognizers for other
    scripts and the n-gram word models load the first time a page needs them. The module
-   and weights are served from austegard.com with CORS, so previews load them too. */
+   and weights are served from austegard.com with CORS, so previews load them too.
+   Math: with the Math select on Auto, a 90 KB classifier looks at every line of the first
+   page Indra reads; only when it flags a line is the math reader (about 8 MB) fetched,
+   and flagged lines it reads confidently come back as LaTeX ($...$, display equations as
+   $$...$$). On fetches both at once; Off fetches neither. */
 const INDRA_BASE = "https://austegard.com/experiments/indra-browser/web/";
 let indra = null;              /* lazy Indra reader */
 let indraLoading = null;
 function useIndra() { const el = document.getElementById("tier"); return !!el && el.value === "indra"; }
+function mathMode() { const el = document.getElementById("math"); return el ? el.value : "auto"; }
+document.getElementById("math").onchange = () => {
+  relay.log("math mode", { mode: mathMode() });
+  if (indra) indra.setMath(mathMode());
+};
 async function ensureIndra() {
   if (indra) return indra;
   if (!indraLoading) {
     indraLoading = (async () => {
       setStatus("Loading Indra OCR (about 2.3 MB on first run)...");
       const mod = await import(INDRA_BASE + "indra.js");
-      const r = await mod.Indra.load(INDRA_BASE + "models/mix8/", { log: m => console.log("[indra]", m) });
+      const r = await mod.Indra.load(INDRA_BASE + "models/mix8/", {
+        math: mathMode(),
+        log: m => {
+          console.log("[indra]", m);
+          if (/math/.test(m)) { relay.log("indra: " + m); setStatus("Indra: " + m); }
+        },
+      });
       r.furniture = true;      /* keep running headers and footers: this tool extracts all text */
       return r;
     })();
@@ -574,11 +615,13 @@ async function ensureIndra() {
   try {
     indra = await indraLoading;
     console.log("[indra] ready on", indra.gpu.label || "WebGPU");
+    relay.log("indra ready", { gpu: indra.gpu.label || "WebGPU", ms: Math.round(indra.loadMs), math: indra.mathMode });
     return indra;
   } catch (e) {
     /* no WebGPU, or the load failed: switch this session to PP-OCRv6 and carry on */
     indraLoading = null;
     console.error("[indra] load failed; falling back to PP-OCRv6", e);
+    relay.error("indra load failed", { e: String((e && e.message) || e) });
     const el = document.getElementById("tier");
     if (el) el.value = "small";
     setStatus("Indra could not start (" + ((e && e.message) || e) + "); using PP-OCRv6 small instead.");
@@ -612,6 +655,10 @@ async function recognizeIndra(pg, canvas) {
   pg.text = page.markdown || pg.lines.join("\n");
   pg.engine = "indra";
   console.log("[indra]", pg.image, page.lines.length + " lines", page.rotation ? "turned " + page.rotation : "", page.skew ? "skew " + page.skew : "", page.timings);
+  const t = page.timings || {};
+  relay.log("indra page", { image: pg.image, lines: page.lines.length, math: indra.mathMode, math_lines: t.math_lines ?? null,
+                            math_used: t.math_used ?? null, math_ms: t.math_ms != null ? Math.round(t.math_ms) : null,
+                            rec_ms: t.rec_ms != null ? Math.round(t.rec_ms) : null });
 }
 
 /* ---------- model ---------- */
