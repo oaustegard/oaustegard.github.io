@@ -1,4 +1,4 @@
-import{jsx as e,jsxs as t}from"preact/compat/jsx-runtime";import{Separator as n}from"ui-sdk/separator.js";function r(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ e(`h3`,{children:`Hollis Grant`}),/* @__PURE__ */ e(`p`,{"data-slot":`hint`,children:`hollis@example.com`})]}),/* @__PURE__ */ e(n,{}),/* @__PURE__ */ e(`p`,{children:`Designs the billing and onboarding flows, and reviews every new pricing page.`})]})}function i(){return/* @__PURE__ */ t(`nav`,{"aria-label":`Legal`,"data-slot":`row`,children:[/* @__PURE__ */ e(`a`,{href:`#`,children:`Privacy`}),/* @__PURE__ */ e(n,{orientation:`vertical`}),/* @__PURE__ */ e(`a`,{href:`#`,children:`Terms`}),/* @__PURE__ */ e(n,{orientation:`vertical`}),/* @__PURE__ */ e(`a`,{href:`#`,children:`Cookies`})]})}function a(){return/* @__PURE__ */ t(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ e(`span`,{children:`24`}),/* @__PURE__ */ e(`span`,{"data-slot":`hint`,children:`Projects`})]}),/* @__PURE__ */ e(n,{orientation:`vertical`}),/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ e(`span`,{children:`1,280`}),/* @__PURE__ */ e(`span`,{"data-slot":`hint`,children:`Followers`})]}),/* @__PURE__ */ e(n,{orientation:`vertical`}),/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ e(`span`,{children:`312`}),/* @__PURE__ */ e(`span`,{"data-slot":`hint`,children:`Following`})]})]})}function o(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`dl`,{children:[/* @__PURE__ */ e(`dt`,{children:`Plan`}),/* @__PURE__ */ e(`dd`,{children:`Pro`})]}),/* @__PURE__ */ e(n,{}),/* @__PURE__ */ t(`dl`,{children:[/* @__PURE__ */ e(`dt`,{children:`Seats`}),/* @__PURE__ */ e(`dd`,{children:`8 of 10`})]}),/* @__PURE__ */ e(n,{}),/* @__PURE__ */ t(`dl`,{children:[/* @__PURE__ */ e(`dt`,{children:`Renews`}),/* @__PURE__ */ e(`dd`,{children:`December 1, 2026`})]})]})}function s(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ e(`button`,{type:`button`,"data-variant":`solid`,children:`Sign In with Passkey`}),/* @__PURE__ */ t(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ e(n,{decorative:!0}),/* @__PURE__ */ e(`span`,{children:`or`}),/* @__PURE__ */ e(n,{decorative:!0})]}),/* @__PURE__ */ e(`button`,{type:`button`,children:`Email Me a Link`})]})}function c(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,dir:`rtl`,children:[/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ e(`h3`,{children:`الحساب`}),/* @__PURE__ */ e(`p`,{"data-slot":`hint`,children:`إدارة ملفك الشخصي وتفضيلاتك.`})]}),/* @__PURE__ */ e(n,{}),/* @__PURE__ */ t(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ e(`span`,{children:`الملف الشخصي`}),/* @__PURE__ */ e(n,{orientation:`vertical`}),/* @__PURE__ */ e(`span`,{children:`الفوترة`}),/* @__PURE__ */ e(n,{orientation:`vertical`}),/* @__PURE__ */ e(`span`,{children:`الإعدادات`})]})]})}var l={name:`separator`,title:`Separator`,description:`Divide groups of content with a horizontal or vertical line.`,sections:[{heading:null,text:`Use a separator between groups of content that a reader should take as separate, like a profile's header and its bio.`,examples:[{id:`separator/basic`,caption:`Read the profile with a screen reader. It announces a separator between Hollis Grant's name and email and the bio below.`,Example:r,source:`import { Separator } from "@ui-sdk/react/separator"
+import{K as e,tl as t}from"../chunks/c-CIXE4Nkk.js";function n(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`h3`,{children:`Hollis Grant`}),/* @__PURE__ */ t(`p`,{"data-slot":`hint`,children:`hollis@example.com`})]}),/* @__PURE__ */ t(e,{}),/* @__PURE__ */ t(`p`,{children:`Designs the billing and onboarding flows, and reviews every new pricing page.`})]})}function r(){return/* @__PURE__ */ t(`nav`,{"aria-label":`Legal`,"data-slot":`row`,children:[/* @__PURE__ */ t(`a`,{href:`#`,children:`Privacy`}),/* @__PURE__ */ t(e,{orientation:`vertical`}),/* @__PURE__ */ t(`a`,{href:`#`,children:`Terms`}),/* @__PURE__ */ t(e,{orientation:`vertical`}),/* @__PURE__ */ t(`a`,{href:`#`,children:`Cookies`})]})}function i(){return/* @__PURE__ */ t(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`span`,{children:`24`}),/* @__PURE__ */ t(`span`,{"data-slot":`hint`,children:`Projects`})]}),/* @__PURE__ */ t(e,{orientation:`vertical`}),/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`span`,{children:`1,280`}),/* @__PURE__ */ t(`span`,{"data-slot":`hint`,children:`Followers`})]}),/* @__PURE__ */ t(e,{orientation:`vertical`}),/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`span`,{children:`312`}),/* @__PURE__ */ t(`span`,{"data-slot":`hint`,children:`Following`})]})]})}function a(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`dl`,{children:[/* @__PURE__ */ t(`dt`,{children:`Plan`}),/* @__PURE__ */ t(`dd`,{children:`Pro`})]}),/* @__PURE__ */ t(e,{}),/* @__PURE__ */ t(`dl`,{children:[/* @__PURE__ */ t(`dt`,{children:`Seats`}),/* @__PURE__ */ t(`dd`,{children:`8 of 10`})]}),/* @__PURE__ */ t(e,{}),/* @__PURE__ */ t(`dl`,{children:[/* @__PURE__ */ t(`dt`,{children:`Renews`}),/* @__PURE__ */ t(`dd`,{children:`December 1, 2026`})]})]})}function o(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`button`,{type:`button`,"data-variant":`solid`,children:`Sign In with Passkey`}),/* @__PURE__ */ t(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ t(e,{decorative:!0}),/* @__PURE__ */ t(`span`,{children:`or`}),/* @__PURE__ */ t(e,{decorative:!0})]}),/* @__PURE__ */ t(`button`,{type:`button`,children:`Email Me a Link`})]})}function s(){return/* @__PURE__ */ t(`div`,{"data-slot":`stack`,dir:`rtl`,children:[/* @__PURE__ */ t(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ t(`h3`,{children:`الحساب`}),/* @__PURE__ */ t(`p`,{"data-slot":`hint`,children:`إدارة ملفك الشخصي وتفضيلاتك.`})]}),/* @__PURE__ */ t(e,{}),/* @__PURE__ */ t(`div`,{"data-slot":`row`,children:[/* @__PURE__ */ t(`span`,{children:`الملف الشخصي`}),/* @__PURE__ */ t(e,{orientation:`vertical`}),/* @__PURE__ */ t(`span`,{children:`الفوترة`}),/* @__PURE__ */ t(e,{orientation:`vertical`}),/* @__PURE__ */ t(`span`,{children:`الإعدادات`})]})]})}var c={name:`separator`,title:`Separator`,description:`Divide groups of content with a horizontal or vertical line.`,sections:[{heading:null,text:`Use a separator between groups of content that a reader should take as separate, like a profile's header and its bio.`,examples:[{id:`separator/basic`,caption:`Read the profile with a screen reader. It announces a separator between Hollis Grant's name and email and the bio below.`,Example:n,source:`import { Separator } from "@ui-sdk/react/separator"
 
 function Example() {
   return (
@@ -17,7 +17,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Vertical`,text:'Set `orientation="vertical"` for a line between items in a row. It takes the row\'s height.',examples:[{id:`separator/vertical`,caption:`Read across Privacy, Terms and Cookies. A screen reader announces a vertical separator between each link.`,Example:i,source:`import { Separator } from "@ui-sdk/react/separator"
+`}]},{heading:`Vertical`,text:'Set `orientation="vertical"` for a line between items in a row. It takes the row\'s height.',examples:[{id:`separator/vertical`,caption:`Read across Privacy, Terms and Cookies. A screen reader announces a vertical separator between each link.`,Example:r,source:`import { Separator } from "@ui-sdk/react/separator"
 
 function Example() {
   return (
@@ -32,7 +32,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Stacked Content`,text:`A vertical separator stretches to the tallest item in its row, so it spans a number and its label.`,examples:[{id:`separator/menu`,caption:`Compare the lines with the stats. Each one runs the full height of Projects, Followers and Following.`,Example:a,source:`import { Separator } from "@ui-sdk/react/separator"
+`}]},{heading:`Stacked Content`,text:`A vertical separator stretches to the tallest item in its row, so it spans a number and its label.`,examples:[{id:`separator/menu`,caption:`Compare the lines with the stats. Each one runs the full height of Projects, Followers and Following.`,Example:i,source:`import { Separator } from "@ui-sdk/react/separator"
 
 function Example() {
   return (
@@ -56,7 +56,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Rows`,text:`Put a separator between each pair of rows to divide a list of details.`,examples:[{id:`separator/list`,caption:`Read the plan details with a screen reader. It announces a separator between Plan, Seats and Renews.`,Example:o,source:`import { Separator } from "@ui-sdk/react/separator"
+`}]},{heading:`Rows`,text:`Put a separator between each pair of rows to divide a list of details.`,examples:[{id:`separator/list`,caption:`Read the plan details with a screen reader. It announces a separator between Plan, Seats and Renews.`,Example:a,source:`import { Separator } from "@ui-sdk/react/separator"
 
 function Example() {
   return (
@@ -80,7 +80,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Decorative`,text:"Set `decorative` when the line adds no information. Here, the word “or” already says the two ways to sign in are separate, so a screen reader skips the lines.",examples:[{id:`separator/decorative`,caption:`Read from Sign In with Passkey to Email Me a Link with a screen reader. It reads “or” and skips the lines.`,Example:s,source:`import { Separator } from "@ui-sdk/react/separator"
+`}]},{heading:`Decorative`,text:"Set `decorative` when the line adds no information. Here, the word “or” already says the two ways to sign in are separate, so a screen reader skips the lines.",examples:[{id:`separator/decorative`,caption:`Read from Sign In with Passkey to Email Me a Link with a screen reader. It reads “or” and skips the lines.`,Example:o,source:`import { Separator } from "@ui-sdk/react/separator"
 
 function Example() {
   return (
@@ -99,7 +99,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`More examples`,text:``,examples:[{id:`separator/rtl`,caption:``,Example:c,source:`import { Separator } from "@ui-sdk/react/separator"
+`}]},{heading:`More examples`,text:``,examples:[{id:`separator/rtl`,caption:``,Example:s,source:`import { Separator } from "@ui-sdk/react/separator"
 
 function Example() {
   return (
@@ -121,4 +121,4 @@ function Example() {
 }
 
 export { Example }
-`}]}]};export{l as default};
+`}]}]};export{c as default};

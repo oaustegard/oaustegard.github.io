@@ -1,1 +1,0 @@
-"use client";import{agentTools as e,createAgent as t,registerTools as n}from"./core/agent.js";export{e as agentTools,t as createAgent,n as registerTools};

@@ -1,81 +1,4 @@
-import{t as e}from"../chunks/c-Bnrfo8pz.js";import{n as t,r as n,t as r}from"../chunks/c-DBckuTC-.js";import{t as i}from"../chunks/c-WfjOen3K.js";import{t as a}from"../chunks/c-CA3STxaZ.js";import{t as ee}from"../chunks/c-CUqRK9mO.js";import{t as o}from"../chunks/c-GkCruRXY.js";import{t as s}from"../chunks/c-BHtAohdq.js";import{t as te}from"../chunks/c-BfTRFW97.js";import{t as ne}from"../chunks/c-CKwygB1M.js";import{n as re,t as ie}from"../chunks/c-CdF4Sfnd.js";import{n as ae,r as c,t as oe}from"../chunks/c-u-NNRFH-.js";import{t as se}from"../chunks/c-CiOBso80.js";import{useLog as l}from"./log.js";import{Menu as ce,MenuContent as le,MenuItem as u,MenuTrigger as d}from"ui-sdk/menu.js";import*as f from"preact/compat";import{jsx as p,jsxs as m}from"preact/compat/jsx-runtime";import{Select as h,SelectContent as g,SelectItem as _,SelectItemIndicator as v,SelectTrigger as ue,SelectValue as de}from"ui-sdk/select.js";import{Toggle as y,ToggleGroup as b,ToggleIcon as x}from"ui-sdk/toggle.js";import{Toolbar as S,ToolbarButton as C,ToolbarGroup as w,ToolbarInput as T,ToolbarLink as E,ToolbarSeparator as D,createToolbarController as O}from"ui-sdk/toolbar.js";import{NumberInput as k,NumberInputControl as A,NumberInputDecrement as j,NumberInputGroup as M,NumberInputIncrement as N}from"ui-sdk/number-input.js";import{useShortcut as P}from"ui-sdk/shortcuts.js";
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-const F={name:`chevrons-up-down`,size:24,node:[[`path`,{d:`m7 15 5 5 5-5`,key:`1hf1tw`}],[`path`,{d:`m7 9 5-5 5 5`,key:`sgt6xg`}]]};F.node;const I=e(F),L={name:`clipboard`,size:24,node:[[`rect`,{width:`8`,height:`4`,x:`8`,y:`2`,rx:`1`,ry:`1`,key:`tgr4d6`}],[`path`,{d:`M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2`,key:`116196`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;L.node;const R=e(L),z={name:`list-ordered`,size:24,node:[[`path`,{d:`M11 5h10`,key:`1cz7ny`}],[`path`,{d:`M11 12h10`,key:`1438ji`}],[`path`,{d:`M11 19h10`,key:`11t30w`}],[`path`,{d:`M4 4h1v5`,key:`10yrso`}],[`path`,{d:`M4 9h2`,key:`r1h2o0`}],[`path`,{d:`M6.5 20H3.4c0-1 2.6-1.925 2.6-3.5a1.5 1.5 0 0 0-2.6-1.02`,key:`xtkcd5`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;z.node;const B=e(z),V={name:`list`,size:24,node:[[`path`,{d:`M3 5h.01`,key:`18ugdj`}],[`path`,{d:`M3 12h.01`,key:`nlz23k`}],[`path`,{d:`M3 19h.01`,key:`noohij`}],[`path`,{d:`M8 5h13`,key:`1pao27`}],[`path`,{d:`M8 12h13`,key:`1za7za`}],[`path`,{d:`M8 19h13`,key:`m83p4d`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;V.node;const H=e(V),U={name:`message-square`,size:24,node:[[`path`,{d:`M22 17a2 2 0 0 1-2 2H6.828a2 2 0 0 0-1.414.586l-2.202 2.202A.71.71 0 0 1 2 21.286V5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2z`,key:`18887p`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;U.node;const fe=e(U),W={name:`mouse-pointer-2`,size:24,node:[[`path`,{d:`M4.037 4.688a.495.495 0 0 1 .651-.651l16 6.5a.5.5 0 0 1-.063.947l-6.124 1.58a2 2 0 0 0-1.438 1.435l-1.579 6.126a.5.5 0 0 1-.947.063z`,key:`edeuup`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;W.node;const pe=e(W),G={name:`scissors`,size:24,node:[[`circle`,{cx:`6`,cy:`6`,r:`3`,key:`1lh9wr`}],[`path`,{d:`M8.12 8.12 12 12`,key:`1alkpv`}],[`path`,{d:`M20 4 8.12 15.88`,key:`xgtan2`}],[`circle`,{cx:`6`,cy:`18`,r:`3`,key:`fqmcym`}],[`path`,{d:`M14.8 14.8 20 20`,key:`ptml3r`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;G.node;const me=e(G),K={name:`square`,size:24,node:[[`rect`,{width:`18`,height:`18`,x:`3`,y:`3`,rx:`2`,key:`afitv7`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;K.node;const he=e(K),q={name:`type`,size:24,node:[[`path`,{d:`M12 4v16`,key:`1654pz`}],[`path`,{d:`M4 7V5a1 1 0 0 1 1-1h14a1 1 0 0 1 1 1v2`,key:`e0r10z`}],[`path`,{d:`M9 20h6`,key:`s66wpe`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;q.node;const ge=e(q),J={name:`zoom-in`,size:24,node:[[`circle`,{cx:`11`,cy:`11`,r:`8`,key:`4ej97u`}],[`line`,{x1:`21`,x2:`16.65`,y1:`21`,y2:`16.65`,key:`13gj7c`}],[`line`,{x1:`11`,x2:`11`,y1:`8`,y2:`14`,key:`1vmskp`}],[`line`,{x1:`8`,x2:`14`,y1:`11`,y2:`11`,key:`durymu`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;J.node;const _e=e(J),Y={name:`zoom-out`,size:24,node:[[`circle`,{cx:`11`,cy:`11`,r:`8`,key:`4ej97u`}],[`line`,{x1:`21`,x2:`16.65`,y1:`21`,y2:`16.65`,key:`13gj7c`}],[`line`,{x1:`8`,x2:`14`,y1:`11`,y2:`11`,key:`durymu`}]]}
-/**
-* @license lucide-react v1.52.0 - ISC
-*
-* This source code is licensed under the ISC license.
-* See the LICENSE file in the root directory of this source tree.
-*/
-;Y.node;const ve=e(Y),ye=[{label:`Bold`,icon:n},{label:`Italic`,icon:t},{label:`Underline`,icon:r}];function be(){let e=l();return/* @__PURE__ */ m(S,{"aria-label":`Formatting`,children:[ye.map(({label:t,icon:n})=>/* @__PURE__ */ p(y,{"aria-label":t,onPressedChange:n=>e(`${t} ${n?`on`:`off`}`),children:/* @__PURE__ */ p(x,{children:/* @__PURE__ */ p(n,{})})},t)),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ p(C,{"aria-label":`Insert link`,onClick:()=>e(`Insert link`),children:/* @__PURE__ */ p(o,{"aria-hidden":`true`})})]})}const xe=[{value:`left`,label:`Align left`,icon:oe},{value:`center`,label:`Align center`,icon:c},{value:`right`,label:`Align right`,icon:ae}],X=[{value:`bulleted`,label:`Bulleted list`,icon:H},{value:`numbered`,label:`Numbered list`,icon:B}];function Se(){let e=l();return/* @__PURE__ */ m(S,{"aria-label":`Paragraph`,children:[/* @__PURE__ */ p(b,{defaultValue:[`left`],deselectable:!1,"aria-label":`Alignment`,onValueChange:([t])=>e(`Align ${t}`),children:xe.map(({value:e,label:t,icon:n})=>/* @__PURE__ */ p(y,{value:e,"aria-label":t,children:/* @__PURE__ */ p(x,{children:/* @__PURE__ */ p(n,{})})},e))}),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ p(b,{"aria-label":`List`,onValueChange:([t])=>e(X.find(e=>e.value===t)?.label??`No list`),children:X.map(({value:e,label:t,icon:n})=>/* @__PURE__ */ p(y,{value:e,"aria-label":t,children:/* @__PURE__ */ p(x,{children:/* @__PURE__ */ p(n,{})})},e))})]})}const Ce=[{label:`Cut`,icon:me},{label:`Copy`,icon:ee},{label:`Paste`,icon:R}];function we(){let e=l();return/* @__PURE__ */ m(S,{"aria-label":`Edit`,children:[/* @__PURE__ */ p(w,{"aria-label":`Clipboard`,children:Ce.map(({label:t,icon:n})=>/* @__PURE__ */ p(C,{"aria-label":t,onClick:()=>e(t),children:/* @__PURE__ */ p(n,{"aria-hidden":`true`})},t))}),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ m(w,{disabled:!0,"aria-label":`History`,children:[/* @__PURE__ */ p(C,{"aria-label":`Undo`,children:/* @__PURE__ */ p(ie,{"aria-hidden":`true`})}),/* @__PURE__ */ p(C,{"aria-label":`Redo`,children:/* @__PURE__ */ p(re,{"aria-hidden":`true`})})]})]})}function Te(){let e=l();return/* @__PURE__ */ m(S,{"aria-label":`Document`,children:[/* @__PURE__ */ p(C,{onClick:()=>e(`Saved`),children:`Save`}),/* @__PURE__ */ m(ce,{onAction:t=>e(`Shared by ${t}`),children:[/* @__PURE__ */ m(C,{render:/* @__PURE__ */ p(d,{}),children:[`Share`,/* @__PURE__ */ p(a,{"aria-hidden":`true`})]}),/* @__PURE__ */ m(le,{children:[/* @__PURE__ */ p(u,{value:`email`,children:`Email`}),/* @__PURE__ */ p(u,{value:`link`,children:`Copy Link`})]})]}),/* @__PURE__ */ p(C,{onClick:()=>e(`Printed`),children:`Print`})]})}const Z=[`50%`,`75%`,`100%`,`150%`,`200%`];function Ee(){let e=l(),[t,n]=f.useState(`100%`),r=Z.indexOf(t),a=t=>{n(t),e(`Zoom ${t}`)};return/* @__PURE__ */ m(S,{"aria-label":`View`,children:[/* @__PURE__ */ p(C,{"aria-label":`Zoom out`,disabled:r===0,onClick:()=>a(Z[r-1]),children:/* @__PURE__ */ p(ve,{"aria-hidden":`true`})}),/* @__PURE__ */ m(h,{value:t,onValueChange:e=>e&&a(e),children:[/* @__PURE__ */ m(C,{render:/* @__PURE__ */ p(ue,{}),"aria-label":`Zoom`,children:[/* @__PURE__ */ p(de,{}),/* @__PURE__ */ p(I,{"aria-hidden":`true`})]}),/* @__PURE__ */ p(g,{children:Z.map(e=>/* @__PURE__ */ m(_,{value:e,children:[e,/* @__PURE__ */ p(v,{children:/* @__PURE__ */ p(i,{"aria-hidden":`true`})})]},e))})]}),/* @__PURE__ */ p(C,{"aria-label":`Zoom in`,disabled:r===Z.length-1,onClick:()=>a(Z[r+1]),children:/* @__PURE__ */ p(_e,{"aria-hidden":`true`})})]})}function De(){return/* @__PURE__ */ m(S,{"aria-label":`Text`,children:[/* @__PURE__ */ p(k,{defaultValue:14,min:8,max:72,children:/* @__PURE__ */ m(M,{children:[/* @__PURE__ */ p(j,{"aria-label":`Decrease font size`,children:/* @__PURE__ */ p(s,{"aria-hidden":`true`})}),/* @__PURE__ */ p(T,{render:/* @__PURE__ */ p(A,{"aria-label":`Font size`})}),/* @__PURE__ */ p(N,{"aria-label":`Increase font size`,children:/* @__PURE__ */ p(ne,{"aria-hidden":`true`})})]})}),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ p(T,{"aria-label":`Find`,placeholder:`Find…`})]})}function Oe(){let e=l(),t=t=>{t.button!==0||t.metaKey||t.ctrlKey||t.shiftKey||t.altKey||(t.preventDefault(),e(`Opened ${t.currentTarget.textContent}`))};return/* @__PURE__ */ m(S,{"aria-label":`Pull request`,children:[/* @__PURE__ */ p(C,{"aria-label":`Approve`,onClick:()=>e(`Approved`),children:/* @__PURE__ */ p(i,{"aria-hidden":`true`})}),/* @__PURE__ */ p(C,{"aria-label":`Comment`,onClick:()=>e(`Comment`),children:/* @__PURE__ */ p(fe,{"aria-hidden":`true`})}),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ p(E,{href:`#files`,onClick:t,children:`Files Changed`}),/* @__PURE__ */ p(E,{href:`#checks`,onClick:t,children:`Checks`})]})}const Q=[{value:`select`,label:`Select`,icon:pe},{value:`draw`,label:`Draw`,icon:te},{value:`shape`,label:`Shape`,icon:he},{value:`text`,label:`Text`,icon:ge}];function ke(){let e=l();return/* @__PURE__ */ m(S,{orientation:`vertical`,"aria-label":`Canvas`,children:[/* @__PURE__ */ p(b,{defaultValue:[`select`],deselectable:!1,orientation:`vertical`,"aria-label":`Tool`,onValueChange:([t])=>e(`${Q.find(e=>e.value===t)?.label} tool`),children:Q.map(({value:e,label:t,icon:n})=>/* @__PURE__ */ p(y,{value:e,"aria-label":t,children:/* @__PURE__ */ p(x,{children:/* @__PURE__ */ p(n,{})})},e))}),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ p(C,{"aria-label":`Delete`,onClick:()=>e(`Deleted selection`),children:/* @__PURE__ */ p(se,{"aria-hidden":`true`})})]})}function Ae(){let e=l();return/* @__PURE__ */ m(S,{"aria-label":`Message`,children:[/* @__PURE__ */ p(C,{onClick:()=>e(`Reply`),children:`Reply`}),/* @__PURE__ */ p(C,{disabled:!0,onClick:()=>e(`Archive`),children:`Archive`}),/* @__PURE__ */ p(C,{disabled:!0,focusableWhenDisabled:!1,onClick:()=>e(`Delete`),children:`Delete`})]})}function $(){let e=l();return/* @__PURE__ */ p(S,{loop:!1,"aria-label":`Pages`,children:[`First`,`Previous`,`Next`,`Last`].map(t=>/* @__PURE__ */ p(C,{onClick:()=>e(`${t} page`),children:t},t))})}const je=[{label:`Bold`,icon:n},{label:`Italic`,icon:t},{label:`Insert link`,icon:o}];function Me(){let e=l(),[t]=f.useState(O);return P(`alt+f10`,()=>t.focus(),{allowInInput:!0}),/* @__PURE__ */ m(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ p(`div`,{"data-slot":`controls`,children:/* @__PURE__ */ p(`button`,{type:`button`,onClick:()=>t.focus(),children:`Focus Toolbar`})}),/* @__PURE__ */ p(S,{controller:t,"aria-label":`Notes formatting`,children:je.map(({label:t,icon:n})=>/* @__PURE__ */ p(C,{"aria-label":t,onClick:()=>e(t),children:/* @__PURE__ */ p(n,{"aria-hidden":`true`})},t))}),/* @__PURE__ */ p(`textarea`,{"aria-label":`Notes`,placeholder:`Type, then press Alt+F10`})]})}function Ne(){return/* @__PURE__ */ p(`div`,{dir:`rtl`,children:/* @__PURE__ */ m(S,{"aria-label":`تنسيق`,children:[/* @__PURE__ */ p(y,{"aria-label":`غامق`,children:/* @__PURE__ */ p(x,{children:/* @__PURE__ */ p(n,{})})}),/* @__PURE__ */ p(y,{"aria-label":`مائل`,children:/* @__PURE__ */ p(x,{children:/* @__PURE__ */ p(t,{})})}),/* @__PURE__ */ p(D,{}),/* @__PURE__ */ p(C,{"aria-label":`إدراج رابط`,children:/* @__PURE__ */ p(o,{"aria-hidden":`true`})})]})})}var Pe={name:`toolbar`,title:`Toolbar`,description:`Give buttons, toggles, menus and fields one tab stop with arrow-key navigation.`,sections:[{heading:null,text:`Use a Toolbar to group the controls of an editor, a canvas or a table. Tab enters it once, and the arrow keys move between its buttons, toggles, menus and fields.`,examples:[{id:`toolbar/demo`,caption:`Tab into the toolbar, then use Left and Right to move between Bold, Italic, Underline and Insert link. Press Space to toggle the focused style. The console logs each change.`,Example:be,source:`"use client"
+import{Ai as e,Bo as t,Ci as n,Di as r,Ei as i,Go as a,Hs as o,Ko as s,Ks as c,Ls as l,Mc as ee,Mi as u,Mo as d,No as f,Oi as p,Pc as m,Po as h,Ps as g,Rc as _,Ti as v,Uo as te,Vo as ne,Wo as re,Xa as y,Yo as b,Zs as x,_i as S,_s as C,as as w,bs as T,do as E,es as D,fl as O,fs as k,gi as A,hi as j,is as M,ji as N,ki as P,mi as F,ps as I,qa as L,qc as R,qs as z,ro as B,ss as V,tl as H,to as ie,uo as U,us as W,vi as G,vs as K,wi as q,yi as J,ys as Y,zo as ae}from"../chunks/c-CIXE4Nkk.js";const oe=[{label:`Bold`,icon:x},{label:`Italic`,icon:T},{label:`Underline`,icon:t}];function se(){let t=d();return/* @__PURE__ */ H(n,{"aria-label":`Formatting`,children:[oe.map(({label:n,icon:r})=>/* @__PURE__ */ H(e,{"aria-label":n,onPressedChange:e=>t(`${n} ${e?`on`:`off`}`),children:/* @__PURE__ */ H(u,{children:/* @__PURE__ */ H(r,{})})},n)),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(q,{"aria-label":`Insert link`,onClick:()=>t(`Insert link`),children:/* @__PURE__ */ H(Y,{"aria-hidden":`true`})})]})}const ce=[{value:`left`,label:`Align left`,icon:re},{value:`center`,label:`Align center`,icon:s},{value:`right`,label:`Align right`,icon:a}],X=[{value:`bulleted`,label:`Bulleted list`,icon:C},{value:`numbered`,label:`Numbered list`,icon:K}];function le(){let t=d();return/* @__PURE__ */ H(n,{"aria-label":`Paragraph`,children:[/* @__PURE__ */ H(N,{defaultValue:[`left`],deselectable:!1,"aria-label":`Alignment`,onValueChange:([e])=>t(`Align ${e}`),children:ce.map(({value:t,label:n,icon:r})=>/* @__PURE__ */ H(e,{value:t,"aria-label":n,children:/* @__PURE__ */ H(u,{children:/* @__PURE__ */ H(r,{})})},t))}),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(N,{"aria-label":`List`,onValueChange:([e])=>t(X.find(t=>t.value===e)?.label??`No list`),children:X.map(({value:t,label:n,icon:r})=>/* @__PURE__ */ H(e,{value:t,"aria-label":n,children:/* @__PURE__ */ H(u,{children:/* @__PURE__ */ H(r,{})})},t))})]})}const ue=[{label:`Cut`,icon:D},{label:`Copy`,icon:g},{label:`Paste`,icon:l}];function de(){let e=d();return/* @__PURE__ */ H(n,{"aria-label":`Edit`,children:[/* @__PURE__ */ H(v,{"aria-label":`Clipboard`,children:ue.map(({label:t,icon:n})=>/* @__PURE__ */ H(q,{"aria-label":t,onClick:()=>e(t),children:/* @__PURE__ */ H(n,{"aria-hidden":`true`})},t))}),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(v,{disabled:!0,"aria-label":`History`,children:[/* @__PURE__ */ H(q,{"aria-label":`Undo`,children:/* @__PURE__ */ H(ae,{"aria-hidden":`true`})}),/* @__PURE__ */ H(q,{"aria-label":`Redo`,children:/* @__PURE__ */ H(M,{"aria-hidden":`true`})})]})]})}function fe(){let e=d();return/* @__PURE__ */ H(n,{"aria-label":`Document`,children:[/* @__PURE__ */ H(q,{onClick:()=>e(`Saved`),children:`Save`}),/* @__PURE__ */ H(ee,{onAction:t=>e(`Shared by ${t}`),children:[/* @__PURE__ */ H(q,{render:/* @__PURE__ */ H(R,{}),children:[`Share`,/* @__PURE__ */ H(c,{"aria-hidden":`true`})]}),/* @__PURE__ */ H(m,{children:[/* @__PURE__ */ H(_,{value:`email`,children:`Email`}),/* @__PURE__ */ H(_,{value:`link`,children:`Copy Link`})]})]}),/* @__PURE__ */ H(q,{onClick:()=>e(`Printed`),children:`Print`})]})}const Z=[`50%`,`75%`,`100%`,`150%`,`200%`];function pe(){let e=d(),[t,r]=O(`100%`),i=Z.indexOf(t),a=t=>{r(t),e(`Zoom ${t}`)};return/* @__PURE__ */ H(n,{"aria-label":`View`,children:[/* @__PURE__ */ H(q,{"aria-label":`Zoom out`,disabled:i===0,onClick:()=>a(Z[i-1]),children:/* @__PURE__ */ H(f,{"aria-hidden":`true`})}),/* @__PURE__ */ H(L,{value:t,onValueChange:e=>e&&a(e),children:[/* @__PURE__ */ H(q,{render:/* @__PURE__ */ H(U,{}),"aria-label":`Zoom`,children:[/* @__PURE__ */ H(E,{}),/* @__PURE__ */ H(o,{"aria-hidden":`true`})]}),/* @__PURE__ */ H(y,{children:Z.map(e=>/* @__PURE__ */ H(ie,{value:e,children:[e,/* @__PURE__ */ H(B,{children:/* @__PURE__ */ H(z,{"aria-hidden":`true`})})]},e))})]}),/* @__PURE__ */ H(q,{"aria-label":`Zoom in`,disabled:i===Z.length-1,onClick:()=>a(Z[i+1]),children:/* @__PURE__ */ H(h,{"aria-hidden":`true`})})]})}function me(){return/* @__PURE__ */ H(n,{"aria-label":`Text`,children:[/* @__PURE__ */ H(j,{defaultValue:14,min:8,max:72,children:/* @__PURE__ */ H(G,{children:[/* @__PURE__ */ H(S,{"aria-label":`Decrease font size`,children:/* @__PURE__ */ H(k,{"aria-hidden":`true`})}),/* @__PURE__ */ H(i,{render:/* @__PURE__ */ H(A,{"aria-label":`Font size`})}),/* @__PURE__ */ H(J,{"aria-label":`Increase font size`,children:/* @__PURE__ */ H(w,{"aria-hidden":`true`})})]})}),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(i,{"aria-label":`Find`,placeholder:`Find…`})]})}function Q(){let e=d(),t=t=>{t.button!==0||t.metaKey||t.ctrlKey||t.shiftKey||t.altKey||(t.preventDefault(),e(`Opened ${t.currentTarget.textContent}`))};return/* @__PURE__ */ H(n,{"aria-label":`Pull request`,children:[/* @__PURE__ */ H(q,{"aria-label":`Approve`,onClick:()=>e(`Approved`),children:/* @__PURE__ */ H(z,{"aria-hidden":`true`})}),/* @__PURE__ */ H(q,{"aria-label":`Comment`,onClick:()=>e(`Comment`),children:/* @__PURE__ */ H(I,{"aria-hidden":`true`})}),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(r,{href:`#files`,onClick:t,children:`Files Changed`}),/* @__PURE__ */ H(r,{href:`#checks`,onClick:t,children:`Checks`})]})}const $=[{value:`select`,label:`Select`,icon:W},{value:`draw`,label:`Draw`,icon:V},{value:`shape`,label:`Shape`,icon:b},{value:`text`,label:`Text`,icon:ne}];function he(){let t=d();return/* @__PURE__ */ H(n,{orientation:`vertical`,"aria-label":`Canvas`,children:[/* @__PURE__ */ H(N,{defaultValue:[`select`],deselectable:!1,orientation:`vertical`,"aria-label":`Tool`,onValueChange:([e])=>t(`${$.find(t=>t.value===e)?.label} tool`),children:$.map(({value:t,label:n,icon:r})=>/* @__PURE__ */ H(e,{value:t,"aria-label":n,children:/* @__PURE__ */ H(u,{children:/* @__PURE__ */ H(r,{})})},t))}),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(q,{"aria-label":`Delete`,onClick:()=>t(`Deleted selection`),children:/* @__PURE__ */ H(te,{"aria-hidden":`true`})})]})}function ge(){let e=d();return/* @__PURE__ */ H(n,{"aria-label":`Message`,children:[/* @__PURE__ */ H(q,{onClick:()=>e(`Reply`),children:`Reply`}),/* @__PURE__ */ H(q,{disabled:!0,onClick:()=>e(`Archive`),children:`Archive`}),/* @__PURE__ */ H(q,{disabled:!0,focusableWhenDisabled:!1,onClick:()=>e(`Delete`),children:`Delete`})]})}function _e(){let e=d();return/* @__PURE__ */ H(n,{loop:!1,"aria-label":`Pages`,children:[`First`,`Previous`,`Next`,`Last`].map(t=>/* @__PURE__ */ H(q,{onClick:()=>e(`${t} page`),children:t},t))})}const ve=[{label:`Bold`,icon:x},{label:`Italic`,icon:T},{label:`Insert link`,icon:Y}];function ye(){let e=d(),[t]=O(P);return F(`alt+f10`,()=>t.focus(),{allowInInput:!0}),/* @__PURE__ */ H(`div`,{"data-slot":`stack`,children:[/* @__PURE__ */ H(`div`,{"data-slot":`controls`,children:/* @__PURE__ */ H(`button`,{type:`button`,onClick:()=>t.focus(),children:`Focus Toolbar`})}),/* @__PURE__ */ H(n,{controller:t,"aria-label":`Notes formatting`,children:ve.map(({label:t,icon:n})=>/* @__PURE__ */ H(q,{"aria-label":t,onClick:()=>e(t),children:/* @__PURE__ */ H(n,{"aria-hidden":`true`})},t))}),/* @__PURE__ */ H(`textarea`,{"aria-label":`Notes`,placeholder:`Type, then press Alt+F10`})]})}function be(){return/* @__PURE__ */ H(`div`,{dir:`rtl`,children:/* @__PURE__ */ H(n,{"aria-label":`تنسيق`,children:[/* @__PURE__ */ H(e,{"aria-label":`غامق`,children:/* @__PURE__ */ H(u,{children:/* @__PURE__ */ H(x,{})})}),/* @__PURE__ */ H(e,{"aria-label":`مائل`,children:/* @__PURE__ */ H(u,{children:/* @__PURE__ */ H(T,{})})}),/* @__PURE__ */ H(p,{}),/* @__PURE__ */ H(q,{"aria-label":`إدراج رابط`,children:/* @__PURE__ */ H(Y,{"aria-hidden":`true`})})]})})}var xe={name:`toolbar`,title:`Toolbar`,description:`Give buttons, toggles, menus and fields one tab stop with arrow-key navigation.`,sections:[{heading:null,text:`Use a Toolbar to group the controls of an editor, a canvas or a table. Tab enters it once, and the arrow keys move between its buttons, toggles, menus and fields.`,examples:[{id:`toolbar/demo`,caption:`Tab into the toolbar, then use Left and Right to move between Bold, Italic, Underline and Insert link. Press Space to toggle the focused style. The console logs each change.`,Example:se,source:`"use client"
 
 import { Toggle, ToggleIcon } from "@ui-sdk/react/toggle"
 import { Toolbar, ToolbarButton, ToolbarSeparator } from "@ui-sdk/react/toolbar"
@@ -117,7 +40,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Toggle Groups`,text:`A Toggle group inside a toolbar joins its navigation instead of adding another tab stop. Arrow keys move focus without pressing anything; Enter or Space presses the focused toggle.`,examples:[{id:`toolbar/toggle-group`,caption:`Arrow from the alignment group to the list group, then press Space on Align center or Numbered list. The console logs each choice.`,Example:Se,source:`"use client"
+`}]},{heading:`Toggle Groups`,text:`A Toggle group inside a toolbar joins its navigation instead of adding another tab stop. Arrow keys move focus without pressing anything; Enter or Space presses the focused toggle.`,examples:[{id:`toolbar/toggle-group`,caption:`Arrow from the alignment group to the list group, then press Space on Align center or Numbered list. The console logs each choice.`,Example:le,source:`"use client"
 
 import { Toggle, ToggleGroup, ToggleIcon } from "@ui-sdk/react/toggle"
 import { Toolbar, ToolbarSeparator } from "@ui-sdk/react/toolbar"
@@ -179,7 +102,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Groups`,text:"Use `ToolbarGroup` to name related controls. Set `disabled` on the group to disable them together; they stay focusable with `aria-disabled`.",examples:[{id:`toolbar/group`,caption:`Move through Cut, Copy and Paste into History with the arrow keys. Undo and Redo stay focusable but do nothing.`,Example:we,source:`"use client"
+`}]},{heading:`Groups`,text:"Use `ToolbarGroup` to name related controls. Set `disabled` on the group to disable them together; they stay focusable with `aria-disabled`.",examples:[{id:`toolbar/group`,caption:`Move through Cut, Copy and Paste into History with the arrow keys. Undo and Redo stay focusable but do nothing.`,Example:de,source:`"use client"
 
 import {
   Toolbar,
@@ -231,7 +154,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Menus`,text:"Render a Menu trigger through `ToolbarButton`. In a horizontal toolbar, Down opens the menu while Left and Right keep moving between toolbar items.",examples:[{id:`toolbar/menu`,caption:`Focus Share and press Down, then choose Email or Copy Link. Escape closes the menu and returns focus to Share.`,Example:Te,source:`"use client"
+`}]},{heading:`Menus`,text:"Render a Menu trigger through `ToolbarButton`. In a horizontal toolbar, Down opens the menu while Left and Right keep moving between toolbar items.",examples:[{id:`toolbar/menu`,caption:`Focus Share and press Down, then choose Email or Copy Link. Escape closes the menu and returns focus to Share.`,Example:fe,source:`"use client"
 
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@ui-sdk/react/menu"
 import { Toolbar, ToolbarButton } from "@ui-sdk/react/toolbar"
@@ -259,7 +182,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Selects`,text:`A Select trigger joins the same way. It keeps its select behavior while it takes part in the toolbar's focus order.`,examples:[{id:`toolbar/select`,caption:`Open Zoom and choose a value, or step it with Zoom out and Zoom in. Each button turns off at the end of the range.`,Example:Ee,source:`"use client"
+`}]},{heading:`Selects`,text:`A Select trigger joins the same way. It keeps its select behavior while it takes part in the toolbar's focus order.`,examples:[{id:`toolbar/select`,caption:`Open Zoom and choose a value, or step it with Zoom out and Zoom in. Each button turns off at the end of the range.`,Example:pe,source:`"use client"
 
 import {
   Select,
@@ -326,7 +249,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Fields`,text:"Use `ToolbarInput` for a text field, or render another field through it, like a Number Input control. A field keeps Home, End and the arrow keys while they move its caret. At the matching end, with no text selected, an arrow moves to the next item.",examples:[{id:`toolbar/input`,caption:`Move into Font size and press Up or Down to change it. In Find, type a word, then move the caret to an edge before that arrow leaves the field.`,Example:De,source:`"use client"
+`}]},{heading:`Fields`,text:"Use `ToolbarInput` for a text field, or render another field through it, like a Number Input control. A field keeps Home, End and the arrow keys while they move its caret. At the matching end, with no text selected, an arrow moves to the next item.",examples:[{id:`toolbar/input`,caption:`Move into Font size and press Up or Down to change it. In Find, type a word, then move the caret to an edge before that arrow leaves the field.`,Example:me,source:`"use client"
 
 import {
   NumberInput,
@@ -361,7 +284,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Links`,text:"`ToolbarLink` joins the same focus order and keeps its link behavior. The demo handles a plain click itself and leaves modified clicks, like opening in a new tab, to the browser.",examples:[{id:`toolbar/link`,caption:`Arrow to Files Changed and press Enter. The console logs the page it opened.`,Example:Oe,source:`"use client"
+`}]},{heading:`Links`,text:"`ToolbarLink` joins the same focus order and keeps its link behavior. The demo handles a plain click itself and leaves modified clicks, like opening in a new tab, to the browser.",examples:[{id:`toolbar/link`,caption:`Arrow to Files Changed and press Enter. The console logs the page it opened.`,Example:Q,source:`"use client"
 
 import {
   Toolbar,
@@ -408,7 +331,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Vertical`,text:'Set `orientation="vertical"` to move with Up and Down, like a canvas tool palette. Separators turn to run across the toolbar.',examples:[{id:`toolbar/vertical`,caption:`Use Up and Down to move between the tools and Delete. Space picks the focused tool.`,Example:ke,source:`"use client"
+`}]},{heading:`Vertical`,text:'Set `orientation="vertical"` to move with Up and Down, like a canvas tool palette. Separators turn to run across the toolbar.',examples:[{id:`toolbar/vertical`,caption:`Use Up and Down to move between the tools and Delete. Space picks the focused tool.`,Example:he,source:`"use client"
 
 import { Toggle, ToggleGroup, ToggleIcon } from "@ui-sdk/react/toggle"
 import { Toolbar, ToolbarButton, ToolbarSeparator } from "@ui-sdk/react/toolbar"
@@ -461,7 +384,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Disabled`,text:"A disabled item stays reachable with `aria-disabled`, so people can find it, but it ignores presses, including keys meant for a component rendered through it. Set `focusableWhenDisabled` to `false` to skip it instead.",examples:[{id:`toolbar/disabled`,caption:`Arrow from Reply to Archive, which is disabled but focusable. Delete is skipped. Only Reply logs a press.`,Example:Ae,source:`"use client"
+`}]},{heading:`Disabled`,text:"A disabled item stays reachable with `aria-disabled`, so people can find it, but it ignores presses, including keys meant for a component rendered through it. Set `focusableWhenDisabled` to `false` to skip it instead.",examples:[{id:`toolbar/disabled`,caption:`Arrow from Reply to Archive, which is disabled but focusable. Delete is skipped. Only Reply logs a press.`,Example:ge,source:`"use client"
 
 import { Toolbar, ToolbarButton } from "@ui-sdk/react/toolbar"
 import { useLog } from "../../../shared/react/log"
@@ -486,7 +409,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Loop`,text:"Arrow keys wrap from the last item to the first by default. Set `loop` to `false` to stop at the ends.",examples:[{id:`toolbar/loop`,caption:`Focus Last and press Right. Focus stays there; Home still moves to First.`,Example:$,source:`"use client"
+`}]},{heading:`Loop`,text:"Arrow keys wrap from the last item to the first by default. Set `loop` to `false` to stop at the ends.",examples:[{id:`toolbar/loop`,caption:`Focus Last and press Right. Focus stays there; Home still moves to First.`,Example:_e,source:`"use client"
 
 import { Toolbar, ToolbarButton } from "@ui-sdk/react/toolbar"
 import { useLog } from "../../../shared/react/log"
@@ -505,7 +428,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`Controller`,text:"Create a controller with `createToolbarController` and pass it as `controller`. Its `focus()` moves focus to the item focused last, like the Alt+F10 shortcut editors give their toolbars. Create one controller per toolbar.",examples:[{id:`toolbar/controller`,caption:`Type in Notes, then press Alt+F10 or choose Focus Toolbar. Press a toolbar button and the console logs it.`,Example:Me,source:`"use client"
+`}]},{heading:`Controller`,text:"Create a controller with `createToolbarController` and pass it as `controller`. Its `focus()` moves focus to the item focused last, like the Alt+F10 shortcut editors give their toolbars. Create one controller per toolbar.",examples:[{id:`toolbar/controller`,caption:`Type in Notes, then press Alt+F10 or choose Focus Toolbar. Press a toolbar button and the console logs it.`,Example:ye,source:`"use client"
 
 import { useShortcut } from "@ui-sdk/react/shortcuts"
 import {
@@ -551,7 +474,7 @@ function Example() {
 }
 
 export { Example }
-`}]},{heading:`More examples`,text:``,examples:[{id:`toolbar/rtl`,caption:``,Example:Ne,source:`"use client"
+`}]},{heading:`More examples`,text:``,examples:[{id:`toolbar/rtl`,caption:``,Example:be,source:`"use client"
 
 import { Toggle, ToggleIcon } from "@ui-sdk/react/toggle"
 import { Toolbar, ToolbarButton, ToolbarSeparator } from "@ui-sdk/react/toolbar"
@@ -581,4 +504,4 @@ function Example() {
 }
 
 export { Example }
-`}]}]};export{Pe as default};
+`}]}]};export{xe as default};

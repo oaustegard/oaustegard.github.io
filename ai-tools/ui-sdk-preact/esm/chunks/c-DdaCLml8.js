@@ -1,1 +1,0 @@
-function e(e){if(e!==null)return e===`false`?!1:e===`pointer`||e===`trap-focus`?e:!0}function t(e){if(e!==null)return e===`false`?!1:e!==`pointer`||`pointer`}export{t as n,e as t};

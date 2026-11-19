@@ -1,1 +1,0 @@
-"use client";import{s as e}from"./chunks/c-BAxPgVuz.js";import{elementOf as t,observe as n}from"./core/observe.js";export{t as elementOf,n as observe,e as withSource};

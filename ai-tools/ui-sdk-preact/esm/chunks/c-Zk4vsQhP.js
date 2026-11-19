@@ -1,1 +1,0 @@
-function e(e,t,n,r){return e.addEventListener(t,n,r),()=>e.removeEventListener(t,n,r)}var t=()=>new Event(`select`,{cancelable:!0});function n(e){let t=`nativeEvent`in e?e.nativeEvent:e;return t.isComposing===!0||t.keyCode===229}export{e as n,t as r,n as t};

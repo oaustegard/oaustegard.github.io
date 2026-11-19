@@ -1,1 +1,0 @@
-function e(e){let t=``;for(let n in e){let r=e[n];r!==void 0&&(t+=`${t?`;`:``}${n}:${r}`)}return t}export{e as t};

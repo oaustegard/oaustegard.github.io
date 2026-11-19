@@ -1,1 +1,0 @@
-var e=e=>e.isTrusted;function t(t){e=e=>e.isTrusted||t.has(e)}export{e as n,t};

@@ -12,9 +12,10 @@ its React adapter on Preact through `preact/compat`.
   this browser.
 - **Contrast**: the page restyles the upstream examples in this site's palette. Every text color pair is at least
   4.5:1 and input borders at least 3:1, in both themes, checked with axe-core on every component page.
-- **Files**: `app.js` is the shell, `examples/<name>.js` loads one component's examples when you open it, `esm/` is
-  ui-sdk 0.1.0-beta.10 built for Preact, `vendor/` is Preact 11.2.0. ui-sdk and its examples are Apache-2.0
-  (`LICENSE-ui-sdk.txt`), Preact is MIT, the icons are Lucide (ISC).
+- **Files**: `app.js` is the shell, `examples/<name>.js` loads one component's examples when you open it, and one
+  shared chunk in `chunks/` holds ui-sdk 0.1.0-beta.10, Preact 11.2.0 and the icons (280 KB gzipped, loaded once). A
+  component page makes three module requests; if one fails, the page reloads once by itself, then offers a button.
+  ui-sdk and its examples are Apache-2.0 (`LICENSE-ui-sdk.txt`), Preact is MIT, the icons are Lucide (ISC).
 - `?log=1` on Oskar's devices sends the page's console to his log relay.
 
 How the port was built and tested (2,868 of ui-sdk's 2,991 React tests pass on Preact, against React's 2,884), and

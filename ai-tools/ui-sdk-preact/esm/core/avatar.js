@@ -1,1 +1,0 @@
-import{t as e}from"../chunks/c-C_iUIC86.js";export{e as avatar};

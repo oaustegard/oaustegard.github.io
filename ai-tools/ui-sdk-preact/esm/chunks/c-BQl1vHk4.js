@@ -1,1 +1,0 @@
-var e=()=>{};function t(e,t){return{disabled:e.disabled||t?.disabled,readOnly:e.readOnly,required:e.required}}function n(t,n,r,i){return{name:n?.name,...t,value:r,defaultValue:i,onChange:t.onChange??(r===void 0?void 0:e)}}export{n,t};

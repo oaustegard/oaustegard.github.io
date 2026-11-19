@@ -1,1 +1,0 @@
-"use client";import{n as e}from"./chunks/c-CSK0OQ4h.js";import{label as t}from"./core/label.js";var n=e(t,{root:`label`}).Root;export{n as Label};
