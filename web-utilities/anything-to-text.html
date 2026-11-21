@@ -205,6 +205,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
             <option value="indra" selected title="Indra OCR (Datalab): 12M parameters, reads layout and reading order, outputs Markdown. Needs WebGPU.">Indra (layout + Markdown, ~2.3 MB, needs WebGPU)</option>
             <option value="tiny">PP-OCRv6 tiny (~3M, fastest)</option>
             <option value="small">PP-OCRv6 small (~7M, balanced)</option>
+            <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
           </select>
         </div>
         <div>
@@ -483,7 +484,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-19-math"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-21-tess"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 /* a cached copy of an older build reloads itself once */
 fetch("anything-to-text_build.json", { cache: "no-store" }).then(r => (r.ok ? r.json() : null)).then(b => {
@@ -590,6 +591,24 @@ const INDRA_BASE = "https://austegard.com/experiments/indra-browser/web/";
 let indra = null;              /* lazy Indra reader */
 let indraLoading = null;
 function useIndra() { const el = document.getElementById("tier"); return !!el && el.value === "indra"; }
+function useTesseract() { const el = document.getElementById("tier"); return !!el && el.value === "tesseract"; }
+/* Tesseract on WebGPU: the tesseract-gpu experiment's reader, loaded from the experiments site on first use. */
+const TESS_OCR = "https://austegard.com/experiments/tesseract-gpu/web/ocr.js";
+let tess = null, tessLoading = null;
+async function ensureTesseract() {
+  if (tess) return tess;
+  if (!tessLoading) {
+    tessLoading = (async () => {
+      setStatus("Loading Tesseract (layout engine and the fine-tuned English model, first run)...");
+      const { createReader } = await import(window.TESS_OCR_URL || TESS_OCR);
+      tess = await createReader({ model: "eng-ft" });
+      relay.log("tesseract ready", { model: tess.name });
+      return tess;
+    })();
+    tessLoading.catch(() => { tessLoading = null; });
+  }
+  return tessLoading;
+}
 function mathMode() { const el = document.getElementById("math"); return el ? el.value : "auto"; }
 document.getElementById("math").onchange = () => {
   relay.log("math mode", { mode: mathMode() });
@@ -1117,6 +1136,20 @@ async function processPage(pg) {
   /* OCR path: images, forced-OCR PDF pages, and text-less PDF pages. The model loads
      lazily here, so a PDF that is entirely born-digital never touches the weights. */
   pg.markdown = null; pg.engine = null;
+  if (useTesseract()) {
+    const reader = await ensureTesseract();
+    const canvas = await pg.render(scale);
+    pg.pageW = canvas.width; pg.pageH = canvas.height;
+    pg.preview = makePreview(canvas);
+    setStatus("OCR " + pg.image + " (Tesseract on WebGPU)...");
+    const { items, meanConf } = await reader.read(canvas);
+    buildResult(pg, items, "ocr", { confidence: meanConf });
+    pg.engine = "tesseract";
+    pg.ms = Math.round(performance.now() - t0);
+    pg.status = "done";
+    console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines (Tesseract)");
+    return;
+  }
   if (useIndra() && await ensureIndra()) {
     const canvas = await pg.render(scale);
     pg.preview = makePreview(canvas);
@@ -1292,7 +1325,7 @@ function escapeHtml(s) {
 function pageInner(pg) {
   const done = pg.status === "done";
   const srcBadge = done
-    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : "OCR")) + '</span>'
+    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : pg.engine === "tesseract" ? "OCR (Tesseract)" : "OCR")) + '</span>'
     : "";
   const meta = done
     ? '<span class="meta">' + (pg.source === "text"

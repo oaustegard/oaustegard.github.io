@@ -9,7 +9,7 @@ file by type:
 
 | Input | Engine | Output |
 |---|---|---|
-| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** otherwise | Markdown (Indra) or text lines in reading order, with confidence |
+| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** or **Tesseract** (fine-tuned English) otherwise | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper** via Transformers.js | timestamped transcript, editable, with per-segment playback |
 
@@ -38,6 +38,12 @@ so these extensionless files are selectable in the first place.
   It returns plain text lines and runs without WebGPU, so a browser without WebGPU
   switches to PP-OCRv6 small automatically. Its weights and 50-language character
   list download from Hugging Face on first use.
+- **Tesseract English, fine-tuned for scans** runs Tesseract's page layout and its LSTM
+  recognizer on WebGPU, with an English model fine-tuned on document lines and receipt
+  photos that cuts errors on real scans by about 30% against Google's `eng` model
+  (Apache-2.0, 5 MB). English only; needs WebGPU. It comes from the
+  [tesseract-gpu](https://austegard.com/experiments/tesseract-gpu/web/) experiment and
+  loads from there on first use.
 - **PDFs are hybrid**: each page first tries pdf.js's embedded text layer (exact,
   instant, no model). Only text-less pages (scans) fall through to OCR, so a
   born-digital PDF never loads an OCR model. Any page can be forced through OCR
