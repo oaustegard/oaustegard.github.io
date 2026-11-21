@@ -11,7 +11,7 @@ file by type:
 |---|---|---|
 | Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** or **Tesseract** (fine-tuned English) otherwise | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
-| Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper** via Transformers.js | timestamped transcript, editable, with per-segment playback |
+| Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper**, from quantized packs on a WebGPU engine ([whisper-pack](https://github.com/oaustegard/experiments/tree/main/whisper-pack)), or via Transformers.js | timestamped transcript, editable, with per-segment playback |
 
 Drop several files at once and the relevant sections light up independently —
 e.g. a folder of scans plus one screen recording.
@@ -66,6 +66,12 @@ so these extensionless files are selectable in the first place.
 
 - **Whisper** models: tiny / base / small / large-v3-turbo. Runs on **WebGPU** when
   available, WASM (CPU) otherwise — the badge shows which.
+- With WebGPU the default models are **packed**: quantized weights on a hand-written WebGPU
+  engine, in two builds per size. *English-optimized* (the default) is the smaller or more
+  accurate choice for English audio; *All languages* is used automatically for any other
+  language, for translation, and for Auto-detect on tiny, base and small. Downloads: tiny
+  25–28 MB, base 47–55 MB, small 171–183 MB, large-v3-turbo 412–493 MB. The original ONNX
+  models stay in the menu and take over if a pack fails to load.
 - Audio is decoded to 16 kHz mono in-page (native Web Audio for audio; `ffmpeg.wasm`
   loaded lazily for video / unsupported containers).
 - **Voice-activity detection** segments speech into ≤30 s bundles, dropping silence,

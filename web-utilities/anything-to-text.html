@@ -292,6 +292,13 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
           <label class="field" for="model">Model</label>
           <select id="model"></select>
         </div>
+        <div id="build-wrap">
+          <label class="field" for="build">Build</label>
+          <select id="build">
+            <option value="en" selected>English-optimized</option>
+            <option value="all">All languages</option>
+          </select>
+        </div>
         <div>
           <label class="field" for="lang">Language</label>
           <select id="lang">
@@ -379,7 +386,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
   </section>
 
   <footer>
-    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6, or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) and speech-to-text (Whisper via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
+    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6, or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) and speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
   </footer>
 </div>
 
@@ -485,8 +492,9 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-21-rerun"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-21-whisper-pack"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
+window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
 fetch("anything-to-text_build.json", { cache: "no-store" }).then(r => (r.ok ? r.json() : null)).then(b => {
   if (!b || !b.build || b.build === BUILD) return;
@@ -1579,6 +1587,9 @@ estimateBtn.disabled = true; runBtn.disabled = true; continueBtn.disabled = true
        * WebGPU when available, WASM fallback otherwise
    ========================================================================= */
 
+/* the OCR module above started the relay; this module has its own scope */
+const relay = window.a2tRelay || { log() {}, warn() {}, error() {} };
+
 /* ---- version pins (bump here if a CDN pairing breaks) ---- */
 const TRANSFORMERS_VER = "4.2.0";
 const FFMPEG_VER = "0.12.15";
@@ -1603,21 +1614,52 @@ function resolveDtype(modelId) {
   return { encoder_model: "fp32", decoder_model_merged: "fp16" };
 }
 
-/* ---- model menu (all multilingual so language/translate work) ---- */
-const MODELS = [
+/* ---- packed Whisper (oaustegard/experiments whisper-pack): quantized weight packs on a
+   hand-written WebGPU engine, served from R2 as gzip shards. Each size has an English-optimized
+   build (the default) and an all-languages build; `fallback` is the transformers.js model used
+   if a pack fails to load. Needs WebGPU. ---- */
+/* ?packbase= and ?packworker= point both at local copies, for tests */
+const PACK_QS = new URLSearchParams(location.search);
+const PACK_BASE = PACK_QS.get("packbase") || "https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/models/whisper-pack/";
+const PACK_WORKER = PACK_QS.get("packworker") || "https://austegard.com/experiments/whisper-pack/web/worker.js";
+const PACKED = [
+  { id: "pack:turbo", name: "large-v3-turbo", note: "best quality", size: "~410 MB", fallback: "onnx-community/whisper-large-v3-turbo",
+    en: { dir: "turbo-en-r15/", size: "~410 MB", multilingual: true }, all: { dir: "turbo-t4r31/", size: "~490 MB" } },
+  { id: "pack:small", name: "small", note: "balanced", size: "~171 MB", fallback: "onnx-community/whisper-small",
+    en: { dir: "small.en-r63/", size: "~171 MB" }, all: { dir: "small-r63/", size: "~183 MB" } },
+  { id: "pack:base", name: "base", note: "fast", size: "~47 MB", fallback: "onnx-community/whisper-base",
+    en: { dir: "base.en-r63/", size: "~47 MB" }, all: { dir: "base-r63/", size: "~55 MB" } },
+  { id: "pack:tiny", name: "tiny", note: "fastest, lowest quality", size: "~25 MB", fallback: "onnx-community/whisper-tiny",
+    en: { dir: "tiny.en-r63/", size: "~25 MB" }, all: { dir: "tiny-r63/", size: "~28 MB" } }
+];
+/* Which build a run uses. English-optimized applies when the audio is English: the turbo build
+   is still multilingual, so it also serves Auto-detect; the smaller sizes use English-only
+   checkpoints, so they need English chosen explicitly. Anything else gets the all-languages build. */
+function packFor(entry, build, language, task) {
+  const wantsAll = build === "all" || task === "translate" || (language !== "en" && language !== "auto")
+    || (language === "auto" && !entry.en.multilingual);
+  const b = wantsAll ? entry.all : entry.en;
+  return { url: PACK_BASE + b.dir, size: b.size, english: !wantsAll };
+}
+
+/* ---- transformers.js models (all multilingual so language/translate work) ---- */
+const TJS_MODELS = [
   { id: "onnx-community/whisper-tiny",           name: "tiny",           note: "fastest, lowest quality", size: "~80 MB" },
   { id: "onnx-community/whisper-base",           name: "base",           note: "fast",                    size: "~190 MB" },
   { id: "onnx-community/whisper-small",          name: "small",          note: "balanced",                size: "~650 MB" },
   { id: "onnx-community/whisper-large-v3-turbo", name: "large-v3-turbo", note: "best quality",            size: "~800 MB" }
 ];
+const MODELS = HAS_WEBGPU
+  ? PACKED.map((m) => Object.assign({ packed: true }, m)).concat(TJS_MODELS.map((m) => Object.assign({}, m, { note: m.note + ", original ONNX" })))
+  : TJS_MODELS;
 /* turbo is great on GPU but heavy on CPU; pick a sane default per device */
-const DEFAULT_MODEL = HAS_WEBGPU ? "onnx-community/whisper-large-v3-turbo" : "onnx-community/whisper-base";
+const DEFAULT_MODEL = HAS_WEBGPU ? "pack:turbo" : "onnx-community/whisper-base";
 
 /* ---- DOM ---- */
 const el = (id) => document.getElementById(id);
 const dom = {
   drop: el("drop"), file: el("file"), filemeta: el("filemeta"),
-  model: el("model"), lang: el("lang"), task: el("task"),
+  model: el("model"), lang: el("lang"), task: el("task"), build: el("build"), buildWrap: el("build-wrap"),
   run: el("tr-run"), device: el("device"), status: el("tr-status"),
   bar: el("bar"), barFill: el("bar").firstElementChild,
   results: el("results"), partial: el("partial"),
@@ -1668,8 +1710,15 @@ function updateTechNote() {
   if (!dom.techNote) return;
   const m = MODELS.find((x) => x.id === dom.model.value) || MODELS[0];
   const backend = HAS_WEBGPU ? "your GPU (WebGPU)" : "your CPU";
+  if (dom.buildWrap) dom.buildWrap.style.display = m.packed ? "" : "none";
+  let size = m.size, kind = "";
+  if (m.packed) {
+    const pk = packFor(m, dom.build.value, dom.lang.value, state.task);
+    size = pk.size;
+    kind = pk.english ? ", English-optimized build" : ", all-languages build";
+  }
   dom.techNote.textContent =
-    "Whisper " + m.name + " (" + m.size + " model) runs entirely in this page on " + backend +
+    "Whisper " + m.name + kind + " (" + size + " download) runs entirely in this page on " + backend +
     ". Your audio is transcribed on your device and is never uploaded.";
 }
 
@@ -1758,14 +1807,21 @@ const WORKER_SOURCE = [
   '};'
 ].join("\n");
 
-let worker = null;
+let worker = null;          /* the worker the loaded model lives in */
+const workers = {};         /* "tjs" (transformers.js blob) and "pack" (packed engine module) */
 const pending = { load: null, transcribe: null };
 const download = { files: {}, };
 
-function ensureWorker() {
-  if (worker) return worker;
-  const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
-  worker = new Worker(URL.createObjectURL(blob), { type: "module" });
+function ensureWorker(kind) {
+  if (!kind) return worker || ensureWorker("tjs");
+  if (workers[kind]) return (worker = workers[kind]);
+  if (kind === "pack") {
+    worker = new Worker(PACK_WORKER, { type: "module" });
+  } else {
+    const blob = new Blob([WORKER_SOURCE], { type: "text/javascript" });
+    worker = new Worker(URL.createObjectURL(blob), { type: "module" });
+  }
+  workers[kind] = worker;
   worker.onmessage = onWorkerMessage;
   worker.onerror = (e) => {
     console.error("[worker:error]", e);
@@ -1773,7 +1829,7 @@ function ensureWorker() {
     if (pending.load) { pending.load.reject(new Error(msg)); pending.load = null; }
     if (pending.transcribe) { pending.transcribe.reject(new Error(msg)); pending.transcribe = null; }
   };
-  console.log("[worker] created");
+  console.log("[worker] created", kind);
   return worker;
 }
 
@@ -1812,6 +1868,7 @@ function onWorkerMessage(event) {
       break;
     case "log":
       console.log("[worker:log]", m.message);
+      relay.log("whisper: " + m.message);
       break;
     case "error":
       console.error("[worker:error]", m.message);
@@ -1823,13 +1880,19 @@ function onWorkerMessage(event) {
   }
 }
 
+/* `model` is a transformers.js model id or a pack directory URL. */
 function loadModel(model) {
   return new Promise((resolve, reject) => {
     pending.load = { resolve, reject };
     download.files = {};
+    if (model.startsWith(PACK_BASE)) {
+      console.log("[load] pack=%s", model);
+      ensureWorker("pack").postMessage({ type: "load", model });
+      return;
+    }
     const dtype = resolveDtype(model);
     console.log("[load] model=%s device=%s dtype=%o", model, DEVICE, dtype);
-    ensureWorker().postMessage({ type: "load", model, device: DEVICE, dtype });
+    ensureWorker("tjs").postMessage({ type: "load", model, device: DEVICE, dtype });
   });
 }
 
@@ -2149,9 +2212,12 @@ async function run() {
   state.audio = null;
   resetStages();
 
-  const model = dom.model.value;
   const language = dom.lang.value;
   const task = state.task;
+  const entry = MODELS.find((x) => x.id === dom.model.value) || MODELS[0];
+  const pack = entry.packed ? packFor(entry, dom.build.value, language, task) : null;
+  const model = pack ? pack.url : entry.id;
+  relay.log("transcribe", { model: entry.name, pack: pack ? pack.url.slice(PACK_BASE.length) : null, language, task });
 
   try {
     /* stages 1 + 2 overlap: decode audio while the model downloads */
@@ -2164,7 +2230,13 @@ async function run() {
 
     const loadPromise = (state.loadedModel === model)
       ? Promise.resolve()
-      : loadModel(model).then(() => { state.loadedModel = model; });
+      : loadModel(model).then(() => { state.loadedModel = model; }, (err) => {
+          if (!pack) throw err;
+          /* a pack that will not load must not take transcription down with it */
+          relay.error("pack load failed, using " + entry.fallback, { message: String(err && err.message || err) });
+          setStatus("Packed model failed to load; using the original model instead\u2026");
+          return loadModel(entry.fallback).then(() => { state.loadedModel = entry.fallback; });
+        });
 
     const [audio] = await Promise.all([decodePromise, loadPromise]);
     setStage("model", "done");
@@ -2720,10 +2792,13 @@ window.addEventListener("intake:transcribe", e => { trSection.hidden = false; ac
 makeDropZone(dom.editAudioZone, dom.editAudio, (f) => acceptEditFile("editAudio", f));
 makeDropZone(dom.editTranscriptZone, dom.editTranscript, (f) => acceptEditFile("editTranscript", f));
 dom.model.addEventListener("change", updateTechNote);
+dom.build.addEventListener("change", updateTechNote);
+dom.lang.addEventListener("change", updateTechNote);
 
 dom.task.addEventListener("change", () => {
   const r = dom.task.querySelector('input[name="task"]:checked');
   if (r) state.task = r.value;
+  updateTechNote();
 });
 
 dom.run.addEventListener("click", run);
