@@ -10,7 +10,7 @@ Press Launch, hold the phone the way you want to play, and press LEVEL: that pos
 
 Dragging on the playfield also moves the ship and takes over from tilt for a moment. On a computer the ship follows the mouse pointer, or the arrow keys move it; `Space` sets off a nuke, `P` pauses and `M` mutes.
 
-A shot from an enemy, or an enemy flying into you, costs a ship; the game ends when the last one goes. Easy (the default) gives five ships, two nukes, slower enemies and shots, and fewer enemies diving at once; Arcade gives three ships and one nuke. Each difficulty keeps its own best score and the furthest stage reached, and you can start at stage 1, 5, 9 and so on once you have got there.
+A shot from an enemy, or an enemy flying into you, costs a ship; the game ends when the last one goes. Easy (the default) gives four ships, slower enemies and shots, and fewer enemies diving at once; Arcade gives three ships, and its swarm dives harder and shoots more. Both start with one nuke. Each difficulty keeps its own best score and the furthest stage reached, and you can start at stage 1, 5, 9 and so on once you have got there.
 
 ## The swarm
 
@@ -22,15 +22,15 @@ Each stage has forty enemies of three kinds:
 | mantis | middle two rows | 70 | 160 |
 | warden (takes two hits) | top row | 120 | 350 |
 
-They arrive in five groups, from the left, the right and the top, along looping paths, and settle into the formation. While they arrive the formation sways from side to side; once everyone is in place it spreads out and draws back in, once every two bars of the music. Then they start diving: an enemy peels off with a half loop, homes in on you with a weave and fires on the way down. Most fly off the bottom and come back in from the top; from stage 5 some turn and climb straight back to their place instead. When five or fewer are left, they dive in quick succession.
+They arrive in five groups, from the left, the right and the top, along looping paths, and settle into the formation. While they arrive the formation sways from side to side; once everyone is in place it spreads out and draws back in, once every two bars of the music. Attacks begin as soon as a dozen have settled, before the rest have arrived: members of the formation take aimed shots at you, and others start diving: an enemy peels off with a half loop, homes in on you with a weave and fires on the way down. Most fly off the bottom and come back in from the top; from stage 5 some turn and climb straight back to their place instead. When five or fewer are left, they dive in quick succession.
 
 From stage 2 a warden dives with up to two mantises from the row below it as escorts. Shoot the escorts down before the warden for a bonus of 500 each. A warden shot down in mid-dive always drops a drone pod; catch it for wingmen, the same as the W capsule below.
 
-From stage 4 on Easy, and stage 2 on Arcade, enemies also fire while they are still arriving. Dives get faster, more frequent and more numerous as the stages go up.
+Enemies also fire while they are still arriving, and their aimed shots lead a moving ship. Dives get faster, more frequent and more numerous as the stages go up.
 
 Stages 3, 7, 11 and so on are bonus stages: forty enemies loop through without firing, and flying into them does no harm. Every one is downed by a single hit. Each one you shoot down is worth 100, and the stage pays another 100 for each at the end, or 10,000 if you got all forty.
 
-Kills less than a second apart build a chain that raises each kill's score, up to ×4. An enemy shot that passes close under your ship without hitting it is a graze, worth 10. Clearing a stage scores a bonus for accuracy and another if you lost no ship on it. An extra ship comes every 15,000 points on Easy and every 20,000 on Arcade.
+Kills less than a second apart build a chain that raises each kill's score, up to ×4. An enemy shot that passes close under your ship without hitting it is a graze, worth 10. Clearing a stage scores a bonus for accuracy and another if you lost no ship on it. Extra ships come at 20,000 points and every 60,000 after that on Easy, and at 30,000 and every 80,000 after on Arcade.
 
 ## Capsules
 

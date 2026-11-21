@@ -32,7 +32,7 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Oxanium:wght@400;600&display=swap">
 <script src="/experiments/gpu-bridge/web/relay.js"></script>
 <script>
-const BUILD = window.BUILD = "202611210002";   // keep equal to build.json
+const BUILD = window.BUILD = "202611210003";   // keep equal to build.json
 window.relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "swarmfall", build: BUILD });
 // A phone can keep serving a cached copy after a deploy: build.json is fetched past every cache,
 // and when it names another build the page reloads once under a URL no cache holds.
@@ -308,8 +308,8 @@ const settings = Object.assign({ tilt: true, range: 22, sound: true, music: true
 const saveSettings = () => store.set('settings', settings);
 // Easy is the default: slower flyers and shots, fewer divers at once, more ships and more drops.
 const MODES = {
-  easy:   { lives: 5, nukes: 2, bullet: 150, speed: .8, dive: .62, divers: 2, shots: 1, capsule: .08, bpm: 112, extra: 15000, enterFireFrom: 4, gap: 1.9 },
-  arcade: { lives: 3, nukes: 1, bullet: 200, speed: 1, dive: 1, divers: 3, shots: 2, capsule: .05, bpm: 122, extra: 20000, enterFireFrom: 2, gap: 1.6 },
+  easy:   { lives: 4, nukes: 1, bullet: 175, speed: .92, dive: .9, divers: 2, shots: 2, capsule: .07, bpm: 112, extra: 60000, firstExtra: 20000, enterFireFrom: 1, gap: 1.7, snipe: 3.2 },
+  arcade: { lives: 3, nukes: 1, bullet: 225, speed: 1.08, dive: 1.3, divers: 3, shots: 3, capsule: .045, bpm: 122, extra: 80000, firstExtra: 30000, enterFireFrom: 1, gap: 1.4, snipe: 2 },
 };
 let best = store.get('best-' + settings.mode, 0);
 let unlocked = store.get('unlocked-' + settings.mode, 1);
@@ -776,11 +776,12 @@ const STAGE_NAMES = ['Swarm', 'Hive Front', 'Moth Storm', 'Mantis Line', 'Crown 
 function waveSpec(w) {
   const m = mode(), n = Math.max(0, w - 1);
   return {
-    speed: (250 + Math.min(70, n * 6)) * m.speed,
+    speed: (265 + Math.min(80, n * 7)) * m.speed,
     diveSpeed: (150 + Math.min(80, n * 6)) * m.speed,
-    maxDivers: Math.min(6, m.divers + Math.floor(n / 4)),
-    diveEvery: Math.max(.8, 3.2 - n * .14) / m.dive,
-    shots: m.shots + Math.floor(n / 6),
+    maxDivers: Math.min(7, m.divers + Math.floor(n / 3)),
+    diveEvery: Math.max(.55, 2.3 - n * .14) / m.dive,
+    snipe: Math.max(.7, m.snipe - n * .15),
+    shots: m.shots + Math.floor(n / 4),
     enterFire: w >= m.enterFireFrom,
     escorts: w >= 2,
     loopBack: w >= 5,
@@ -1246,7 +1247,7 @@ function startDive(v, lead) {
 function enemyShot(x, y, type, aimed, mul = 1) {
   const sp = (mode().bullet + Math.min(70, game.wave * 4)) * mul;
   let vx = 0, vy = sp;
-  if (aimed) { const dx = ship.x - x, dy = SHIP_Y - y, d = Math.hypot(dx, dy) || 1; vx = dx / d * sp; vy = Math.max(sp * .55, dy / d * sp); }
+  if (aimed) { const lead = clamp(ship.vx, -260, 260) * (SHIP_Y - y) / sp * .6, dx = ship.x + lead - x, dy = SHIP_Y - y, d = Math.hypot(dx, dy) || 1; vx = dx / d * sp; vy = Math.max(sp * .55, dy / d * sp); }
   game.ebul.push({ x, y, vx, vy, type, t: Math.random(), near: false, grazed: false });
 }
 function maybeFire(v, chance, dt) {
@@ -1291,12 +1292,12 @@ function updateEnemies(dt, frozen) {
         v.ang = v.lead.ang;
       } else {
         if (v.t < .75) v.ang += v.side * Math.PI / .75 * dt; // the peel-off: a half loop out to the near side
-        else if (v.y < SHIP_Y - 70) steerTo(v, ship.x + Math.sin(v.t * 2.2 + v.seed * 6) * 50, SHIP_Y + 40, 1.7, dt);
+        else if (v.y < SHIP_Y - 70) steerTo(v, ship.x + Math.sin(v.t * 2.2 + v.seed * 6) * 50, SHIP_Y + 40, 2.4, dt);
         v.spd = Math.min(v.spd + 30 * dt, spec.diveSpeed * 1.35);
         v.x += Math.cos(v.ang) * v.spd * dt; v.y += Math.sin(v.ang) * v.spd * dt;
         v.x = clamp(v.x, 10, W - 10);
       }
-      maybeFire(v, 1.4, dt);
+      maybeFire(v, 2.2, dt);
       if (v.loopBack && v.y > 450) { v.state = 'return'; v.spd *= 1.1; }
       else if (v.y > H + 24) { v.state = 'return'; v.x = slotX(v); v.y = -30; v.ang = Math.PI / 2; v.px = v.x; v.py = v.y; v.lead = null; }
     }
@@ -1310,7 +1311,16 @@ function updateEnemies(dt, frozen) {
   }
   // Formation complete: every flyer has arrived once.
   if (!game.formed && !game.bonus && game.inv.length && game.inv.every(v => !v.alive || v.state === 'form' || v.state === 'dive' || v.state === 'return')) { game.formed = true; game.formedT = game.t; }
-  if (!game.formed || game.bonus || game.phase !== 'play' || frozen || !ship.alive || game.t < game.formedT + 1.2) return;
+  if (game.bonus || game.phase !== 'play' || frozen || !ship.alive || game.t < game.readyT + 4) return;
+  const settled = game.inv.filter(v => v.alive && v.state === 'form');
+  if (!game.formed && settled.length < 12) return;
+  // The formation snipes: now and then one of its lowest members fires an aimed shot.
+  game.snipeT = (game.snipeT ?? 2) - dt;
+  if (game.snipeT <= 0 && settled.length && game.ebul.length < 14) {
+    game.snipeT = spec.snipe * rnd(.6, 1.4);
+    const v = pick(settled.filter(o => o.row >= 3).concat(settled).slice(0, 8));
+    enemyShot(v.x, v.y + 8, KIND[v.kind].shot, true, .9);
+  }
   game.diveT -= dt;
   if (game.diveT > 0) return;
   const left = game.inv.filter(v => v.alive);
@@ -1392,7 +1402,7 @@ function resetLoadout() {
 }
 function newGame(start) {
   game.demo = false; game.score = 0; game.lives = mode().lives; game.nukes = mode().nukes; game.wave = start;
-  game.nextLife = mode().extra; game.fired = 0; game.landed = 0; game.volleys = 0; game.kills = 0; game.chain = 0;
+  game.nextLife = mode().firstExtra; game.fired = 0; game.landed = 0; game.volleys = 0; game.kills = 0; game.chain = 0;
   resetLoadout(); game.pbul = []; ship.x = W / 2; input.x = W / 2; ship.alive = true; ship.inv = 0; ship.fireCd = .4;
   startWave(); hideAll(); Music.start(); wake(true);
   relay.log('new game', { mode: settings.mode, start, tilt: motion.ok && settings.tilt, renderer: renderer && renderer.kind });
