@@ -247,7 +247,8 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
         <button id="run" class="primary" disabled>Run batch</button>
         <button id="continue" class="ghost" disabled>Continue</button>
         <button id="estimate" class="ghost" disabled>Estimate</button>
-        <button id="clear" class="ghost" disabled>Clear</button>
+        <button id="reset" class="ghost" disabled title="Clear the results and keep the files, to read them again">Clear results</button>
+        <button id="clear" class="ghost" disabled title="Remove the files and their results">Clear</button>
         <span id="status">Loading OCR libraries&hellip;</span>
       </div>
       <div id="eta"></div>
@@ -484,7 +485,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-21-tess"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-21-rerun"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 /* a cached copy of an older build reloads itself once */
 fetch("anything-to-text_build.json", { cache: "no-store" }).then(r => (r.ok ? r.json() : null)).then(b => {
@@ -500,7 +501,7 @@ fetch("anything-to-text_build.json", { cache: "no-store" }).then(r => (r.ok ? r.
 
 const $ = s => document.querySelector(s);
 const statusEl = $("#status"), etaEl = $("#eta"), pagesEl = $("#pages");
-const estimateBtn = $("#estimate"), runBtn = $("#run"), continueBtn = $("#continue"), clearBtn = $("#clear");
+const estimateBtn = $("#estimate"), runBtn = $("#run"), continueBtn = $("#continue"), clearBtn = $("#clear"), resetBtn = $("#reset");
 const copyBtn = $("#copy"), txtBtn = $("#txt"), mdBtn = $("#md"), jsonBtn = $("#json"), htmlBtn = $("#html");
 const showJsonBtn = $("#show-json"), showHtmlBtn = $("#show-html");
 const overlay = $("#overlay"), ovBody = $("#ov-body"), ovTitle = $("#ov-title"), ovClose = $("#ov-close");
@@ -856,6 +857,7 @@ async function accept(fileList) {
   renderPages();
   refreshControls();
   estimate();
+  autoRun();
 }
 
 /* ---------- estimate (skill step 1) ---------- */
@@ -1419,7 +1421,11 @@ function download(name, text, type) {
 }
 
 /* ---------- control state ---------- */
+let running = false;         /* a batch is being read */
+let rerunAfter = false;      /* a setting changed during a run: re-read when it ends */
 function setBusy(b) {
+  running = b;
+  resetBtn.disabled = b || !pages.some(p => p.status !== "pending");
   estimateBtn.disabled = b || !pages.length;
   runBtn.disabled = b || nextIndex >= pages.length;
   continueBtn.disabled = b || nextIndex >= pages.length || nextIndex === 0;
@@ -1433,6 +1439,7 @@ function refreshControls() {
   runBtn.disabled = !more;
   continueBtn.disabled = !more || nextIndex === 0;
   clearBtn.disabled = !has;
+  resetBtn.disabled = running || !pages.some(p => p.status !== "pending");
   copyBtn.disabled = !someDone;
   txtBtn.disabled = !someDone;
   mdBtn.disabled = !someDone;
@@ -1440,6 +1447,39 @@ function refreshControls() {
   htmlBtn.disabled = !someDone;
   showJsonBtn.disabled = !someDone;
   showHtmlBtn.disabled = !someDone;
+}
+
+/* Clear the results and keep the files: every page goes back to pending and the next run starts from the first. */
+function resetResults() {
+  for (const p of pages) {
+    Object.assign(p, { status: "pending", text: "", lines: [], segments: [], markdown: null, engine: null, source: null,
+                       ms: 0, error: null, meanConf: 0, forceOcr: false, forceText: false });
+  }
+  nextIndex = 0;
+  renderPages();
+  refreshControls();
+  estimate();
+}
+
+/* Run straight away when what is left fits in one batch; otherwise leave it to Run batch. */
+function autoRun() {
+  if (running || !pages.length || nextIndex >= pages.length) return;
+  if (pages.length - nextIndex <= batchSize()) runBatch().then(afterRun);
+}
+function afterRun() {
+  refreshControls();
+  if (rerunAfter) { rerunAfter = false; resetResults(); autoRun(); }
+}
+
+/* A reading setting changed: results read with the old one are cleared, and a page set that fits in one batch is
+   read again at once. During a run, this happens when the run ends. */
+function settingsChanged() {
+  if (!pages.length) return;
+  if (running) { rerunAfter = true; setStatus("Settings changed - re-reading when this batch ends."); return; }
+  if (!pages.some(p => p.status !== "pending")) { autoRun(); return; }
+  resetResults();
+  if (pages.length <= batchSize()) autoRun();
+  else setStatus("Settings changed - results cleared. Press Run batch to read again.");
 }
 
 function clearAll() {
@@ -1457,15 +1497,18 @@ estimateBtn.onclick = estimate;
 document.getElementById("tier").onchange = () => {
   if (paddle) { paddle = null; setStatus("Model changed - will reload on next run."); }
   estimate();
+  settingsChanged();
 };
+for (const id of ["math", "dpi", "batch", "columns", "textorder"]) document.getElementById(id).addEventListener("change", settingsChanged);
 /* the layer mode decides how many entries a PDF becomes, so it applies at intake */
 document.getElementById("pdflayers").onchange = () => {
   if (pages.some(p => p.kind === "pdf")) setStatus("PDF layer mode applies to PDFs added from now on; Clear and add the file again to re-read it.");
 };
 /* Indra is the default; without WebGPU, ensureIndra switches the select to PP-OCRv6 small */
-runBtn.onclick = () => runBatch().then(refreshControls);
-continueBtn.onclick = () => runBatch().then(refreshControls);
+runBtn.onclick = () => runBatch().then(afterRun);
+continueBtn.onclick = () => runBatch().then(afterRun);
 clearBtn.onclick = clearAll;
+resetBtn.onclick = () => { resetResults(); setStatus("Results cleared. Press Run batch, or change a setting, to read again."); };
 copyBtn.onclick = async () => {
   try { await navigator.clipboard.writeText(allText()); setStatus("Copied all text to clipboard."); }
   catch (e) { console.error("[copy] failed", e); setStatus("Copy failed: " + (e && e.message || e)); }
@@ -1520,7 +1563,7 @@ pagesEl.addEventListener("click", async e => {
 
 
 setStatus("Ready - choose images or a PDF.");
-estimateBtn.disabled = true; runBtn.disabled = true; continueBtn.disabled = true; clearBtn.disabled = true;
+estimateBtn.disabled = true; runBtn.disabled = true; continueBtn.disabled = true; clearBtn.disabled = true; resetBtn.disabled = true;
 
 </script>
 
