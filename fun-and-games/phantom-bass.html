@@ -122,7 +122,11 @@
       <button data-src="real" aria-pressed="true">Real bass</button>
       <button data-src="harm" aria-pressed="false">Harmonics only</button>
       <button data-src="nld" aria-pressed="false">Waveshaper</button>
+      <button data-src="boost" aria-pressed="false">Real + harmonics</button>
     </div>
+    <div class="row"><span class="lab">Harmonics</span><strong id="tv" style="font-variant-numeric:tabular-nums">0 dB</strong>
+      <span class="small">relative to a loudness match with the real bass</span></div>
+    <input type="range" id="trim" min="-12" max="12" step="1" value="0" aria-label="Level of the added harmonics, in decibels">
     <div class="row"><span class="lab">Speaker</span>
       <button data-spk="full" aria-pressed="false">Full range</button>
       <button data-spk="small" aria-pressed="true">Small speaker</button>
@@ -133,7 +137,7 @@
     </div>
     <div class="readout" id="r3"></div>
     <canvas id="c3" aria-label="Live spectrum of the bassline"></canvas>
-    <p class="small"><strong>Small speaker</strong> runs everything through a steep filter below 180 Hz, so on headphones you hear roughly what a laptop plays. On a phone speaker, use <strong>Full range</strong> and let the real speaker do the cutting. <strong>Harmonics only</strong> plays partials 2 to 7 with the fundamental left out. <strong>Waveshaper</strong> is how most virtual bass plugins do it: the low band of the real bass is bent through a nonlinear curve that creates harmonics, and those replace it. All three carry about the same power before the speaker; through the small speaker the virtual versions come out several decibels louder in the bass range.</p>
+    <p class="small"><strong>Small speaker</strong> runs everything through a steep filter below 180 Hz, so on headphones you hear roughly what a laptop plays. On a phone speaker, use <strong>Full range</strong> and let the real speaker do the cutting. <strong>Harmonics only</strong> plays partials 2 to 7 with the fundamental left out. <strong>Waveshaper</strong> bends the low band of the real bass through a nonlinear curve that creates harmonics, and those replace it. <strong>Real + harmonics</strong> keeps the real bass and adds the harmonics on top, which is how most bass enhancers work: full-range speakers still get the low note, small ones get the harmonics. The harmonics are set to sound about as loud as the real bass at a moderate volume (from the equal-loudness contours, since the ear is much less sensitive at 50 Hz than at 200 Hz). Use the slider to match them by ear: switch between <strong>Real bass</strong> and <strong>Harmonics only</strong> on <strong>Full range</strong> until neither sounds louder.</p>
   </section>
 
   <footer>
@@ -423,7 +427,7 @@ function draw2() {
 }
 
 // ── section 3: virtual bass ───────────────────────────────
-const S3 = { src: 'real', spk: 'small', virt: 'harm', on: false, timer: null, step: 0, next: 0, ab: false, log: [], raf: 0 };
+const S3 = { trimG: 1, src: 'real', spk: 'small', virt: 'harm', on: false, timer: null, step: 0, next: 0, ab: false, log: [], raf: 0 };
 let B3 = null;
 const BPM = 104, EIGHTH = 60 / BPM / 2;
 const RIFF = [33, 33, null, 33, 36, null, 38, 40, 31, 31, null, 31, 33, null, 36, 38];
@@ -432,12 +436,15 @@ const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
 const mname = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
 const REAL = [0, 1, 0.5, 0.3, 0.18, 0.1, 0.06, 0.035];
 const HARM = [0, 0, 0.75, 1, 0.75, 0.5, 0.3, 0.15];
+// Loudness-match trims (dB) from an ISO 226 / critical-band loudness estimate at a moderate level,
+// averaged over the riff's notes: equal-RMS harmonics sound about 7 dB louder, the waveshaper about 10 dB.
+const TRIM_HARM = -7, TRIM_NLD = -10;
 function wstats(c) { let s = 0, pk = 0; for (let i = 0; i < 2048; i++) { const t = i / 2048; let y = 0; c.forEach((a, n) => { y += a * Math.sin(2 * Math.PI * n * t); }); s += y * y; pk = Math.max(pk, Math.abs(y)); } return { rms: Math.sqrt(s / 2048), pk }; }
 
 function build3() {
   if (B3) return B3;
   const r = wstats(REAL), h = wstats(HARM);
-  const kR = 0.5 / r.pk, kH = kR * r.rms / h.rms;          // real peaks at 0.5; harmonics matched in RMS
+  const kR = 0.5 / r.pk, kH = kR * r.rms / h.rms * 10 ** (TRIM_HARM / 20);   // real peaks at 0.5; harmonics matched in loudness
   const wave = (c, k) => ctx.createPeriodicWave(new Float32Array(c.length), Float32Array.from(c, a => a * k), { disableNormalization: true });
   const bq = (type, f, q = Math.SQRT1_2) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; };
   const G = v => { const g = ctx.createGain(); g.gain.value = v; return g; };
@@ -450,9 +457,12 @@ function build3() {
   B.spkIn.connect(s1); s1.connect(s2); s2.connect(B.wet).connect(B.out);
   // sources
   B.busReal = G(1); B.busHarm = G(1);
-  B.selReal = G(1); B.selHarm = G(0); B.selNld = G(0);
+  B.selReal = G(1); B.selHarm = G(0); B.selNld = G(0); B.selBoost = G(0);
+  B.vtH = G(S3.trimG); B.vtN = G(S3.trimG);              // user trim on the added harmonics
   B.busReal.connect(B.selReal).connect(B.spkIn);
-  B.busHarm.connect(B.selHarm).connect(B.spkIn);
+  B.busHarm.connect(B.vtH); B.vtH.connect(B.selHarm).connect(B.spkIn);
+  // bass boost: the real bass plus the harmonics
+  B.busReal.connect(B.selBoost); B.vtH.connect(B.selBoost); B.selBoost.connect(B.spkIn);
   // waveshaper virtual bass: low band -> nonlinear curve -> keep the new harmonics, add back the real bass above 150 Hz
   const lp = bq('lowpass', 150), drive = G(2.2), sh = ctx.createWaveShaper();
   const curve = new Float32Array(2049);
@@ -462,7 +472,8 @@ function build3() {
   const keep = bq('highpass', 150), sum = G(1);
   B.busReal.connect(lp); lp.connect(drive); drive.connect(sh); sh.connect(h1); h1.connect(h2); h2.connect(lp2); lp2.connect(amt); amt.connect(sum);
   B.busReal.connect(keep); keep.connect(sum);
-  sum.connect(B.selNld).connect(B.spkIn);
+  const nTrim = G(10 ** (TRIM_NLD / 20));
+  sum.connect(nTrim); nTrim.connect(B.vtN); B.vtN.connect(B.selNld).connect(B.spkIn);
   // hi-hat tick so the groove survives when the bass vanishes
   const nb = ctx.createBuffer(1, Math.round(ctx.sampleRate * 0.05), ctx.sampleRate), nd = nb.getChannelData(0);
   for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
@@ -471,7 +482,7 @@ function build3() {
 }
 function setSrc3(src, t) {
   const B = build3(); t = t ?? ctx.currentTime;
-  [['real', B.selReal], ['harm', B.selHarm], ['nld', B.selNld]].forEach(([k, g]) => { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(k === src ? 1 : 0, t, 0.012); });
+  [['real', B.selReal], ['harm', B.selHarm], ['nld', B.selNld], ['boost', B.selBoost]].forEach(([k, g]) => { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(k === src ? 1 : 0, t, 0.012); });
 }
 function setSpk3(spk) {
   const B = build3(), t = ctx.currentTime;
@@ -534,18 +545,23 @@ document.querySelectorAll('[data-src]').forEach(b => b.addEventListener('click',
 document.querySelectorAll('[data-spk]').forEach(b => b.addEventListener('click', () => {
   S3.spk = b.dataset.spk; if (S3.on) setSpk3(S3.spk); ui3();
 }));
+$('#trim').addEventListener('input', e => {
+  const db = +e.target.value; S3.trimG = 10 ** (db / 20);
+  $('#tv').textContent = (db > 0 ? '+' : db < 0 ? '−' : '') + Math.abs(db) + ' dB';
+  if (B3) { const t = ctx.currentTime; B3.vtH.gain.setTargetAtTime(S3.trimG, t, 0.03); B3.vtN.gain.setTargetAtTime(S3.trimG, t, 0.03); }
+});
 $('#ab3').addEventListener('change', e => {
   S3.ab = e.target.checked;
   if (S3.ab && S3.on && S3.src !== 'real') { S3.src = 'real'; setSrc3('real'); }
   ui3();
 });
-const SRCNAME = { real: 'the real bass', harm: 'virtual bass, harmonics only', nld: 'virtual bass, waveshaper' };
+const SRCNAME = { real: 'the real bass', harm: 'virtual bass, harmonics only', nld: 'virtual bass, waveshaper', boost: 'the real bass plus its harmonics' };
 function ui3() {
   document.querySelectorAll('[data-src]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.src === S3.src)));
   document.querySelectorAll('[data-spk]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.spk === S3.spk)));
   const where = S3.spk === 'small' ? 'through the small-speaker filter' : 'full range';
   $('#r3').innerHTML = S3.on
-    ? (S3.ab ? `<span class="flag">${S3.src === 'real' ? 'A: REAL' : 'B: VIRTUAL'}</span> ` : '') + `Hearing <b>${SRCNAME[S3.src]}</b>, ${where}.`
+    ? (S3.ab ? `<span class="flag">${S3.src === 'real' ? 'A: REAL' : S3.src === 'boost' ? 'B: BOOSTED' : 'B: VIRTUAL'}</span> ` : '') + `Hearing <b>${SRCNAME[S3.src]}</b>, ${where}.`
     : `Ready: <b>${SRCNAME[S3.src]}</b>, ${where}. Press play.` + (S3.ab ? ` It starts on the real bass and swaps to ${SRCNAME[S3.virt]} every 2 bars.` : '');
 }
 function loop3() { draw3(); if (S3.on) S3.raf = requestAnimationFrame(loop3); }
