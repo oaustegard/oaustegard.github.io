@@ -1,0 +1,593 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="ai-disclosure" content="ai-assisted">
+<title>Phantom Bass</title>
+<meta name="description" content="Hear a bass note that isn't there: the missing fundamental, partials shifted off the harmonic grid, and the virtual-bass trick that small speakers use.">
+<meta property="og:title" content="Phantom Bass">
+<meta property="og:description" content="Hear a bass note that isn't there. Missing fundamentals, shifted partials and a virtual-bass A/B in Web Audio.">
+<meta property="og:image" content="https://austegard.com/images/og/fun-and-games-phantom-bass.png">
+<meta property="og:type" content="website">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="color-scheme" content="light dark">
+<style>
+  :root {
+    --bg: #f4f2ec; --card: #fffdf8; --ink: #1d1f1a; --dim: #61655a; --line: #d9d5c8;
+    --acc: #b5481f; --acc2: #2b6f8a; --ghost: #b5481f; --good: #3b7d3a; --zone: rgba(181,72,31,.09);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #121410; --card: #1b1e18; --ink: #ecebe3; --dim: #a3a698; --line: #343a30;
+      --acc: #ef8a5c; --acc2: #6fb6d2; --ghost: #ef8a5c; --good: #8fcf7e; --zone: rgba(239,138,92,.12); }
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; padding-bottom: 96px; }
+  main { max-width: 760px; margin: 0 auto; padding: max(16px, env(safe-area-inset-top)) 16px 24px; }
+  a { color: var(--acc2); }
+  .crumb { font-size: 14px; color: var(--dim); margin: 4px 0 18px; }
+  h1 { font: 600 34px/1.1 Georgia, "Times New Roman", serif; margin: 0 0 8px; letter-spacing: -.01em; }
+  h2 { font: 600 22px/1.25 Georgia, "Times New Roman", serif; margin: 0 0 6px; }
+  .lede { font-size: 18px; color: var(--dim); margin: 0 0 16px; }
+  .note { border-left: 3px solid var(--acc); padding: 8px 12px; background: var(--card); border-radius: 0 8px 8px 0; font-size: 15px; margin: 0 0 24px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 14px; padding: 18px 16px; margin: 0 0 22px; }
+  section p { margin: 6px 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  .lab { font-size: 13px; color: var(--dim); text-transform: uppercase; letter-spacing: .06em; min-width: 92px; }
+  button { font: inherit; font-size: 15px; color: var(--ink); background: transparent; border: 1px solid var(--line); border-radius: 999px; padding: 8px 14px; cursor: pointer; touch-action: manipulation; }
+  button:hover { border-color: var(--dim); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--acc2); outline-offset: 2px; }
+  button[aria-pressed="true"] { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+  button.play { background: var(--acc); color: #fff; border-color: var(--acc); font-weight: 600; padding: 10px 20px; }
+  button.play.on { background: transparent; color: var(--acc); }
+  button.chip { min-width: 44px; padding: 7px 10px; font-variant-numeric: tabular-nums; }
+  .readout { font-variant-numeric: tabular-nums; font-size: 15px; background: var(--bg); border-radius: 10px; padding: 10px 12px; margin: 10px 0; }
+  .readout b { color: var(--acc); }
+  .readout .big { font-size: 20px; }
+  canvas { width: 100%; display: block; border-radius: 10px; background: var(--bg); touch-action: pan-y; }
+  #c1 { height: 260px; } #c2 { height: 280px; } #c3 { height: 220px; }
+  input[type=range] { width: 100%; accent-color: var(--acc); height: 32px; }
+  label.chk { display: inline-flex; gap: 8px; align-items: center; font-size: 15px; cursor: pointer; }
+  label.chk input { width: 20px; height: 20px; accent-color: var(--acc); }
+  .flag { display: inline-block; min-width: 9.5em; font-weight: 600; color: var(--acc); }
+  .small { font-size: 14px; color: var(--dim); }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--dim); font-size: 15px; }
+  .dock { position: fixed; left: 0; right: 0; bottom: 0; background: color-mix(in srgb, var(--card) 92%, transparent); border-top: 1px solid var(--line);
+    -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); padding: 10px 16px max(10px, env(safe-area-inset-bottom)); z-index: 5; }
+  .dock .in { max-width: 760px; margin: 0 auto; display: flex; gap: 12px; align-items: center; }
+  .dock label { font-size: 14px; color: var(--dim); white-space: nowrap; }
+  .dock input { flex: 1; }
+  #volv { font-variant-numeric: tabular-nums; width: 3.2em; text-align: right; font-size: 14px; }
+  footer { font-size: 14px; color: var(--dim); }
+  footer li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+  <p class="crumb"><a href="/">austegard.com</a> / <a href="/fun-and-games/">Toys &amp; Gadgets</a></p>
+  <h1>Phantom Bass</h1>
+  <p class="lede">Your ear hears a bass note even when the note's own frequency is missing. Three experiments show how, and how small speakers use it.</p>
+  <p class="note"><strong>Start quiet.</strong> The volume slider at the bottom starts low and every tone fades in and out. Use headphones or proper speakers at a moderate level. A phone speaker hides the low notes, which is the point of part 3.</p>
+
+  <section id="s1" aria-labelledby="h1s">
+    <h2 id="h1s">1. The missing fundamental</h2>
+    <p>A pitched sound is a stack of partials at whole multiples of one frequency, the fundamental. Remove the fundamental and the pitch stays where it was: 200, 300 and 400 Hz together sound like 100 Hz, though nothing is playing at 100 Hz.</p>
+    <div class="row"><span class="lab">Fundamental</span>
+      <span id="f0s"></span></div>
+    <div class="row"><span class="lab">Partials</span>
+      <span id="hs"></span></div>
+    <div class="row"><span class="lab">Presets</span>
+      <button data-pre="1-8">With fundamental (1&ndash;8)</button>
+      <button data-pre="2-8">Without it (2&ndash;8)</button>
+      <button data-pre="2,3,4">Just 2, 3, 4</button>
+      <button data-pre="6-10">High ones only (6&ndash;10)</button>
+      <button data-pre="1">Fundamental alone</button>
+    </div>
+    <div class="row">
+      <button class="play" id="p1">Play</button>
+      <label class="chk"><input type="checkbox" id="flip1"> Switch the fundamental on and off every 2 seconds</label>
+    </div>
+    <div class="readout" id="r1"></div>
+    <canvas id="c1" aria-label="Spectrum of the partials and the resulting waveform"></canvas>
+    <details><summary>Why it works</summary>
+      <p class="small">The partials all repeat together once per period of the fundamental, so the waveform keeps the fundamental's period (the lower plot) with or without energy at that frequency. The auditory system tracks that periodicity. Schouten showed in 1940 that this residue pitch is not a distortion tone made in the ear: shift every partial by the same amount (part 2) and the pitch moves, while a difference tone could not.</p>
+    </details>
+  </section>
+
+  <section id="s2" aria-labelledby="h2s">
+    <h2 id="h2s">2. Shift every partial</h2>
+    <p>Now slide all three partials up or down by the same number of hertz. They stay 100 Hz apart, so their arithmetic difference never changes. The pitch you hear moves anyway, by about a third of the shift.</p>
+    <div class="row"><span class="lab">Partials</span><span id="sets"></span></div>
+    <div class="row"><span class="lab">Shift</span><strong id="dv" style="font-variant-numeric:tabular-nums">+20 Hz</strong></div>
+    <input type="range" id="shift" min="-50" max="50" step="1" value="20" aria-label="Shift all partials, in hertz">
+    <div class="row">
+      <button class="play" id="p2">Play</button>
+      <button id="cmpD">Compare with 100 Hz</button>
+      <button id="cmpP">Compare with the predicted pitch</button>
+    </div>
+    <div class="readout" id="r2"></div>
+    <canvas id="c2" aria-label="Chart of the predicted pitch against the shift, and the partials against two harmonic grids"></canvas>
+    <p class="small">The compare buttons play the shifted sound, then a normal tone with its fundamental, twice over. Most listeners hear the predicted pitch as the closer match, though people differ: some hear the missing fundamental strongly, some follow the individual partials.</p>
+    <details><summary>How the prediction is made</summary>
+      <p class="small">The ear behaves roughly as if it looks for the harmonic series that best fits the partials. With partials at 2&times;100+&Delta;, 3&times;100+&Delta; and 4&times;100+&Delta;, the best-fitting fundamental by least squares is 100 + &Delta;&middot;(2+3+4)/(4+9+16), about 100 + 0.31&Delta;. That is close to de Boer's rule, the middle partial divided by its harmonic number (320/3 = 106.7 Hz for a shift of +20). For higher partials such as 5, 6, 7 the pitch moves less per hertz of shift. Near &plusmn;50 Hz the partials sit halfway between two series and the pitch becomes ambiguous.</p>
+    </details>
+  </section>
+
+  <section id="s3" aria-labelledby="h3s">
+    <h2 id="h3s">3. Bass on a small speaker</h2>
+    <p>A laptop or phone speaker can barely move air below about 150&ndash;200 Hz, and this bassline sits between 49 and 82 Hz. A virtual bass system removes the low fundamental and adds its harmonics instead, which the small speaker can play and your ear turns back into the low note.</p>
+    <div class="row"><span class="lab">Bass</span>
+      <button data-src="real" aria-pressed="true">Real bass</button>
+      <button data-src="harm" aria-pressed="false">Harmonics only</button>
+      <button data-src="nld" aria-pressed="false">Waveshaper</button>
+    </div>
+    <div class="row"><span class="lab">Speaker</span>
+      <button data-spk="full" aria-pressed="false">Full range</button>
+      <button data-spk="small" aria-pressed="true">Small speaker</button>
+    </div>
+    <div class="row">
+      <button class="play" id="p3">Play</button>
+      <label class="chk"><input type="checkbox" id="ab3"> Alternate with the real bass every 2 bars</label>
+    </div>
+    <div class="readout" id="r3"></div>
+    <canvas id="c3" aria-label="Live spectrum of the bassline"></canvas>
+    <p class="small"><strong>Small speaker</strong> runs everything through a steep filter below 180 Hz, so on headphones you hear roughly what a laptop plays. On a phone speaker, use <strong>Full range</strong> and let the real speaker do the cutting. <strong>Harmonics only</strong> plays partials 2 to 7 with the fundamental left out. <strong>Waveshaper</strong> is how most virtual bass plugins do it: the low band of the real bass is bent through a nonlinear curve that creates harmonics, and those replace it. All three carry about the same power before the speaker; through the small speaker the virtual versions come out several decibels louder in the bass range.</p>
+  </section>
+
+  <footer>
+    <p>Sources and further reading:</p>
+    <ul>
+      <li><a href="https://www.sfu.ca/sonic-studio/WSPDatabase/AnalysisDVD/Handbook5/handbook/Residue.html">Residue (Handbook for Acoustic Ecology)</a></li>
+      <li><a href="https://arxiv.org/abs/chao-dyn/9505001">Cartwright, Gonz&aacute;lez and Piro on residue pitch and the pitch-shift experiments</a></li>
+      <li><a href="https://www3.ntu.edu.sg/home/ewsgan/img/projects/VBS.pdf">Mu and Gan on virtual bass systems</a></li>
+      <li><a href="https://pure.mpg.de/pubman/item/item_1569821_7/component/file_1850729/Ladd_etal_2013.pdf">Ladd et al. (2013) on f0 listeners and spectral listeners</a></li>
+    </ul>
+    <p>Everything is synthesized in your browser with Web Audio. <a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/fun-and-games/phantom-bass_README.md">README</a></p>
+  </footer>
+</main>
+
+<div class="dock"><div class="in">
+  <label for="vol">Volume</label>
+  <input type="range" id="vol" min="0" max="100" step="1" value="25" aria-label="Master volume">
+  <span id="volv">25%</span>
+  <button id="stopAll">Stop</button>
+</div></div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmt = (x, d = 0) => (Math.round(x * 10 ** d) / 10 ** d).toFixed(d);
+
+// ── audio core ────────────────────────────────────────────
+let ctx = null, mix, master, limiter, analyser;
+const volGain = () => { const v = +$('#vol').value / 100; return 0.9 * v * v; };
+
+function audio() {
+  if (!ctx) {
+    const AC = window.AudioContext || window.webkitAudioContext;
+    ctx = new AC();
+    try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch (e) {}
+    mix = ctx.createGain();
+    master = ctx.createGain(); master.gain.value = volGain();
+    limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -6; limiter.knee.value = 3; limiter.ratio.value = 20;
+    limiter.attack.value = 0.002; limiter.release.value = 0.15;
+    analyser = ctx.createAnalyser(); analyser.fftSize = 8192; analyser.smoothingTimeConstant = 0.55;
+    analyser.minDecibels = -110; analyser.maxDecibels = -10;
+    mix.connect(master); master.connect(limiter); limiter.connect(ctx.destination);
+    mix.connect(analyser);
+  }
+  if (ctx.state !== 'running') ctx.resume();
+  return ctx;
+}
+function glide(p, v, t, dur = 0.04) {
+  p.cancelScheduledValues(t);
+  p.setValueAtTime(p.value, t);
+  p.linearRampToValueAtTime(v, t + dur);
+}
+
+// A bank of sine oscillators whose frequencies and levels change smoothly.
+class Bank {
+  constructor(parts, n) {
+    this.out = ctx.createGain(); this.out.gain.value = 0; this.out.connect(mix);
+    this.v = [];
+    for (let i = 0; i < n; i++) {
+      const o = ctx.createOscillator(), g = ctx.createGain();
+      const p = parts[i];
+      o.frequency.value = p ? p.f : 100; g.gain.value = p ? p.a : 0;
+      o.connect(g).connect(this.out); o.start();
+      this.v.push({ o, g });
+    }
+    glide(this.out.gain, 1, ctx.currentTime, 0.06);
+  }
+  set(parts) {
+    const t = ctx.currentTime;
+    this.v.forEach((v, i) => {
+      const p = parts[i];
+      if (p) { v.o.frequency.cancelScheduledValues(t); v.o.frequency.setTargetAtTime(p.f, t, 0.015); glide(v.g.gain, p.a, t); }
+      else glide(v.g.gain, 0, t);
+    });
+  }
+  close() {
+    const t = ctx.currentTime;
+    glide(this.out.gain, 0, t, 0.08);
+    this.v.forEach(v => v.o.stop(t + 0.2));
+    const out = this.out; setTimeout(() => out.disconnect(), 500);
+  }
+}
+
+// One-shot tone with its own fade in and out, for the compare sequences.
+let shots = [];
+function tone(parts, t0, dur) {
+  const g = ctx.createGain();
+  g.gain.setValueAtTime(0, t0); g.gain.linearRampToValueAtTime(1, t0 + 0.05);
+  g.gain.setValueAtTime(1, t0 + dur - 0.07); g.gain.linearRampToValueAtTime(0, t0 + dur);
+  g.connect(mix);
+  const os = parts.map(p => {
+    const o = ctx.createOscillator(), a = ctx.createGain();
+    o.frequency.value = p.f; a.gain.value = p.a; o.connect(a).connect(g);
+    o.start(t0); o.stop(t0 + dur + 0.05); return o;
+  });
+  shots.push({ g, os, end: t0 + dur });
+}
+function killShots() {
+  if (!ctx) return;
+  const t = ctx.currentTime;
+  shots.forEach(s => { glide(s.g.gain, 0, t, 0.05); s.os.forEach(o => { try { o.stop(t + 0.1); } catch (e) {} }); });
+  shots = [];
+}
+
+// ── section 1: missing fundamental ────────────────────────
+const S1 = { f0: 100, on: new Set([2, 3, 4]), bank: null, flip: null };
+const amp1 = n => 0.15 / Math.sqrt(n);
+const parts1 = () => Array.from({ length: 10 }, (_, i) => S1.on.has(i + 1) ? { f: (i + 1) * S1.f0, a: amp1(i + 1) } : null);
+
+function ui1() {
+  $('#f0s').innerHTML = [80, 100, 150, 200].map(f =>
+    `<button class="chip" data-f0="${f}" aria-pressed="${f === S1.f0}">${f} Hz</button>`).join(' ');
+  $('#hs').innerHTML = Array.from({ length: 10 }, (_, i) => i + 1).map(n =>
+    `<button class="chip" data-h="${n}" aria-pressed="${S1.on.has(n)}" aria-label="Partial ${n}, ${n * S1.f0} hertz">${n}</button>`).join(' ');
+  const list = [...S1.on].sort((a, b) => a - b);
+  const hz = list.map(n => n * S1.f0);
+  const has1 = S1.on.has(1);
+  let txt;
+  if (!list.length) txt = 'No partials selected.';
+  else {
+    const g = list.reduce((a, b) => gcd(a, b));
+    const pitch = g * S1.f0;
+    txt = `Playing <b>${hz.join(', ')} Hz</b>. ` +
+      (list.length === 1 ? `A single partial is just a sine at ${hz[0]} Hz.` :
+        `The waveform repeats every <b>${fmt(1000 / pitch, 1)} ms</b>, so the pitch is <b class="big">${pitch} Hz</b>` +
+        (has1 || g > 1 ? '.' : `, even though there is <b>nothing at ${S1.f0} Hz</b>.`));
+    if (S1.flip) txt = `<span class="flag">Fundamental ${has1 ? 'ON' : 'OFF'}</span> ` + txt;
+  }
+  $('#r1').innerHTML = txt;
+  draw1();
+}
+function gcd(a, b) { return b ? gcd(b, a % b) : a; }
+function apply1() { if (S1.bank) S1.bank.set(parts1()); ui1(); }
+
+$('#f0s').addEventListener('click', e => { const b = e.target.closest('[data-f0]'); if (!b) return; S1.f0 = +b.dataset.f0; apply1(); });
+$('#hs').addEventListener('click', e => { const b = e.target.closest('[data-h]'); if (!b) return; const n = +b.dataset.h; S1.on.has(n) ? S1.on.delete(n) : S1.on.add(n); apply1(); });
+document.querySelectorAll('[data-pre]').forEach(b => b.addEventListener('click', () => {
+  const p = b.dataset.pre; S1.on.clear();
+  if (p.includes('-')) { const [a, z] = p.split('-').map(Number); for (let n = a; n <= z; n++) S1.on.add(n); }
+  else p.split(',').forEach(n => S1.on.add(+n));
+  apply1();
+}));
+function start1() {
+  stopAll(); audio();
+  S1.bank = new Bank(parts1(), 10);
+  $('#p1').textContent = 'Stop'; $('#p1').classList.add('on');
+  if ($('#flip1').checked) startFlip();
+}
+function stop1() {
+  if (S1.bank) { S1.bank.close(); S1.bank = null; }
+  stopFlip();
+  $('#p1').textContent = 'Play'; $('#p1').classList.remove('on');
+}
+function startFlip() { stopFlip(); S1.flip = setInterval(() => { S1.on.has(1) ? S1.on.delete(1) : S1.on.add(1); apply1(); }, 2000); ui1(); }
+function stopFlip() { if (S1.flip) { clearInterval(S1.flip); S1.flip = null; ui1(); } }
+$('#p1').addEventListener('click', () => S1.bank ? stop1() : start1());
+$('#flip1').addEventListener('change', e => { if (!S1.bank) return; e.target.checked ? startFlip() : stopFlip(); });
+
+function fit(c) {
+  const r = c.getBoundingClientRect(), d = window.devicePixelRatio || 1;
+  const w = Math.round(r.width * d), h = Math.round(r.height * d);
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext('2d'); g.setTransform(d, 0, 0, d, 0, 0); g.clearRect(0, 0, r.width, r.height);
+  return [g, r.width, r.height];
+}
+function draw1() {
+  const [g, W, H] = fit($('#c1'));
+  const ink = css('--ink'), dim = css('--dim'), acc = css('--acc'), acc2 = css('--acc2'), line = css('--line');
+  const pad = 12, sh = H * 0.55, fmax = S1.f0 * 11;
+  const x = f => pad + (W - 2 * pad) * f / fmax;
+  g.font = '12px system-ui, sans-serif'; g.textBaseline = 'alphabetic';
+  // spectrum
+  g.strokeStyle = line; g.beginPath(); g.moveTo(pad, sh - 18); g.lineTo(W - pad, sh - 18); g.stroke();
+  g.fillStyle = dim; g.textAlign = 'center';
+  for (let n = 1; n <= 10; n++) if (n === 1 || n % 2 === 0 || W > 520) g.fillText(n * S1.f0, x(n * S1.f0), sh - 4);
+  const top = 22, base = sh - 18, hmax = base - top;
+  for (let n = 1; n <= 10; n++) {
+    if (!S1.on.has(n)) continue;
+    const h = hmax * amp1(n) / amp1(1);
+    g.fillStyle = n === 1 ? acc2 : ink; g.fillRect(x(n * S1.f0) - 3, base - h, 6, h);
+  }
+  const list = [...S1.on];
+  if (!S1.on.has(1) && list.length > 1 && list.reduce((a, b) => gcd(a, b)) === 1) {
+    g.setLineDash([4, 4]); g.strokeStyle = acc; g.lineWidth = 1.5;
+    g.strokeRect(x(S1.f0) - 4, top, 8, hmax); g.setLineDash([]); g.lineWidth = 1;
+    g.fillStyle = acc; g.textAlign = 'left'; g.fillText('heard here, not played', x(S1.f0) + 9, top + 10);
+  }
+  g.fillStyle = dim; g.textAlign = 'right'; g.fillText('spectrum, Hz', W - pad, 14);
+  // waveform over 3 periods of f0
+  const w0 = sh + 10, wh = H - w0 - 8, mid = w0 + wh / 2, T = 1 / S1.f0, N = 600;
+  const ys = []; let mx = 1e-9;
+  for (let i = 0; i <= N; i++) {
+    const t = 3 * T * i / N; let y = 0;
+    S1.on.forEach(n => { y += amp1(n) * Math.sin(2 * Math.PI * n * S1.f0 * t); });
+    ys.push(y); mx = Math.max(mx, Math.abs(y));
+  }
+  g.strokeStyle = line; g.beginPath(); g.moveTo(pad, mid); g.lineTo(W - pad, mid); g.stroke();
+  g.setLineDash([3, 4]);
+  for (let k = 1; k < 3; k++) { const xx = pad + (W - 2 * pad) * k / 3; g.beginPath(); g.moveTo(xx, w0); g.lineTo(xx, w0 + wh); g.stroke(); }
+  g.setLineDash([]);
+  g.strokeStyle = acc2; g.lineWidth = 1.8; g.beginPath();
+  ys.forEach((y, i) => { const xx = pad + (W - 2 * pad) * i / N, yy = mid - (wh / 2 - 4) * y / mx; i ? g.lineTo(xx, yy) : g.moveTo(xx, yy); });
+  g.stroke(); g.lineWidth = 1;
+  g.fillStyle = dim; g.textAlign = 'right'; g.fillText(`waveform, 3 periods of ${fmt(1000 * T, 1)} ms`, W - pad, w0 + 12);
+}
+
+// ── section 2: shifted partials ───────────────────────────
+const S2 = { set: [2, 3, 4], d: 20, s: 100, bank: null };
+const sets2 = [[2, 3, 4], [3, 4, 5], [5, 6, 7], [8, 9, 10]];
+const amp2 = 0.17;
+const parts2 = () => S2.set.map(n => ({ f: n * S2.s + S2.d, a: amp2 }));
+// best-fitting fundamental for partials f_k with assumed harmonic numbers ns
+function fitPitch(ns, fs) { let a = 0, b = 0; ns.forEach((n, i) => { a += n * fs[i]; b += n * n; }); return a / b; }
+const pred2 = (d = S2.d) => fitPitch(S2.set, S2.set.map(n => n * S2.s + d));
+const alt2 = (d = S2.d) => { const sh = d >= 0 ? 1 : -1, ns = S2.set.map(n => n + sh); return ns[0] < 1 ? null : fitPitch(ns, S2.set.map(n => n * S2.s + d)); };
+const refParts = f => [1, 2, 3, 4, 5, 6].map(n => ({ f: n * f, a: 0.15 / Math.sqrt(n) }));
+
+function ui2() {
+  $('#sets').innerHTML = sets2.map((s, i) => `<button class="chip" data-set="${i}" aria-pressed="${s.join() === S2.set.join()}">${s.join(', ')}</button>`).join(' ');
+  $('#dv').textContent = (S2.d > 0 ? '+' : S2.d < 0 ? '−' : '') + Math.abs(S2.d) + ' Hz';
+  const fs = S2.set.map(n => n * S2.s + S2.d), p = pred2(), alt = alt2();
+  let t = `Partials <b>${fs.join(', ')} Hz</b>. Their spacing, the arithmetic difference, stays <b>${S2.s} Hz</b>.<br>` +
+    `Predicted pitch: <b class="big">≈ ${fmt(p, 1)} Hz</b>`;
+  if (Math.abs(S2.d) >= 35 && alt) t += `, or it may flip to ≈ ${fmt(alt, 1)} Hz (ambiguous this far out)`;
+  $('#r2').innerHTML = t + '.';
+  $('#cmpP').textContent = `Compare with ${fmt(p, 0)} Hz`;
+  draw2();
+}
+$('#sets').addEventListener('click', e => { const b = e.target.closest('[data-set]'); if (!b) return; S2.set = sets2[+b.dataset.set]; if (S2.bank) S2.bank.set(parts2()); ui2(); });
+$('#shift').addEventListener('input', e => { S2.d = +e.target.value; if (S2.bank) S2.bank.set(parts2()); ui2(); });
+function start2() {
+  stopAll(); audio();
+  S2.bank = new Bank(parts2(), 3);
+  $('#p2').textContent = 'Stop'; $('#p2').classList.add('on');
+}
+function stop2() {
+  if (S2.bank) { S2.bank.close(); S2.bank = null; }
+  $('#p2').textContent = 'Play'; $('#p2').classList.remove('on');
+}
+$('#p2').addEventListener('click', () => S2.bank ? stop2() : start2());
+function compare(refF) {
+  stopAll(); audio();
+  let t = ctx.currentTime + 0.08; const d = 1.1, gap = 0.2;
+  for (let k = 0; k < 2; k++) { tone(parts2(), t, d); t += d + gap; tone(refParts(refF), t, d); t += d + gap + 0.25; }
+}
+$('#cmpD').addEventListener('click', () => compare(S2.s));
+$('#cmpP').addEventListener('click', () => compare(pred2()));
+
+function draw2() {
+  const [g, W, H] = fit($('#c2'));
+  const ink = css('--ink'), dim = css('--dim'), acc = css('--acc'), acc2 = css('--acc2'), line = css('--line');
+  g.font = '12px system-ui, sans-serif';
+  const L = 40, R = 12, T = 18, ch = H * 0.58, B = ch - 22;
+  const lo = 75, hi = 125;
+  const X = d => L + (W - L - R) * (d + 50) / 100, Y = f => B - (B - T) * (f - lo) / (hi - lo);
+  // axes
+  g.strokeStyle = line; g.fillStyle = dim; g.textAlign = 'right'; g.textBaseline = 'middle';
+  for (let f = 80; f <= 120; f += 10) { g.beginPath(); g.moveTo(L, Y(f)); g.lineTo(W - R, Y(f)); g.stroke(); g.fillText(f, L - 6, Y(f)); }
+  g.textAlign = 'center'; g.textBaseline = 'alphabetic';
+  [-50, -25, 0, 25, 50].forEach(d => g.fillText((d > 0 ? '+' : '') + d, X(d), B + 16));
+  g.fillText('shift, Hz', X(-37.5), B + 16);
+  // difference line
+  g.strokeStyle = acc2; g.lineWidth = 2; g.beginPath(); g.moveTo(X(-50), Y(S2.s)); g.lineTo(X(50), Y(S2.s)); g.stroke();
+  g.fillStyle = acc2; g.textAlign = 'left'; g.fillText('difference between partials', X(-48), Y(S2.s) - 6);
+  // predicted line
+  g.strokeStyle = acc; g.beginPath(); g.moveTo(X(-50), Y(pred2(-50))); g.lineTo(X(50), Y(pred2(50))); g.stroke();
+  g.lineWidth = 1;
+  g.fillStyle = acc; g.textAlign = 'right'; g.fillText('predicted pitch', X(48), Y(pred2(48)) - 8);
+  // current
+  g.setLineDash([3, 4]); g.strokeStyle = dim; g.beginPath(); g.moveTo(X(S2.d), T - 6); g.lineTo(X(S2.d), B); g.stroke(); g.setLineDash([]);
+  g.fillStyle = acc; g.beginPath(); g.arc(X(S2.d), Y(pred2()), 5, 0, 7); g.fill();
+  g.fillStyle = acc2; g.beginPath(); g.arc(X(S2.d), Y(S2.s), 4, 0, 7); g.fill();
+  // partials against two grids
+  const top = ch + 6, bh = H - top - 6, nmax = S2.set[2] + 1.6, fmax = nmax * S2.s;
+  const x = f => 12 + (W - 24) * f / fmax, p = pred2();
+  const rowA = top + bh * 0.28, rowB = top + bh * 0.78;
+  g.fillStyle = dim; g.textAlign = 'left'; g.font = '11px system-ui, sans-serif';
+  g.fillText(`grid of ${S2.s} Hz`, 12, rowA - 14); g.fillText(`grid of ${fmt(p, 1)} Hz`, 12, rowB - 14);
+  g.strokeStyle = acc2;
+  for (let k = 1; k * S2.s <= fmax; k++) { g.beginPath(); g.moveTo(x(k * S2.s), rowA - 8); g.lineTo(x(k * S2.s), rowA + 8); g.stroke(); }
+  g.strokeStyle = acc;
+  for (let k = 1; k * p <= fmax; k++) { g.beginPath(); g.moveTo(x(k * p), rowB - 8); g.lineTo(x(k * p), rowB + 8); g.stroke(); }
+  g.fillStyle = ink;
+  S2.set.forEach(n => { const f = n * S2.s + S2.d; [rowA, rowB].forEach(r => { g.beginPath(); g.arc(x(f), r, 4, 0, 7); g.fill(); }); });
+}
+
+// ── section 3: virtual bass ───────────────────────────────
+const S3 = { src: 'real', spk: 'small', virt: 'harm', on: false, timer: null, step: 0, next: 0, ab: false, log: [], raf: 0 };
+let B3 = null;
+const BPM = 104, EIGHTH = 60 / BPM / 2;
+const RIFF = [33, 33, null, 33, 36, null, 38, 40, 31, 31, null, 31, 33, null, 36, 38];
+const mtof = m => 440 * 2 ** ((m - 69) / 12);
+const NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+const mname = m => NAMES[m % 12] + (Math.floor(m / 12) - 1);
+const REAL = [0, 1, 0.5, 0.3, 0.18, 0.1, 0.06, 0.035];
+const HARM = [0, 0, 0.75, 1, 0.75, 0.5, 0.3, 0.15];
+function wstats(c) { let s = 0, pk = 0; for (let i = 0; i < 2048; i++) { const t = i / 2048; let y = 0; c.forEach((a, n) => { y += a * Math.sin(2 * Math.PI * n * t); }); s += y * y; pk = Math.max(pk, Math.abs(y)); } return { rms: Math.sqrt(s / 2048), pk }; }
+
+function build3() {
+  if (B3) return B3;
+  const r = wstats(REAL), h = wstats(HARM);
+  const kR = 0.5 / r.pk, kH = kR * r.rms / h.rms;          // real peaks at 0.5; harmonics matched in RMS
+  const wave = (c, k) => ctx.createPeriodicWave(new Float32Array(c.length), Float32Array.from(c, a => a * k), { disableNormalization: true });
+  const bq = (type, f, q = Math.SQRT1_2) => { const b = ctx.createBiquadFilter(); b.type = type; b.frequency.value = f; b.Q.value = q; return b; };
+  const G = v => { const g = ctx.createGain(); g.gain.value = v; return g; };
+  const B = { realW: wave(REAL, kR), harmW: wave(HARM, kH) };
+  B.out = G(0); B.out.connect(mix);
+  // speaker: dry or a 4th-order high-pass at 180 Hz
+  B.spkIn = G(1); B.dry = G(0); B.wet = G(1);
+  const s1 = bq('highpass', 180), s2 = bq('highpass', 180);
+  B.spkIn.connect(B.dry).connect(B.out);
+  B.spkIn.connect(s1); s1.connect(s2); s2.connect(B.wet).connect(B.out);
+  // sources
+  B.busReal = G(1); B.busHarm = G(1);
+  B.selReal = G(1); B.selHarm = G(0); B.selNld = G(0);
+  B.busReal.connect(B.selReal).connect(B.spkIn);
+  B.busHarm.connect(B.selHarm).connect(B.spkIn);
+  // waveshaper virtual bass: low band -> nonlinear curve -> keep the new harmonics, add back the real bass above 150 Hz
+  const lp = bq('lowpass', 150), drive = G(2.2), sh = ctx.createWaveShaper();
+  const curve = new Float32Array(2049);
+  for (let i = 0; i < curve.length; i++) { const x = i / 1024 - 1; curve[i] = 0.5 * Math.tanh(3 * x) + 0.7 * Math.abs(x); }
+  sh.curve = curve; sh.oversample = '2x';
+  const h1 = bq('highpass', 110), h2 = bq('highpass', 110), lp2 = bq('lowpass', 1200), amt = G(1.4);
+  const keep = bq('highpass', 150), sum = G(1);
+  B.busReal.connect(lp); lp.connect(drive); drive.connect(sh); sh.connect(h1); h1.connect(h2); h2.connect(lp2); lp2.connect(amt); amt.connect(sum);
+  B.busReal.connect(keep); keep.connect(sum);
+  sum.connect(B.selNld).connect(B.spkIn);
+  // hi-hat tick so the groove survives when the bass vanishes
+  const nb = ctx.createBuffer(1, Math.round(ctx.sampleRate * 0.05), ctx.sampleRate), nd = nb.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random() * 2 - 1;
+  B.noise = nb; B.hatF = bq('highpass', 7000); B.hatF.connect(B.out);
+  return (B3 = B);
+}
+function setSrc3(src, t) {
+  const B = build3(); t = t ?? ctx.currentTime;
+  [['real', B.selReal], ['harm', B.selHarm], ['nld', B.selNld]].forEach(([k, g]) => { g.gain.cancelScheduledValues(t); g.gain.setTargetAtTime(k === src ? 1 : 0, t, 0.012); });
+}
+function setSpk3(spk) {
+  const B = build3(), t = ctx.currentTime;
+  B.dry.gain.setTargetAtTime(spk === 'full' ? 1 : 0, t, 0.015);
+  B.wet.gain.setTargetAtTime(spk === 'small' ? 1 : 0, t, 0.015);
+}
+function note3(m, t, d) {
+  const B = B3, f = mtof(m);
+  [[B.realW, B.busReal], [B.harmW, B.busHarm]].forEach(([w, bus]) => {
+    const o = ctx.createOscillator(), e = ctx.createGain();
+    o.setPeriodicWave(w); o.frequency.value = f;
+    e.gain.setValueAtTime(0, t); e.gain.linearRampToValueAtTime(1, t + 0.01);
+    e.gain.setValueAtTime(1, t + d); e.gain.setTargetAtTime(0, t + d, 0.03);
+    o.connect(e).connect(bus); o.start(t); o.stop(t + d + 0.25);
+  });
+}
+function hat3(t, a) {
+  const s = ctx.createBufferSource(), e = ctx.createGain();
+  s.buffer = B3.noise; e.gain.setValueAtTime(a, t); e.gain.exponentialRampToValueAtTime(0.0005, t + 0.045);
+  s.connect(e).connect(B3.hatF); s.start(t); s.stop(t + 0.05);
+}
+function sched3() {
+  while (S3.next < ctx.currentTime + 0.15) {
+    const t = S3.next, i = S3.step % 16;
+    if (S3.ab && i === 0 && S3.step > 0) {
+      const now = S3.src === 'real' ? S3.virt : 'real';
+      S3.src = now; setSrc3(now, t);
+      setTimeout(ui3, Math.max(0, (t - ctx.currentTime) * 1000));
+    }
+    const m = RIFF[i];
+    if (m != null) { note3(m, t, EIGHTH * 0.8); S3.log.push({ t, m }); }
+    hat3(t, i % 2 ? 0.05 : 0.025);
+    S3.next += EIGHTH; S3.step++;
+  }
+  const now = ctx.currentTime; while (S3.log.length > 2 && S3.log[1].t <= now) S3.log.shift();
+}
+function start3() {
+  stopAll(); audio(); const B = build3();
+  if (S3.ab) { S3.src = 'real'; }
+  setSrc3(S3.src); setSpk3(S3.spk);
+  glide(B.out.gain, 1, ctx.currentTime, 0.06);
+  S3.step = 0; S3.next = ctx.currentTime + 0.1; S3.log = []; S3.on = true;
+  sched3(); S3.timer = setInterval(sched3, 25);
+  $('#p3').textContent = 'Stop'; $('#p3').classList.add('on');
+  ui3(); loop3();
+}
+function stop3() {
+  if (!S3.on) return;
+  S3.on = false; clearInterval(S3.timer); cancelAnimationFrame(S3.raf);
+  glide(B3.out.gain, 0, ctx.currentTime, 0.08);
+  $('#p3').textContent = 'Play'; $('#p3').classList.remove('on');
+  ui3(); draw3();
+}
+$('#p3').addEventListener('click', () => S3.on ? stop3() : start3());
+document.querySelectorAll('[data-src]').forEach(b => b.addEventListener('click', () => {
+  S3.src = b.dataset.src; if (S3.src !== 'real') S3.virt = S3.src;
+  if (S3.ab) { S3.ab = false; $('#ab3').checked = false; }
+  if (S3.on) setSrc3(S3.src); ui3();
+}));
+document.querySelectorAll('[data-spk]').forEach(b => b.addEventListener('click', () => {
+  S3.spk = b.dataset.spk; if (S3.on) setSpk3(S3.spk); ui3();
+}));
+$('#ab3').addEventListener('change', e => {
+  S3.ab = e.target.checked;
+  if (S3.ab && S3.on && S3.src !== 'real') { S3.src = 'real'; setSrc3('real'); }
+  ui3();
+});
+const SRCNAME = { real: 'the real bass', harm: 'virtual bass, harmonics only', nld: 'virtual bass, waveshaper' };
+function ui3() {
+  document.querySelectorAll('[data-src]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.src === S3.src)));
+  document.querySelectorAll('[data-spk]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.spk === S3.spk)));
+  const where = S3.spk === 'small' ? 'through the small-speaker filter' : 'full range';
+  $('#r3').innerHTML = S3.on
+    ? (S3.ab ? `<span class="flag">${S3.src === 'real' ? 'A: REAL' : 'B: VIRTUAL'}</span> ` : '') + `Hearing <b>${SRCNAME[S3.src]}</b>, ${where}.`
+    : `Ready: <b>${SRCNAME[S3.src]}</b>, ${where}. Press play.` + (S3.ab ? ` It starts on the real bass and swaps to ${SRCNAME[S3.virt]} every 2 bars.` : '');
+}
+function loop3() { draw3(); if (S3.on) S3.raf = requestAnimationFrame(loop3); }
+function draw3() {
+  const [g, W, H] = fit($('#c3'));
+  const ink = css('--ink'), dim = css('--dim'), acc = css('--acc'), acc2 = css('--acc2'), line = css('--line'), zone = css('--zone');
+  const L = 10, R = 10, T = 10, B = H - 22, f0 = 30, f1 = 1200;
+  const X = f => L + (W - L - R) * Math.log(f / f0) / Math.log(f1 / f0);
+  g.font = '12px system-ui, sans-serif';
+  if (S3.spk === 'small') {
+    g.fillStyle = zone; g.fillRect(L, T, X(180) - L, B - T);
+    g.fillStyle = acc; g.textAlign = 'left'; g.fillText('small speaker: gone', L + 4, T + 14);
+  }
+  g.strokeStyle = line; g.fillStyle = dim; g.textAlign = 'center';
+  [50, 100, 200, 500, 1000].forEach(f => { g.beginPath(); g.moveTo(X(f), T); g.lineTo(X(f), B); g.stroke(); g.fillText(f >= 1000 ? '1k' : f, X(f), B + 15); });
+  g.textAlign = 'right'; g.fillText('Hz', W - R, B + 15);
+  if (!S3.on || !analyser) { g.textAlign = 'center'; g.fillStyle = dim; g.fillText('live spectrum appears while it plays', W / 2, (T + B) / 2); return; }
+  const n = analyser.frequencyBinCount, data = new Float32Array(n); analyser.getFloatFrequencyData(data);
+  const hz = ctx.sampleRate / analyser.fftSize, lo = analyser.minDecibels, hi = analyser.maxDecibels;
+  g.beginPath(); g.moveTo(X(f0), B);
+  for (let i = Math.floor(f0 / hz); i * hz <= f1 && i < n; i++) {
+    const f = Math.max(f0, i * hz), v = Math.min(1, Math.max(0, (data[i] - lo) / (hi - lo)));
+    g.lineTo(X(f), B - (B - T) * v);
+  }
+  g.lineTo(X(f1), B); g.closePath();
+  g.fillStyle = acc2; g.globalAlpha = 0.35; g.fill(); g.globalAlpha = 1; g.strokeStyle = acc2; g.stroke();
+  const cur = S3.log.filter(e => e.t <= ctx.currentTime).pop();
+  if (cur) {
+    const f = mtof(cur.m); g.strokeStyle = acc; g.lineWidth = 2; g.setLineDash([4, 3]);
+    g.beginPath(); g.moveTo(X(f), T + 18); g.lineTo(X(f), B); g.stroke(); g.setLineDash([]); g.lineWidth = 1;
+    g.fillStyle = ink; g.textAlign = 'left'; g.fillText(`note ${mname(cur.m)}, ${fmt(f, 1)} Hz`, Math.min(X(f) + 6, W - 130), T + 30);
+  }
+}
+
+// ── shared controls ───────────────────────────────────────
+function stopAll() { stop1(); stop2(); killShots(); stop3(); }
+$('#stopAll').addEventListener('click', stopAll);
+$('#vol').addEventListener('input', e => { $('#volv').textContent = e.target.value + '%'; if (ctx) master.gain.setTargetAtTime(volGain(), ctx.currentTime, 0.03); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) stopAll(); });
+window.addEventListener('resize', () => { draw1(); draw2(); if (!S3.on) draw3(); });
+matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => { draw1(); draw2(); draw3(); });
+ui1(); ui2(); ui3(); draw3();
+</script>
+</body>
+</html>
