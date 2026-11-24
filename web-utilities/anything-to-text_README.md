@@ -96,37 +96,48 @@ words are where to look for errors.
 
 - **OCR**: each OCRed page is read by both models from the same render, and the card shows
   the two readings side by side with the count of differences and the share of words that
-  agree. Pages taken from a PDF's embedded text layer are exact and are not compared. The
-  comparison runs straight away when the pages fit in one batch, as new files do; a larger
-  set waits for **Run batch**. Choosing a compare model after a run keeps the first
-  readings and reads only with the new model. The `.json` export carries the second
-  reading under `compare`.
-- **Transcription**: the compare model transcribes the same speech bundles after the
-  primary model, and each bundle gets a row with both readings and a play button for that
-  stretch of audio (**Only where they differ** hides the rows that match). Chosen after a
-  transcript is done, it runs at once on the audio already decoded.
+  agree. Pages taken from a PDF's embedded text layer are exact and are not compared. Pages
+  are read in batches of **Batch size** (10 by default): when all the pages fit in one batch,
+  both models read them as soon as they are added; a larger set waits for **Run batch** and
+  **Continue**. Choosing a compare model after a run keeps the first model's readings and
+  reads only with the new one; choosing another replaces the comparison. The `.json` export
+  carries the second reading under `compare`.
+- **Transcription**: the speech is cut into chunks of up to 30 seconds with the silence
+  removed. The compare model transcribes the same chunks after the primary model, and each
+  chunk gets a row with both readings and a play button for that stretch of audio
+  (**Only where they differ** hides the rows that match). Chosen after a transcript is done,
+  the compare model runs at once on the audio already decoded.
 - The comparison ignores spacing, line breaks and Markdown markup (Indra writes Markdown,
   the other OCR models plain lines). Punctuation and case count.
 
 ## Settings in the address bar
 
 Every setting is written to the query string as it changes, so the address bar is a link
-to the exact setup. The model is always written; other settings only when they differ from
-the default.
+to the exact setup. Each section's model (`ocr`, `asr`) is always written, so a shared link
+names it even when it is the default; other settings are written only when they differ from
+their default.
 
-| Key | Section | Values |
+| Key | Control | Values (default first) |
 |---|---|---|
-| `mode` | both | `ocr` or `transcribe` |
-| `ocr`, `ocr2` | OCR | model and compare model: `indra`, `tiny`, `small`, `tesseract` |
-| `math`, `dpi`, `batch`, `cols`, `order`, `layers` | OCR | as the controls: `auto`/`on`/`off`, 72-400, 1-50, `auto`/`1`/`2`/`3`, `geometric`/`pdf`, `flat`/`separate` |
-| `asr`, `asr2` | transcription | model and compare model: `turbo`, `small`, `base`, `tiny` (packed, WebGPU) or `onnx-turbo`, `onnx-small`, `onnx-base`, `onnx-tiny`; a packed name opened without WebGPU uses the ONNX model of that size |
-| `build`, `lang`, `task`, `tab` | transcription | `all`, a language code, `translate`, `edit` |
+| `mode` | which section the page opens on | `ocr`, `transcribe` (none: all) |
+| `ocr`, `ocr2` | OCR model, Compare with | `indra`, `tiny`, `small`, `tesseract` |
+| `math` | Math as LaTeX | `auto`, `on`, `off` |
+| `dpi`, `batch` | PDF DPI, Batch size | 200 (72-400), 10 (1-50) |
+| `cols` | Columns | `auto`, `1`, `2`, `3` |
+| `order` | PDF text order | `geometric`, `pdf` |
+| `layers` | PDF layers | `flat`, `separate` |
+| `asr`, `asr2` | Whisper model, Compare with | `turbo`, `small`, `base`, `tiny` (packed, WebGPU) or `onnx-turbo`, `onnx-small`, `onnx-base`, `onnx-tiny`; a packed name opened without WebGPU uses the ONNX model of that size |
+| `build` | Build of a packed model | `en` (English-optimized), `all` (all languages) |
+| `lang` | Language | `auto`, or a code such as `de` |
+| `task` | Task | `transcribe`, `translate` |
+| `tab` | Transcribe or Edit existing tab | (none), `edit` |
 
-`mode` is written while only one engine is in use. A link with it opens the page on that
-engine: its section shows before any file is added and the drop zone asks for that kind of
-file. **Use all modes** under the drop zone leaves it, as does dropping a file of the other
-kind; after that the session stops writing `mode`. Without `mode`, a section whose keys are
-in the link still shows at load.
+While only one section has been used, the page also writes `mode` (OCR or transcription).
+A link with `mode` opens the page in that mode: its section shows before any file is added,
+the other section stays hidden, and the drop zone asks for that kind of file. **Use all
+modes**, under the drop zone, returns the page to taking every kind of file, as does
+dropping a file of the other kind; from then on the session writes no `mode`. A link
+without `mode` shows at load every section whose keys it carries.
 
 ## Privacy
 
