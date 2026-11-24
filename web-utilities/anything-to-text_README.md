@@ -9,7 +9,7 @@ file by type:
 
 | Input | Engine | Output |
 |---|---|---|
-| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) or **Tesseract** (fine-tuned English) | Markdown (Indra) or text lines in reading order, with confidence |
+| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) or **Tesseract** (fine-tuned English); optionally a second model to compare against | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper**, from quantized packs on a WebGPU engine ([whisper-pack](https://github.com/oaustegard/experiments/tree/main/whisper-pack)), or via Transformers.js | timestamped transcript, editable, with per-segment playback |
 
@@ -87,6 +87,46 @@ so these extensionless files are selectable in the first place.
 - **Exports**: copy, `.txt`, and `.srt` (segment ends normalized to the displayed spans).
 - **Edit existing** tab: load a prior recording plus its `.srt`/`.txt`, correct the
   text against per-segment playback, and re-download — no re-transcription needed.
+
+## Comparing two models
+
+**Compare with** (in both sections) reads the same input with a second model and marks
+the words the two disagree on. Two models rarely make the same mistake, so the marked
+words are where to look for errors.
+
+- **OCR**: each OCRed page is read by both models from the same render, and the card shows
+  the two readings side by side with the count of differences and the share of words that
+  agree. Pages taken from a PDF's embedded text layer are exact and are not compared. The
+  comparison runs straight away when the pages fit in one batch, as new files do; a larger
+  set waits for **Run batch**. Choosing a compare model after a run keeps the first
+  readings and reads only with the new model. The `.json` export carries the second
+  reading under `compare`.
+- **Transcription**: the compare model transcribes the same speech bundles after the
+  primary model, and each bundle gets a row with both readings and a play button for that
+  stretch of audio (**Only where they differ** hides the rows that match). Chosen after a
+  transcript is done, it runs at once on the audio already decoded.
+- The comparison ignores spacing, line breaks and Markdown markup (Indra writes Markdown,
+  the other OCR models plain lines). Punctuation and case count.
+
+## Settings in the address bar
+
+Every setting is written to the query string as it changes, so the address bar is a link
+to the exact setup. The model is always written; other settings only when they differ from
+the default.
+
+| Key | Section | Values |
+|---|---|---|
+| `mode` | both | `ocr` or `transcribe` |
+| `ocr`, `ocr2` | OCR | model and compare model: `indra`, `tiny`, `small`, `tesseract` |
+| `math`, `dpi`, `batch`, `cols`, `order`, `layers` | OCR | as the controls: `auto`/`on`/`off`, 72-400, 1-50, `auto`/`1`/`2`/`3`, `geometric`/`pdf`, `flat`/`separate` |
+| `asr`, `asr2` | transcription | model and compare model: `turbo`, `small`, `base`, `tiny` (packed, WebGPU) or `onnx-turbo`, `onnx-small`, `onnx-base`, `onnx-tiny`; a packed name opened without WebGPU uses the ONNX model of that size |
+| `build`, `lang`, `task`, `tab` | transcription | `all`, a language code, `translate`, `edit` |
+
+`mode` is written while only one engine is in use. A link with it opens the page on that
+engine: its section shows before any file is added and the drop zone asks for that kind of
+file. **Use all modes** under the drop zone leaves it, as does dropping a file of the other
+kind; after that the session stops writing `mode`. Without `mode`, a section whose keys are
+in the link still shows at load.
 
 ## Privacy
 

@@ -97,6 +97,8 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 .page .preview { width: 300px; flex: 0 0 300px; height: auto; border: 1px solid var(--a2t-line); border-radius: var(--radius); background: #fff; cursor: zoom-in; }
 .page .preview:target, .page .preview.zoomed { width: 100%; flex-basis: 100%; max-width: 100%; cursor: zoom-out; }
 .page .col-text { flex: 1 1 auto; min-width: 0; }
+/* two readings side by side need the room: a smaller preview (click still zooms it) */
+@media (min-width: 681px) { .page .cols.has-cmp .preview:not(.zoomed) { width: 180px; flex-basis: 180px; } }
 .page .col-text .out { margin-top: 0; }
 .out.muted { color: var(--a2t-faint); }
 @media (max-width: 680px) { .page .cols { flex-direction: column; } .page .preview { width: 100%; flex-basis: auto; max-width: 360px; } }
@@ -170,6 +172,30 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 .meta-line { color: var(--a2t-faint); font-size: 11px; margin-top: 14px; font-family: var(--mono); }
 .tech-note { color: var(--a2t-faint); font-size: 11px; line-height: 1.7; margin-top: 18px; }
 
+/* settings carried in the address bar: a link with ?mode= opens one engine only */
+#mode-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--a2t-dim); font-size: 12px; margin: 10px 2px 0; }
+#mode-bar button { padding: 5px 11px; font-size: 11px; }
+
+/* two-model comparison: the same text from both models, words they disagree on marked */
+mark.d { background: color-mix(in srgb, var(--a2t-danger) 24%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.cmp .out { margin-top: 0; }
+.cmp-lbl { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--a2t-faint); font-family: var(--mono); margin: 0 0 4px; }
+.cmp-stat { font-size: 11px; color: var(--a2t-dim); margin: 6px 0 0; font-family: var(--mono); }
+.cmp-stat.same { color: var(--a2t-accent); }
+#cmp-wrap { margin-top: 18px; border-top: 1px solid var(--a2t-line); padding-top: 14px; }
+#cmp-wrap h3 { font-family: var(--disp); font-size: 16px; margin: 0; color: var(--fg); }
+.cmp-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-bottom: 10px; }
+.cmp-head .radio { font-size: 12px; }
+#cmp-partial { color: var(--a2t-faint); font-style: italic; white-space: pre-wrap; }
+/* one grid for all rows (subgrid), so the header labels line up with the columns below */
+#cmp-rows { display: grid; grid-template-columns: auto 1fr 1fr; column-gap: 12px; }
+.cmp-row { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; padding: 6px 0; border-bottom: 1px solid var(--a2t-line); align-items: start; }
+.cmp-row.head { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--a2t-faint); font-family: var(--mono); padding-top: 0; }
+.cmp-row .tx { color: var(--fg); white-space: pre-wrap; }
+#cmp-rows.only-diff .cmp-row.same { display: none; }
+@media (max-width: 680px) { .cmp { grid-template-columns: 1fr; } #cmp-rows { grid-template-columns: 1fr; } .cmp-row { row-gap: 4px; } .cmp-row.head span:first-child { display: none; } }
+
 @media (max-width: 680px) { .pipeline { grid-template-columns: repeat(2, 1fr); } .controls { flex-direction: column; gap: 12px; } }
 </style>
 </head>
@@ -193,6 +219,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
          after selection rather than at the picker. -->
     <input id="file" type="file" multiple hidden>
     <p id="route-note"></p>
+    <p id="mode-bar" hidden><span id="mode-text"></span> <button id="mode-exit" class="ghost" type="button" title="Take audio and video as well as images and PDFs again">Use all modes</button></p>
   </div>
 
   <!-- ===================== OCR engine (images + PDF) ===================== -->
@@ -207,6 +234,17 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
             <option value="small" title="PP-OCRv6 small, about 7M parameters. With WebGPU it runs from packed int8 weights (about 6.3 MB download); without, through onnxruntime-web from Hugging Face (31 MB).">PP-OCRv6 small (~7M, balanced, ~6.3 MB on WebGPU)</option>
             <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
           </select>
+        </div>
+        <div>
+          <label class="field" for="ocr-vs">Compare with</label>
+          <select id="ocr-vs" title="Read each OCRed page with a second model as well and mark the words the two disagree on, where errors are most likely. Pages taken from a PDF's embedded text layer are exact and are not compared.">
+            <option value="" selected>Off</option>
+            <option value="indra">Indra</option>
+            <option value="tiny">PP-OCRv6 tiny</option>
+            <option value="small">PP-OCRv6 small</option>
+            <option value="tesseract">Tesseract English</option>
+          </select>
+          <small class="hint">A second model reads each page; words they disagree on are marked.</small>
         </div>
         <div>
           <label class="field" for="math">Math as LaTeX (Indra only)</label>
@@ -325,6 +363,10 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
             <label class="radio"><input type="radio" name="task" value="translate"> Translate &rarr; EN</label>
           </div>
         </div>
+        <div>
+          <label class="field" for="asr-vs">Compare with</label>
+          <select id="asr-vs" title="Transcribe the same speech with a second model as well and mark the words the two disagree on, where errors are most likely. Chosen after a transcript is done, it runs at once on the same audio."><option value="" selected>Off</option></select>
+        </div>
       </div>
       <div class="runbar">
         <button class="primary" id="tr-run" disabled>Transcribe</button>
@@ -379,6 +421,15 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
         <summary>Timestamped segments</summary>
         <div id="segments"></div>
       </details>
+      <div id="cmp-wrap" hidden>
+        <div class="cmp-head">
+          <h3>Model comparison</h3>
+          <label class="radio"><input type="checkbox" id="cmp-only" checked> Only where they differ</label>
+          <span class="cmp-stat" id="cmp-stat"></span>
+        </div>
+        <div id="cmp-partial"></div>
+        <div id="cmp-rows" class="only-diff"></div>
+      </div>
       <div class="meta-line" id="metaline"></div>
     </div>
 
@@ -444,13 +495,151 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
     return out;
   }
 
+  /* ---------- word diff between two models' readings ----------
+     Tokens are whitespace-separated words, so line breaks and spacing never count as a
+     difference. Indra writes Markdown (headings, lists, tables) and the other models write
+     plain lines, so markup is left out of the comparison: a token that is only markup is
+     shown but never compared, and markup around a word is stripped before comparing.
+     Matching is a longest common subsequence after trimming the common head and tail. */
+  const MARKUP_ONLY = /^[#>*_|`:=~+-]+$/;
+  const DIFF_CELLS = 12e6;   /* LCS table cap (Uint16, about 24 MB): some 3400 x 3400 words */
+  const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  function normTok(t) {
+    return t.replace(/\\([\\`*_{}\[\]()#+\-.!|$])/g, "$1").replace(/^[#>*_|`]+/, "").replace(/[*_|`]+$/, "");
+  }
+  function tokenize(text) {
+    const parts = String(text || "").split(/(\s+)/);   /* even: word, odd: the whitespace after it */
+    const lead = parts[0] === "" && parts.length > 1 ? parts[1] : "";
+    const toks = [];
+    for (let i = lead ? 2 : 0; i < parts.length; i += 2) {
+      if (!parts[i]) continue;
+      const key = MARKUP_ONLY.test(parts[i]) ? "" : normTok(parts[i]);
+      toks.push({ t: parts[i], ws: parts[i + 1] || "", key: key || null });
+    }
+    return { lead, toks };
+  }
+  /* matched flags for two key arrays, or null when the middle is too long for the table */
+  function lcsMatch(a, b) {
+    const n = a.length, m = b.length;
+    const ma = new Uint8Array(n), mb = new Uint8Array(m);
+    let s = 0;
+    while (s < n && s < m && a[s] === b[s]) { ma[s] = mb[s] = 1; s++; }
+    let ea = n, eb = m;
+    while (ea > s && eb > s && a[ea - 1] === b[eb - 1]) { ea--; eb--; ma[ea] = mb[eb] = 1; }
+    const N = ea - s, M = eb - s;
+    if (N && M) {
+      if ((N + 1) * (M + 1) > DIFF_CELLS) return null;
+      const W = M + 1, L = new Uint16Array((N + 1) * W);
+      for (let i = N - 1; i >= 0; i--) for (let j = M - 1; j >= 0; j--)
+        L[i * W + j] = a[s + i] === b[s + j] ? L[(i + 1) * W + j + 1] + 1 : Math.max(L[(i + 1) * W + j], L[i * W + j + 1]);
+      for (let i = 0, j = 0; i < N && j < M; ) {
+        if (a[s + i] === b[s + j]) { ma[s + i] = mb[s + j] = 1; i++; j++; }
+        else if (L[(i + 1) * W + j] >= L[i * W + j + 1]) i++;
+        else j++;
+      }
+    }
+    return [ma, mb];
+  }
+  /* one side as HTML, runs of words the other model did not read wrapped in <mark class="d"> */
+  function markHtml(tk, same) {
+    let html = esc(tk.lead), open = false;
+    for (let i = 0; i < tk.toks.length; i++) {
+      const x = tk.toks[i], d = !same[i];
+      if (d && !open) { html += '<mark class="d">'; open = true; }
+      if (!d && open) { html += "</mark>"; open = false; }
+      html += esc(x.t);
+      if (open && !(i + 1 < tk.toks.length && !same[i + 1])) { html += "</mark>"; open = false; }
+      html += esc(x.ws);
+    }
+    return html + (open ? "</mark>" : "");
+  }
+  /* -> { a, b: HTML of each side; hunks: places they disagree; agree: share of words in
+     common, 0..1; words: words compared on both sides }. hunks and agree are null when the
+     texts are too long to align. */
+  function diff(textA, textB) {
+    const A = tokenize(textA), B = tokenize(textB);
+    const ia = [], ib = [];
+    A.toks.forEach((x, i) => { if (x.key) ia.push(i); });
+    B.toks.forEach((x, i) => { if (x.key) ib.push(i); });
+    const m = lcsMatch(ia.map(i => A.toks[i].key), ib.map(i => B.toks[i].key));
+    if (!m) return { a: esc(textA || ""), b: esc(textB || ""), hunks: null, agree: null, words: ia.length + ib.length };
+    const sameA = A.toks.map(x => !x.key), sameB = B.toks.map(x => !x.key);
+    const pa = [], pb = [];
+    ia.forEach((ti, k) => { if (m[0][k]) { sameA[ti] = true; pa.push(k); } });
+    ib.forEach((ti, k) => { if (m[1][k]) { sameB[ti] = true; pb.push(k); } });
+    /* a hunk is a gap between consecutive matched words on either side */
+    let hunks = 0;
+    for (let k = 0; k <= pa.length; k++) {
+      const ga = (k < pa.length ? pa[k] : ia.length) - (k ? pa[k - 1] : -1);
+      const gb = (k < pb.length ? pb[k] : ib.length) - (k ? pb[k - 1] : -1);
+      if (ga > 1 || gb > 1) hunks++;
+    }
+    const total = ia.length + ib.length;
+    return { a: markHtml(A, sameA), b: markHtml(B, sameB), hunks, agree: total ? (2 * pa.length) / total : 1, words: total };
+  }
+
+  /* ---------- settings in the address bar ----------
+     Each engine registers its section, the query keys it owns and a function returning its
+     current settings; sync() rewrites the query (replaceState, no history entries) with the
+     settings of every visible section, so the address bar is always a link to this exact
+     setup. Keys the page does not own (?log, ?b, ?ort, ...) are kept.
+     ?mode=ocr|transcribe opens the page on one engine: its section shows at once, before any
+     file, and the drop zone asks for that kind of file. sync() writes it while only one
+     engine is in use. Use all modes, or dropping a file of the other kind, leaves it; after
+     that the session no longer writes a mode. */
+  const MODES = { ocr: "images or a PDF", transcribe: "audio or video" };
+  const MODE_NAMES = { ocr: "OCR", transcribe: "Transcription" };
+  const qs0 = new URLSearchParams(location.search);
+  const sections = {};
+  let pinned = MODES[qs0.get("mode")] ? qs0.get("mode") : null;
+  let allModes = false;
+  const dropBig = drop.querySelector(".big");
+  const DROP_ANY = dropBig.innerHTML;
+  const modeBar = document.getElementById("mode-bar"), modeText = document.getElementById("mode-text");
+  function showPin() {
+    if (pinned) dropBig.textContent = "Drop " + MODES[pinned];
+    else dropBig.innerHTML = DROP_ANY;
+    modeBar.hidden = !pinned;
+    if (pinned) modeText.textContent = MODE_NAMES[pinned] + " only: this link opens the page on " + MODE_NAMES[pinned].toLowerCase() + " with the settings it carries.";
+  }
+  function sync() {
+    const cur = new URLSearchParams(location.search), out = new URLSearchParams();
+    const owned = new Set(["mode"]);
+    for (const s of Object.values(sections)) s.keys.forEach(k => owned.add(k));
+    const vis = Object.keys(sections).filter(n => !sections[n].el.hidden);
+    if (vis.length === 1 && !allModes) out.set("mode", vis[0]);
+    for (const n of vis) for (const [k, v] of Object.entries(sections[n].params())) if (v != null && v !== "") out.set(k, v);
+    for (const [k, v] of cur) if (!owned.has(k)) out.append(k, v);
+    const q = out.toString();
+    if (q !== cur.toString()) history.replaceState(history.state, "", location.pathname + (q ? "?" + q : "") + location.hash);
+  }
+  /* def: { el: section, keys: [query keys], params: () => ({key: value}), hasContent: () => bool }.
+     Without a mode, a section whose keys are in the address shows at load. */
+  function register(name, def) {
+    sections[name] = def;
+    if (pinned ? pinned === name : def.keys.some(k => qs0.has(k))) def.el.hidden = false;
+  }
+  function release() {
+    if (!pinned) return;
+    const s = sections[pinned];
+    pinned = null; allModes = true;
+    if (s && !s.hasContent()) s.el.hidden = true;
+    showPin(); sync();
+  }
+  document.getElementById("mode-exit").addEventListener("click", release);
+  showPin();
+  window.A2T = { qs: qs0, register, sync, diff, mode: () => pinned };
+
   async function route(fileList) {
     const files = await classify([...fileList]);
     if (!files.length) return;
     const ocr = files.filter(isOcr);
     const av  = files.filter(isAv);
+    /* a file of the other kind takes the page out of a one-engine link */
+    if ((pinned === "ocr" && av.length) || (pinned === "transcribe" && ocr.length)) release();
     if (ocr.length) window.dispatchEvent(new CustomEvent("intake:ocr", { detail: ocr }));
     if (av.length)  window.dispatchEvent(new CustomEvent("intake:transcribe", { detail: av }));
+    sync();
     const parts = [];
     if (ocr.length) parts.push(ocr.length + " image/PDF \u2192 OCR");
     if (av.length)  parts.push((av.length > 1 ? "1 of " + av.length + " " : "") + "audio/video \u2192 transcript");
@@ -492,7 +681,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-21-whisper-pack"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-24-compare"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -522,8 +711,8 @@ const INDRA_LOAD_SECONDS = 4;
 const PACKED_SECONDS_PER_PAGE = 2; /* packed PP-OCRv6 on WebGPU: detector plus recognizer, plus rendering */
 const PACKED_LOAD_SECONDS = 3;
 
-let paddle = null;             /* lazy PaddleOcrService */
-let pages = [];                /* { id, image, kind, render, status, text, lines, meanConf, ms, error } */
+const paddles = {};            /* tier -> lazy PaddleOcrService */
+let pages = [];                /* { id, image, kind, render, status, text, lines, meanConf, ms, error, alt } -- alt: the compare model's reading */
 let nextIndex = 0;             /* pointer to the next unprocessed page */
 const pdfDocs = [];            /* keep pdf documents alive so lazy page render works */
 
@@ -601,8 +790,12 @@ async function loadV6Dict(url) {
 const INDRA_BASE = "https://austegard.com/experiments/indra-browser/web/";
 let indra = null;              /* lazy Indra reader */
 let indraLoading = null;
-function useIndra() { const el = document.getElementById("tier"); return !!el && el.value === "indra"; }
-function useTesseract() { const el = document.getElementById("tier"); return !!el && el.value === "tesseract"; }
+/* The page reads with two models when Compare is on: the primary ("tier") and the compare
+   model ("ocr-vs"). Engine functions take the model name rather than reading a select. */
+const tierSel = document.getElementById("tier"), vsSel = document.getElementById("ocr-vs");
+const OCR_LABEL = { indra: "Indra", tiny: "PP-OCRv6 tiny", small: "PP-OCRv6 small", tesseract: "Tesseract" };
+function primaryModel() { return tierSel.value; }
+function compareModel() { const v = vsSel.value; return v && v !== tierSel.value ? v : null; }
 /* Tesseract on WebGPU: the tesseract-gpu experiment's reader, loaded from the experiments site on first use. */
 const TESS_OCR = "https://austegard.com/experiments/tesseract-gpu/web/ocr.js";
 let tess = null, tessLoading = null;
@@ -648,16 +841,15 @@ async function ensureIndra() {
     relay.log("indra ready", { gpu: indra.gpu.label || "WebGPU", ms: Math.round(indra.loadMs), math: indra.mathMode });
     return indra;
   } catch (e) {
-    /* no WebGPU, or the load failed: switch this session to PP-OCRv6 and carry on */
+    /* no WebGPU, or the load failed: readOcr switches that model's select to PP-OCRv6 */
     indraLoading = null;
+    indraError = (e && e.message) || String(e);
     console.error("[indra] load failed; falling back to PP-OCRv6", e);
-    relay.error("indra load failed", { e: String((e && e.message) || e) });
-    const el = document.getElementById("tier");
-    if (el) el.value = "small";
-    setStatus("Indra could not start (" + ((e && e.message) || e) + "); using PP-OCRv6 small instead.");
+    relay.error("indra load failed", { e: indraError });
     return null;
   }
 }
+let indraError = null;
 /* RGBA canvas -> 8-bit gray with OpenCV's RGB->GRAY weights in 14-bit fixed point, the
    conversion Indra was scored with. */
 function canvasToGray(canvas) {
@@ -702,15 +894,13 @@ const packedNets = {};         /* tier -> { pipe, loadMs } */
 const packedLoading = {};
 let packedGpu = null;
 let packedFailed = false;
-function usePacked() {
+function usePacked(tier) {
   if (packedFailed || !navigator.gpu) return false;
   try { if (new URLSearchParams(location.search).get("ort") === "1") return false; } catch (e) {}
-  const el = document.getElementById("tier");
-  return !!el && (el.value === "tiny" || el.value === "small");
+  return tier === "tiny" || tier === "small";
 }
 const PACKED_MB = { tiny: "1.6", small: "6.3" };
-async function ensurePacked() {
-  const tier = document.getElementById("tier").value;
+async function ensurePacked(tier) {
   if (packedNets[tier]) return packedNets[tier];
   if (!packedLoading[tier]) {
     packedLoading[tier] = (async () => {
@@ -739,9 +929,9 @@ async function ensurePacked() {
     return null;
   }
 }
-/* one canvas through the packed pipeline, as the {text, confidence, box} items the page works with */
-async function packedRead(canvas) {
-  const net = packedNets[document.getElementById("tier").value];
+/* a reader that sends one canvas through the packed pipeline, returning the {text, confidence, box} items the page works with */
+const packedReader = tier => async canvas => {
+  const net = packedNets[tier];
   const t0 = performance.now();
   const lines = await net.pipe.run(canvas);
   const items = lines.map(l => {
@@ -750,24 +940,21 @@ async function packedRead(canvas) {
     return { text: l.text, confidence: l.score, box: { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y } };
   }).filter(it => it.text && it.text.length);
   const t = lines.timing || {};
-  relay.log("packed page", { tier: document.getElementById("tier").value, w: canvas.width, h: canvas.height, lines: items.length,
+  relay.log("packed page", { tier, w: canvas.width, h: canvas.height, lines: items.length,
     ms: Math.round(performance.now() - t0), det_ms: Math.round(t.det_ms || 0), post_ms: Math.round(t.post_ms || 0),
     crop_ms: Math.round(t.crop_ms || 0), rec_ms: Math.round(t.rec_ms || 0) });
   return items;
-}
+};
 
 /* ---------- model ---------- */
-function selectedTier() {
-  const el = document.getElementById("tier");
-  return (el && V6_TIERS[el.value]) ? el.value : "small";
-}
-
-async function ensurePaddle() {
-  if (paddle) return paddle;
+/* one onnxruntime-web service per tier, so a primary and a compare model can both be loaded */
+async function ensurePaddle(tier) {
+  if (!V6_TIERS[tier]) tier = "small";
+  if (paddles[tier]) return paddles[tier];
+  let paddle = null;
   try {
     let opts = {};
     if (USE_V6) {
-      const tier = selectedTier();
       const urls = V6_TIERS[tier];
       setStatus("Loading PP-OCRv6 " + tier + " dictionary...");
       const dict = await loadV6Dict(urls.yml);
@@ -778,13 +965,12 @@ async function ensurePaddle() {
     }
     paddle = new PaddleOcrService(opts);
     await paddle.initialize();
-    console.log("[ocr] PaddleOcrService initialized; model:", USE_V6 ? "PP-OCRv6 " + selectedTier() : "PP-OCRv5 mobile");
+    console.log("[ocr] PaddleOcrService initialized; model:", USE_V6 ? "PP-OCRv6 " + tier : "PP-OCRv5 mobile");
   } catch (e) {
-    paddle = null;
     console.error("[ocr] init failed", e);
     throw e;
   }
-  return paddle;
+  return (paddles[tier] = paddle);
 }
 
 /* ---------- intake ---------- */
@@ -939,11 +1125,11 @@ async function accept(fileList) {
 function estimate() {
   const remaining = pages.length - nextIndex;
   if (!pages.length) { etaEl.textContent = ""; return; }
-  const secs = useIndra()
-    ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
-    : usePacked()
-    ? remaining * PACKED_SECONDS_PER_PAGE + (packedNets[document.getElementById("tier").value] ? 0 : PACKED_LOAD_SECONDS)
-    : remaining * SECONDS_PER_PAGE + (paddle ? 0 : LOAD_SECONDS);
+  const cost = m => m === "indra" ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
+    : m === "tesseract" ? remaining * PACKED_SECONDS_PER_PAGE + (tess ? 0 : PACKED_LOAD_SECONDS)
+    : usePacked(m) ? remaining * PACKED_SECONDS_PER_PAGE + (packedNets[m] ? 0 : PACKED_LOAD_SECONDS)
+    : remaining * SECONDS_PER_PAGE + (paddles[m] ? 0 : LOAD_SECONDS);
+  const secs = cost(primaryModel()) + (compareModel() ? cost(compareModel()) : 0);
   const mins = secs / 60;
   const eta = mins >= 1 ? (mins.toFixed(1) + " min") : (secs + " s");
   let msg = pages.length + " page(s); " + remaining + " pending; about " + eta + " of processing.";
@@ -1154,7 +1340,7 @@ function hasUsableText(items) {
 function buildResult(pg, items, source, res) {
   const W = pg.pageW || 1, H = pg.pageH || 1;
   pg.source = source;
-  if (source === "text") { pg.markdown = null; pg.engine = null; }
+  if (source === "text") { pg.markdown = null; pg.engine = null; pg.model = null; }
   /* born-digital text can keep pdf.js's native order when asked; everything else (and
      geometric text) flows through the column-aware orderer. */
   pg.lines = (source === "text" && textOrderMode() === "pdf")
@@ -1171,9 +1357,23 @@ function buildResult(pg, items, source, res) {
   pg.meanConf = source === "text" ? 1 : meanConfidence(res, items);
 }
 
+/* One page: the primary reading (skipped when the page already has one), then the compare
+   model's reading of the same render when Compare is on. */
 async function processPage(pg) {
+  let canvas = null;
+  if (pg.status !== "done") {
+    canvas = await readPrimary(pg);
+    updatePage(pg);
+  }
+  await readCompare(pg, canvas);
+}
+
+/* The primary reading. Returns the rendered canvas when the page was OCRed, so the compare
+   model reads the same pixels without a second render. */
+async function readPrimary(pg) {
   const t0 = performance.now();
   const scale = clampDpi() / 72;
+  pg.alt = null;
 
   /* Hybrid PDF path: prefer pdf.js's embedded text layer - exact, instant, and needs no
      model. Auto pages fall back to OCR when no usable text is found; a page the user has
@@ -1197,7 +1397,7 @@ async function processPage(pg) {
       pg.ms = Math.round(performance.now() - t0);
       pg.status = "done";
       console.log("[text]", pg.image, pg.ms + "ms", pg.lines.length + " lines (pdf.js text layer" + (annotItems.length ? " + " + annotItems.length + " from fields/annotations" : "") + ")");
-      return;
+      return null;
     }
     if (pg.forceText) {
       const canvas = await renderPdfCanvas(pdfPage, viewport, pg.layer);
@@ -1207,53 +1407,94 @@ async function processPage(pg) {
       pg.ms = Math.round(performance.now() - t0);
       pg.status = "done";
       console.log("[text]", pg.image, "no embedded text layer on this page (forced text)");
-      return;
+      return null;
     }
     console.log("[text]", pg.image, "no usable text layer - falling back to OCR");
   }
 
   /* OCR path: images, forced-OCR PDF pages, and text-less PDF pages. The model loads
      lazily here, so a PDF that is entirely born-digital never touches the weights. */
-  pg.markdown = null; pg.engine = null;
-  if (useTesseract()) {
-    const reader = await ensureTesseract();
-    const canvas = await pg.render(scale);
-    pg.pageW = canvas.width; pg.pageH = canvas.height;
-    pg.preview = makePreview(canvas);
-    setStatus("OCR " + pg.image + " (Tesseract on WebGPU)...");
-    const { items, meanConf } = await reader.read(canvas);
-    buildResult(pg, items, "ocr", { confidence: meanConf });
-    pg.engine = "tesseract";
-    pg.ms = Math.round(performance.now() - t0);
-    pg.status = "done";
-    console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines (Tesseract)");
-    return;
-  }
-  if (useIndra() && await ensureIndra()) {
-    const canvas = await pg.render(scale);
-    pg.preview = makePreview(canvas);
-    await recognizeIndra(pg, canvas);
-    pg.ms = Math.round(performance.now() - t0);
-    pg.status = "done";
-    return;
-  }
-  const packed = usePacked() && await ensurePacked();
-  if (!packed) await ensurePaddle();
   const canvas = await pg.render(scale);
-  pg.pageW = canvas.width; pg.pageH = canvas.height;
   pg.preview = makePreview(canvas);
+  await readOcr(primaryModel(), pg, canvas, "primary");
+  pg.ms = Math.round(performance.now() - t0);
+  pg.status = "done";
+  return canvas;
+}
+
+/* The compare model's reading, kept in pg.alt. Only OCRed pages are compared: a page taken
+   from the PDF text layer is exact. */
+async function readCompare(pg, canvas) {
+  const vs = compareModel();
+  if (!vs || pg.status !== "done" || pg.source !== "ocr") return;
+  if (pg.alt && pg.alt.model === vs && pg.alt.status === "done") return;
+  pg.alt = { model: vs, image: pg.image, status: "pending" };
+  updatePage(pg);
+  const t0 = performance.now();
+  try {
+    if (!canvas) canvas = await pg.render(clampDpi() / 72);
+    setStatus("Comparing " + pg.image + " with " + OCR_LABEL[vs] + "...");
+    await readOcr(vs, pg.alt, canvas, "compare");
+    pg.alt.status = "done";
+  } catch (e) {
+    pg.alt.status = "error";
+    pg.alt.error = (e && e.message) || String(e);
+    console.error("[compare] page failed", pg.image, e);
+  }
+  pg.alt.ms = Math.round(performance.now() - t0);
+  relay.log("compare page", { image: pg.image, a: pg.model, b: pg.alt.model, status: pg.alt.status, ms: pg.alt.ms });
+}
+
+/* Indra could not start (no WebGPU, or the load failed): move that model's select to
+   PP-OCRv6 for the rest of the session, small unless the other select already has small. */
+function indraFallback(role) {
+  const sel = role === "compare" ? vsSel : tierSel;
+  const other = role === "compare" ? tierSel.value : vsSel.value;
+  const sub = other === "small" ? "tiny" : "small";
+  sel.value = sub;
+  syncVsOptions();
+  A2T.sync();
+  setStatus("Indra could not start (" + indraError + "); using PP-OCRv6 " + sub + " instead.");
+  return sub;
+}
+
+/* Read one rendered page with one model. The result (source, lines, text, markdown,
+   segments, meanConf, engine, model, pageW/H) is written onto `out`: the page itself for
+   the primary model, page.alt for the compare model. */
+async function readOcr(model, out, canvas, role) {
+  const t0 = performance.now();
+  out.markdown = null; out.engine = null; out.model = model;
+  if (model === "indra") {
+    if (await ensureIndra()) { await recognizeIndra(out, canvas); return; }
+    model = out.model = indraFallback(role);
+  }
+  out.pageW = canvas.width; out.pageH = canvas.height;
+  if (model === "tesseract") {
+    const reader = await ensureTesseract();
+    setStatus("OCR " + out.image + " (Tesseract on WebGPU)...");
+    const { items, meanConf } = await reader.read(canvas);
+    buildResult(out, items, "ocr", { confidence: meanConf });
+    out.engine = "tesseract";
+    console.log("[ocr]", out.image, Math.round(performance.now() - t0) + "ms", out.lines.length + " lines (Tesseract)");
+    return;
+  }
+  const packed = usePacked(model) && await ensurePacked(model);
+  let paddle = null;
+  if (!packed) paddle = await ensurePaddle(model);
   /* Tile large renders before recognition. PP-OCR's detector resizes its input down to a
      fixed long side (~960 px), so a full A4/Letter page rendered at 200 DPI (~1700x2200)
      is shrunk to roughly half resolution before any box is found - which is why dense,
      small, multi-column body text scores badly. recognizeTiled feeds the model
      near-native-resolution tiles, offsets each tile's boxes back into page pixels, and
-     dedupes the overlaps. */
-  const { items, meanConf } = await recognizeTiled(canvas, pg.image, packed ? packedRead : null);
-  buildResult(pg, items, "ocr", { confidence: meanConf });
-  pg.ms = Math.round(performance.now() - t0);
-  pg.status = "done";
-  console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines", (pg.meanConf * 100).toFixed(1) + "%", packed ? "(packed)" : "(onnxruntime-web)");
-  relay.log("ocr page", { image: pg.image, engine: packed ? "packed" : "ort", tier: selectedTier(), ms: pg.ms, lines: pg.lines.length });
+     dedupes the overlaps. noCache: same-size tiles would otherwise collide on
+     ppu-paddle-ocr's 1 KB-prefix cache key. */
+  const read = packed ? packedReader(model)
+    : async c => (((await paddle.recognize(c, { flatten: true, noCache: true })) || {}).results) || [];
+  const { items, meanConf } = await recognizeTiled(canvas, out.image, read);
+  buildResult(out, items, "ocr", { confidence: meanConf });
+  const ms = Math.round(performance.now() - t0);
+  console.log("[ocr]", out.image, ms + "ms", out.lines.length + " lines", (out.meanConf * 100).toFixed(1) + "%", packed ? "(packed)" : "(onnxruntime-web)", role);
+  relay.log("ocr page", { image: out.image, engine: packed ? "packed" : "ort", tier: model, role, ms, lines: out.lines.length });
 }
 
 /* ---------- tiled recognition ----------
@@ -1305,8 +1546,8 @@ function dedupeBoxes(items) {
 }
 
 async function recognizeTiled(canvas, label, read) {
-  /* read: optional (canvas) => items for the packed engine; default is onnxruntime-web */
-  const readTile = read || (async c => (((await paddle.recognize(c, { flatten: true, noCache: true })) || {}).results) || []);
+  /* read: (canvas) => items, from the packed engine or onnxruntime-web */
+  const readTile = read;
   const W = canvas.width, H = canvas.height;
   if (Math.max(W, H) <= SINGLE_MAX) {
     const items = await readTile(canvas);
@@ -1424,13 +1665,45 @@ function pageInner(pg) {
   const preview = pg.preview ? '<img class="preview" src="' + pg.preview + '" alt="page preview">' : "";
   const textOut = pg.status === "error"
     ? '<div class="out err">' + escapeHtml(pg.error || "error") + '</div>'
+    : (done && pg.alt && pg.source === "ocr")
+    ? compareInner(pg)
     : (done
         ? '<div class="out">' + (escapeHtml(pg.text) || "(no text)") + '</div>'
         : '<div class="out muted">working&#x2026;</div>');
-  const body = '<div class="cols">' + preview + '<div class="col-text">' + textOut + '</div></div>';
+  const body = '<div class="cols' + (done && pg.alt && pg.source === "ocr" ? ' has-cmp' : '') + '">' + preview + '<div class="col-text">' + textOut + '</div></div>';
   return '<h2><span class="badge ' + pg.status + '">' + pg.status + '</span> '
     + '<span class="pg-name">' + escapeHtml(pg.image) + '</span> ' + srcBadge + meta
     + '<span class="hdr-actions">' + convBtn + copyBtn + '</span></h2>' + body;
+}
+
+/* Both readings side by side, the words they disagree on marked. The diff is cached on the
+   page and recomputed only when either text changes. */
+function pageDiff(pg) {
+  const a = pg.text || "", b = pg.alt.text || "";
+  if (!pg._diff || pg._diff.ta !== a || pg._diff.tb !== b) pg._diff = { ta: a, tb: b, d: A2T.diff(a, b) };
+  return pg._diff.d;
+}
+function diffSummary(d) {
+  if (d.hunks == null) return "too long to compare word by word";
+  if (!d.hunks) return "the two models agree";
+  return d.hunks + (d.hunks > 1 ? " differences" : " difference") + " · " + (d.agree * 100).toFixed(1) + "% of words agree";
+}
+function compareInner(pg) {
+  const alt = pg.alt;
+  const pane = (label, inner) => '<div><p class="cmp-lbl">' + escapeHtml(label) + '</p>' + inner + '</div>';
+  let a = escapeHtml(pg.text), b, stat = "";
+  if (alt.status === "done") {
+    const d = pageDiff(pg);
+    a = d.a; b = '<div class="out">' + (d.b || "(no text)") + '</div>';
+    stat = '<p class="cmp-stat' + (d.hunks === 0 ? ' same' : '') + '">' + diffSummary(d)
+      + ' · ' + OCR_LABEL[alt.model] + ' ' + alt.ms + 'ms, conf ' + ((alt.meanConf || 0) * 100).toFixed(1) + '%</p>';
+  } else if (alt.status === "error") {
+    b = '<div class="out err">' + escapeHtml(alt.error || "error") + '</div>';
+  } else {
+    b = '<div class="out muted">working&#x2026;</div>';
+  }
+  return '<div class="cmp">' + pane(OCR_LABEL[pg.model] || "OCR", '<div class="out">' + (a || "(no text)") + '</div>')
+    + pane(OCR_LABEL[alt.model] || "Compare", b) + '</div>' + stat;
 }
 
 /* ---------- exports ---------- */
@@ -1455,6 +1728,12 @@ function asJson() {
       bbox: [+s.x.toFixed(5), +s.y.toFixed(5), +s.w.toFixed(5), +s.h.toFixed(5)],
     })),
     error: p.error,
+    /* the compare model's reading, with how many places it differs from the primary one */
+    compare: (p.alt && p.alt.status === "done" && p.source === "ocr") ? {
+      model: p.alt.model, primary_model: p.model, text: p.alt.text, lines: p.alt.lines,
+      markdown: p.alt.markdown || undefined, mean_conf: p.alt.meanConf,
+      differences: pageDiff(p).hunks, agreement: pageDiff(p).agree,
+    } : undefined,
   })), null, 2);
 }
 /* Absolutely-positioned text layer: one container per page, one div per detected
@@ -1532,7 +1811,7 @@ function refreshControls() {
 function resetResults() {
   for (const p of pages) {
     Object.assign(p, { status: "pending", text: "", lines: [], segments: [], markdown: null, engine: null, source: null,
-                       ms: 0, error: null, meanConf: 0, forceOcr: false, forceText: false });
+                       model: null, alt: null, ms: 0, error: null, meanConf: 0, forceOcr: false, forceText: false });
   }
   nextIndex = 0;
   renderPages();
@@ -1547,7 +1826,37 @@ function autoRun() {
 }
 function afterRun() {
   refreshControls();
-  if (rerunAfter) { rerunAfter = false; resetResults(); autoRun(); }
+  const what = rerunAfter;
+  rerunAfter = false;
+  if (what === "compare") compareChanged();
+  else if (what) { resetResults(); autoRun(); }
+}
+
+/* The compare model changed. The primary readings stay; readings by an old compare model
+   are dropped, and the pages that now need a compare reading are read at once when they
+   fit in one batch, as new files are; a larger set waits for Run batch. */
+function compareChanged() {
+  syncVsOptions();
+  A2T.sync();
+  estimate();
+  if (!pages.length) return;
+  if (running) { if (!rerunAfter) rerunAfter = "compare"; setStatus("Compare model changed - comparing when this batch ends."); return; }
+  const vs = compareModel();
+  for (const p of pages) if (p.alt && p.alt.model !== vs) p.alt = null;
+  renderPages();
+  if (vs) {
+    const first = pages.findIndex(p => p.status !== "done" || (p.source === "ocr" && !(p.alt && p.alt.status === "done")));
+    if (first >= 0 && first < nextIndex) nextIndex = first;
+    if (pages.length - nextIndex > batchSize()) setStatus("Compare model set - press Run batch to read the pages with " + OCR_LABEL[vs] + " too.");
+  }
+  refreshControls();
+  estimate();
+  autoRun();
+}
+/* the compare select cannot name the primary model */
+function syncVsOptions() {
+  for (const o of vsSel.options) o.disabled = !!o.value && o.value === tierSel.value;
+  if (vsSel.value && vsSel.value === tierSel.value) vsSel.value = "";
 }
 
 /* A reading setting changed: results read with the old one are cleared, and a page set that fits in one batch is
@@ -1573,17 +1882,42 @@ const ocrSection = document.getElementById("ocr-section");
 window.addEventListener("intake:ocr", e => { ocrSection.hidden = false; accept(e.detail); });
 
 estimateBtn.onclick = estimate;
-document.getElementById("tier").onchange = () => {
-  if (paddle) { paddle = null; setStatus("Model changed - will reload on next run."); }
+tierSel.onchange = () => {
+  syncVsOptions();
+  A2T.sync();
   estimate();
   settingsChanged();
 };
-for (const id of ["math", "dpi", "batch", "columns", "textorder"]) document.getElementById(id).addEventListener("change", settingsChanged);
+vsSel.onchange = compareChanged;
+for (const id of ["math", "dpi", "batch", "columns", "textorder"]) document.getElementById(id).addEventListener("change", () => { A2T.sync(); settingsChanged(); });
 /* the layer mode decides how many entries a PDF becomes, so it applies at intake */
 document.getElementById("pdflayers").onchange = () => {
+  A2T.sync();
   if (pages.some(p => p.kind === "pdf")) setStatus("PDF layer mode applies to PDFs added from now on; Clear and add the file again to re-read it.");
 };
-/* Indra is the default; without WebGPU, ensureIndra switches the select to PP-OCRv6 small (packed engine when WebGPU has an adapter, else onnxruntime-web) */
+
+/* ---------- settings in the address bar (see A2T in the router) ----------
+   The OCR model is always written, so a shared link names it even when it is the default;
+   the other settings only when they differ from the default. */
+const OCR_URL = [
+  ["ocr", tierSel, null], ["ocr2", vsSel, ""], ["math", document.getElementById("math"), "auto"],
+  ["dpi", document.getElementById("dpi"), "200"], ["batch", document.getElementById("batch"), "10"],
+  ["cols", document.getElementById("columns"), "auto"], ["order", document.getElementById("textorder"), "geometric"],
+  ["layers", document.getElementById("pdflayers"), "flat"],
+];
+for (const [k, node] of OCR_URL) {
+  const v = A2T.qs.get(k);
+  if (v == null) continue;
+  if (node.tagName === "SELECT") { if ([...node.options].some(o => o.value === v)) node.value = v; }
+  else if (/^\d+$/.test(v)) node.value = String(Math.min(+node.max, Math.max(+node.min, +v)));
+}
+syncVsOptions();
+A2T.register("ocr", {
+  el: ocrSection, keys: OCR_URL.map(x => x[0]),
+  params: () => Object.fromEntries(OCR_URL.map(([k, node, def]) => [k, def !== null && node.value === def ? null : node.value])),
+  hasContent: () => pages.length > 0,
+});
+/* Indra is the default; without WebGPU, readOcr switches the select to PP-OCRv6 small (packed engine when WebGPU has an adapter, else onnxruntime-web) */
 runBtn.onclick = () => runBatch().then(afterRun);
 continueBtn.onclick = () => runBatch().then(afterRun);
 clearBtn.onclick = clearAll;
@@ -1743,7 +2077,9 @@ const dom = {
   editAudioMeta: el("edit-audio-meta"), editTranscriptMeta: el("edit-transcript-meta"),
   editStatus: el("edit-status"), editBar: el("edit-bar"),
   tabTranscribe: el("tab-transcribe"), tabEdit: el("tab-edit"),
-  panelTranscribe: el("panel-transcribe"), panelEdit: el("panel-edit")
+  panelTranscribe: el("panel-transcribe"), panelEdit: el("panel-edit"),
+  vs: el("asr-vs"), cmpWrap: el("cmp-wrap"), cmpRows: el("cmp-rows"), cmpStat: el("cmp-stat"),
+  cmpPartial: el("cmp-partial"), cmpOnly: el("cmp-only")
 };
 
 /* ---- app state ---- */
@@ -1755,7 +2091,12 @@ const state = {
   result: null,      /* { text, chunks, elapsed } */
   audio: null,       /* decoded 16kHz mono Float32Array, kept for per-segment playback */
   editAudio: null,       /* edit tab: chosen original media File (drop or click) */
-  editTranscript: null   /* edit tab: chosen .srt/.txt File (drop or click) */
+  editTranscript: null,  /* edit tab: chosen .srt/.txt File (drop or click) */
+  /* the last fresh run's speech bundles, kept so a compare model can read the same audio:
+     bundles[r].regs as packBundles made them, spans[r] = [first, end) of its chunks in result */
+  bundles: null, spans: null, runOpts: null,
+  phase: null,           /* "compare" while the compare model runs: its partial text goes to the comparison */
+  compareQueued: false   /* the compare model changed while busy: compare again when free */
 };
 
 
@@ -1769,7 +2110,12 @@ const state = {
     opt.textContent = m.name + " \u2014 " + m.note + " (" + m.size + ")";
     if (m.id === DEFAULT_MODEL) opt.selected = true;
     dom.model.appendChild(opt);
+    const vs = document.createElement("option");
+    vs.value = m.id;
+    vs.textContent = m.name + (HAS_WEBGPU && !m.packed ? ", original ONNX" : "") + " (" + m.size + ")";
+    dom.vs.appendChild(vs);
   }
+  syncVsOptions();
   updateTechNote();
   console.log("[init] device=%s defaultModel=%s dtype=%o", DEVICE, DEFAULT_MODEL, resolveDtype(DEFAULT_MODEL));
 })();
@@ -1788,9 +2134,32 @@ function updateTechNote() {
     size = pk.size;
     kind = pk.english ? ", English-optimized build" : ", all-languages build";
   }
+  const vs = compareEntry();
   dom.techNote.textContent =
     "Whisper " + m.name + kind + " (" + size + " download) runs entirely in this page on " + backend +
+    (vs ? ", followed by Whisper " + vs.name + " for the comparison" : "") +
     ". Your audio is transcribed on your device and is never uploaded.";
+}
+
+/* ---- second model: Compare with ---- */
+function compareEntry() {
+  const v = dom.vs.value;
+  return v && v !== dom.model.value ? (MODELS.find((x) => x.id === v) || null) : null;
+}
+function syncVsOptions() {
+  for (const o of dom.vs.options) o.disabled = !!o.value && o.value === dom.model.value;
+  if (dom.vs.value && dom.vs.value === dom.model.value) dom.vs.value = "";
+}
+/* model ids <-> the short names the address bar uses: pack:turbo -> turbo,
+   onnx-community/whisper-large-v3-turbo -> onnx-turbo. A packed name opened without WebGPU
+   maps to the ONNX model of the same size. */
+function modelAlias(id) {
+  return id.startsWith("pack:") ? id.slice(5) : "onnx-" + id.replace(/^onnx-community\/whisper-/, "").replace("large-v3-turbo", "turbo");
+}
+function modelFromAlias(a) {
+  if (!a) return null;
+  const m = MODELS.find((x) => modelAlias(x.id) === a) || MODELS.find((x) => modelAlias(x.id) === "onnx-" + a);
+  return m ? m.id : null;
 }
 
 /* =========================================================================
@@ -1924,7 +2293,7 @@ function onWorkerMessage(event) {
       break;
     case "partial":
       /* running text for the current window; the clean merged text arrives in "complete" */
-      dom.partial.textContent = (m.text || "");
+      (state.phase === "compare" ? dom.cmpPartial : dom.partial).textContent = (m.text || "");
       break;
     case "progress":
       /* chunks-done / total-chunks fraction; kept monotonic as a flicker guard */
@@ -2281,6 +2650,9 @@ async function run() {
   audioPlayback.mode = "buffer";
   audioPlayback.buffer = null;    /* new run -> rebuild from the new audio on first play */
   state.audio = null;
+  state.bundles = state.spans = null;
+  state.compareQueued = false;
+  dom.cmpWrap.hidden = true;
   resetStages();
 
   const language = dom.lang.value;
@@ -2342,6 +2714,9 @@ async function run() {
     transcribeProgress.totalWindows = bundles.length || 1;
 
     state.result = { text: "", chunks: [], elapsed: 0 };
+    state.bundles = bundles;
+    state.spans = [];
+    state.runOpts = { language, task };
     let elapsed = 0;
     for (let r = 0; r < bundles.length; r++) {
       dom.partial.textContent = "";
@@ -2359,6 +2734,7 @@ async function run() {
         lastStart = st;
         state.result.chunks.push({ timestamp: [st, en], text: c.text });
       }
+      state.spans.push([from, state.result.chunks.length]);
       appendSegments(state.result.chunks, from, seconds, true);
       syncEditedText();
 
@@ -2381,6 +2757,10 @@ async function run() {
     }
     setResultMeta(state.result, seconds, true);
     setStatus("Done in " + elapsed.toFixed(1) + "s \u00b7 " + bundles.length + " bundles, " + state.result.chunks.length + " segments.");
+    if (compareEntry() && bundles.length) {
+      state.compareQueued = false;
+      await compareBundles();
+    }
     notify("Transcription complete", fmtClock(seconds) + " transcribed in " + elapsed.toFixed(1) + "s", false);
   } catch (err) {
     console.error("[run] failed:", err);
@@ -2394,6 +2774,108 @@ async function run() {
     releaseWakeLock();
     state.busy = false;
     dom.run.disabled = !state.file;
+    if (state.compareQueued) setTimeout(startCompare, 0);
+  }
+}
+
+/* =========================================================================
+   Compare with a second model: the same speech bundles the primary model read go
+   through the compare model, and each bundle's two readings are word-diffed (A2T.diff
+   in the router). A row per bundle shows both, the words they disagree on marked, with
+   a play button for that stretch of audio. Runs right after the primary transcript, or
+   at once when the compare model is chosen after one.
+   ========================================================================= */
+async function compareBundles() {
+  const entry = compareEntry();
+  if (!entry || !state.bundles || !state.audio || !state.result) return;
+  const { language, task } = state.runOpts;
+  const pack = entry.packed ? packFor(entry, dom.build.value, language, task) : null;
+  const model = pack ? pack.url : entry.id;
+  const primary = MODELS.find((x) => x.id === dom.model.value) || MODELS[0];
+  const n = state.bundles.length;
+  relay.log("compare", { a: primary.name, b: entry.name, pack: pack ? pack.url.slice(PACK_BASE.length) : null, bundles: n });
+
+  state.phase = "compare";
+  dom.cmpWrap.hidden = false;
+  dom.cmpRows.innerHTML = '<div class="cmp-row head"><span></span><span>Whisper ' + primary.name + '</span><span>Whisper ' + entry.name + '</span></div>';
+  dom.cmpStat.textContent = "";
+  dom.cmpPartial.textContent = "";
+  let differ = 0, hunks = 0, words = 0, agreeing = 0, elapsed = 0;
+  try {
+    setStatus("Loading Whisper " + entry.name + " for the comparison…");
+    if (state.loadedModel !== model) {
+      await loadModel(model).then(() => { state.loadedModel = model; }, (err) => {
+        if (!pack) throw err;
+        relay.error("compare pack load failed, using " + entry.fallback, { message: String(err && err.message || err) });
+        return loadModel(entry.fallback).then(() => { state.loadedModel = entry.fallback; });
+      });
+    }
+    const seamSamples = Math.round(VAD_PARAMS.seamS * TARGET_RATE);
+    showBar();
+    for (let r = 0; r < n; r++) {
+      setStatus("Comparing with Whisper " + entry.name + " · bundle " + (r + 1) + "/" + n);
+      dom.barFill.style.width = ((r / n) * 100).toFixed(1) + "%";
+      dom.cmpPartial.textContent = "";
+      const built = materializeBundle(state.bundles[r], state.audio, TARGET_RATE, seamSamples);
+      const spanS = built.buffer.length / TARGET_RATE;
+      const out = await transcribe(built.buffer, language, task, spanS > 30 ? 30 : 0);
+      elapsed += out.elapsed || 0;
+      const [c0, c1] = state.spans[r];
+      const aText = state.result.chunks.slice(c0, c1).map((c) => (c.text || "").trim()).filter(Boolean).join(" ");
+      const bText = (out.chunks && out.chunks.length
+        ? out.chunks.map((c) => (c.text || "").trim()).filter(Boolean).join(" ") : (out.text || "")).trim();
+      const d = A2T.diff(aText, bText);
+      if (d.hunks) { differ++; hunks += d.hunks; }
+      words += d.words; agreeing += (d.agree || 0) * d.words;
+      dom.cmpRows.appendChild(makeCompareRow(state.bundles[r], d));
+    }
+    dom.cmpStat.className = "cmp-stat" + (differ ? "" : " same");
+    dom.cmpStat.textContent = differ
+      ? differ + " of " + n + " bundles differ · " + hunks + (hunks > 1 ? " differences" : " difference") + " · " + (words ? (agreeing / words * 100).toFixed(1) : "100") + "% of words agree"
+      : "The two models agree everywhere";
+    setStatus("Compared with Whisper " + entry.name + " in " + elapsed.toFixed(1) + "s.");
+  } catch (err) {
+    console.error("[compare] failed:", err);
+    dom.cmpStat.className = "cmp-stat";
+    dom.cmpStat.textContent = "Comparison failed: " + friendlyError(err);
+    setStatus("Comparison failed: " + friendlyError(err), true);
+  } finally {
+    state.phase = null;
+    dom.cmpPartial.textContent = "";
+    hideBar();
+  }
+}
+function makeCompareRow(bundle, d) {
+  const row = document.createElement("div");
+  row.className = "cmp-row seg-row" + (d.hunks === 0 ? " same" : "");
+  const first = bundle.regs[0], last = bundle.regs[bundle.regs.length - 1];
+  const start = first[2], end = last[2] + (last[1] - last[0]) / TARGET_RATE;
+  const btn = document.createElement("button");
+  btn.className = "ts";
+  btn.type = "button";
+  btn.title = "Play this stretch";
+  btn.innerHTML = '<span class="glyph">▶</span><span>' + fmtClock(start) + " → " + fmtClock(end) + "</span>";
+  btn.disabled = !playbackReady();
+  btn.addEventListener("click", () => playSpan(start, end, btn));
+  const a = document.createElement("div"), b = document.createElement("div");
+  a.className = b.className = "tx";
+  a.innerHTML = d.a; b.innerHTML = d.b;   /* A2T.diff escapes the text */
+  row.append(btn, a, b);
+  return row;
+}
+/* the compare model was chosen after a transcript: compare now, on the same audio */
+async function startCompare() {
+  state.compareQueued = false;
+  if (state.busy || !compareEntry() || !state.bundles || !state.bundles.length || !state.audio) return;
+  state.busy = true;
+  dom.run.disabled = true;
+  acquireWakeLock();
+  try { await compareBundles(); }
+  finally {
+    releaseWakeLock();
+    state.busy = false;
+    dom.run.disabled = !state.file;
+    if (state.compareQueued) setTimeout(startCompare, 0);
   }
 }
 
@@ -2794,6 +3276,7 @@ async function loadForEditing() {
       audioSeconds = audio.length / TARGET_RATE;
     }
     acceptFile(af);   /* register as the working file (re-download naming, optional re-transcribe) */
+    dom.cmpWrap.hidden = true;   /* a loaded transcript has no run to compare against */
     setEditStatus("Reading transcript\u2026");
     const text = await tf.text();
     const isSrt = /\.srt$/i.test(tf.name) || /-->/.test(text);
@@ -2819,6 +3302,7 @@ async function loadForEditing() {
 function acceptFile(file) {
   if (!file) return;
   state.file = file;
+  state.bundles = state.spans = null;   /* a compare chosen from now on waits for this file's run */
   dom.drop.classList.add("has-file");
   dom.filemeta.hidden = false;
   dom.filemeta.innerHTML = "<b>" + file.name + "</b> \u00b7 " + fmtBytes(file.size) + (file.type ? " \u00b7 " + file.type : "");
@@ -2862,15 +3346,27 @@ const trSection = document.getElementById("tr-section");
 window.addEventListener("intake:transcribe", e => { trSection.hidden = false; acceptFile(e.detail[0]); });
 makeDropZone(dom.editAudioZone, dom.editAudio, (f) => acceptEditFile("editAudio", f));
 makeDropZone(dom.editTranscriptZone, dom.editTranscript, (f) => acceptEditFile("editTranscript", f));
-dom.model.addEventListener("change", updateTechNote);
-dom.build.addEventListener("change", updateTechNote);
-dom.lang.addEventListener("change", updateTechNote);
+dom.model.addEventListener("change", () => { syncVsOptions(); updateTechNote(); A2T.sync(); });
+dom.build.addEventListener("change", () => { updateTechNote(); A2T.sync(); });
+dom.lang.addEventListener("change", () => { updateTechNote(); A2T.sync(); });
 
 dom.task.addEventListener("change", () => {
   const r = dom.task.querySelector('input[name="task"]:checked');
   if (r) state.task = r.value;
   updateTechNote();
+  A2T.sync();
 });
+
+/* Compare with: off hides the comparison; a model chosen after a transcript compares at once */
+dom.vs.addEventListener("change", () => {
+  syncVsOptions();
+  updateTechNote();
+  A2T.sync();
+  if (!compareEntry()) { if (!state.busy) dom.cmpWrap.hidden = true; return; }
+  if (state.busy) { if (state.phase === "compare") state.compareQueued = true; return; }
+  startCompare();
+});
+dom.cmpOnly.addEventListener("change", () => dom.cmpRows.classList.toggle("only-diff", dom.cmpOnly.checked));
 
 dom.run.addEventListener("click", run);
 
@@ -2914,8 +3410,39 @@ function selectTab(mode) {
   dom.pipeline.hidden = isEdit;
   console.log("[tab] mode =", mode);
 }
-dom.tabTranscribe.addEventListener("click", () => selectTab("transcribe"));
-dom.tabEdit.addEventListener("click", () => selectTab("edit"));
+dom.tabTranscribe.addEventListener("click", () => { selectTab("transcribe"); A2T.sync(); });
+dom.tabEdit.addEventListener("click", () => { selectTab("edit"); A2T.sync(); });
+
+/* ---- settings in the address bar (see A2T in the router) ----
+   The model is always written, so a shared link names it even when it is the default; the
+   other settings only when they differ from the default. */
+(function urlSettings() {
+  const q = A2T.qs;
+  const pick = (node, v) => { if (v != null && [...node.options].some((o) => o.value === v)) node.value = v; };
+  const m = modelFromAlias(q.get("asr"));
+  if (m) dom.model.value = m;
+  const vs = modelFromAlias(q.get("asr2"));
+  if (vs) dom.vs.value = vs;
+  pick(dom.build, q.get("build"));
+  pick(dom.lang, q.get("lang"));
+  const t = dom.task.querySelector('input[name="task"][value="' + (q.get("task") === "translate" ? "translate" : "transcribe") + '"]');
+  if (t) { t.checked = true; state.task = t.value; }
+  if (q.get("tab") === "edit") selectTab("edit");
+  syncVsOptions();
+  updateTechNote();
+  A2T.register("transcribe", {
+    el: trSection, keys: ["asr", "asr2", "build", "lang", "task", "tab"],
+    params: () => ({
+      asr: modelAlias(dom.model.value),
+      asr2: compareEntry() ? modelAlias(dom.vs.value) : null,
+      build: dom.build.value === "en" ? null : dom.build.value,
+      lang: dom.lang.value === "auto" ? null : dom.lang.value,
+      task: state.task === "transcribe" ? null : state.task,
+      tab: dom.panelEdit.hidden ? null : "edit",
+    }),
+    hasContent: () => !!(state.file || state.editAudio || state.editTranscript),
+  });
+})();
 
 document.addEventListener("visibilitychange", function () {
   if (!document.hidden && state.busy && !wakeLock) acquireWakeLock();
