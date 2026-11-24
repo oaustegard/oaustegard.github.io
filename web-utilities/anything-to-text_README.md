@@ -9,7 +9,7 @@ file by type:
 
 | Input | Engine | Output |
 |---|---|---|
-| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** or **Tesseract** (fine-tuned English) otherwise | Markdown (Indra) or text lines in reading order, with confidence |
+| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) or **Tesseract** (fine-tuned English) | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper**, from quantized packs on a WebGPU engine ([whisper-pack](https://github.com/oaustegard/experiments/tree/main/whisper-pack)), or via Transformers.js | timestamped transcript, editable, with per-segment playback |
 
@@ -35,9 +35,14 @@ so these extensionless files are selectable in the first place.
   on first use; models for other writing systems and its spelling-correction tables
   download only when a page needs them.
 - **PP-OCRv6** is the other choice, in two sizes (tiny ~3M / small ~7M parameters).
-  It returns plain text lines and runs without WebGPU, so a browser without WebGPU
-  switches to PP-OCRv6 small automatically. Its weights and 50-language character
-  list download from Hugging Face on first use.
+  It returns plain text lines. With WebGPU it runs from packed int8 weights with
+  hand-written WGSL kernels (the
+  [ppocr-pack](https://austegard.com/experiments/ppocr-pack/web/) experiment), which
+  download from there on first use: about 1.6 MB for tiny, 6.3 MB for small. Without
+  WebGPU, or if the packed engine fails to load, it runs through onnxruntime-web
+  from Hugging Face (6.2 MB / 31 MB; append `?ort=1` to force this path). A browser
+  without WebGPU switches from Indra to PP-OCRv6 small automatically. The 50-language
+  character list ships with the packs, or comes from Hugging Face on the fallback path.
 - **Tesseract English, fine-tuned for scans** runs Tesseract's page layout and its LSTM
   recognizer on WebGPU, with an English model fine-tuned on document lines and receipt
   photos that cuts errors on real scans by about 30% against Google's `eng` model

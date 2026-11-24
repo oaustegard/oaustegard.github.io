@@ -203,8 +203,8 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
           <label class="field" for="tier">OCR model</label>
           <select id="tier">
             <option value="indra" selected title="Indra OCR (Datalab): 12M parameters, reads layout and reading order, outputs Markdown. Needs WebGPU.">Indra (layout + Markdown, ~2.3 MB, needs WebGPU)</option>
-            <option value="tiny">PP-OCRv6 tiny (~3M, fastest)</option>
-            <option value="small">PP-OCRv6 small (~7M, balanced)</option>
+            <option value="tiny" title="PP-OCRv6 tiny, about 3M parameters. With WebGPU it runs from packed int8 weights (about 1.6 MB download); without, through onnxruntime-web from Hugging Face (6.2 MB).">PP-OCRv6 tiny (~3M, fastest, ~1.6 MB on WebGPU)</option>
+            <option value="small" title="PP-OCRv6 small, about 7M parameters. With WebGPU it runs from packed int8 weights (about 6.3 MB download); without, through onnxruntime-web from Hugging Face (31 MB).">PP-OCRv6 small (~7M, balanced, ~6.3 MB on WebGPU)</option>
             <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
           </select>
         </div>
@@ -386,7 +386,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
   </section>
 
   <footer>
-    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6, or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) and speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
+    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6 (from <a href="https://austegard.com/experiments/ppocr-pack/web/">packed int8 weights on WebGPU</a>, or through onnxruntime-web without it), or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) and speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
   </footer>
 </div>
 
@@ -519,6 +519,8 @@ const SECONDS_PER_PAGE = 10;   /* skill estimate: ~10s/page on CPU */
 const LOAD_SECONDS = 6;        /* one-time model load */
 const INDRA_SECONDS_PER_PAGE = 1;  /* Indra on WebGPU: 0.1-0.5 s per page warm, plus rendering */
 const INDRA_LOAD_SECONDS = 4;
+const PACKED_SECONDS_PER_PAGE = 2; /* packed PP-OCRv6 on WebGPU: detector plus recognizer, plus rendering */
+const PACKED_LOAD_SECONDS = 3;
 
 let paddle = null;             /* lazy PaddleOcrService */
 let pages = [];                /* { id, image, kind, render, status, text, lines, meanConf, ms, error } */
@@ -687,6 +689,71 @@ async function recognizeIndra(pg, canvas) {
   relay.log("indra page", { image: pg.image, lines: page.lines.length, math: indra.mathMode, math_lines: t.math_lines ?? null,
                             math_used: t.math_used ?? null, math_ms: t.math_ms != null ? Math.round(t.math_ms) : null,
                             rec_ms: t.rec_ms != null ? Math.round(t.rec_ms) : null });
+}
+
+/* ---------- packed PP-OCRv6 engine ----------
+   The same PP-OCRv6 tiny/small models as the onnxruntime-web path below, repacked to int8
+   weights and run by hand-written WGSL kernels (oaustegard/experiments ppocr-pack): about
+   1.6 MB (tiny) / 6.3 MB (small) over the wire against 6.2 / 31 MB of ONNX. Used whenever
+   WebGPU has an adapter and a PP-OCRv6 tier is chosen; if it cannot load, this session
+   drops to onnxruntime-web. ?ort=1 forces that path. */
+const PACKED_BASE = "https://austegard.com/experiments/ppocr-pack/web/";
+const packedNets = {};         /* tier -> { pipe, loadMs } */
+const packedLoading = {};
+let packedGpu = null;
+let packedFailed = false;
+function usePacked() {
+  if (packedFailed || !navigator.gpu) return false;
+  try { if (new URLSearchParams(location.search).get("ort") === "1") return false; } catch (e) {}
+  const el = document.getElementById("tier");
+  return !!el && (el.value === "tiny" || el.value === "small");
+}
+const PACKED_MB = { tiny: "1.6", small: "6.3" };
+async function ensurePacked() {
+  const tier = document.getElementById("tier").value;
+  if (packedNets[tier]) return packedNets[tier];
+  if (!packedLoading[tier]) {
+    packedLoading[tier] = (async () => {
+      setStatus("Loading PP-OCRv6 " + tier + " (packed int8, about " + PACKED_MB[tier] + " MB on first run)...");
+      const t0 = performance.now();
+      const [{ Gpu }, { DetNet }, { RecNet }, { TextPipeline }] = await Promise.all(
+        ["det/gpu.js", "det/engine.js", "rec/engine.js", "pipeline.js"].map(f => import(PACKED_BASE + f)));
+      if (!packedGpu) packedGpu = await Gpu.create();
+      const det = await DetNet.load(packedGpu, PACKED_BASE + "det/models/" + tier + "/");
+      const rec = await RecNet.load(packedGpu, PACKED_BASE + "rec/models/" + tier + "/");
+      const loadMs = performance.now() - t0;
+      return { pipe: new TextPipeline({ det, rec, longSide: SINGLE_MAX }), loadMs };
+    })();
+  }
+  try {
+    packedNets[tier] = await packedLoading[tier];
+    console.log("[packed] ready:", tier, Math.round(packedNets[tier].loadMs) + " ms");
+    relay.log("packed ocr ready", { tier, ms: Math.round(packedNets[tier].loadMs) });
+    return packedNets[tier];
+  } catch (e) {
+    packedLoading[tier] = null;
+    packedFailed = true;
+    console.error("[packed] load failed; falling back to onnxruntime-web", e);
+    relay.error("packed ocr load failed, using onnxruntime-web", { tier, e: String((e && e.message) || e) });
+    setStatus("The packed engine could not start (" + ((e && e.message) || e) + "); using onnxruntime-web instead.");
+    return null;
+  }
+}
+/* one canvas through the packed pipeline, as the {text, confidence, box} items the page works with */
+async function packedRead(canvas) {
+  const net = packedNets[document.getElementById("tier").value];
+  const t0 = performance.now();
+  const lines = await net.pipe.run(canvas);
+  const items = lines.map(l => {
+    const xs = l.box.map(q => q[0]), ys = l.box.map(q => q[1]);
+    const x = Math.min(...xs), y = Math.min(...ys);
+    return { text: l.text, confidence: l.score, box: { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y } };
+  }).filter(it => it.text && it.text.length);
+  const t = lines.timing || {};
+  relay.log("packed page", { tier: document.getElementById("tier").value, w: canvas.width, h: canvas.height, lines: items.length,
+    ms: Math.round(performance.now() - t0), det_ms: Math.round(t.det_ms || 0), post_ms: Math.round(t.post_ms || 0),
+    crop_ms: Math.round(t.crop_ms || 0), rec_ms: Math.round(t.rec_ms || 0) });
+  return items;
 }
 
 /* ---------- model ---------- */
@@ -874,6 +941,8 @@ function estimate() {
   if (!pages.length) { etaEl.textContent = ""; return; }
   const secs = useIndra()
     ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
+    : usePacked()
+    ? remaining * PACKED_SECONDS_PER_PAGE + (packedNets[document.getElementById("tier").value] ? 0 : PACKED_LOAD_SECONDS)
     : remaining * SECONDS_PER_PAGE + (paddle ? 0 : LOAD_SECONDS);
   const mins = secs / 60;
   const eta = mins >= 1 ? (mins.toFixed(1) + " min") : (secs + " s");
@@ -1168,7 +1237,8 @@ async function processPage(pg) {
     pg.status = "done";
     return;
   }
-  await ensurePaddle();
+  const packed = usePacked() && await ensurePacked();
+  if (!packed) await ensurePaddle();
   const canvas = await pg.render(scale);
   pg.pageW = canvas.width; pg.pageH = canvas.height;
   pg.preview = makePreview(canvas);
@@ -1178,11 +1248,12 @@ async function processPage(pg) {
      small, multi-column body text scores badly. recognizeTiled feeds the model
      near-native-resolution tiles, offsets each tile's boxes back into page pixels, and
      dedupes the overlaps. */
-  const { items, meanConf } = await recognizeTiled(canvas, pg.image);
+  const { items, meanConf } = await recognizeTiled(canvas, pg.image, packed ? packedRead : null);
   buildResult(pg, items, "ocr", { confidence: meanConf });
   pg.ms = Math.round(performance.now() - t0);
   pg.status = "done";
-  console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines", (pg.meanConf * 100).toFixed(1) + "%");
+  console.log("[ocr]", pg.image, pg.ms + "ms", pg.lines.length + " lines", (pg.meanConf * 100).toFixed(1) + "%", packed ? "(packed)" : "(onnxruntime-web)");
+  relay.log("ocr page", { image: pg.image, engine: packed ? "packed" : "ort", tier: selectedTier(), ms: pg.ms, lines: pg.lines.length });
 }
 
 /* ---------- tiled recognition ----------
@@ -1233,12 +1304,13 @@ function dedupeBoxes(items) {
   return kept;
 }
 
-async function recognizeTiled(canvas, label) {
+async function recognizeTiled(canvas, label, read) {
+  /* read: optional (canvas) => items for the packed engine; default is onnxruntime-web */
+  const readTile = read || (async c => (((await paddle.recognize(c, { flatten: true, noCache: true })) || {}).results) || []);
   const W = canvas.width, H = canvas.height;
   if (Math.max(W, H) <= SINGLE_MAX) {
-    const res = await paddle.recognize(canvas, { flatten: true, noCache: true });
-    const items = (res && res.results) || [];
-    return { items, meanConf: meanConfidence(res, items) };
+    const items = await readTile(canvas);
+    return { items, meanConf: meanConfidence(null, items) };
   }
   const cells = tileGrid(W, H, TILE, OVERLAP);
   const all = [];
@@ -1248,8 +1320,7 @@ async function recognizeTiled(canvas, label) {
     const sub = document.createElement("canvas");
     sub.width = c.w; sub.height = c.h;
     sub.getContext("2d").drawImage(canvas, c.x, c.y, c.w, c.h, 0, 0, c.w, c.h);
-    const res = await paddle.recognize(sub, { flatten: true, noCache: true });
-    for (const r of (res && res.results) || []) {
+    for (const r of await readTile(sub)) {
       if (!r || !r.box) continue;
       all.push({
         text: r.text, confidence: r.confidence,
@@ -1512,7 +1583,7 @@ for (const id of ["math", "dpi", "batch", "columns", "textorder"]) document.getE
 document.getElementById("pdflayers").onchange = () => {
   if (pages.some(p => p.kind === "pdf")) setStatus("PDF layer mode applies to PDFs added from now on; Clear and add the file again to re-read it.");
 };
-/* Indra is the default; without WebGPU, ensureIndra switches the select to PP-OCRv6 small */
+/* Indra is the default; without WebGPU, ensureIndra switches the select to PP-OCRv6 small (packed engine when WebGPU has an adapter, else onnxruntime-web) */
 runBtn.onclick = () => runBatch().then(afterRun);
 continueBtn.onclick = () => runBatch().then(afterRun);
 clearBtn.onclick = clearAll;
