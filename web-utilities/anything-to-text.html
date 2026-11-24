@@ -97,6 +97,8 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 .page .preview { width: 300px; flex: 0 0 300px; height: auto; border: 1px solid var(--a2t-line); border-radius: var(--radius); background: #fff; cursor: zoom-in; }
 .page .preview:target, .page .preview.zoomed { width: 100%; flex-basis: 100%; max-width: 100%; cursor: zoom-out; }
 .page .col-text { flex: 1 1 auto; min-width: 0; }
+/* a zoomed preview takes the full width, so the text goes below it rather than being squeezed */
+.page .cols:has(> .preview.zoomed) { flex-direction: column; align-items: stretch; }
 /* two readings side by side need the room: a smaller preview (click still zooms it) */
 @media (min-width: 681px) { .page .cols.has-cmp .preview:not(.zoomed) { width: 180px; flex-basis: 180px; } }
 .page .col-text .out { margin-top: 0; }
@@ -177,7 +179,18 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 #mode-bar button { padding: 5px 11px; font-size: 11px; }
 
 /* two-model comparison: the same text from both models, words they disagree on marked */
-mark.d { background: color-mix(in srgb, var(--a2t-danger) 24%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+/* the primary model's disagreements are red, the compare model's blue, in the text and on the preview */
+:root { --a2t-cmp-a: var(--tongue); --a2t-cmp-b: var(--water, #2d6477); }
+mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); color: inherit; border-radius: 2px; padding: 0 1px; }
+.cmp > div:nth-child(2) mark.d, .cmp-row .tx:last-child mark.d { background: color-mix(in srgb, var(--a2t-cmp-b) 26%, transparent); }
+.cmp-lbl .sw { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 6px; vertical-align: -1px; }
+.sw.a { background: color-mix(in srgb, var(--a2t-cmp-a) 55%, transparent); }
+.sw.b { background: color-mix(in srgb, var(--a2t-cmp-b) 55%, transparent); }
+.page .preview.pv { position: relative; overflow: hidden; height: auto; }
+.pv img { display: block; width: 100%; height: auto; }
+.pv .hl { position: absolute; pointer-events: none; border-radius: 1px; }
+.pv .hl.a { background: color-mix(in srgb, var(--a2t-cmp-a) 30%, transparent); box-shadow: 0 0 0 1px color-mix(in srgb, var(--a2t-cmp-a) 75%, transparent); }
+.pv .hl.b { box-shadow: 0 0 0 1.5px var(--a2t-cmp-b); }
 .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
 .cmp .out { margin-top: 0; }
 .cmp-lbl { font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--a2t-faint); font-family: var(--mono); margin: 0 0 4px; }
@@ -562,7 +575,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-danger) 24%, transparent); col
     A.toks.forEach((x, i) => { if (x.key) ia.push(i); });
     B.toks.forEach((x, i) => { if (x.key) ib.push(i); });
     const m = lcsMatch(ia.map(i => A.toks[i].key), ib.map(i => B.toks[i].key));
-    if (!m) return { a: esc(textA || ""), b: esc(textB || ""), hunks: null, agree: null, words: ia.length + ib.length };
+    if (!m) return { a: esc(textA || ""), b: esc(textB || ""), hunks: null, agree: null, words: ia.length + ib.length, sideA: null, sideB: null };
     const sameA = A.toks.map(x => !x.key), sameB = B.toks.map(x => !x.key);
     const pa = [], pb = [];
     ia.forEach((ti, k) => { if (m[0][k]) { sameA[ti] = true; pa.push(k); } });
@@ -575,7 +588,24 @@ mark.d { background: color-mix(in srgb, var(--a2t-danger) 24%, transparent); col
       if (ga > 1 || gb > 1) hunks++;
     }
     const total = ia.length + ib.length;
-    return { a: markHtml(A, sameA), b: markHtml(B, sameB), hunks, agree: total ? (2 * pa.length) / total : 1, words: total };
+    return { a: markHtml(A, sameA), b: markHtml(B, sameB), hunks, agree: total ? (2 * pa.length) / total : 1, words: total,
+             sideA: { keys: A.toks.map(x => x.key), same: sameA }, sideB: { keys: B.toks.map(x => x.key), same: sameB } };
+  }
+  /* Map each token of a diff side to a word of another token list of the same reading (the
+     OCR words that carry page boxes): -> Int32Array, word index or -1 per token. The two
+     lists hold the same words, so the LCS pairs them up; Markdown and joined hyphenation
+     leave a few tokens unpaired. null when too long to align. */
+  function align(keys, words) {
+    const wk = words.map(w => MARKUP_ONLY.test(w) ? null : (normTok(w) || null));
+    const ia = [], ib = [];
+    keys.forEach((k, i) => { if (k) ia.push(i); });
+    wk.forEach((k, j) => { if (k) ib.push(j); });
+    const m = lcsMatch(ia.map(i => keys[i]), ib.map(j => wk[j]));
+    if (!m) return null;
+    const out = new Int32Array(keys.length).fill(-1);
+    const pa = ia.filter((_, k) => m[0][k]), pb = ib.filter((_, k) => m[1][k]);
+    pa.forEach((ti, k) => { out[ti] = pb[k]; });
+    return out;
   }
 
   /* ---------- settings in the address bar ----------
@@ -628,7 +658,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-danger) 24%, transparent); col
   }
   document.getElementById("mode-exit").addEventListener("click", release);
   showPin();
-  window.A2T = { qs: qs0, register, sync, diff, mode: () => pinned };
+  window.A2T = { qs: qs0, register, sync, diff, align, mode: () => pinned };
 
   async function route(fileList) {
     const files = await classify([...fileList]);
@@ -681,7 +711,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-24-compare"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-24-compare-boxes"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -873,6 +903,9 @@ async function recognizeIndra(pg, canvas) {
   /* Indra's reading-order model replaces the geometric orderer, and the card shows its
      Markdown, which joins lines into paragraphs and keeps headings and tables */
   pg.lines = page.lines.map(l => l.text);
+  pg.words = wordBoxes(items, sw, sh);
+  /* boxes of a page Indra turned are in the turned frame, not the preview's */
+  pg.turned = !!(page.rotation || page.vertical);
   pg.markdown = page.markdown;
   pg.text = page.markdown || pg.lines.join("\n");
   pg.engine = "indra";
@@ -1165,7 +1198,27 @@ function lineify(group) {
     line.items.push(r);
   }
   lines.sort((a, b) => a.y - b.y);
-  return lines.map(L => L.items.sort((a, b) => a.box.x - b.box.x).map(r => r.text).join(" "));
+  return lines.map(L => {
+    L.items.sort((a, b) => a.box.x - b.box.x);
+    if (lineSink) lineSink.push(...L.items);
+    return L.items.map(r => r.text).join(" ");
+  });
+}
+/* While set, lineify appends each line's boxes in the order it emits them, which is the
+   order of the words in the text readingOrder returns: buildResult uses it for word boxes. */
+let lineSink = null;
+/* One normalized box per word, in text order. A word's box is its share of the line box,
+   by character offset: close enough on printed text to point at the word. */
+function wordBoxes(items, W, H) {
+  const out = [];
+  for (const r of items) {
+    if (!r || !r.box || typeof r.text !== "string") continue;
+    const n = r.text.length || 1, re = /\S+/g;
+    let m;
+    while ((m = re.exec(r.text))) out.push({ t: m[0], x: (r.box.x + r.box.width * m.index / n) / W, y: r.box.y / H,
+                                             w: r.box.width * m[0].length / n / W, h: r.box.height / H });
+  }
+  return out;
 }
 
 /* Auto-detect column gutters with a 2-D occupancy projection. A multi-column page has a
@@ -1343,9 +1396,12 @@ function buildResult(pg, items, source, res) {
   if (source === "text") { pg.markdown = null; pg.engine = null; pg.model = null; }
   /* born-digital text can keep pdf.js's native order when asked; everything else (and
      geometric text) flows through the column-aware orderer. */
+  lineSink = source === "ocr" ? [] : null;
   pg.lines = (source === "text" && textOrderMode() === "pdf")
     ? pdfOrderLines(items)
     : readingOrder(items, { pageW: W, pageH: H, columns: columnMode() });
+  pg.words = lineSink ? wordBoxes(lineSink, W, H) : null;   /* OCR only: the comparison draws on them */
+  lineSink = null;
   pg.text = pg.lines.join("\n");
   pg.segments = items
     .filter(r => r && r.box && typeof r.text === "string" && r.text.length)
@@ -1463,7 +1519,7 @@ function indraFallback(role) {
    the primary model, page.alt for the compare model. */
 async function readOcr(model, out, canvas, role) {
   const t0 = performance.now();
-  out.markdown = null; out.engine = null; out.model = model;
+  out.markdown = null; out.engine = null; out.model = model; out.turned = false;
   if (model === "indra") {
     if (await ensureIndra()) { await recognizeIndra(out, canvas); return; }
     model = out.model = indraFallback(role);
@@ -1662,7 +1718,7 @@ function pageInner(pg) {
     else if (pg.source === "ocr") convBtn = '<button class="ghost retext" data-pg="' + pg.id + '">Extract text instead</button>';
   }
   const copyBtn = done ? '<button class="ghost copy-page" data-pg="' + pg.id + '">Copy</button>' : "";
-  const preview = pg.preview ? '<img class="preview" src="' + pg.preview + '" alt="page preview">' : "";
+  const preview = previewHtml(pg);
   const textOut = pg.status === "error"
     ? '<div class="out err">' + escapeHtml(pg.error || "error") + '</div>'
     : (done && pg.alt && pg.source === "ocr")
@@ -1680,8 +1736,38 @@ function pageInner(pg) {
    page and recomputed only when either text changes. */
 function pageDiff(pg) {
   const a = pg.text || "", b = pg.alt.text || "";
-  if (!pg._diff || pg._diff.ta !== a || pg._diff.tb !== b) pg._diff = { ta: a, tb: b, d: A2T.diff(a, b) };
+  if (!pg._diff || pg._diff.ta !== a || pg._diff.tb !== b) {
+    const d = A2T.diff(a, b);
+    pg._diff = { ta: a, tb: b, d, boxes: [...diffBoxes(d.sideA, pg, "a"), ...diffBoxes(d.sideB, pg.alt, "b")] };
+  }
   return pg._diff.d;
+}
+/* The words one reading disagrees on, as boxes on the page: each marked token is paired
+   with the reading's word boxes (A2T.align) and its box kept. Readings without boxes, or
+   whose boxes are in a turned frame, add none. */
+function diffBoxes(side, reading, cls) {
+  if (!side || !reading.words || !reading.words.length || reading.turned) return [];
+  const map = A2T.align(side.keys, reading.words.map(w => w.t));
+  if (!map) return [];
+  const out = [];
+  side.same.forEach((same, i) => {
+    if (same || map[i] < 0) return;
+    const w = reading.words[map[i]];
+    out.push({ cls, t: w.t, x: w.x, y: w.y, w: w.w, h: w.h });
+  });
+  return out;
+}
+/* the page preview with the disagreeing words drawn over it */
+function previewHtml(pg) {
+  if (!pg.preview) return "";
+  const img = '<img src="' + pg.preview + '" alt="page preview">';
+  if (!(pg.status === "done" && pg.alt && pg.alt.status === "done" && pg.source === "ocr")) return img.replace("<img ", '<img class="preview" ');
+  pageDiff(pg);
+  const pct = v => (v * 100).toFixed(3) + "%";
+  const hl = pg._diff.boxes.map(b => '<span class="hl ' + b.cls + '" title="' + escapeHtml(b.t).replace(/"/g, "&quot;")
+    + '" style="left:' + pct(b.x) + ';top:' + pct(b.y) + ';width:' + pct(b.w) + ';height:' + pct(b.h) + '"></span>').join("");
+  return '<div class="preview pv" title="Words the models disagree on: red, ' + escapeHtml(OCR_LABEL[pg.model] || "")
+    + '; blue outline, ' + escapeHtml(OCR_LABEL[pg.alt.model] || "") + '">' + img + hl + '</div>';
 }
 function diffSummary(d) {
   if (d.hunks == null) return "too long to compare word by word";
@@ -1690,7 +1776,7 @@ function diffSummary(d) {
 }
 function compareInner(pg) {
   const alt = pg.alt;
-  const pane = (label, inner) => '<div><p class="cmp-lbl">' + escapeHtml(label) + '</p>' + inner + '</div>';
+  const pane = (label, inner, cls) => '<div><p class="cmp-lbl"><span class="sw ' + cls + '"></span>' + escapeHtml(label) + '</p>' + inner + '</div>';
   let a = escapeHtml(pg.text), b, stat = "";
   if (alt.status === "done") {
     const d = pageDiff(pg);
@@ -1702,8 +1788,8 @@ function compareInner(pg) {
   } else {
     b = '<div class="out muted">working&#x2026;</div>';
   }
-  return '<div class="cmp">' + pane(OCR_LABEL[pg.model] || "OCR", '<div class="out">' + (a || "(no text)") + '</div>')
-    + pane(OCR_LABEL[alt.model] || "Compare", b) + '</div>' + stat;
+  return '<div class="cmp">' + pane(OCR_LABEL[pg.model] || "OCR", '<div class="out">' + (a || "(no text)") + '</div>', "a")
+    + pane(OCR_LABEL[alt.model] || "Compare", b, "b") + '</div>' + stat;
 }
 
 /* ---------- exports ---------- */
@@ -2797,7 +2883,7 @@ async function compareBundles() {
 
   state.phase = "compare";
   dom.cmpWrap.hidden = false;
-  dom.cmpRows.innerHTML = '<div class="cmp-row head"><span></span><span>Whisper ' + primary.name + '</span><span>Whisper ' + entry.name + '</span></div>';
+  dom.cmpRows.innerHTML = '<div class="cmp-row head"><span></span><span class="cmp-lbl"><span class="sw a"></span>Whisper ' + primary.name + '</span><span class="cmp-lbl"><span class="sw b"></span>Whisper ' + entry.name + '</span></div>';
   dom.cmpStat.textContent = "";
   dom.cmpPartial.textContent = "";
   let differ = 0, hunks = 0, words = 0, agreeing = 0, elapsed = 0;

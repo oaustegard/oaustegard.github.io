@@ -96,7 +96,10 @@ words are where to look for errors.
 
 - **OCR**: each OCRed page is read by both models from the same render, and the card shows
   the two readings side by side with the count of differences and the share of words that
-  agree. Pages taken from a PDF's embedded text layer are exact and are not compared. Pages
+  agree. The words they disagree on are also drawn on the page preview, red for the first
+  model and outlined in blue for the second (click the preview to enlarge it); a word's box
+  is its share of the detected line, so it is approximate. Pages taken from a PDF's
+  embedded text layer are exact and are not compared. Pages
   are read in batches of **Batch size** (10 by default): when all the pages fit in one batch,
   both models read them as soon as they are added; a larger set waits for **Run batch** and
   **Continue**. Choosing a compare model after a run keeps the first model's readings and

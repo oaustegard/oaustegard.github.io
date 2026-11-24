@@ -71,6 +71,18 @@ test.describe('Anything to Text: two-model diff', () => {
     expect(d.a).toBe('a &lt;b&gt; &amp; c');
   });
 
+  test('diff tokens pair with the reading\'s word boxes despite Markdown', async ({ page }) => {
+    await page.goto(PAGE);
+    const r = await page.evaluate(() => {
+      const d = window.A2T.diff('## Total: **$1,284**', 'Total: $1.284');
+      const map = window.A2T.align(d.sideA.keys, ['Total:', '$1,284']);
+      return { map: [...map], same: d.sideA.same };
+    });
+    // "##" is markup and pairs with nothing; "**$1,284**" pairs with the plain word box
+    expect(r.map).toEqual([-1, 0, 1]);
+    expect(r.same).toEqual([true, true, false]);
+  });
+
   test('adjacent differing words share one mark', async ({ page }) => {
     await page.goto(PAGE);
     const d = await page.evaluate(() => window.A2T.diff('one two three four', 'one tvvo thr3e four'));
