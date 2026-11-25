@@ -5,10 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="ai-disclosure" content="ai-assisted">
 <meta name="theme-color" content="#5d6d3b">
-<meta name="description" content="Turn anything into text in your browser - OCR for images and PDFs, speech-to-text for audio and video. Nothing is uploaded; everything runs on your device.">
+<meta name="description" content="Turn anything into text in your browser - OCR for images and PDFs, speech-to-text for audio and video, Markdown from Word, PowerPoint, Excel and other documents. Nothing is uploaded; everything runs on your device.">
 <meta property="og:image" content="https://austegard.com/images/og/web-utilities-anything-to-text.jpg">
 <meta name="twitter:card" content="summary_large_image">
-<title>Anything to Text - in-browser OCR &amp; transcription</title>
+<title>Anything to Text - in-browser OCR, transcription &amp; document conversion</title>
 <link rel="icon" href="/favicon.ico" sizes="any">
 <link rel="stylesheet" href="/styles/style.css">
 <!-- logs to the GPU bridge on Oskar's devices only, with ?log=1 (experiments/gpu-bridge/web/relay.js) -->
@@ -190,6 +190,16 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 .edit-inputs .dropzone .big { font-size: 15px; }
 .meta-line { color: var(--a2t-faint); font-size: 11px; margin-top: 14px; font-family: var(--mono); }
 .tech-note { color: var(--a2t-faint); font-size: 11px; line-height: 1.7; margin-top: 18px; }
+/* document results */
+.doc-item + .doc-item { border-top: 1px solid var(--a2t-line); margin-top: 18px; padding-top: 18px; }
+.doc-head { margin-bottom: 10px; }
+.doc-head h3 { font-family: var(--disp); font-size: 16px; margin: 0; color: var(--fg); word-break: break-all; }
+.doc-fmt { color: var(--a2t-faint); font-family: var(--mono); font-size: 11px; margin-left: 6px; }
+.doc-text { max-height: 70vh; overflow: auto; font-family: var(--mono); font-size: 13px; line-height: 1.55; }
+.doc-empty, .doc-err { color: var(--a2t-dim); }
+.doc-err { color: var(--a2t-danger); white-space: pre-wrap; font-family: var(--mono); font-size: 12px; }
+.doc-warn { margin-top: 8px; color: var(--a2t-dim); font-size: 12px; }
+.doc-warn summary { cursor: pointer; }
 
 /* settings carried in the address bar: a link with ?mode= opens one engine only */
 #mode-bar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--a2t-dim); font-size: 12px; margin: 10px 2px 0; }
@@ -236,13 +246,13 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
   <header>
     <p class="eyebrow">In your browser &middot; nothing uploaded</p>
     <h1>Anything to Text</h1>
-    <p class="sub">Drop an <b>image</b>, a <b>PDF</b>, or an <b>audio/video</b> recording and get text back. Images and PDFs are read with on-device OCR; audio and video are transcribed with a local speech model. <b>Your files never leave your device</b> &mdash; only the models download on first run.</p>
+    <p class="sub">Drop an <b>image</b>, a <b>PDF</b>, an <b>audio/video</b> recording, or a <b>document</b> (Word, PowerPoint, Excel, OpenDocument, EPUB, HTML, LaTeX&hellip;) and get text back. Images and PDFs are read with on-device OCR; audio and video are transcribed with a local speech model; documents are converted to Markdown by pandoc. <b>Your files never leave your device</b> &mdash; only the models download on first run.</p>
   </header>
 
   <!-- shared intake: one drop zone for everything, routed by file type -->
   <div class="panel">
     <div id="drop" class="dropzone">
-      <div class="big">Drop anything &mdash; images, a PDF, audio, or video</div>
+      <div class="big">Drop anything &mdash; images, a PDF, audio, video, or a document</div>
       <div class="hint">paste an image, or click to choose files</div>
     </div>
     <!-- No accept filter: mobile file pickers hide extensionless files (e.g. an arXiv PDF
@@ -250,7 +260,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
          after selection rather than at the picker. -->
     <input id="file" type="file" multiple hidden>
     <p id="route-note"></p>
-    <p id="mode-bar" hidden><span id="mode-text"></span> <button id="mode-exit" class="ghost" type="button" title="Take audio and video as well as images and PDFs again">Use all modes</button></p>
+    <p id="mode-bar" hidden><span id="mode-text"></span> <button id="mode-exit" class="ghost" type="button" title="Take every kind of file again">Use all modes</button></p>
   </div>
 
   <!-- ===================== OCR engine (images + PDF) ===================== -->
@@ -481,8 +491,49 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
     <div class="tech-note" id="tech-note"></div>
   </section>
 
+  <!-- ===================== Document engine (Office, ODF, EPUB, HTML, LaTeX, ... via pandoc) ===================== -->
+  <section id="doc-section" class="engine" hidden>
+    <div class="panel">
+      <div class="controls">
+        <div>
+          <label class="field" for="doc-to">Output</label>
+          <select id="doc-to" title="What pandoc writes. GitHub Markdown keeps headings, lists, links and tables; plain text drops the markup.">
+            <option value="gfm" selected>Markdown (GitHub)</option>
+            <option value="markdown">Markdown (pandoc)</option>
+            <option value="plain">Plain text</option>
+          </select>
+        </div>
+        <div>
+          <label class="field" for="doc-images">Images</label>
+          <select id="doc-images" title="Embedded pictures cannot come along as files. Alt text keeps each picture's description in its place; Drop removes them.">
+            <option value="alt" selected>Alt text only</option>
+            <option value="keep">Keep image links</option>
+            <option value="drop">Drop</option>
+          </select>
+        </div>
+      </div>
+      <div class="runbar">
+        <button class="ghost" id="doc-clear" type="button">Clear</button>
+        <span class="badge" id="doc-engine">pandoc</span>
+        <span id="doc-status"></span>
+      </div>
+      <div class="bar" id="doc-bar"><i></i></div>
+    </div>
+
+    <div class="panel" id="doc-results" hidden>
+      <div class="result-head">
+        <h2>Document text</h2>
+        <div class="result-actions">
+          <button class="ghost" id="doc-copy" type="button">Copy all</button>
+          <button class="ghost" id="doc-dl" type="button">Download</button>
+        </div>
+      </div>
+      <div id="doc-list"></div>
+    </div>
+  </section>
+
   <footer>
-    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6 (from <a href="https://austegard.com/experiments/ppocr-pack/web/">packed int8 weights on WebGPU</a>, or through onnxruntime-web without it), or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) and speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
+    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6 (from <a href="https://austegard.com/experiments/ppocr-pack/web/">packed int8 weights on WebGPU</a>, or through onnxruntime-web without it), or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js), and document conversion (<a href="https://pandoc.org/">pandoc</a> 3.10, GPL-2.0-or-later, from the official <a href="https://github.com/pandoc/pandoc-wasm">WebAssembly build</a>). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
   </footer>
 </div>
 
@@ -496,6 +547,32 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
   const note = document.getElementById("route-note");
   const isOcr = f => f.type.startsWith("image/") || f.type === "application/pdf" || /\.pdf$/i.test(f.name || "");
   const isAv  = f => f.type.startsWith("audio/") || f.type.startsWith("video/") || /\.(mp4|mov|mkv|webm|mp3|wav|m4a|flac|ogg|opus|aac)$/i.test(f.name || "");
+  /* Documents go to pandoc. Extension -> pandoc reader, for the formats pandoc 3.10 reads
+     that have an unambiguous extension (.xml and .json could be several readers, .txt is
+     already text). MIME types cover files a phone saved without an extension. */
+  const DOC_EXT = {
+    docx: "docx", docm: "docx", dotx: "docx", pptx: "pptx", pptm: "pptx", potx: "pptx", xlsx: "xlsx", xlsm: "xlsx",
+    odt: "odt", ott: "odt", epub: "epub", rtf: "rtf", html: "html", htm: "html", xhtml: "html", xht: "html",
+    tex: "latex", latex: "latex", ltx: "latex", rst: "rst", org: "org", textile: "textile", mediawiki: "mediawiki", wiki: "mediawiki",
+    dbk: "docbook", docbook: "docbook", ipynb: "ipynb", fb2: "fb2", opml: "opml", csv: "csv", tsv: "tsv", typ: "typst",
+    dj: "djot", djot: "djot", md: "markdown", markdown: "markdown", mkd: "markdown", mdown: "markdown", bib: "biblatex", ris: "ris",
+    adoc: "asciidoc", asciidoc: "asciidoc", t2t: "t2t", muse: "muse", pod: "pod",
+  };
+  const DOC_MIME = {
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": "docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": "pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": "xlsx",
+    "application/vnd.oasis.opendocument.text": "odt", "application/epub+zip": "epub",
+    "application/rtf": "rtf", "text/rtf": "rtf", "text/html": "html", "application/xhtml+xml": "xhtml",
+    "text/markdown": "md", "text/csv": "csv", "text/tab-separated-values": "tsv",
+    "application/x-ipynb+json": "ipynb", "application/x-tex": "tex", "application/x-latex": "tex", "text/x-tex": "tex",
+  };
+  const extOf = f => { const m = /\.([a-z0-9]+)$/i.exec(f.name || ""); return m ? m[1].toLowerCase() : ""; };
+  const docFrom = f => DOC_EXT[extOf(f)] || DOC_EXT[DOC_MIME[f.type] || ""] || null;
+  const isDoc = f => !isOcr(f) && !isAv(f) && !!docFrom(f);
+  /* the binary Office formats before 2007 (and OpenDocument slides and sheets): pandoc reads none of them */
+  const LEGACY = /\.(doc|dot|xls|xlt|ppt|pps|pot|odp|ods|pages|key|numbers)$/i;
+  const LEGACY_MIME = new Set(["application/msword", "application/vnd.ms-excel", "application/vnd.ms-powerpoint"]);
 
   /* Content sniffing. A file's declared type/name is not always trustworthy: phones save a
      downloaded arXiv PDF as e.g. "2401.12345" (the ".12345" reads like an extension) with an
@@ -514,9 +591,29 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
   async function sniff(file) {
     try {
       const buf = new Uint8Array(await file.slice(0, 16).arrayBuffer());
-      return MAGIC.find(m => m.test(buf)) || null;
+      return MAGIC.find(m => m.test(buf)) || await sniffDoc(file, buf);
     } catch (e) { console.warn("[sniff] failed for", file && file.name, e); return null; }
   }
+  /* A zip is a document when its member names say which kind: EPUB and OpenDocument store
+     their mimetype first, and an Office file names word/, ppt/ or xl/ in the central
+     directory at the end. An OLE2 compound file is a pre-2007 Office document. */
+  async function sniffDoc(file, b) {
+    if (b[0] === 0xD0 && b[1] === 0xCF && b[2] === 0x11 && b[3] === 0xE0) return { legacy: true };
+    if (!(b[0] === 0x50 && b[1] === 0x4B && b[2] === 0x03 && b[3] === 0x04)) return null;
+    const latin = u => String.fromCharCode.apply(null, u);
+    const head = latin(new Uint8Array(await file.slice(0, 128).arrayBuffer()));
+    if (head.includes("mimetypeapplication/epub+zip")) return { mime: "application/epub+zip", ext: "epub" };
+    if (head.includes("mimetypeapplication/vnd.oasis.opendocument.text")) return { mime: DOC_EXT_MIME.odt, ext: "odt" };
+    if (head.includes("mimetypeapplication/vnd.oasis.opendocument")) return { legacy: true };
+    const tail = new Uint8Array(await file.slice(Math.max(0, file.size - 65536)).arrayBuffer());
+    let names = "";
+    for (let i = 0; i < tail.length; i += 8192) names += latin(tail.subarray(i, i + 8192));
+    if (names.includes("word/document")) return { mime: DOC_EXT_MIME.docx, ext: "docx" };
+    if (names.includes("ppt/presentation")) return { mime: DOC_EXT_MIME.pptx, ext: "pptx" };
+    if (names.includes("xl/workbook")) return { mime: DOC_EXT_MIME.xlsx, ext: "xlsx" };
+    return null;
+  }
+  const DOC_EXT_MIME = Object.fromEntries(Object.entries(DOC_MIME).reverse().map(([m, e]) => [e, m]));
   const ensureExt = (name, ext) => {
     const base = (name && name.trim()) ? name : "file";
     return new RegExp("\\." + ext + "$", "i").test(base) ? base : base + "." + ext;
@@ -527,8 +624,10 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
   async function classify(fileList) {
     const out = [];
     for (const f of fileList) {
-      if (isOcr(f) || isAv(f)) { out.push(f); continue; }
+      if (isOcr(f) || isAv(f) || isDoc(f)) { out.push(f); continue; }
+      if (LEGACY.test(f.name || "") || LEGACY_MIME.has(f.type)) { f.a2tLegacy = true; out.push(f); continue; }
       const m = await sniff(f);
+      if (m && m.legacy) { f.a2tLegacy = true; out.push(f); continue; }
       if (m) {
         const tagged = new File([f], ensureExt(f.name, m.ext), { type: m.mime });
         console.log("[sniff]", (f.name || "(unnamed)"), (f.type || "no-type"), "->", m.mime, "as", tagged.name);
@@ -649,8 +748,8 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
      file, and the drop zone asks for that kind of file. sync() writes it while only one
      engine is in use. Use all modes, or dropping a file of the other kind, leaves it; after
      that the session no longer writes a mode. */
-  const MODES = { ocr: "images or a PDF", transcribe: "audio or video" };
-  const MODE_NAMES = { ocr: "OCR", transcribe: "Transcription" };
+  const MODES = { ocr: "images or a PDF", transcribe: "audio or video", doc: "a Word, PowerPoint, Excel or other document" };
+  const MODE_NAMES = { ocr: "OCR", transcribe: "Transcription", doc: "Documents" };
   const qs0 = new URLSearchParams(location.search);
   const sections = {};
   let pinned = MODES[qs0.get("mode")] ? qs0.get("mode") : null;
@@ -697,15 +796,22 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
     if (!files.length) return;
     const ocr = files.filter(isOcr);
     const av  = files.filter(isAv);
-    /* a file of the other kind takes the page out of a one-engine link */
-    if ((pinned === "ocr" && av.length) || (pinned === "transcribe" && ocr.length)) release();
+    const doc = files.filter(isDoc);
+    doc.forEach(f => { f.a2tFrom = docFrom(f); });
+    const legacy = files.filter(f => f.a2tLegacy).length;
+    /* a file of another kind takes the page out of a one-engine link */
+    const kinds = { ocr: ocr.length, transcribe: av.length, doc: doc.length };
+    if (pinned && Object.keys(kinds).some(k => k !== pinned && kinds[k])) release();
     if (ocr.length) window.dispatchEvent(new CustomEvent("intake:ocr", { detail: ocr }));
     if (av.length)  window.dispatchEvent(new CustomEvent("intake:transcribe", { detail: av }));
+    if (doc.length) window.dispatchEvent(new CustomEvent("intake:doc", { detail: doc }));
     sync();
     const parts = [];
     if (ocr.length) parts.push(ocr.length + " image/PDF \u2192 OCR");
     if (av.length)  parts.push((av.length > 1 ? "1 of " + av.length + " " : "") + "audio/video \u2192 transcript");
-    const skipped = files.length - ocr.length - av.length;
+    if (doc.length) parts.push(doc.length + " document" + (doc.length > 1 ? "s" : "") + " \u2192 pandoc");
+    if (legacy) parts.push(legacy + " older Office or OpenDocument slides/sheets file" + (legacy > 1 ? "s" : "") + " skipped: pandoc reads .docx, .pptx, .xlsx and .odt, so save it in one of those first");
+    const skipped = files.length - ocr.length - av.length - doc.length - legacy;
     if (skipped > 0) parts.push(skipped + " unsupported skipped");
     note.textContent = parts.join("  \u00b7  ");
   }
@@ -743,7 +849,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-25-autorotate"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-25-pandoc"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -3715,6 +3821,348 @@ document.addEventListener("visibilitychange", function () {
 
 console.log("[ready] Local Transcriber initialized");
 
+</script>
+
+<!-- ===================== Document engine: pandoc compiled to WebAssembly, in a worker ===================== -->
+<script type="module">
+/* Word, PowerPoint, Excel, OpenDocument, EPUB, RTF, HTML, LaTeX and the other formats pandoc
+   reads, converted to Markdown or plain text by the official pandoc WebAssembly build
+   (npm pandoc-wasm, pandoc 3.10). The router decides which files come here and with which
+   pandoc reader (file.a2tFrom); this module only converts.
+
+   pandoc runs in a module worker: one conversion is a synchronous call into the wasm and a
+   large workbook can take seconds, which would freeze the page on the main thread. The
+   58 MB binary (16 MB gzipped on the wire) is kept in Cache Storage after the first
+   download, so later visits start from disk. The worker keeps the bytes, so a conversion
+   that kills the instance (pandoc exits on some malformed input) costs one fresh
+   instantiation rather than another download. */
+const relay = window.a2tRelay || { log() {}, warn() {}, error() {} };
+const PANDOC_PKG = "pandoc-wasm@1.1.0";   /* pandoc 3.10 */
+const PANDOC_QS = new URLSearchParams(location.search);
+const PANDOC_WASM = PANDOC_QS.get("pandocwasm") || "https://unpkg.com/" + PANDOC_PKG + "/src/pandoc.wasm";
+const PANDOC_CORE = "https://cdn.jsdelivr.net/npm/" + PANDOC_PKG + "/src/core.js/+esm";
+const PANDOC_BYTES = 58580800;            /* unpacked size: the gzipped Content-Length is useless for progress */
+const FFLATE = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js";
+
+/* A Lua filter shapes the text. Images cannot come along as files, so each becomes its alt
+   text (default), a plain Markdown image link, or nothing; a figure becomes its caption, or
+   the picture's alt text when it has no caption. Spans and divs are unwrapped: they carry
+   only ids and classes (EPUB chapter anchors, ODT bookmarks), which GitHub Markdown would
+   otherwise keep as raw HTML around the text. */
+const IMAGE_FILTER = mode => [
+  'local mode = "' + mode + '"',
+  "function Span(el) return el.content end",
+  "function Div(el) return el.content end",
+  "function Image(el)",
+  '  if mode == "drop" then return {} end',
+  '  if mode == "keep" then el.attr = pandoc.Attr() return el end',
+  "  return el.caption",
+  "end",
+  "function Figure(el)",
+  '  if mode == "drop" then return {} end',
+  "  local c = pandoc.utils.blocks_to_inlines(el.caption.long)",
+  '  if mode == "keep" then',
+  "    local out = pandoc.List(el.content)",
+  "    if #c > 0 then out:insert(pandoc.Plain(c)) end",
+  "    return out",
+  "  end",
+  "  if #c > 0 then return pandoc.Plain(c) end",
+  "  return el.content",
+  "end",
+].join("\n");
+
+/* The worker's code, written as a function so this module's parser checks it too; it runs
+   only inside the worker, where it is the module body after the pandoc-wasm import. */
+function pandocWorker(createPandocInstance, cfg) {
+  const WASM_URL = cfg.wasm, TOTAL = cfg.total;
+  let bytes = null, inst = null;
+  /* Two kinds of Office file that pandoc 3.10 misreads, both written by openpyxl (and so by
+     pandas): relationships with absolute part names (Target="/xl/worksheets/sheet1.xml") fail
+     with "Entry not found: xl//xl/...", and text cells stored inline (t="inlineStr") come out
+     empty, because the xlsx reader looks only at shared strings and formula results. Excel,
+     LibreOffice and xlsxwriter write neither. Rewrite each absolute target relative to its
+     .rels file's folder and each inline string as a formula-result string (t="str"); returns
+     null when nothing needed changing. */
+  async function normalizeOffice(blob) {
+    const { unzipSync, zipSync, strFromU8, strToU8 } = await import(cfg.fflate);
+    const z = unzipSync(new Uint8Array(await blob.arrayBuffer()));
+    let changed = false;
+    const edit = (name, fn) => { const s = strFromU8(z[name]), t = fn(s); if (t !== s) { z[name] = strToU8(t); changed = true; } };
+    for (const name of Object.keys(z)) {
+      if (/\.rels$/.test(name)) {
+        const dir = name.replace(/_rels\/[^/]*$/, "");
+        edit(name, s => s.replace(/Target="\/([^"]*)"/g, (m, p) => 'Target="' + (dir && p.startsWith(dir) ? p.slice(dir.length) : p) + '"'));
+      } else if (/^xl\/worksheets\/[^/]+\.xml$/.test(name)) {
+        edit(name, s => s.replace(/<c([^>]*?)\st="inlineStr"([^>]*)>\s*<is>([\s\S]*?)<\/is>\s*<\/c>/g, (m, a, b, is) => {
+          const text = [...is.replace(/<rPh[\s\S]*?<\/rPh>/g, "").matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(x => x[1]).join("");
+          return "<c" + a + ' t="str"' + b + "><v>" + text + "</v></c>";
+        }));
+      }
+    }
+    return changed ? new Blob([zipSync(z, { level: 0 })]) : null;
+  }
+  async function download() {
+    let cache = null;
+    try { cache = await caches.open("a2t-pandoc"); } catch (e) { cache = null; }
+    if (cache) {
+      try {
+        const hit = await cache.match(WASM_URL);
+        if (hit) { postMessage({ type: "progress", loaded: TOTAL, total: TOTAL, cached: true }); return { buf: await hit.arrayBuffer(), cached: true }; }
+      } catch (e) { /* a broken cache entry: download again */ }
+    }
+    const res = await fetch(WASM_URL);
+    if (!res.ok) throw new Error("pandoc.wasm download failed: HTTP " + res.status);
+    const reader = res.body.getReader(), parts = [];
+    let loaded = 0, last = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      parts.push(value); loaded += value.length;
+      const now = Date.now();
+      if (now - last > 150) { last = now; postMessage({ type: "progress", loaded, total: Math.max(TOTAL, loaded) }); }
+    }
+    const buf = new Uint8Array(loaded);
+    let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
+    if (cache) {
+      try { await cache.put(WASM_URL, new Response(buf, { headers: { "Content-Type": "application/wasm" } })); }
+      catch (e) { postMessage({ type: "note", text: "could not keep pandoc.wasm in Cache Storage: " + (e && e.message || e) }); }
+    }
+    return { buf: buf.buffer, cached: false };
+  }
+  async function instance() {
+    if (inst) return inst;
+    let cached = null;
+    if (!bytes) { const d = await download(); bytes = d.buf; cached = d.cached; }
+    const t0 = performance.now();
+    inst = await createPandocInstance(bytes);
+    const version = inst.query({ query: "version" });
+    postMessage({ type: "ready", version, ms: Math.round(performance.now() - t0), cached, bytes: bytes.byteLength });
+    return inst;
+  }
+  self.onmessage = async (e) => {
+    const m = e.data;
+    try {
+      const p = await instance();
+      if (m.type === "load") return;
+      const t0 = performance.now();
+      const opts = { from: m.from, to: m.to, wrap: "none", "input-files": [m.name], filters: ["images.lua"] };
+      /* a bibliography has no body: its entries are document metadata, which only a standalone
+         Markdown file prints (as YAML front matter), so plain text falls back to Markdown */
+      if (/^(biblatex|bibtex|ris)$/.test(m.from)) { opts.standalone = true; if (m.to === "plain") opts.to = "markdown"; }
+      /* a workbook is checked before converting, since its inline strings vanish without an error;
+         a document or deck only when pandoc fails on an absolute part name */
+      let file = m.file, repaired = false;
+      if (m.from === "xlsx") { const fixed = await normalizeOffice(file); if (fixed) { file = fixed; repaired = true; } }
+      let r = await p.convert(opts, null, { [m.name]: file, "images.lua": m.filter });
+      if (!r.stdout && !repaired && /Entry not found: \w+\/\//.test(r.stderr) && /^(docx|pptx)$/.test(m.from)) {
+        const fixed = await normalizeOffice(file);
+        if (fixed) { r = await p.convert(opts, null, { [m.name]: fixed, "images.lua": m.filter }); repaired = true; }
+      }
+      postMessage({ type: "result", id: m.id, text: r.stdout, stderr: r.stderr, warnings: r.warnings || [], repaired, ms: Math.round(performance.now() - t0) });
+    } catch (err) {
+      /* pandoc exiting or trapping leaves the instance unusable: start the next file on a new one */
+      inst = null;
+      postMessage({ type: m.type === "load" ? "fail" : "error", id: m.id, message: String(err && err.message || err) });
+    }
+  };
+}
+const WORKER_SRC = 'import { createPandocInstance } from "' + PANDOC_CORE + '";\n(' + pandocWorker.toString() + ")(createPandocInstance, " +
+  JSON.stringify({ wasm: PANDOC_WASM, total: PANDOC_BYTES, fflate: FFLATE }) + ");\n";
+
+const $ = id => document.getElementById(id);
+const docSection = $("doc-section"), toSel = $("doc-to"), imgSel = $("doc-images");
+const statusEl = $("doc-status"), barEl = $("doc-bar"), engineBadge = $("doc-engine");
+const resultsEl = $("doc-results"), listEl = $("doc-list");
+
+const docs = [];       /* { id, file, name, from, status: queued|working|done|error, text, warnings, ms, error } */
+let seq = 0, worker = null, ready = null, busy = null;
+const waiting = new Map();   /* conversion id -> resolve */
+
+function setStatus(t) { statusEl.textContent = t; }
+function setBar(frac) {
+  barEl.style.display = frac == null ? "none" : "block";
+  if (frac != null) barEl.firstElementChild.style.width = Math.round(Math.min(1, frac) * 100) + "%";
+}
+const fmtMB = n => (n / 1048576).toFixed(n < 10485760 ? 1 : 0) + " MB";
+const fmtSize = n => n < 1048576 ? Math.max(1, Math.round(n / 1024)) + " KB" : fmtMB(n);
+const esc = s => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+function ensureWorker() {
+  if (worker) return ready;
+  const url = URL.createObjectURL(new Blob([WORKER_SRC], { type: "text/javascript" }));
+  worker = new Worker(url, { type: "module" });
+  ready = new Promise((resolve, reject) => {
+    worker.onmessage = (e) => {
+      const m = e.data;
+      if (m.type === "progress") {
+        setBar(m.loaded / m.total);
+        setStatus(m.cached ? "Starting pandoc from the browser cache…" : "Downloading pandoc " + fmtMB(m.loaded) + " of " + fmtMB(m.total) + " (once; it stays in the browser cache)…");
+      } else if (m.type === "ready") {
+        setBar(null);
+        engineBadge.textContent = "pandoc " + m.version;
+        engineBadge.className = "badge cpu";
+        relay.log("pandoc ready", { version: m.version, init_ms: m.ms, cached: m.cached, bytes: m.bytes });
+        resolve(m);
+      } else if (m.type === "fail") {
+        relay.error("pandoc load failed", { e: m.message });
+        worker.terminate(); worker = null;
+        setBar(null);
+        reject(new Error(m.message));
+      } else if (m.type === "note") {
+        relay.warn("pandoc: " + m.text);
+      } else if (m.type === "result" || m.type === "error") {
+        const done = waiting.get(m.id);
+        if (done) { waiting.delete(m.id); done(m); }
+      }
+    };
+    worker.onerror = (e) => {
+      const msg = (e && e.message) || "the pandoc worker failed to start";
+      relay.error("pandoc worker error", { e: msg });
+      for (const done of waiting.values()) done({ type: "error", message: msg });
+      waiting.clear();
+      worker.terminate(); worker = null;
+      setBar(null);
+      reject(new Error(msg));
+    };
+  });
+  worker.postMessage({ type: "load" });
+  return ready;
+}
+
+function convertOne(d) {
+  const id = ++seq;
+  return new Promise(resolve => {
+    waiting.set(id, resolve);
+    worker.postMessage({ type: "convert", id, name: d.name, from: d.from, to: toSel.value, filter: IMAGE_FILTER(imgSel.value), file: d.file });
+  });
+}
+
+/* Convert every queued document, one at a time (pandoc is single-threaded). A run that is
+   already going picks up documents queued while it works. */
+async function runQueue() {
+  if (busy) return busy;
+  busy = (async () => {
+    try { await ensureWorker(); }
+    catch (e) {
+      for (const d of docs) if (d.status === "queued") { d.status = "error"; d.error = "pandoc did not load: " + e.message; }
+      setStatus("pandoc did not load: " + e.message);
+      render(); return;
+    }
+    for (let d; (d = docs.find(x => x.status === "queued")); ) {
+      d.status = "working"; render();
+      setStatus("Converting " + d.name + "…");
+      const to = toSel.value, images = imgSel.value;
+      const r = await convertOne(d);
+      if (r.type === "error" || (!r.text && r.stderr)) {
+        d.status = "error";
+        d.error = (r.message || r.stderr || "pandoc produced no output").trim();
+        relay.error("pandoc convert failed", { name: d.name, from: d.from, e: d.error });
+      } else {
+        d.status = "done"; d.text = r.text; d.warnings = r.warnings; d.ms = r.ms; d.to = to; d.repaired = r.repaired;
+        relay.log("pandoc convert", { name: d.name, from: d.from, to, images, bytes: d.file.size, chars: r.text.length, warnings: r.warnings.length, repaired: r.repaired, ms: r.ms });
+      }
+      /* a setting changed while this file converted: read it again with the new one */
+      if (d.stale) { d.stale = false; d.status = "queued"; }
+      render();
+    }
+    const ok = docs.filter(x => x.status === "done").length, bad = docs.filter(x => x.status === "error").length;
+    setStatus(ok + " converted" + (bad ? " · " + bad + " failed" : "") + ".");
+  })();
+  try { await busy; } finally { busy = null; }
+}
+
+function warningText(w) {
+  if (!w) return "";
+  if (typeof w === "string") return w;
+  return w.type ? w.type + (w.contents != null ? ": " + (typeof w.contents === "string" ? w.contents : JSON.stringify(w.contents)) : "") : JSON.stringify(w);
+}
+
+function render() {
+  resultsEl.hidden = docs.length === 0;
+  listEl.innerHTML = docs.map(d => {
+    const head = '<div class="result-head doc-head"><h3><span class="badge ' + (d.status === "done" ? "done" : d.status === "error" ? "error" : "pending") + '">' + d.status + "</span> " + esc(d.name) +
+      ' <span class="doc-fmt">' + esc(d.from) + " &rarr; " + esc(d.to || toSel.value) + "</span></h3>" +
+      (d.status === "done" ? '<button class="ghost" type="button" data-copy="' + d.id + '">Copy</button>' : "") + "</div>";
+    let body = "";
+    if (d.status === "done") {
+      body = '<div class="plaintext doc-text">' + (d.text ? esc(d.text) : '<i class="doc-empty">pandoc found no text in this file.</i>') + "</div>";
+      const meta = [fmtSize(d.file.size), d.text.length.toLocaleString() + " characters", d.ms + " ms"];
+      if (d.repaired) meta.push("file normalized for pandoc (openpyxl-style parts)");
+      body += '<div class="meta-line">' + meta.join(" · ") + "</div>";
+      if (d.warnings && d.warnings.length) body += '<details class="doc-warn"><summary>' + d.warnings.length + " pandoc warning" + (d.warnings.length > 1 ? "s" : "") + "</summary><ul>" + d.warnings.map(w => "<li>" + esc(warningText(w)) + "</li>").join("") + "</ul></details>";
+    } else if (d.status === "error") {
+      body = '<p class="doc-err">' + esc(d.error) + "</p>";
+    }
+    return '<div class="doc-item">' + head + body + "</div>";
+  }).join("");
+}
+
+listEl.addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-copy]");
+  if (!b) return;
+  const d = docs.find(x => x.id === +b.dataset.copy);
+  if (!d) return;
+  try { await navigator.clipboard.writeText(d.text || ""); b.textContent = "Copied"; }
+  catch (err) { b.textContent = "Copy failed"; }
+  setTimeout(() => (b.textContent = "Copy"), 1400);
+});
+
+/* all documents as one text: a single file as it is, several each under its own name */
+function allText() {
+  const done = docs.filter(d => d.status === "done");
+  if (done.length === 1) return done[0].text;
+  const plain = toSel.value === "plain";
+  return done.map(d => (plain ? d.name + "\n" + "=".repeat(Math.min(72, d.name.length)) : "# " + d.name) + "\n\n" + d.text.trim() + "\n").join("\n");
+}
+$("doc-copy").addEventListener("click", async () => {
+  const b = $("doc-copy");
+  try { await navigator.clipboard.writeText(allText()); b.textContent = "Copied"; }
+  catch (err) { b.textContent = "Copy failed"; }
+  setTimeout(() => (b.textContent = "Copy all"), 1400);
+});
+$("doc-dl").addEventListener("click", () => {
+  const done = docs.filter(d => d.status === "done");
+  if (!done.length) return;
+  const ext = toSel.value === "plain" ? ".txt" : ".md";
+  const name = done.length === 1 ? done[0].name.replace(/\.[^.]+$/, "") + ext : "documents" + ext;
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([allText()], { type: ext === ".md" ? "text/markdown" : "text/plain" }));
+  a.download = name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 4000);
+});
+$("doc-clear").addEventListener("click", () => {
+  docs.length = 0; render(); setStatus("Cleared. Drop a document.");
+});
+
+/* a changed output or image setting re-converts every document; the files are still in memory */
+function settingsChanged() {
+  A2T.sync();
+  if (!docs.length) return;
+  for (const d of docs) { if (d.status === "working") d.stale = true; else { d.status = "queued"; d.error = null; } }
+  render(); runQueue();
+}
+toSel.addEventListener("change", settingsChanged);
+imgSel.addEventListener("change", settingsChanged);
+
+window.addEventListener("intake:doc", (e) => {
+  docSection.hidden = false;
+  for (const f of e.detail) docs.push({ id: ++seq, file: f, name: f.name || "document", from: f.a2tFrom, status: "queued", text: "", warnings: [] });
+  render(); runQueue();
+});
+
+/* settings in the address bar (see A2T in the router): only when they differ from the default */
+const DOC_URL = [["docto", toSel, "gfm"], ["docimg", imgSel, "alt"]];
+for (const [k, node] of DOC_URL) {
+  const v = A2T.qs.get(k);
+  if (v != null && [...node.options].some(o => o.value === v)) node.value = v;
+}
+A2T.register("doc", {
+  el: docSection, keys: DOC_URL.map(x => x[0]),
+  params: () => Object.fromEntries(DOC_URL.map(([k, node, def]) => [k, node.value === def ? null : node.value])),
+  hasContent: () => docs.length > 0,
+});
+setStatus("Drop a Word, PowerPoint, Excel, OpenDocument, EPUB, HTML or LaTeX file. pandoc (16 MB) downloads on first use.");
+console.log("[doc] ready");
 </script>
 <script>
 /* (i) popups: hover or keyboard focus shows them on a desktop; a tap or Enter toggles them for touch */

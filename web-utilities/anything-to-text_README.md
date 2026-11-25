@@ -1,10 +1,10 @@
 # Anything to Text
 
-Drop in **anything** — an image, a PDF, or an audio/video recording — and get
-text back. Everything runs **in your browser**: files are never uploaded, only
-the models download (once) on first use.
+Drop in **anything** — an image, a PDF, a document, or an audio/video recording — and
+get text back. Everything runs **in your browser**: files are never uploaded, only
+the models and the document converter download (once) on first use.
 
-It is a composite of two pipelines behind a single drop zone that routes each
+It is a composite of three pipelines behind a single drop zone that routes each
 file by type:
 
 | Input | Engine | Output |
@@ -12,6 +12,7 @@ file by type:
 | Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) or **Tesseract** (fine-tuned English); optionally a second model to compare against | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper**, from quantized packs on a WebGPU engine ([whisper-pack](https://github.com/oaustegard/experiments/tree/main/whisper-pack)), or via Transformers.js | timestamped transcript, editable, with per-segment playback |
+| Documents (`docx`, `pptx`, `xlsx`, `odt`, EPUB, HTML, LaTeX, … — full list below) | **pandoc** 3.10, the official WebAssembly build, in a web worker | Markdown (GitHub or pandoc) or plain text |
 
 Drop several files at once and the relevant sections light up independently —
 e.g. a folder of scans plus one screen recording.
@@ -20,8 +21,10 @@ Routing validates by **file content, not name or the picker's type filter**. A
 file whose declared type/extension doesn't identify it — e.g. an arXiv PDF a phone
 saved as `2401.12345` with no `.pdf` suffix and a generic MIME type — is sniffed by
 its magic bytes after selection and, if recognized (PDF or a supported image
-format), re-tagged and routed to OCR. The file picker imposes no `accept` filter,
-so these extensionless files are selectable in the first place.
+format), re-tagged and routed to OCR. Word, PowerPoint, Excel, EPUB and ODT files saved
+without an extension are recognized by content too and routed to Documents. The file
+picker imposes no `accept` filter, so these extensionless files are selectable in the
+first place.
 
 ## Images & PDFs (OCR)
 
@@ -103,11 +106,40 @@ so these extensionless files are selectable in the first place.
 - **Edit existing** tab: load a prior recording plus its `.srt`/`.txt`, correct the
   text against per-segment playback, and re-download — no re-transcription needed.
 
+## Documents (pandoc)
+
+- **Formats**: any of these comes back as Markdown or plain text: Word (`.docx`),
+  PowerPoint (`.pptx`), Excel (`.xlsx`), OpenDocument text (`.odt`), EPUB, RTF, HTML, LaTeX,
+  reStructuredText, Org, Jupyter notebook (`.ipynb`), CSV/TSV, Typst, DocBook, FictionBook,
+  OPML, Textile, MediaWiki, Djot, AsciiDoc, Markdown, BibTeX/BibLaTeX (`.bib`) and RIS.
+- **pandoc 3.10**, the official WebAssembly build (npm package `pandoc-wasm` 1.1.0), runs
+  in a web worker on your device, so nothing is uploaded. The binary is 58 MB (a 16 MB
+  gzipped download); it is fetched once, on the first document, and kept in the browser's
+  Cache Storage.
+- **Output**: Markdown (GitHub), the default; Markdown (pandoc); or Plain text.
+- **Images**: pictures embedded in a document cannot come along as files, so this setting
+  chooses what stands in for each one: its alt text (**Alt text only**, the default), a
+  Markdown image link to its path inside the document (**Keep image links**), or nothing
+  (**Drop**). A captioned figure becomes its caption. Changing **Output** or **Images**
+  converts the documents already dropped again.
+- **Spreadsheets** come out as one heading and one table per sheet, including workbooks
+  written by openpyxl or pandas, which pandoc 3.10 cannot read unaided; the page adjusts
+  them before converting.
+- **Not read**: legacy binary Office files (`.doc`, `.xls`, `.ppt`) and OpenDocument
+  slides and sheets (`.odp`, `.ods`) are not read by pandoc. The page says so and asks for
+  `.docx`, `.pptx`, `.xlsx` or `.odt` instead. PDFs go to OCR (above).
+- **Exports**: each document has its own **Copy** button. **Copy all** and **Download**
+  take every converted document, each under its file name when there is more than one
+  (`.md`, or `.txt` for plain text).
+- **Address bar**: `?mode=doc` opens the page in Documents mode, and `docto` and `docimg`
+  carry the two settings. `?pandocwasm=<url>` changes where `pandoc.wasm` is fetched from
+  (unpkg by default).
+
 ## Comparing two models
 
-**Compare with** (in both sections) reads the same input with a second model and marks
-the words the two disagree on. Two models rarely make the same mistake, so the marked
-words are where to look for errors.
+**Compare with** (in the OCR and transcription sections) reads the same input with a
+second model and marks the words the two disagree on. Two models rarely make the same
+mistake, so the marked words are where to look for errors.
 
 - **OCR**: each OCRed page is read by both models from the same render, and the card shows
   the two readings side by side with the count of differences and the share of words that
@@ -137,7 +169,7 @@ their default.
 
 | Key | Control | Values (default first) |
 |---|---|---|
-| `mode` | which section the page opens on | `ocr`, `transcribe` (none: all) |
+| `mode` | which section the page opens on | `ocr`, `transcribe`, `doc` (none: all) |
 | `ocr`, `ocr2` | OCR model, Compare with | `indra`, `tiny`, `small`, `tesseract` |
 | `math` | Math as LaTeX | `auto`, `on`, `off` |
 | `dpi`, `batch` | PDF DPI, Batch size | 200 (72-400), 10 (1-50) |
@@ -149,13 +181,15 @@ their default.
 | `lang` | Language | `auto`, or a code such as `de` |
 | `task` | Task | `transcribe`, `translate` |
 | `tab` | Transcribe or Edit existing tab | (none), `edit` |
+| `docto` | Documents: Output | `gfm`, `markdown`, `plain` |
+| `docimg` | Documents: Images | `alt`, `keep`, `drop` |
 
-While only one section has been used, the page also writes `mode` (OCR or transcription).
-A link with `mode` opens the page in that mode: its section shows before any file is added,
-the other section stays hidden, and the drop zone asks for that kind of file. **Use all
-modes**, under the drop zone, returns the page to taking every kind of file, as does
-dropping a file of the other kind; from then on the session writes no `mode`. A link
-without `mode` shows at load every section whose keys it carries.
+While only one section has been used, the page also writes `mode` (OCR, transcription or
+documents). A link with `mode` opens the page in that mode: its section shows before any
+file is added, the other sections stay hidden, and the drop zone asks for that kind of
+file. **Use all modes**, under the drop zone, returns the page to taking every kind of
+file, as does dropping a file of another kind; from then on the session writes no `mode`.
+A link without `mode` shows at load every section whose keys it carries.
 
 ## Privacy
 
