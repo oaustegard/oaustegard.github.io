@@ -99,6 +99,7 @@ button.ghost:disabled { color: var(--a2t-faint); border-color: var(--a2t-line); 
 .page .pg-name { color: var(--fg); word-break: break-all; }
 .page .meta { font-size: 11px; color: var(--a2t-faint); font-variant-numeric: tabular-nums; }
 .page .copy-page, .page .reocr { padding: 5px 11px; font-size: 11px; }
+.page .rot { padding: 4px 10px; font-size: 15px; line-height: 1; }
 .page .hdr-actions { margin-left: auto; display: flex; gap: 8px; flex-wrap: wrap; }
 .src { font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase; padding: 3px 9px; border-radius: 999px; border: 1px solid var(--a2t-line); color: var(--a2t-dim); }
 .src.ocr { color: var(--a2t-accent); border-color: color-mix(in srgb, var(--a2t-accent) 45%, transparent); }
@@ -732,7 +733,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-25-wide-layout"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-25-rotate"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -1374,6 +1375,21 @@ function meanConfidence(res, items) {
   return items.reduce((a, r) => a + (r.confidence || 0), 0) / items.length;
 }
 
+/* Manual rotation: pg.rot is 0, 90, 180 or 270 degrees clockwise, applied to the rendered page
+   before any model reads it, so every model, the preview and the word boxes share one frame. */
+function rotateCanvas(src, deg) {
+  deg = ((deg % 360) + 360) % 360;
+  if (!deg) return src;
+  const swap = deg === 90 || deg === 270;
+  const cv = document.createElement("canvas");
+  cv.width = swap ? src.height : src.width; cv.height = swap ? src.width : src.height;
+  const ctx = cv.getContext("2d");
+  ctx.translate(cv.width / 2, cv.height / 2); ctx.rotate(deg * Math.PI / 180);
+  ctx.drawImage(src, -src.width / 2, -src.height / 2);
+  return cv;
+}
+async function renderPage(pg, scale) { return rotateCanvas(await pg.render(scale), pg.rot || 0); }
+
 /* Downscaled preview data URL so each card can show the rendered page next to its text
    without holding full-resolution canvases in memory. */
 function makePreview(canvas, maxW) {
@@ -1491,7 +1507,7 @@ async function readPrimary(pg) {
 
   /* OCR path: images, forced-OCR PDF pages, and text-less PDF pages. The model loads
      lazily here, so a PDF that is entirely born-digital never touches the weights. */
-  const canvas = await pg.render(scale);
+  const canvas = await renderPage(pg, scale);
   pg.preview = makePreview(canvas);
   await readOcr(primaryModel(), pg, canvas, "primary");
   pg.ms = Math.round(performance.now() - t0);
@@ -1509,7 +1525,7 @@ async function readCompare(pg, canvas) {
   updatePage(pg);
   const t0 = performance.now();
   try {
-    if (!canvas) canvas = await pg.render(clampDpi() / 72);
+    if (!canvas) canvas = await renderPage(pg, clampDpi() / 72);
     setStatus("Comparing " + pg.image + " with " + OCR_LABEL[vs] + "...");
     await readOcr(vs, pg.alt, canvas, "compare");
     pg.alt.status = "done";
@@ -1703,6 +1719,32 @@ async function reprocessPage(id, mode) {
   refreshControls();
 }
 
+/* Manual rotation. The preview turns at once; the page is read again once the clicks stop
+   (so a half turn is two clicks and one read), by every model that is on. */
+const rotTimers = new Map();
+async function rotatedDataUrl(url, deg) {
+  const img = new Image(); img.src = url; await img.decode();
+  const cv = document.createElement("canvas");
+  cv.width = img.naturalWidth; cv.height = img.naturalHeight;
+  cv.getContext("2d").drawImage(img, 0, 0);
+  return rotateCanvas(cv, deg).toDataURL("image/jpeg", 0.85);
+}
+async function rotatePage(id, deg) {
+  const pg = pages[id];
+  if (!pg || (running && !rotTimers.has(id))) { if (running) setStatus("Rotate once the current read has finished."); return; }
+  pg.rot = (((pg.rot || 0) + deg) % 360 + 360) % 360;
+  if (pg.preview) { try { pg.preview = await rotatedDataUrl(pg.preview, deg); } catch (e) { console.error("[rotate] preview", e); } }
+  pg.status = "pending"; pg.alt = null; pg.error = null; pg.text = ""; pg.lines = []; pg.segments = [];
+  updatePage(pg);
+  clearTimeout(rotTimers.get(id));
+  const fire = () => {
+    if (running) { rotTimers.set(id, setTimeout(fire, 500)); return; }
+    rotTimers.delete(id);
+    reprocessPage(id, "ocr");
+  };
+  rotTimers.set(id, setTimeout(fire, 700));
+}
+
 /* ---------- rendering (additive: each page block updates in place) ---------- */
 function renderPages() {
   pagesEl.innerHTML = "";
@@ -1731,6 +1773,7 @@ function pageInner(pg) {
         ? pg.lines.length + ' lines | exact'
         : pg.ms + 'ms | ' + pg.lines.length + ' lines | conf ' + (pg.meanConf * 100).toFixed(1) + '%') + '</span>'
     : (pg.status === "error" ? '<span class="meta">failed</span>' : "");
+  const rotMeta = pg.rot ? '<span class="meta">turned ' + pg.rot + '\u00b0</span>' : "";
   /* PDF pages can swap source either way: text->OCR when the layer is partial, and
      OCR->text to escape a bad recognition back to the exact embedded text. */
   let convBtn = "";
@@ -1739,6 +1782,11 @@ function pageInner(pg) {
     else if (pg.source === "ocr") convBtn = '<button class="ghost retext" data-pg="' + pg.id + '">Extract text instead</button>';
   }
   const copyBtn = done ? '<button class="ghost copy-page" data-pg="' + pg.id + '">Copy</button>' : "";
+  /* a page read from a PDF's text layer is exact whatever its orientation; every other page can be turned */
+  const rotBtns = (pg.preview && pg.source !== "text")
+    ? '<button class="ghost rot" data-pg="' + pg.id + '" data-deg="-90" title="Rotate 90\u00b0 counter-clockwise and read again" aria-label="Rotate counter-clockwise">&#x21BA;</button>'
+      + '<button class="ghost rot" data-pg="' + pg.id + '" data-deg="90" title="Rotate 90\u00b0 clockwise and read again" aria-label="Rotate clockwise">&#x21BB;</button>'
+    : "";
   const preview = previewHtml(pg);
   const textOut = pg.status === "error"
     ? '<div class="out err">' + escapeHtml(pg.error || "error") + '</div>'
@@ -1749,8 +1797,8 @@ function pageInner(pg) {
         : '<div class="out muted">working&#x2026;</div>');
   const body = '<div class="cols' + (done && pg.alt && pg.source === "ocr" ? ' has-cmp' : '') + '">' + preview + '<div class="col-text">' + textOut + '</div></div>';
   return '<h2><span class="badge ' + pg.status + '">' + pg.status + '</span> '
-    + '<span class="pg-name">' + escapeHtml(pg.image) + '</span> ' + srcBadge + meta
-    + '<span class="hdr-actions">' + convBtn + copyBtn + '</span></h2>' + body;
+    + '<span class="pg-name">' + escapeHtml(pg.image) + '</span> ' + srcBadge + meta + rotMeta
+    + '<span class="hdr-actions">' + rotBtns + convBtn + copyBtn + '</span></h2>' + body;
 }
 
 /* Both readings side by side, the words they disagree on marked. The diff is cached on the
@@ -1825,7 +1873,7 @@ function allMarkdown() {
 }
 function asJson() {
   return JSON.stringify(pages.map((p, i) => ({
-    page: i + 1, image: p.image, source: p.source, engine: p.engine || undefined, text: p.text, lines: p.lines,
+    page: i + 1, image: p.image, source: p.source, engine: p.engine || undefined, rotation: p.rot || undefined, text: p.text, lines: p.lines,
     markdown: p.markdown || undefined,
     mean_conf: p.meanConf,
     page_px: { w: p.pageW || 0, h: p.pageH || 0 },
@@ -2068,6 +2116,8 @@ pagesEl.addEventListener("click", async e => {
   if (reBtn) { await reprocessPage(Number(reBtn.dataset.pg), "ocr"); return; }
   const txBtn = e.target.closest(".retext");
   if (txBtn) { await reprocessPage(Number(txBtn.dataset.pg), "text"); return; }
+  const rotBtn = e.target.closest(".rot");
+  if (rotBtn) { await rotatePage(Number(rotBtn.dataset.pg), Number(rotBtn.dataset.deg)); return; }
   const prev = e.target.closest(".preview");
   if (prev) { const z = (Number(prev.dataset.zoom) || 0) + 1; prev.dataset.zoom = z > 2 ? 0 : z; return; }
   const btn = e.target.closest(".copy-page");

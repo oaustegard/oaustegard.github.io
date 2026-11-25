@@ -53,6 +53,12 @@ so these extensionless files are selectable in the first place.
   instant, no model). Only text-less pages (scans) fall through to OCR, so a
   born-digital PDF never loads an OCR model. Any page can be forced through OCR
   with **Re-run as OCR**.
+- **Rotate**: each OCRed page card has counter-clockwise and clockwise buttons (↺ ↻)
+  for a scan or photo that came in sideways or upside down. The preview turns at once
+  and, once the clicks stop, the page is read again with every model that is on, from
+  the turned pixels, so the text, the word boxes and the exports share one frame. The
+  turn is kept when results are cleared and written to the `.json` as `rotation`.
+  Indra turns a sideways page by itself; the PP-OCRv6 and Tesseract models do not.
 - **PDF layers**: by default a page is read flattened, as a viewer shows it. Every
   image is composited, including the JBIG2 and JPEG 2000 layers that compressed scans
   use for the text over a JPEG background, and filled-in form fields and FreeText notes
