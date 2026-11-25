@@ -113,14 +113,13 @@ first place.
   reStructuredText, Org, Jupyter notebook (`.ipynb`), CSV/TSV, Typst, DocBook, FictionBook,
   OPML, Textile, MediaWiki, Djot, AsciiDoc, Markdown, BibTeX/BibLaTeX (`.bib`) and RIS.
 - **pandoc 3.10**, the official WebAssembly build (npm package `pandoc-wasm` 1.1.0), runs
-  in a web worker on your device, so nothing is uploaded. The binary is 58 MB, a 10.8 MB
-  brotli download from the site's R2 storage (unpkg's 16 MB gzip copy if that fails); it is
+  in a web worker on your device, so nothing is uploaded. It is an 11 MB download,
   fetched once, on the first document, and kept in the browser's Cache Storage.
 - **Output**: Markdown (GitHub), the default; Markdown (pandoc); or Plain text.
 - **Images**: **Read with OCR**, the default, sends each picture in the document (PNG,
-  JPEG, GIF, BMP or WebP, and big enough to hold text) to the OCR section as a page, and
-  puts what it reads where the picture was, quoted under the picture's name. Until then the
-  text shows a placeholder. Pictures that are too small, or in a format the browser cannot
+  JPEG, GIF, BMP or WebP, at least 24 px on a side) to the on-device OCR section as a page,
+  and puts what it reads where the picture was, quoted under the picture's name. While OCR
+  works, the picture's place shows "reading with OCR…". Pictures that are too small, or in a format the browser cannot
   draw (EMF, WMF, TIFF, SVG), keep their alt text. The other choices are the alt text alone
   (**Alt text only**), a Markdown image link to the picture's path inside the document
   (**Keep image links**), or nothing (**Drop**). A captioned figure keeps its caption.
@@ -137,7 +136,7 @@ first place.
   (`.md`, or `.txt` for plain text).
 - **Address bar**: `?mode=doc` opens the page in Documents mode, and `docto` and `docimg`
   carry the two settings. `?pandocwasm=<url>` changes where `pandoc.wasm` is fetched from
-  (by default the R2 copy, then unpkg).
+  (by default a brotli copy on the site's R2 storage, then unpkg).
 
 ## Comparing two models
 
