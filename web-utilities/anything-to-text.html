@@ -850,7 +850,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-25-docimg-ocr"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-25-pandoc-br"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -3839,16 +3839,19 @@ console.log("[ready] Local Transcriber initialized");
 
    pandoc runs in a module worker: one conversion is a synchronous call into the wasm and a
    large workbook can take seconds, which would freeze the page on the main thread. The
-   58 MB binary (16 MB gzipped on the wire) is kept in Cache Storage after the first
+   58 MB binary (10.8 MB brotli on the wire) is kept in Cache Storage after the first
    download, so later visits start from disk. The worker keeps the bytes, so a conversion
    that kills the instance (pandoc exits on some malformed input) costs one fresh
    instantiation rather than another download. */
 const relay = window.a2tRelay || { log() {}, warn() {}, error() {} };
 const PANDOC_PKG = "pandoc-wasm@1.1.0";   /* pandoc 3.10 */
 const PANDOC_QS = new URLSearchParams(location.search);
-const PANDOC_WASM = PANDOC_QS.get("pandocwasm") || "https://unpkg.com/" + PANDOC_PKG + "/src/pandoc.wasm";
+/* The npm binary unchanged (sha256 b47c9de52b5b...), stored in R2 brotli-compressed (q11): a 10.8 MB
+   download where unpkg's gzip is 16 MB. unpkg is the fallback when R2 cannot be reached. */
+const PANDOC_R2 = "https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/models/pandoc/pandoc-3.10-b47c9de52b5b.wasm";
+const PANDOC_WASM = PANDOC_QS.get("pandocwasm") ? [PANDOC_QS.get("pandocwasm")] : [PANDOC_R2, "https://unpkg.com/" + PANDOC_PKG + "/src/pandoc.wasm"];
 const PANDOC_CORE = "https://cdn.jsdelivr.net/npm/" + PANDOC_PKG + "/src/core.js/+esm";
-const PANDOC_BYTES = 58580800;            /* unpacked size: the gzipped Content-Length is useless for progress */
+const PANDOC_BYTES = 58580800;            /* unpacked size: the compressed Content-Length is useless for progress */
 const FFLATE = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js";
 
 /* A Lua filter shapes the text. Images cannot come along as files, so each becomes its alt
@@ -3892,7 +3895,7 @@ const IMAGE_FILTER = mode => [
 /* The worker's code, written as a function so this module's parser checks it too; it runs
    only inside the worker, where it is the module body after the pandoc-wasm import. */
 function pandocWorker(createPandocInstance, cfg) {
-  const WASM_URL = cfg.wasm, TOTAL = cfg.total;
+  const SOURCES = cfg.wasm, CACHE_KEY = SOURCES[0], TOTAL = cfg.total;
   let bytes = null, inst = null;
   /* Two kinds of Office file that pandoc 3.10 misreads, both written by openpyxl (and so by
      pandas): relationships with absolute part names (Target="/xl/worksheets/sheet1.xml") fail
@@ -3924,12 +3927,20 @@ function pandocWorker(createPandocInstance, cfg) {
     try { cache = await caches.open("a2t-pandoc"); } catch (e) { cache = null; }
     if (cache) {
       try {
-        const hit = await cache.match(WASM_URL);
+        const hit = await cache.match(CACHE_KEY);
         if (hit) { postMessage({ type: "progress", loaded: TOTAL, total: TOTAL, cached: true }); return { buf: await hit.arrayBuffer(), cached: true }; }
       } catch (e) { /* a broken cache entry: download again */ }
     }
-    const res = await fetch(WASM_URL);
-    if (!res.ok) throw new Error("pandoc.wasm download failed: HTTP " + res.status);
+    let res = null, why = [];
+    for (const url of SOURCES) {
+      try {
+        const r = await fetch(url);
+        if (r.ok) { res = r; break; }
+        why.push(url + ": HTTP " + r.status);
+      } catch (e) { why.push(url + ": " + (e && e.message || e)); }
+      postMessage({ type: "note", text: "pandoc.wasm source failed, trying the next: " + why[why.length - 1] });
+    }
+    if (!res) throw new Error("pandoc.wasm download failed (" + why.join("; ") + ")");
     const reader = res.body.getReader(), parts = [];
     let loaded = 0, last = 0;
     for (;;) {
@@ -3942,7 +3953,7 @@ function pandocWorker(createPandocInstance, cfg) {
     const buf = new Uint8Array(loaded);
     let o = 0; for (const p of parts) { buf.set(p, o); o += p.length; }
     if (cache) {
-      try { await cache.put(WASM_URL, new Response(buf, { headers: { "Content-Type": "application/wasm" } })); }
+      try { await cache.put(CACHE_KEY, new Response(buf, { headers: { "Content-Type": "application/wasm" } })); }
       catch (e) { postMessage({ type: "note", text: "could not keep pandoc.wasm in Cache Storage: " + (e && e.message || e) }); }
     }
     return { buf: buf.buffer, cached: false };
@@ -4262,7 +4273,7 @@ A2T.register("doc", {
   params: () => Object.fromEntries(DOC_URL.map(([k, node, def]) => [k, node.value === def ? null : node.value])),
   hasContent: () => docs.length > 0,
 });
-setStatus("Drop a Word, PowerPoint, Excel, OpenDocument, EPUB, HTML or LaTeX file. pandoc (16 MB) downloads on first use.");
+setStatus("Drop a Word, PowerPoint, Excel, OpenDocument, EPUB, HTML or LaTeX file. pandoc (11 MB) downloads on first use.");
 console.log("[doc] ready");
 </script>
 <script>

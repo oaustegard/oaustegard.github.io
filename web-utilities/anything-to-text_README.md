@@ -113,9 +113,9 @@ first place.
   reStructuredText, Org, Jupyter notebook (`.ipynb`), CSV/TSV, Typst, DocBook, FictionBook,
   OPML, Textile, MediaWiki, Djot, AsciiDoc, Markdown, BibTeX/BibLaTeX (`.bib`) and RIS.
 - **pandoc 3.10**, the official WebAssembly build (npm package `pandoc-wasm` 1.1.0), runs
-  in a web worker on your device, so nothing is uploaded. The binary is 58 MB (a 16 MB
-  gzipped download); it is fetched once, on the first document, and kept in the browser's
-  Cache Storage.
+  in a web worker on your device, so nothing is uploaded. The binary is 58 MB, a 10.8 MB
+  brotli download from the site's R2 storage (unpkg's 16 MB gzip copy if that fails); it is
+  fetched once, on the first document, and kept in the browser's Cache Storage.
 - **Output**: Markdown (GitHub), the default; Markdown (pandoc); or Plain text.
 - **Images**: **Read with OCR**, the default, sends each picture in the document (PNG,
   JPEG, GIF, BMP or WebP, and big enough to hold text) to the OCR section as a page, and
@@ -137,7 +137,7 @@ first place.
   (`.md`, or `.txt` for plain text).
 - **Address bar**: `?mode=doc` opens the page in Documents mode, and `docto` and `docimg`
   carry the two settings. `?pandocwasm=<url>` changes where `pandoc.wasm` is fetched from
-  (unpkg by default).
+  (by default the R2 copy, then unpkg).
 
 ## Comparing two models
 
