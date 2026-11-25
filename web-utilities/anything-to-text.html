@@ -505,8 +505,9 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
         </div>
         <div>
           <label class="field" for="doc-images">Images</label>
-          <select id="doc-images" title="Embedded pictures cannot come along as files. Alt text keeps each picture's description in its place; Drop removes them.">
-            <option value="alt" selected>Alt text only</option>
+          <select id="doc-images" title="Read with OCR sends each picture in the document to the OCR section and puts the text it reads where the picture was. Alt text keeps each picture's description in its place; Drop removes pictures.">
+            <option value="ocr" selected>Read with OCR</option>
+            <option value="alt">Alt text only</option>
             <option value="keep">Keep image links</option>
             <option value="drop">Drop</option>
           </select>
@@ -849,7 +850,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-25-pandoc"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-25-docimg-ocr"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -1149,6 +1150,7 @@ function addImage(file) {
   const id = pages.length;
   pages.push({
     id, image: file.name || ("image-" + (id + 1)), kind: "image",
+    origin: file.a2tOrigin || null,   /* set by the document engine for an image taken out of a document */
     status: "pending", text: "", lines: [], segments: [], pageW: 0, pageH: 0,
     meanConf: 0, ms: 0, error: null, source: null, preview: null, forceOcr: false, forceText: false,
     render: async () => {
@@ -1968,6 +1970,9 @@ function renderPages() {
 function updatePage(pg) {
   const div = $("#pg-" + pg.id);
   if (div) div.innerHTML = pageInner(pg);
+  /* an image from a document: hand its reading back, so the document text carries it */
+  if (pg.origin && (pg.status === "done" || pg.status === "error"))
+    window.dispatchEvent(new CustomEvent("ocr:page", { detail: { origin: pg.origin, status: pg.status, text: pg.text || "", markdown: pg.markdown || null, error: pg.error } }));
 }
 function escapeHtml(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -2194,6 +2199,8 @@ function afterRun() {
   rerunAfter = false;
   if (what === "compare") compareChanged();
   else if (what) { resetResults(); autoRun(); }
+  /* pages added while the batch ran (pictures from a second document, say) */
+  else autoRun();
 }
 
 /* The compare model changed. The primary readings stay; readings by an old compare model
@@ -3851,24 +3858,35 @@ const FFLATE = "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js";
    otherwise keep as raw HTML around the text. */
 const IMAGE_FILTER = mode => [
   'local mode = "' + mode + '"',
-  "function Span(el) return el.content end",
-  "function Div(el) return el.content end",
-  "function Image(el)",
-  '  if mode == "drop" then return {} end',
-  '  if mode == "keep" then el.attr = pandoc.Attr() return el end',
-  "  return el.caption",
-  "end",
-  "function Figure(el)",
+  /* OCR: a marker naming the picture's path in the document and its alt text, both hex so no
+     writer escapes them; the page swaps each marker for what OCR reads */
+  "local function hex(s) return (s:gsub('.', function(c) return string.format('%02x', c:byte()) end)) end",
+  /* two passes: figures first, so a captioned figure can clear its picture's alt text (the
+     caption follows it, and would otherwise print twice); then the pictures themselves */
+  "local function figure(el)",
   '  if mode == "drop" then return {} end',
   "  local c = pandoc.utils.blocks_to_inlines(el.caption.long)",
-  '  if mode == "keep" then',
+  '  if mode == "keep" or mode == "ocr" then',
   "    local out = pandoc.List(el.content)",
+  '    if mode == "ocr" and #c > 0 then',
+  "      out = out:map(function(b) return b:walk({ Image = function(i) i.caption = {} return i end }) end)",
+  "    end",
   "    if #c > 0 then out:insert(pandoc.Plain(c)) end",
   "    return out",
   "  end",
   "  if #c > 0 then return pandoc.Plain(c) end",
   "  return el.content",
   "end",
+  "local function image(el)",
+  '  if mode == "drop" then return {} end',
+  '  if mode == "keep" then el.attr = pandoc.Attr() return el end',
+  '  if mode == "ocr" then return pandoc.Str("A2TIMG" .. hex(el.src) .. "Y" .. hex(pandoc.utils.stringify(el.caption)) .. "Z") end',
+  "  return el.caption",
+  "end",
+  "return {",
+  "  { Figure = figure },",
+  "  { Span = function(el) return el.content end, Div = function(el) return el.content end, Image = image },",
+  "}",
 ].join("\n");
 
 /* The worker's code, written as a function so this module's parser checks it too; it runs
@@ -3949,6 +3967,8 @@ function pandocWorker(createPandocInstance, cfg) {
       /* a bibliography has no body: its entries are document metadata, which only a standalone
          Markdown file prints (as YAML front matter), so plain text falls back to Markdown */
       if (/^(biblatex|bibtex|ris)$/.test(m.from)) { opts.standalone = true; if (m.to === "plain") opts.to = "markdown"; }
+      /* pictures for OCR: pandoc writes each to media/<its path in the document> */
+      if (m.images === "ocr") opts["extract-media"] = "media";
       /* a workbook is checked before converting, since its inline strings vanish without an error;
          a document or deck only when pandoc fails on an absolute part name */
       let file = m.file, repaired = false;
@@ -3958,7 +3978,7 @@ function pandocWorker(createPandocInstance, cfg) {
         const fixed = await normalizeOffice(file);
         if (fixed) { r = await p.convert(opts, null, { [m.name]: fixed, "images.lua": m.filter }); repaired = true; }
       }
-      postMessage({ type: "result", id: m.id, text: r.stdout, stderr: r.stderr, warnings: r.warnings || [], repaired, ms: Math.round(performance.now() - t0) });
+      postMessage({ type: "result", id: m.id, text: r.stdout, stderr: r.stderr, warnings: r.warnings || [], media: r.mediaFiles || {}, repaired, ms: Math.round(performance.now() - t0) });
     } catch (err) {
       /* pandoc exiting or trapping leaves the instance unusable: start the next file on a new one */
       inst = null;
@@ -4033,7 +4053,7 @@ function convertOne(d) {
   const id = ++seq;
   return new Promise(resolve => {
     waiting.set(id, resolve);
-    worker.postMessage({ type: "convert", id, name: d.name, from: d.from, to: toSel.value, filter: IMAGE_FILTER(imgSel.value), file: d.file });
+    worker.postMessage({ type: "convert", id, name: d.name, from: d.from, to: toSel.value, images: imgSel.value, filter: IMAGE_FILTER(imgSel.value), file: d.file });
   });
 }
 
@@ -4059,6 +4079,7 @@ async function runQueue() {
         relay.error("pandoc convert failed", { name: d.name, from: d.from, e: d.error });
       } else {
         d.status = "done"; d.text = r.text; d.warnings = r.warnings; d.ms = r.ms; d.to = to; d.repaired = r.repaired;
+        if (images === "ocr") await sendImages(d, r.media);
         relay.log("pandoc convert", { name: d.name, from: d.from, to, images, bytes: d.file.size, chars: r.text.length, warnings: r.warnings.length, repaired: r.repaired, ms: r.ms });
       }
       /* a setting changed while this file converted: read it again with the new one */
@@ -4069,6 +4090,83 @@ async function runQueue() {
     setStatus(ok + " converted" + (bad ? " · " + bad + " failed" : "") + ".");
   })();
   try { await busy; } finally { busy = null; }
+}
+
+/* ---------- pictures inside documents, read by the OCR section ----------
+   With Images set to Read with OCR, pandoc leaves a marker where each picture sat and hands
+   over the pictures. Each raster picture big enough to hold text goes to the OCR section as
+   a page; its reading comes back on an "ocr:page" event and replaces the marker. d.ocr keeps
+   one entry per picture path for the life of the document, so converting it again (another
+   Output setting) reuses the readings instead of sending the pictures a second time. */
+const MARKER = /A2TIMG([0-9a-f]*)Y([0-9a-f]*)Z/g;
+const unhex = h => { try { return new TextDecoder().decode(new Uint8Array((h.match(/../g) || []).map(x => parseInt(x, 16)))); } catch (e) { return ""; } };
+const RASTER = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", bmp: "image/bmp", webp: "image/webp" };
+const MIN_SIDE = 24, MIN_AREA = 12000;   /* smaller pictures are bullets, icons and rules, not text */
+
+async function sendImages(d, media) {
+  d.ocr = d.ocr || {};
+  const out = [];
+  for (const m of d.text.matchAll(MARKER)) {
+    const src = unhex(m[1]);
+    if (d.ocr[src]) continue;
+    const base = src.split("/").pop() || src;
+    const entry = d.ocr[src] = { status: "skip", name: base };
+    const blob = media["media/" + src] || Object.entries(media).find(([k]) => k.endsWith("/" + src))?.[1];
+    const type = RASTER[(base.split(".").pop() || "").toLowerCase()];
+    if (!blob) { entry.why = "not extracted"; continue; }
+    if (!type) { entry.why = "not a raster image (" + (base.split(".").pop() || "?") + ")"; continue; }
+    try {
+      const bmp = await createImageBitmap(new Blob([blob], { type }));
+      const w = bmp.width, h = bmp.height;
+      bmp.close && bmp.close();
+      if (Math.min(w, h) < MIN_SIDE || w * h < MIN_AREA) { entry.why = "too small to hold text (" + w + "×" + h + ")"; continue; }
+    } catch (e) { entry.why = "could not decode"; continue; }
+    const f = new File([blob], d.name + " › " + base, { type });
+    f.a2tOrigin = { doc: d.id, key: src };
+    entry.status = "pending";
+    out.push(f);
+  }
+  if (out.length) {
+    relay.log("doc images to ocr", { name: d.name, images: out.length });
+    window.dispatchEvent(new CustomEvent("intake:ocr", { detail: out }));
+  }
+}
+
+window.addEventListener("ocr:page", (e) => {
+  const o = e.detail.origin, d = docs.find(x => x.id === o.doc);
+  if (!d || !d.ocr || !d.ocr[o.key]) return;
+  Object.assign(d.ocr[o.key], { status: e.detail.status, text: (e.detail.text || "").trim(), md: (e.detail.markdown || "").trim(), error: e.detail.error || null });
+  render();
+});
+
+/* The document's text with each marker replaced: a picture's first appearance by what OCR
+   read (quoted under the picture's name and alt text), a repeat or a picture with nothing
+   to read by its alt text. Inside a table row the reading is folded onto one line. */
+function docText(d) {
+  if (!d.text || !d.ocr) return d.text || "";
+  const plain = d.to === "plain", seen = new Set();
+  const out = d.text.split("\n").map(line => line.replace(MARKER, (_, h, a) => {
+    const src = unhex(h), alt = unhex(a), o = d.ocr[src] || {};
+    const first = !seen.has(src); seen.add(src);
+    const label = (o.name || src) + (alt && alt !== o.name ? ": " + alt : "");
+    if (o.status === "pending") return "[image " + label + ", reading with OCR…]";
+    const read = o.status === "done" && first ? (plain ? o.text : (o.md || o.text)) : "";
+    if (!read) return alt || (!first && o.status === "done" && o.text ? "(image " + (o.name || src) + ", as above)" : "");
+    if (/^\s*\|/.test(line)) return label + ": " + read.replace(/\s*\n\s*/g, " ").replace(/\|/g, "\\|");
+    return plain ? "\n\n[image " + label + "]\n" + read + "\n\n"
+                 : "\n\n> *image " + label + "*\n>\n" + read.split("\n").map(l => "> " + l).join("\n").replace(/> $/gm, ">") + "\n\n";
+  })).join("\n");
+  return out.replace(/\n{3,}/g, "\n\n").replace(/^\n+/, "");
+}
+function imageNote(d) {
+  const all = Object.values(d.ocr || {});
+  if (!all.length) return "";
+  const sent = all.filter(o => o.status !== "skip"), read = sent.filter(o => o.status === "done").length;
+  const parts = [];
+  if (sent.length) parts.push(sent.length + " picture" + (sent.length > 1 ? "s" : "") + " sent to OCR, " + read + " read" + (read < sent.length ? " (the rest wait in the OCR section)" : ""));
+  const skip = all.length - sent.length;
+  if (skip) parts.push(skip + " left as alt text (" + [...new Set(all.filter(o => o.status === "skip").map(o => o.why))].join("; ") + ")");
+  return parts.join(" · ");
 }
 
 function warningText(w) {
@@ -4085,8 +4183,11 @@ function render() {
       (d.status === "done" ? '<button class="ghost" type="button" data-copy="' + d.id + '">Copy</button>' : "") + "</div>";
     let body = "";
     if (d.status === "done") {
-      body = '<div class="plaintext doc-text">' + (d.text ? esc(d.text) : '<i class="doc-empty">pandoc found no text in this file.</i>') + "</div>";
-      const meta = [fmtSize(d.file.size), d.text.length.toLocaleString() + " characters", d.ms + " ms"];
+      const text = docText(d);
+      body = '<div class="plaintext doc-text">' + (text ? esc(text) : '<i class="doc-empty">pandoc found no text in this file.</i>') + "</div>";
+      const meta = [fmtSize(d.file.size), text.length.toLocaleString() + " characters", d.ms + " ms"];
+      const note = imageNote(d);
+      if (note) meta.push(note);
       if (d.repaired) meta.push("file normalized for pandoc (openpyxl-style parts)");
       body += '<div class="meta-line">' + meta.join(" · ") + "</div>";
       if (d.warnings && d.warnings.length) body += '<details class="doc-warn"><summary>' + d.warnings.length + " pandoc warning" + (d.warnings.length > 1 ? "s" : "") + "</summary><ul>" + d.warnings.map(w => "<li>" + esc(warningText(w)) + "</li>").join("") + "</ul></details>";
@@ -4102,7 +4203,7 @@ listEl.addEventListener("click", async (e) => {
   if (!b) return;
   const d = docs.find(x => x.id === +b.dataset.copy);
   if (!d) return;
-  try { await navigator.clipboard.writeText(d.text || ""); b.textContent = "Copied"; }
+  try { await navigator.clipboard.writeText(docText(d)); b.textContent = "Copied"; }
   catch (err) { b.textContent = "Copy failed"; }
   setTimeout(() => (b.textContent = "Copy"), 1400);
 });
@@ -4110,9 +4211,9 @@ listEl.addEventListener("click", async (e) => {
 /* all documents as one text: a single file as it is, several each under its own name */
 function allText() {
   const done = docs.filter(d => d.status === "done");
-  if (done.length === 1) return done[0].text;
+  if (done.length === 1) return docText(done[0]);
   const plain = toSel.value === "plain";
-  return done.map(d => (plain ? d.name + "\n" + "=".repeat(Math.min(72, d.name.length)) : "# " + d.name) + "\n\n" + d.text.trim() + "\n").join("\n");
+  return done.map(d => (plain ? d.name + "\n" + "=".repeat(Math.min(72, d.name.length)) : "# " + d.name) + "\n\n" + docText(d).trim() + "\n").join("\n");
 }
 $("doc-copy").addEventListener("click", async () => {
   const b = $("doc-copy");
@@ -4151,7 +4252,7 @@ window.addEventListener("intake:doc", (e) => {
 });
 
 /* settings in the address bar (see A2T in the router): only when they differ from the default */
-const DOC_URL = [["docto", toSel, "gfm"], ["docimg", imgSel, "alt"]];
+const DOC_URL = [["docto", toSel, "gfm"], ["docimg", imgSel, "ocr"]];
 for (const [k, node] of DOC_URL) {
   const v = A2T.qs.get(k);
   if (v != null && [...node.options].some(o => o.value === v)) node.value = v;

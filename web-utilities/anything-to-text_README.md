@@ -117,11 +117,15 @@ first place.
   gzipped download); it is fetched once, on the first document, and kept in the browser's
   Cache Storage.
 - **Output**: Markdown (GitHub), the default; Markdown (pandoc); or Plain text.
-- **Images**: pictures embedded in a document cannot come along as files, so this setting
-  chooses what stands in for each one: its alt text (**Alt text only**, the default), a
-  Markdown image link to its path inside the document (**Keep image links**), or nothing
-  (**Drop**). A captioned figure becomes its caption. Changing **Output** or **Images**
-  converts the documents already dropped again.
+- **Images**: **Read with OCR**, the default, sends each picture in the document (PNG,
+  JPEG, GIF, BMP or WebP, and big enough to hold text) to the OCR section as a page, and
+  puts what it reads where the picture was, quoted under the picture's name. Until then the
+  text shows a placeholder. Pictures that are too small, or in a format the browser cannot
+  draw (EMF, WMF, TIFF, SVG), keep their alt text. The other choices are the alt text alone
+  (**Alt text only**), a Markdown image link to the picture's path inside the document
+  (**Keep image links**), or nothing (**Drop**). A captioned figure keeps its caption.
+  Changing **Output** or **Images** converts the documents already dropped again; pictures
+  already read are not sent to OCR a second time.
 - **Spreadsheets** come out as one heading and one table per sheet, including workbooks
   written by openpyxl or pandas, which pandoc 3.10 cannot read unaided; the page adjusts
   them before converting.
@@ -182,7 +186,7 @@ their default.
 | `task` | Task | `transcribe`, `translate` |
 | `tab` | Transcribe or Edit existing tab | (none), `edit` |
 | `docto` | Documents: Output | `gfm`, `markdown`, `plain` |
-| `docimg` | Documents: Images | `alt`, `keep`, `drop` |
+| `docimg` | Documents: Images | `ocr`, `alt`, `keep`, `drop` |
 
 While only one section has been used, the page also writes `mode` (OCR, transcription or
 documents). A link with `mode` opens the page in that mode: its section shows before any
