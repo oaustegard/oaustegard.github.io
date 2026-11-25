@@ -302,6 +302,16 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
           </select>
         </div>
         <div>
+          <label class="field" for="autorot">Auto-rotate</label>
+          <div class="field-row">
+            <select id="autorot">
+              <option value="on" selected>On</option>
+              <option value="off">Off</option>
+            </select>
+            <span class="info"><button type="button" aria-label="About Auto-rotate" aria-expanded="false">i</button><span class="tip" role="tooltip">Before a page is read, a PP-OCRv6 or Tesseract model checks its orientation on a reduced copy. Text lines that come out tall mean a sideways page; a reading that is clearly more confident when turned half a way round means upside-down. Indra turns pages itself, so with Indra alone this does nothing. Wrong guess? Use the &#x21BA; &#x21BB; buttons on the page card.</span></span>
+          </div>
+        </div>
+        <div>
           <label class="field" for="textorder">PDF text order</label>
           <select id="textorder">
             <option value="geometric" selected>Geometric (column-aware)</option>
@@ -733,7 +743,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-25-rotate"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-25-autorotate"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -1390,6 +1400,98 @@ function rotateCanvas(src, deg) {
 }
 async function renderPage(pg, scale) { return rotateCanvas(await pg.render(scale), pg.rot || 0); }
 
+/* ---------- automatic orientation ----------
+   Run before the page is read, on a copy no longer than ORIENT_MAX, by the first PP-OCRv6
+   model that is on (the primary, else the compare model; else Tesseract). Indra turns
+   pages itself and is not asked.
+   Sideways: read as it is, the detector's boxes come out taller than wide. Then the page is
+   read turned 90 and 270 degrees and the more confident reading wins.
+   Upside-down: the recognizer is far less sure of inverted text, so a page read at 0 degrees
+   with a confidence under ORIENT_SURE is also read turned 180 degrees, and that wins only by
+   ORIENT_MARGIN. Pages that read confidently upright cost one pass and no second look.
+   Returns the clockwise turn (0, 90, 180, 270) or null when it cannot tell. */
+const ORIENT_MAX = 1280;
+const ORIENT_SURE = 0.85;
+const ORIENT_MARGIN = 0.08;
+const ORIENT_SIDE = 0.6;
+function autoRotateOn() { const el = document.getElementById("autorot"); return !!el && el.value === "on"; }
+function orientModel() {
+  const ms = [primaryModel(), compareModel()].filter(Boolean);
+  return ms.find(m => m === "tiny" || m === "small") || ms.find(m => m === "tesseract") || null;
+}
+function fitCanvas(src, maxLong) {
+  const k = Math.min(1, maxLong / Math.max(src.width, src.height, 1));
+  if (k === 1) return src;
+  const cv = document.createElement("canvas");
+  cv.width = Math.max(1, Math.round(src.width * k)); cv.height = Math.max(1, Math.round(src.height * k));
+  cv.getContext("2d").drawImage(src, 0, 0, cv.width, cv.height);
+  return cv;
+}
+/* every line the model finds, empty readings included: [{ text, confidence, box: {x, y, width, height} }] */
+async function orientReader(model) {
+  if (model === "tesseract") { const r = await ensureTesseract(); return async c => ((await r.read(c)) || {}).items || []; }
+  if (usePacked(model) && await ensurePacked(model)) {
+    const net = packedNets[model];
+    return async c => (await net.pipe.run(c)).map(l => {
+      const xs = l.box.map(q => q[0]), ys = l.box.map(q => q[1]);
+      const x = Math.min(...xs), y = Math.min(...ys);
+      return { text: l.text || "", confidence: l.score, box: { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y } };
+    });
+  }
+  const paddle = await ensurePaddle(model);
+  return async c => (((await paddle.recognize(c, { flatten: true, noCache: true })) || {}).results) || [];
+}
+/* mean recognizer confidence weighted by text length; null when nothing was read */
+function orientScore(items) {
+  let n = 0, w = 0;
+  for (const it of items) { const L = (it.text || "").trim().length; if (L) { n += L * (it.confidence || 0); w += L; } }
+  return w ? n / w : null;
+}
+/* share of the boxes' area that is taller than wide; null when there are too few boxes to say */
+function tallShare(items) {
+  let tall = 0, all = 0, n = 0;
+  for (const it of items) { if (!it.box) continue; const a = it.box.width * it.box.height; all += a; n++; if (it.box.height > it.box.width * 1.2) tall += a; }
+  return n >= 4 && all > 0 ? tall / all : null;
+}
+async function autoOrient(pg, canvas) {
+  const model = orientModel();
+  if (!model) return null;
+  const t0 = performance.now();
+  setStatus("Checking the orientation of " + pg.image + "...");
+  const read = await orientReader(model);
+  const small = fitCanvas(canvas, ORIENT_MAX);
+  const r0 = await read(small);
+  const s0 = orientScore(r0), tall = tallShare(r0);
+  let deg = null, s90 = null, s270 = null, s180 = null;
+  if (tall !== null && tall > ORIENT_SIDE) {
+    s90 = orientScore(await read(rotateCanvas(small, 90)));
+    s270 = orientScore(await read(rotateCanvas(small, 270)));
+    if (s90 !== null && (s270 === null || s90 > s270 + 0.05)) deg = 90;
+    else if (s270 !== null && (s90 === null || s270 > s90 + 0.05)) deg = 270;
+  } else if (s0 !== null && s0 >= ORIENT_SURE) {
+    deg = 0;
+  } else {
+    s180 = orientScore(await read(rotateCanvas(small, 180)));
+    if (s180 !== null) deg = (s0 === null || s180 > s0 + ORIENT_MARGIN) ? 180 : 0;
+    else if (s0 !== null) deg = 0;
+  }
+  const r = v => v === null ? null : +v.toFixed(3);
+  console.log("[orient]", pg.image, "model", model, "tall", r(tall), "s0", r(s0), "s90", r(s90), "s270", r(s270), "s180", r(s180), "->", deg);
+  relay.log("auto-rotate", { image: pg.image, model, tall: r(tall), s0: r(s0), s90: r(s90), s270: r(s270), s180: r(s180), deg, ms: Math.round(performance.now() - t0) });
+  return deg;
+}
+/* Applied once per page, before its first reading; a turn made by hand (rotManual) is never overridden. */
+async function applyAutoRotate(pg, canvas) {
+  if (!autoRotateOn() || pg.rotManual || pg.autoRot !== undefined || !orientModel()) return canvas;   /* no model to ask yet: not cached, asked again when one is on */
+  let deg = null;
+  try { deg = await autoOrient(pg, canvas); }
+  catch (e) { console.error("[orient] failed for", pg.image, e); relay.error("auto-rotate failed", { image: pg.image, e: String((e && e.message) || e) }); }
+  pg.autoRot = deg;            /* null: could not tell, left as it is */
+  if (!deg) return canvas;
+  pg.rot = deg;
+  return rotateCanvas(canvas, deg);
+}
+
 /* Downscaled preview data URL so each card can show the rendered page next to its text
    without holding full-resolution canvases in memory. */
 function makePreview(canvas, maxW) {
@@ -1507,7 +1609,7 @@ async function readPrimary(pg) {
 
   /* OCR path: images, forced-OCR PDF pages, and text-less PDF pages. The model loads
      lazily here, so a PDF that is entirely born-digital never touches the weights. */
-  const canvas = await renderPage(pg, scale);
+  const canvas = await applyAutoRotate(pg, await renderPage(pg, scale));
   pg.preview = makePreview(canvas);
   await readOcr(primaryModel(), pg, canvas, "primary");
   pg.ms = Math.round(performance.now() - t0);
@@ -1733,6 +1835,7 @@ async function rotatePage(id, deg) {
   const pg = pages[id];
   if (!pg || (running && !rotTimers.has(id))) { if (running) setStatus("Rotate once the current read has finished."); return; }
   pg.rot = (((pg.rot || 0) + deg) % 360 + 360) % 360;
+  pg.rotManual = true;
   if (pg.preview) { try { pg.preview = await rotatedDataUrl(pg.preview, deg); } catch (e) { console.error("[rotate] preview", e); } }
   pg.status = "pending"; pg.alt = null; pg.error = null; pg.text = ""; pg.lines = []; pg.segments = [];
   updatePage(pg);
@@ -1773,7 +1876,7 @@ function pageInner(pg) {
         ? pg.lines.length + ' lines | exact'
         : pg.ms + 'ms | ' + pg.lines.length + ' lines | conf ' + (pg.meanConf * 100).toFixed(1) + '%') + '</span>'
     : (pg.status === "error" ? '<span class="meta">failed</span>' : "");
-  const rotMeta = pg.rot ? '<span class="meta">turned ' + pg.rot + '\u00b0</span>' : "";
+  const rotMeta = pg.rot ? '<span class="meta">turned ' + pg.rot + '\u00b0' + (!pg.rotManual && pg.autoRot === pg.rot ? ' (auto)' : '') + '</span>' : "";
   /* PDF pages can swap source either way: text->OCR when the layer is partial, and
      OCR->text to escape a bad recognition back to the exact embedded text. */
   let convBtn = "";
@@ -1873,7 +1976,7 @@ function allMarkdown() {
 }
 function asJson() {
   return JSON.stringify(pages.map((p, i) => ({
-    page: i + 1, image: p.image, source: p.source, engine: p.engine || undefined, rotation: p.rot || undefined, text: p.text, lines: p.lines,
+    page: i + 1, image: p.image, source: p.source, engine: p.engine || undefined, rotation: p.rot || undefined, rotation_auto: (p.rot && !p.rotManual && p.autoRot === p.rot) || undefined, text: p.text, lines: p.lines,
     markdown: p.markdown || undefined,
     mean_conf: p.meanConf,
     page_px: { w: p.pageW || 0, h: p.pageH || 0 },
@@ -2044,6 +2147,11 @@ tierSel.onchange = () => {
   settingsChanged();
 };
 vsSel.onchange = compareChanged;
+/* switching Auto-rotate drops the turns it made (never one made by hand); the pages are read again */
+document.getElementById("autorot").addEventListener("change", () => {
+  for (const p of pages) if (!p.rotManual) { p.rot = 0; p.autoRot = undefined; }
+  A2T.sync(); settingsChanged();
+});
 for (const id of ["math", "dpi", "batch", "columns", "textorder"]) document.getElementById(id).addEventListener("change", () => { A2T.sync(); settingsChanged(); });
 /* the layer mode decides how many entries a PDF becomes, so it applies at intake */
 document.getElementById("pdflayers").onchange = () => {
@@ -2058,7 +2166,7 @@ const OCR_URL = [
   ["ocr", tierSel, null], ["ocr2", vsSel, ""], ["math", document.getElementById("math"), "auto"],
   ["dpi", document.getElementById("dpi"), "200"], ["batch", document.getElementById("batch"), "10"],
   ["cols", document.getElementById("columns"), "auto"], ["order", document.getElementById("textorder"), "geometric"],
-  ["layers", document.getElementById("pdflayers"), "flat"],
+  ["layers", document.getElementById("pdflayers"), "flat"], ["rot", document.getElementById("autorot"), "on"],
 ];
 for (const [k, node] of OCR_URL) {
   const v = A2T.qs.get(k);

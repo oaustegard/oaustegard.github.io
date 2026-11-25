@@ -59,6 +59,15 @@ so these extensionless files are selectable in the first place.
   the turned pixels, so the text, the word boxes and the exports share one frame. The
   turn is kept when results are cleared and written to the `.json` as `rotation`.
   Indra turns a sideways page by itself; the PP-OCRv6 and Tesseract models do not.
+- **Auto-rotate** (on by default, `rot=off` in the address to disable): before a page is
+  read, a PP-OCRv6 model (the primary, else the compare model; else Tesseract) checks its
+  orientation on a copy of at most 1280 px. Text lines that come out taller than wide mean
+  a sideways page, and the page is then read turned 90° and 270° and the more confident
+  reading wins. A page that reads below 85% confidence upright is also read turned 180°,
+  and that wins only by 8 points. A page that reads confidently upright costs one extra
+  pass; when no verdict is clear the page is left as it is. The card says `turned N° (auto)`;
+  a turn made with the buttons replaces it and is never overridden. With Indra alone there
+  is nothing to ask, so Auto-rotate does nothing.
 - **PDF layers**: by default a page is read flattened, as a viewer shows it. Every
   image is composited, including the JBIG2 and JPEG 2000 layers that compressed scans
   use for the text over a JPEG background, and filled-in form fields and FreeText notes
