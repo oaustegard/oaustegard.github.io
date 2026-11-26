@@ -274,6 +274,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
             <option value="ocria" title="OCRia-nano-1 (LlamaIndex): 8M parameters. With WebGPU it runs from packed int8 weights on WGSL kernels (about 4 MB, about 1 s per page) and returns text lines. Without WebGPU (or with ?ocria=wasm) it runs on the CPU in LiteParse's WebAssembly build, which also reads tables (with spanning cells), headings and lists as Markdown: about 14 MB on first run and a few seconds per page. Weights under LlamaIndex's OCRia-nano-1 Model License (modified OpenRAIL-M).">OCRia-nano-1 (~4 MB on WebGPU; tables + Markdown on CPU, ~14 MB)</option>
             <option value="tiny" title="PP-OCRv6 tiny, about 3M parameters. With WebGPU it runs from packed int8 weights (about 1.6 MB download); without, through onnxruntime-web from Hugging Face (6.2 MB).">PP-OCRv6 tiny (~3M, fastest, ~1.6 MB on WebGPU)</option>
             <option value="small" title="PP-OCRv6 small, about 7M parameters. With WebGPU it runs from packed int8 weights (about 6.3 MB download); without, through onnxruntime-web from Hugging Face (31 MB).">PP-OCRv6 small (~7M, balanced, ~6.3 MB on WebGPU)</option>
+            <option value="nemotron" title="NVIDIA Nemotron Parse 2.0: a 903M-parameter vision-language parser (a ViT-H image encoder and a 10-layer text decoder) that writes each block of the page with its class, box and reading order, tables included, as Markdown. Runs on WebGPU from weights packed to 4 and 8 bits: a large download on first use (kept by the browser after that) and about 14 seconds to read a page on a recent laptop GPU, then about 50 tokens a second to write it out, so under a minute for a dense page. Weights under NVIDIA's OpenMDW License 1.1.">Nemotron Parse 2.0 (layout + tables + Markdown, 558 MB, slow, needs WebGPU)</option>
             <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
           </select>
         </div>
@@ -286,6 +287,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
             <option value="ocria">OCRia-nano-1</option>
             <option value="tiny">PP-OCRv6 tiny</option>
             <option value="small">PP-OCRv6 small</option>
+            <option value="nemotron">Nemotron Parse 2.0</option>
             <option value="tesseract">Tesseract English</option>
           </select>
           <span class="info"><button type="button" aria-label="About Compare with" aria-expanded="false">i</button><span class="tip" role="tooltip">A second model reads each page; words they disagree on are marked.</span></span>
@@ -852,7 +854,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-26-ocria-gpu"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-26-nemotron"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -881,6 +883,8 @@ const INDRA_SECONDS_PER_PAGE = 1;  /* Indra on WebGPU: 0.1-0.5 s per page warm, 
 const INDRA_LOAD_SECONDS = 4;
 const OCRIA_SECONDS_PER_PAGE = 4;  /* OCRia-nano in single-threaded WebAssembly: 1-8 s per scanned page; about 1 s on WebGPU */
 const OCRIA_LOAD_SECONDS = 10;
+const NEMOTRON_SECONDS_PER_PAGE = 40; /* Nemotron Parse on WebGPU: encoder plus about 1-3k decoder tokens per dense page */
+const NEMOTRON_LOAD_SECONDS = 60;
 const PACKED_SECONDS_PER_PAGE = 2; /* packed PP-OCRv6 on WebGPU: detector plus recognizer, plus rendering */
 const PACKED_LOAD_SECONDS = 3;
 
@@ -966,7 +970,7 @@ let indraLoading = null;
 /* The page reads with two models when Compare is on: the primary ("tier") and the compare
    model ("ocr-vs"). Engine functions take the model name rather than reading a select. */
 const tierSel = document.getElementById("tier"), vsSel = document.getElementById("ocr-vs");
-const OCR_LABEL = { indra: "Indra", ocria: "OCRia-nano-1", tiny: "PP-OCRv6 tiny", small: "PP-OCRv6 small", tesseract: "Tesseract" };
+const OCR_LABEL = { indra: "Indra", ocria: "OCRia-nano-1", tiny: "PP-OCRv6 tiny", small: "PP-OCRv6 small", tesseract: "Tesseract", nemotron: "Nemotron Parse 2.0" };
 function primaryModel() { return tierSel.value; }
 function compareModel() { const v = vsSel.value; return v && v !== tierSel.value ? v : null; }
 /* Tesseract on WebGPU: the tesseract-gpu experiment's reader, loaded from the experiments site on first use. */
@@ -1142,6 +1146,61 @@ async function recognizeOcria(pg, canvas) {
   console.log("[ocria]", pg.image, Math.round(page.ms) + "ms", page.items.length + " items", page.blocks.length + " blocks");
   relay.log("ocria page", { image: pg.image, w: page.width, h: page.height, items: page.items.length,
                             blocks: page.blocks.length, ms: Math.round(page.ms) });
+}
+
+/* ---------- Nemotron Parse engine ----------
+   NVIDIA Nemotron Parse 2.0 (903M parameters): a C-RADIOv2-H ViT reads the page at 1664 x 2048, a convolution
+   neck shrinks its 13,312 patch features to 3,329 tokens, and a 10-layer mBART decoder writes the page block
+   by block: box, class (Title, Text, Table, Picture, Page-header, ...) and Markdown text, tables as HTML.
+   The engine is oaustegard/experiments nemotron-parse-pack web/engine (hand-written WGSL); the weights come
+   packed to 4-bit (encoder) and 8-bit (decoder) from R2 and are kept by the browser's Cache API.
+   Needs WebGPU. Weights under the OpenMDW License 1.1 (permissive; NOTICE in nemotron-parse-pack). */
+const NEMOTRON_ENGINE = "https://austegard.com/experiments/nemotron-parse-pack/web/engine/nemotron.js";
+const NEMOTRON_PACK = "https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/nemotron-parse-pack/v1/";
+let nemo = null, nemoLoading = null;
+async function ensureNemotron() {
+  if (nemo) return nemo;
+  if (!navigator.gpu) throw new Error("Nemotron Parse needs WebGPU, which this browser lacks");
+  if (!nemoLoading) {
+    nemoLoading = (async () => {
+      setStatus("Loading Nemotron Parse 2.0 (packed weights, 558 MB on first use, then kept by the browser)...");
+      const { NemotronParse } = await import(window.NEMOTRON_ENGINE_URL || NEMOTRON_ENGINE);
+      const t0 = performance.now();
+      const m = await NemotronParse.load({ base: window.NEMOTRON_PACK_URL || NEMOTRON_PACK,
+        onProgress: ({ phase, loaded, total }) => setStatus(phase === "download"
+          ? "Loading Nemotron Parse 2.0: " + Math.round(loaded / 1e6) + " of " + Math.round(total / 1e6) + " MB..."
+          : "Loading Nemotron Parse 2.0: copying weights to the GPU...") });
+      relay.log("nemotron ready", { ms: Math.round(performance.now() - t0), info: m.info || null });
+      return m;
+    })();
+    nemoLoading.catch(e => { nemoLoading = null; relay.error("nemotron load failed", { e: String((e && e.message) || e) }); });
+  }
+  return (nemo = await nemoLoading);
+}
+async function recognizeNemotron(pg, canvas) {
+  const t0 = performance.now();
+  let n = 0;
+  const r = await nemo.parse(canvas, { maxTokens: 9000,
+    onToken: () => { if (++n % 64 === 0) setStatus("OCR " + pg.image + " (Nemotron Parse): " + n + " tokens written..."); } });
+  pg.pageW = canvas.width; pg.pageH = canvas.height;
+  /* one item per block with text; the decoder's block order is its reading order */
+  const plain = t => t.replace(/<[^>]+>/g, " ").replace(/[#*_`|]+/g, " ").replace(/\s+/g, " ").trim();
+  const items = r.blocks.filter(b => b.text && b.text.trim()).map(b => ({ text: plain(b.text), confidence: 1,
+    box: { x: b.bbox[0], y: b.bbox[1], width: b.bbox[2] - b.bbox[0], height: b.bbox[3] - b.bbox[1] } }));
+  buildResult(pg, items, "ocr", null);
+  pg.lines = items.map(it => it.text);
+  pg.words = wordBoxes(items, canvas.width, canvas.height);
+  /* Markdown in the decoder's block order: titles and section headers as headings, tables as Markdown tables;
+     text the model read inside pictures is left out */
+  pg.markdown = r.blocks.filter(b => b.text && b.text.trim() && b.cls !== "Picture" && b.cls !== "Chart")
+    .map(b => b.cls === "Title" && !b.text.startsWith("#") ? "# " + b.text
+      : b.cls === "Section-header" && !b.text.startsWith("#") ? "## " + b.text : b.text).join("\n\n");
+  pg.text = pg.markdown || pg.lines.join("\n");
+  pg.engine = "nemotron";
+  const ms = r.ms || {};
+  relay.log("nemotron page", { image: pg.image, w: canvas.width, h: canvas.height, blocks: r.blocks.length, tokens: r.tokens.length,
+                               encode_ms: ms.encode != null ? Math.round(ms.encode) : null, decode_ms: ms.decode != null ? Math.round(ms.decode) : null,
+                               total_ms: Math.round(performance.now() - t0) });
 }
 
 /* ---------- packed PP-OCRv6 engine ----------
@@ -1389,6 +1448,7 @@ function estimate() {
   if (!pages.length) { etaEl.textContent = ""; return; }
   const cost = m => m === "indra" ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
     : m === "ocria" ? remaining * ((ocria ? ocria.kind === "gpu" : ocriaWantsGpu()) ? 1 : OCRIA_SECONDS_PER_PAGE) + (ocria ? 0 : OCRIA_LOAD_SECONDS)
+    : m === "nemotron" ? remaining * NEMOTRON_SECONDS_PER_PAGE + (nemo ? 0 : NEMOTRON_LOAD_SECONDS)
     : m === "tesseract" ? remaining * PACKED_SECONDS_PER_PAGE + (tess ? 0 : PACKED_LOAD_SECONDS)
     : usePacked(m) ? remaining * PACKED_SECONDS_PER_PAGE + (packedNets[m] ? 0 : PACKED_LOAD_SECONDS)
     : remaining * SECONDS_PER_PAGE + (paddles[m] ? 0 : LOAD_SECONDS);
@@ -1861,6 +1921,20 @@ async function readOcr(model, out, canvas, role) {
     if (await ensureIndra()) { await recognizeIndra(out, canvas); return; }
     model = out.model = indraFallback(role);
   }
+  if (model === "nemotron") {
+    try { await ensureNemotron(); }
+    catch (e) {
+      const sub = role === "compare" ? (tierSel.value === "small" ? "tiny" : "small") : "small";
+      (role === "compare" ? vsSel : tierSel).value = sub; syncVsOptions(); A2T.sync();
+      setStatus("Nemotron Parse could not start (" + ((e && e.message) || e) + "); using PP-OCRv6 " + sub + " instead.");
+      model = out.model = sub;
+    }
+  }
+  if (model === "nemotron") {
+    setStatus("OCR " + out.image + " (Nemotron Parse on WebGPU, under a minute per dense page)...");
+    await recognizeNemotron(out, canvas);
+    return;
+  }
   if (model === "ocria") {
     await ensureOcria();
     setStatus("OCR " + out.image + (ocria.kind === "gpu" ? " (OCRia-nano-1 on WebGPU)..." : " (OCRia-nano-1, WebAssembly on the CPU)..."));
@@ -2076,7 +2150,7 @@ function escapeHtml(s) {
 function pageInner(pg) {
   const done = pg.status === "done";
   const srcBadge = done
-    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : pg.engine === "ocria" ? "OCR (OCRia-nano-1)" : pg.engine === "tesseract" ? "OCR (Tesseract)" : "OCR")) + '</span>'
+    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : pg.engine === "ocria" ? "OCR (OCRia-nano-1)" : pg.engine === "nemotron" ? "OCR (Nemotron Parse)" : pg.engine === "tesseract" ? "OCR (Tesseract)" : "OCR")) + '</span>'
     : "";
   const meta = done
     ? '<span class="meta">' + (pg.source === "text"
