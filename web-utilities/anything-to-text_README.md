@@ -9,7 +9,7 @@ file by type:
 
 | Input | Engine | Output |
 |---|---|---|
-| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, **OCRia-nano-1** (WebGPU lines, or Markdown tables on the CPU), PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) **Tesseract** (fine-tuned English) or **Nemotron Parse 2.0** (large, most layout-aware); optionally a second model to compare against | Markdown (Indra) or text lines in reading order, with confidence |
+| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, **OCRia-nano-1** (WebGPU lines, or Markdown tables on the CPU), PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) **Tesseract** (fine-tuned English) or **Nemotron 3.5 Parse** (large, most layout-aware); optionally a second model to compare against | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper**, from quantized packs on a WebGPU engine ([whisper-pack](https://github.com/oaustegard/experiments/tree/main/whisper-pack)), or via Transformers.js | timestamped transcript, editable, with per-segment playback |
 | Documents (`docx`, `pptx`, `xlsx`, `odt`, EPUB, HTML, LaTeX, … — full list below) | **pandoc** 3.10, the official WebAssembly build, in a web worker | Markdown (GitHub or pandoc) or plain text |
@@ -64,13 +64,13 @@ first place.
   (Apache-2.0, 5 MB). English only; needs WebGPU. It comes from the
   [tesseract-gpu](https://austegard.com/experiments/tesseract-gpu/web/) experiment and
   loads from there on first use.
-- **Nemotron Parse 2.0** ([nvidia/NVIDIA-Nemotron-Parse-2.0](https://huggingface.co/nvidia/NVIDIA-Nemotron-Parse-2.0),
-  903M parameters, OpenMDW License 1.1) reads the whole page as one image and writes it block by
-  block: a box, a class (title, section header, text, list item, table, picture, caption, page
-  header or footer, ...) and Markdown text, tables included, in reading order. It runs on WebGPU
-  from weights packed to 4 bits (image encoder) and 8 bits (text decoder), 558 MB downloaded once
-  and kept by the browser. On a recent laptop GPU it takes about 14 seconds to read a page and
-  then writes about 50 tokens a second, so a dense page takes under a minute. It comes from the
+- **Nemotron 3.5 Parse** ([nvidia/Nemotron-3.5-Parse](https://huggingface.co/nvidia/Nemotron-3.5-Parse),
+  631M parameters, OpenMDW License 1.1, tokenizer MIT) reads the whole page as one image and writes it
+  block by block: a box, a class (title, section header, text, list item, table, picture, caption, page
+  header or footer, ...) and Markdown text, tables included, in reading order. It runs on WebGPU from
+  weights packed to 4 bits (image encoder) and 8 bits (text decoder), 403 MB downloaded once and kept by
+  the browser. On a recent laptop GPU it takes about 9 seconds to read a page and then writes about 55
+  tokens a second, so a dense page takes well under a minute. It comes from the
   [nemotron-parse-pack](https://austegard.com/experiments/nemotron-parse-pack/web/) experiment.
   Without WebGPU it falls back to PP-OCRv6 small.
 - **PDFs are hybrid**: each page first tries pdf.js's embedded text layer (exact,
