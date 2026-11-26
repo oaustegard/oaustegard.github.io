@@ -575,19 +575,37 @@ function burst() {
 /* ---------- layout & HUD ---------- */
 const geo = { dpr: 1, w: 0, h: 0, bx: 0, by: 0, cell: 40, cssCell: 40, cssX: 0, cssY: 0 };
 function layout() {
+  // A rotation can leave the page scrolled; the fixed layers assume it is not.
+  if (scrollX || scrollY) scrollTo(0, 0);
   geo.dpr = Math.min(window.devicePixelRatio || 1, 2.5);
-  geo.w = Math.round(innerWidth * geo.dpr); geo.h = Math.round(innerHeight * geo.dpr);
-  canvas.width = geo.w; canvas.height = geo.h;
+  // Measure the canvas and stage boxes themselves, not innerWidth/innerHeight: mid-rotation
+  // on iOS the window sizes and the laid-out boxes disagree, which put the board off screen.
+  const cr = canvas.getBoundingClientRect();
+  geo.w = Math.round(cr.width * geo.dpr); geo.h = Math.round(cr.height * geo.dpr);
+  if (canvas.width !== geo.w) canvas.width = geo.w;
+  if (canvas.height !== geo.h) canvas.height = geo.h;
   const r = stage.getBoundingClientRect();
   const cols = L.cols, rows = L.rows, pad = 10;
   const css = Math.floor(Math.min((r.width - pad * 2) / cols, (r.height - pad * 2 - 18) / rows));
   geo.cssCell = Math.max(16, css);
   geo.cssX = r.left + (r.width - geo.cssCell * cols) / 2;
   geo.cssY = r.top + (r.height - 18 - geo.cssCell * rows) / 2;
-  geo.cell = geo.cssCell * geo.dpr; geo.bx = geo.cssX * geo.dpr; geo.by = geo.cssY * geo.dpr;
+  geo.cell = geo.cssCell * geo.dpr; geo.bx = (geo.cssX - cr.left) * geo.dpr; geo.by = (geo.cssY - cr.top) * geo.dpr;
   renderer && renderer.resize();
 }
-addEventListener('resize', layout);
+// iOS fires resize and orientationchange before the rotated layout has settled, so a layout run
+// from those events alone can measure the old shape and stick. Observing the boxes themselves
+// catches the settled size; the late re-runs cover browsers that settle without a further event.
+let layoutQueued = false;
+function queueLayout() {
+  if (layoutQueued) return;
+  layoutQueued = true;
+  requestAnimationFrame(() => { layoutQueued = false; if (L) layout(); });
+}
+addEventListener('resize', queueLayout);
+addEventListener('orientationchange', () => { queueLayout(); setTimeout(queueLayout, 250); setTimeout(queueLayout, 700); });
+if (window.visualViewport) visualViewport.addEventListener('resize', queueLayout);
+if (window.ResizeObserver) { const ro = new ResizeObserver(queueLayout); ro.observe(stage); ro.observe(canvas); }
 
 function updateHUD() {
   $('score').textContent = score.toLocaleString();
@@ -1128,6 +1146,7 @@ function demoBoard() {
 window.__careen = {
   get state() { return { mode, phase, g, score, chain, level, cleared, free: board && board.free(), renderer: renderer && renderer.kind, pourT }; },
   get board() { return board; },
+  get geo() { return { ...geo }; },
   start, setGravity, trySwap, levelHere,
   pour() { doPour(); },
   setTilt(x, y) { motion.ok = true; motion.gx0 = 0; motion.gd0 = Math.sin(40 * Math.PI / 180); motion.sgx = motion.gx = Math.sin(x * Math.PI / 180); motion.sgd = motion.gd = Math.sin((40 + y) * Math.PI / 180); },
