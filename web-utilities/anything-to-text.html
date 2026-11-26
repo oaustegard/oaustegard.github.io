@@ -271,6 +271,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
           <label class="field" for="tier">OCR model</label>
           <select id="tier">
             <option value="indra" selected title="Indra OCR (Datalab): 12M parameters, reads layout and reading order, outputs Markdown. Needs WebGPU.">Indra (layout + Markdown, ~2.3 MB, needs WebGPU)</option>
+            <option value="ocria" title="OCRia-nano-1 (LlamaIndex): 8M parameters. Reads tables (with spanning cells), headings and lists, outputs Markdown. Runs on the CPU in LiteParse's WebAssembly build, so it needs no WebGPU. About 14 MB on first run: the 5.7 MB runtime plus 8 MB of packed int8 weights for all four scripts and the layout model. Weights under LlamaIndex's OCRia-nano-1 Model License (modified OpenRAIL-M).">OCRia-nano-1 (tables + Markdown, CPU, ~14 MB)</option>
             <option value="tiny" title="PP-OCRv6 tiny, about 3M parameters. With WebGPU it runs from packed int8 weights (about 1.6 MB download); without, through onnxruntime-web from Hugging Face (6.2 MB).">PP-OCRv6 tiny (~3M, fastest, ~1.6 MB on WebGPU)</option>
             <option value="small" title="PP-OCRv6 small, about 7M parameters. With WebGPU it runs from packed int8 weights (about 6.3 MB download); without, through onnxruntime-web from Hugging Face (31 MB).">PP-OCRv6 small (~7M, balanced, ~6.3 MB on WebGPU)</option>
             <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
@@ -282,6 +283,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
           <select id="ocr-vs" title="Read each OCRed page with a second model as well and mark the words the two disagree on, where errors are most likely. Pages taken from a PDF's embedded text layer are exact and are not compared.">
             <option value="" selected>Off</option>
             <option value="indra">Indra</option>
+            <option value="ocria">OCRia-nano-1</option>
             <option value="tiny">PP-OCRv6 tiny</option>
             <option value="small">PP-OCRv6 small</option>
             <option value="tesseract">Tesseract English</option>
@@ -534,7 +536,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
   </section>
 
   <footer>
-    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), PaddleOCR PP-OCRv6 (from <a href="https://austegard.com/experiments/ppocr-pack/web/">packed int8 weights on WebGPU</a>, or through onnxruntime-web without it), or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js), and document conversion (<a href="https://pandoc.org/">pandoc</a> 3.10, GPL-2.0-or-later, from the official <a href="https://github.com/pandoc/pandoc-wasm">WebAssembly build</a>). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
+    <p class="provenance">In-browser OCR (<a href="https://austegard.com/experiments/indra-browser/web/">Indra OCR</a> by Datalab (OpenRAIL-M licensed), <a href="https://austegard.com/experiments/ocria-pack/web/">OCRia-nano-1</a> by LlamaIndex (weights: OCRia-nano-1 Model License, a modified OpenRAIL-M that allows commercial use only under $2M revenue and funding and bars competing parsing services, see the <a href="https://github.com/oaustegard/experiments/blob/main/ocria-pack/NOTICE.md">notice</a>) run by <a href="https://github.com/run-llama/liteparse">LiteParse</a>'s WebAssembly build (Apache-2.0), PaddleOCR PP-OCRv6 (from <a href="https://austegard.com/experiments/ppocr-pack/web/">packed int8 weights on WebGPU</a>, or through onnxruntime-web without it), or <a href="https://austegard.com/experiments/tesseract-gpu/web/">Tesseract on WebGPU</a> with a fine-tuned English model (Apache-2.0), with pdf.js) speech-to-text (Whisper, from <a href="https://austegard.com/experiments/whisper-pack/web/">quantized packs on WebGPU</a> or via Transformers.js), and document conversion (<a href="https://pandoc.org/">pandoc</a> 3.10, GPL-2.0-or-later, from the official <a href="https://github.com/pandoc/pandoc-wasm">WebAssembly build</a>). All processing is client-side; nothing is uploaded. AI-assisted build.</p>
   </footer>
 </div>
 
@@ -850,7 +852,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-25-pandoc-br"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-26-ocria"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -877,6 +879,8 @@ const SECONDS_PER_PAGE = 10;   /* skill estimate: ~10s/page on CPU */
 const LOAD_SECONDS = 6;        /* one-time model load */
 const INDRA_SECONDS_PER_PAGE = 1;  /* Indra on WebGPU: 0.1-0.5 s per page warm, plus rendering */
 const INDRA_LOAD_SECONDS = 4;
+const OCRIA_SECONDS_PER_PAGE = 4;  /* OCRia-nano in single-threaded WebAssembly: 1-8 s per scanned page */
+const OCRIA_LOAD_SECONDS = 10;
 const PACKED_SECONDS_PER_PAGE = 2; /* packed PP-OCRv6 on WebGPU: detector plus recognizer, plus rendering */
 const PACKED_LOAD_SECONDS = 3;
 
@@ -962,7 +966,7 @@ let indraLoading = null;
 /* The page reads with two models when Compare is on: the primary ("tier") and the compare
    model ("ocr-vs"). Engine functions take the model name rather than reading a select. */
 const tierSel = document.getElementById("tier"), vsSel = document.getElementById("ocr-vs");
-const OCR_LABEL = { indra: "Indra", tiny: "PP-OCRv6 tiny", small: "PP-OCRv6 small", tesseract: "Tesseract" };
+const OCR_LABEL = { indra: "Indra", ocria: "OCRia-nano-1", tiny: "PP-OCRv6 tiny", small: "PP-OCRv6 small", tesseract: "Tesseract" };
 function primaryModel() { return tierSel.value; }
 function compareModel() { const v = vsSel.value; return v && v !== tierSel.value ? v : null; }
 /* Tesseract on WebGPU: the tesseract-gpu experiment's reader, loaded from the experiments site on first use. */
@@ -1053,6 +1057,49 @@ async function recognizeIndra(pg, canvas) {
   relay.log("indra page", { image: pg.image, lines: page.lines.length, math: indra.mathMode, math_lines: t.math_lines ?? null,
                             math_used: t.math_used ?? null, math_ms: t.math_ms != null ? Math.round(t.math_ms) : null,
                             rec_ms: t.rec_ms != null ? Math.round(t.rec_ms) : null });
+}
+
+/* ---------- OCRia-nano engine ----------
+   OCRia-nano-1 (LlamaIndex, 8.1M parameters) as LiteParse runs it: line detector, script
+   router, four recognizers (Latin, world scripts, right-to-left, CJK) and LayoutNet, which
+   finds tables (rows, columns, spanning cells), headings and lists and writes Markdown.
+   It runs in LiteParse's own WebAssembly build (Apache-2.0, from jsdelivr) on one CPU
+   thread, so it needs no WebGPU. The weights come packed to int8 from oaustegard/experiments
+   ocria-pack and are rebuilt into the files LiteParse loads; the module hands each canvas
+   to LiteParse as a one-page image PDF. Weights: OCRia-nano-1 Model License (modified
+   OpenRAIL-M), use restrictions included; see the ocria-pack NOTICE. */
+const OCRIA_OCR = "https://austegard.com/experiments/ocria-pack/web/ocria.js";
+let ocria = null, ocriaLoading = null;
+async function ensureOcria() {
+  if (ocria) return ocria;
+  if (!ocriaLoading) {
+    ocriaLoading = (async () => {
+      setStatus("Loading OCRia-nano-1 (LiteParse WebAssembly runtime and packed weights, about 14 MB on first run)...");
+      const { loadOcria } = await import(window.OCRIA_OCR_URL || OCRIA_OCR);
+      const r = await loadOcria({ layout: true, scripts: ["world", "rtl", "cjk"], log: m => console.log("[ocria]", m) });
+      relay.log("ocria ready", { ms: Math.round(r.loadMs), pack_bytes: r.packBytes });
+      return r;
+    })();
+    ocriaLoading.catch(e => {
+      ocriaLoading = null;
+      relay.error("ocria load failed", { e: String((e && e.message) || e) });
+    });
+  }
+  return (ocria = await ocriaLoading);
+}
+async function recognizeOcria(pg, canvas) {
+  const page = await ocria.read(canvas);
+  pg.pageW = page.width; pg.pageH = page.height;
+  buildResult(pg, page.items, "ocr", null);
+  /* LiteParse's reading order and Markdown (tables as HTML, headings, lists) replace the geometric orderer */
+  pg.lines = page.items.map(it => it.text);
+  pg.words = wordBoxes(page.items, page.width, page.height);
+  pg.markdown = page.markdown;
+  pg.text = page.markdown || pg.lines.join("\n");
+  pg.engine = "ocria";
+  console.log("[ocria]", pg.image, Math.round(page.ms) + "ms", page.items.length + " items", page.blocks.length + " blocks");
+  relay.log("ocria page", { image: pg.image, w: page.width, h: page.height, items: page.items.length,
+                            blocks: page.blocks.length, ms: Math.round(page.ms) });
 }
 
 /* ---------- packed PP-OCRv6 engine ----------
@@ -1299,6 +1346,7 @@ function estimate() {
   const remaining = pages.length - nextIndex;
   if (!pages.length) { etaEl.textContent = ""; return; }
   const cost = m => m === "indra" ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
+    : m === "ocria" ? remaining * OCRIA_SECONDS_PER_PAGE + (ocria ? 0 : OCRIA_LOAD_SECONDS)
     : m === "tesseract" ? remaining * PACKED_SECONDS_PER_PAGE + (tess ? 0 : PACKED_LOAD_SECONDS)
     : usePacked(m) ? remaining * PACKED_SECONDS_PER_PAGE + (packedNets[m] ? 0 : PACKED_LOAD_SECONDS)
     : remaining * SECONDS_PER_PAGE + (paddles[m] ? 0 : LOAD_SECONDS);
@@ -1771,6 +1819,12 @@ async function readOcr(model, out, canvas, role) {
     if (await ensureIndra()) { await recognizeIndra(out, canvas); return; }
     model = out.model = indraFallback(role);
   }
+  if (model === "ocria") {
+    await ensureOcria();
+    setStatus("OCR " + out.image + " (OCRia-nano-1, WebAssembly on the CPU)...");
+    await recognizeOcria(out, canvas);
+    return;
+  }
   out.pageW = canvas.width; out.pageH = canvas.height;
   if (model === "tesseract") {
     const reader = await ensureTesseract();
@@ -1980,7 +2034,7 @@ function escapeHtml(s) {
 function pageInner(pg) {
   const done = pg.status === "done";
   const srcBadge = done
-    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : pg.engine === "tesseract" ? "OCR (Tesseract)" : "OCR")) + '</span>'
+    ? '<span class="src ' + (pg.source || "") + '">' + (pg.source === "text" ? "text layer" : (pg.engine === "indra" ? "OCR (Indra)" : pg.engine === "ocria" ? "OCR (OCRia-nano-1)" : pg.engine === "tesseract" ? "OCR (Tesseract)" : "OCR")) + '</span>'
     : "";
   const meta = done
     ? '<span class="meta">' + (pg.source === "text"
