@@ -274,7 +274,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
             <option value="ocria" title="OCRia-nano-1 (LlamaIndex): 8M parameters. With WebGPU it runs from packed int8 weights on WGSL kernels (about 4 MB, about 1 s per page) and returns text lines. Without WebGPU (or with ?ocria=wasm) it runs on the CPU in LiteParse's WebAssembly build, which also reads tables (with spanning cells), headings and lists as Markdown: about 14 MB on first run and a few seconds per page. Weights under LlamaIndex's OCRia-nano-1 Model License (modified OpenRAIL-M).">OCRia-nano-1 (~4 MB on WebGPU; tables + Markdown on CPU, ~14 MB)</option>
             <option value="tiny" title="PP-OCRv6 tiny, about 3M parameters. With WebGPU it runs from packed int8 weights (about 1.6 MB download); without, through onnxruntime-web from Hugging Face (6.2 MB).">PP-OCRv6 tiny (~3M, fastest, ~1.6 MB on WebGPU)</option>
             <option value="small" title="PP-OCRv6 small, about 7M parameters. With WebGPU it runs from packed int8 weights (about 6.3 MB download); without, through onnxruntime-web from Hugging Face (31 MB).">PP-OCRv6 small (~7M, balanced, ~6.3 MB on WebGPU)</option>
-            <option value="nemotron" title="NVIDIA Nemotron 3.5 Parse: a 631M-parameter vision-language parser (a C-RADIOv4 image encoder and a 10-layer text decoder) that writes each block of the page with its class, box and reading order, tables included, as Markdown. Runs on WebGPU from weights packed to 4 and 8 bits: a large download on first use (kept by the browser after that) and about 9 seconds to read a page on a recent laptop GPU, then about 55 tokens a second to write it out, so well under a minute for a dense page. Weights under NVIDIA's OpenMDW License 1.1.">Nemotron 3.5 Parse (layout + tables + Markdown, 403 MB, slow, needs WebGPU)</option>
+            <option value="nemotron" title="NVIDIA Nemotron 3.5 Parse: a 631M-parameter vision-language parser (a C-RADIOv4 image encoder and a 10-layer text decoder) that writes each block of the page with its class, box and reading order, tables included, as Markdown. Runs on WebGPU from weights packed to 8 bits: a large download on first use (kept by the browser after that) and about 9 seconds to read a page on a recent laptop GPU, then about 55 tokens a second to write it out, so well under a minute for a dense page. Weights under NVIDIA's OpenMDW License 1.1.">Nemotron 3.5 Parse (layout + tables + Markdown, 561 MB, slow, needs WebGPU)</option>
             <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
           </select>
         </div>
@@ -854,7 +854,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-26-nemotron35"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-26-nemotron35i8"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -1153,17 +1153,17 @@ async function recognizeOcria(pg, canvas) {
    neck shrinks its patch features by 4, and a 10-layer decoder, reading them as a prefix, writes the page block
    by block: box, class (Title, Text, Table, Picture, Page-header, ...) and Markdown text, tables as HTML.
    The engine is oaustegard/experiments nemotron-parse-pack web/engine (hand-written WGSL); the weights come
-   packed to 4-bit (encoder) and 8-bit (decoder) from R2 and are kept by the browser's Cache API.
+   packed to 8 bits from R2 and are kept by the browser's Cache API.
    Needs WebGPU. Weights under the OpenMDW License 1.1 (permissive; NOTICE in nemotron-parse-pack). */
 const NEMOTRON_ENGINE = "https://austegard.com/experiments/nemotron-parse-pack/web/engine/nemotron.js";
-const NEMOTRON_PACK = "https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/nemotron-parse-pack/v35/";
+const NEMOTRON_PACK = "https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/nemotron-parse-pack/v35i8/";
 let nemo = null, nemoLoading = null;
 async function ensureNemotron() {
   if (nemo) return nemo;
   if (!navigator.gpu) throw new Error("Nemotron Parse needs WebGPU, which this browser lacks");
   if (!nemoLoading) {
     nemoLoading = (async () => {
-      setStatus("Loading Nemotron 3.5 Parse (packed weights, 403 MB on first use, then kept by the browser)...");
+      setStatus("Loading Nemotron 3.5 Parse (packed weights, 561 MB on first use, then kept by the browser)...");
       const { NemotronParse } = await import(window.NEMOTRON_ENGINE_URL || NEMOTRON_ENGINE);
       const t0 = performance.now();
       const m = await NemotronParse.load({ base: window.NEMOTRON_PACK_URL || NEMOTRON_PACK,

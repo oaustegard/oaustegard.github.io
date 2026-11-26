@@ -68,8 +68,8 @@ first place.
   631M parameters, OpenMDW License 1.1, tokenizer MIT) reads the whole page as one image and writes it
   block by block: a box, a class (title, section header, text, list item, table, picture, caption, page
   header or footer, ...) and Markdown text, tables included, in reading order. It runs on WebGPU from
-  weights packed to 4 bits (image encoder) and 8 bits (text decoder), 403 MB downloaded once and kept by
-  the browser. On a recent laptop GPU it takes about 9 seconds to read a page and then writes about 55
+  weights packed to 8 bits (within a point of full precision on Omni Parse Bench), 561 MB downloaded once
+  and kept by the browser. On a recent laptop GPU it takes about 9 seconds to read a page and then writes about 55
   tokens a second, so a dense page takes well under a minute. It comes from the
   [nemotron-parse-pack](https://austegard.com/experiments/nemotron-parse-pack/web/) experiment.
   Without WebGPU it falls back to PP-OCRv6 small.
