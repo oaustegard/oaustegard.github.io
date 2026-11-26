@@ -271,7 +271,7 @@ mark.d { background: color-mix(in srgb, var(--a2t-cmp-a) 24%, transparent); colo
           <label class="field" for="tier">OCR model</label>
           <select id="tier">
             <option value="indra" selected title="Indra OCR (Datalab): 12M parameters, reads layout and reading order, outputs Markdown. Needs WebGPU.">Indra (layout + Markdown, ~2.3 MB, needs WebGPU)</option>
-            <option value="ocria" title="OCRia-nano-1 (LlamaIndex): 8M parameters. Reads tables (with spanning cells), headings and lists, outputs Markdown. Runs on the CPU in LiteParse's WebAssembly build, so it needs no WebGPU. About 14 MB on first run: the 5.7 MB runtime plus 8 MB of packed int8 weights for all four scripts and the layout model. Weights under LlamaIndex's OCRia-nano-1 Model License (modified OpenRAIL-M).">OCRia-nano-1 (tables + Markdown, CPU, ~14 MB)</option>
+            <option value="ocria" title="OCRia-nano-1 (LlamaIndex): 8M parameters. With WebGPU it runs from packed int8 weights on WGSL kernels (about 4 MB, about 1 s per page) and returns text lines. Without WebGPU (or with ?ocria=wasm) it runs on the CPU in LiteParse's WebAssembly build, which also reads tables (with spanning cells), headings and lists as Markdown: about 14 MB on first run and a few seconds per page. Weights under LlamaIndex's OCRia-nano-1 Model License (modified OpenRAIL-M).">OCRia-nano-1 (~4 MB on WebGPU; tables + Markdown on CPU, ~14 MB)</option>
             <option value="tiny" title="PP-OCRv6 tiny, about 3M parameters. With WebGPU it runs from packed int8 weights (about 1.6 MB download); without, through onnxruntime-web from Hugging Face (6.2 MB).">PP-OCRv6 tiny (~3M, fastest, ~1.6 MB on WebGPU)</option>
             <option value="small" title="PP-OCRv6 small, about 7M parameters. With WebGPU it runs from packed int8 weights (about 6.3 MB download); without, through onnxruntime-web from Hugging Face (31 MB).">PP-OCRv6 small (~7M, balanced, ~6.3 MB on WebGPU)</option>
             <option value="tesseract" title="Tesseract's own page layout and its LSTM recognizer on WebGPU, with an English model fine-tuned for scanned documents, forms and receipts (Apache-2.0). Reads English only. Needs WebGPU.">Tesseract English, fine-tuned for scans (~5 MB, needs WebGPU)</option>
@@ -852,7 +852,7 @@ const PDF_DOC_OPTS = {
 };
 
 
-const BUILD = "2026-11-26-ocria"; /* keep equal to anything-to-text_build.json */
+const BUILD = "2026-11-26-ocria-gpu"; /* keep equal to anything-to-text_build.json */
 const relay = (window.Relay || { start() { return this; }, log() {}, warn() {}, error() {} }).start({ page: "anything-to-text", build: BUILD });
 window.a2tRelay = relay; /* the transcriber module below logs through the same relay */
 /* a cached copy of an older build reloads itself once */
@@ -879,7 +879,7 @@ const SECONDS_PER_PAGE = 10;   /* skill estimate: ~10s/page on CPU */
 const LOAD_SECONDS = 6;        /* one-time model load */
 const INDRA_SECONDS_PER_PAGE = 1;  /* Indra on WebGPU: 0.1-0.5 s per page warm, plus rendering */
 const INDRA_LOAD_SECONDS = 4;
-const OCRIA_SECONDS_PER_PAGE = 4;  /* OCRia-nano in single-threaded WebAssembly: 1-8 s per scanned page */
+const OCRIA_SECONDS_PER_PAGE = 4;  /* OCRia-nano in single-threaded WebAssembly: 1-8 s per scanned page; about 1 s on WebGPU */
 const OCRIA_LOAD_SECONDS = 10;
 const PACKED_SECONDS_PER_PAGE = 2; /* packed PP-OCRv6 on WebGPU: detector plus recognizer, plus rendering */
 const PACKED_LOAD_SECONDS = 3;
@@ -1067,17 +1067,46 @@ async function recognizeIndra(pg, canvas) {
    thread, so it needs no WebGPU. The weights come packed to int8 from oaustegard/experiments
    ocria-pack and are rebuilt into the files LiteParse loads; the module hands each canvas
    to LiteParse as a one-page image PDF. Weights: OCRia-nano-1 Model License (modified
-   OpenRAIL-M), use restrictions included; see the ocria-pack NOTICE. */
+   OpenRAIL-M), use restrictions included; see the ocria-pack NOTICE.
+   With WebGPU the same nets run instead from WGSL kernels (ocria-pack web/gpu) with a JS port
+   of LiteParse's OCR page logic: about 4 MB, several times faster, no LiteParse runtime. That
+   path has no LayoutNet, so it returns text lines (ordered here like the other line models)
+   instead of Markdown tables. ?ocria=wasm forces the WebAssembly path; if the GPU path fails
+   to load, this session falls back to it. */
 const OCRIA_OCR = "https://austegard.com/experiments/ocria-pack/web/ocria.js";
+const OCRIA_GPU = "https://austegard.com/experiments/ocria-pack/web/gpu/ocria-gpu.js";
 let ocria = null, ocriaLoading = null;
+function ocriaWantsGpu() {
+  if (!navigator.gpu) return false;
+  try { if (new URLSearchParams(location.search).get("ocria") === "wasm") return false; } catch (e) {}
+  return true;
+}
+async function loadOcriaWasm() {
+  setStatus("Loading OCRia-nano-1 (LiteParse WebAssembly runtime and packed weights, about 14 MB on first run)...");
+  const { loadOcria } = await import(window.OCRIA_OCR_URL || OCRIA_OCR);
+  const r = await loadOcria({ layout: true, scripts: ["world", "rtl", "cjk"], log: m => console.log("[ocria]", m) });
+  r.kind = "wasm";
+  return r;
+}
 async function ensureOcria() {
   if (ocria) return ocria;
   if (!ocriaLoading) {
     ocriaLoading = (async () => {
-      setStatus("Loading OCRia-nano-1 (LiteParse WebAssembly runtime and packed weights, about 14 MB on first run)...");
-      const { loadOcria } = await import(window.OCRIA_OCR_URL || OCRIA_OCR);
-      const r = await loadOcria({ layout: true, scripts: ["world", "rtl", "cjk"], log: m => console.log("[ocria]", m) });
-      relay.log("ocria ready", { ms: Math.round(r.loadMs), pack_bytes: r.packBytes });
+      let r = null;
+      if (ocriaWantsGpu()) {
+        try {
+          setStatus("Loading OCRia-nano-1 on WebGPU (packed weights, about 4 MB on first run)...");
+          const { loadOcriaGpu } = await import(window.OCRIA_GPU_URL || OCRIA_GPU);
+          r = await loadOcriaGpu({ scripts: ["world", "rtl", "cjk"] });
+          r.kind = "gpu";
+        } catch (e) {
+          console.warn("[ocria] WebGPU path failed, using WebAssembly", e);
+          relay.error("ocria gpu load failed, using wasm", { e: String((e && e.message) || e) });
+          r = null;
+        }
+      }
+      if (!r) r = await loadOcriaWasm();
+      relay.log("ocria ready", { kind: r.kind, ms: Math.round(r.loadMs), pack_bytes: r.packBytes ?? null });
       return r;
     })();
     ocriaLoading.catch(e => {
@@ -1088,6 +1117,19 @@ async function ensureOcria() {
   return (ocria = await ocriaLoading);
 }
 async function recognizeOcria(pg, canvas) {
+  if (ocria.kind === "gpu") {
+    const t0 = performance.now();
+    const lines = await ocria.read(canvas);
+    pg.pageW = canvas.width; pg.pageH = canvas.height;
+    const items = lines.map(l => ({ text: l.text, confidence: l.confidence,
+      box: { x: l.bbox[0], y: l.bbox[1], width: l.bbox[2] - l.bbox[0], height: l.bbox[3] - l.bbox[1] } }));
+    buildResult(pg, items, "ocr", null);
+    pg.engine = "ocria";
+    const ms = Math.round(performance.now() - t0);
+    console.log("[ocria]", pg.image, ms + "ms", items.length + " lines (WebGPU)");
+    relay.log("ocria page", { kind: "gpu", image: pg.image, w: canvas.width, h: canvas.height, lines: items.length, ms });
+    return;
+  }
   const page = await ocria.read(canvas);
   pg.pageW = page.width; pg.pageH = page.height;
   buildResult(pg, page.items, "ocr", null);
@@ -1346,7 +1388,7 @@ function estimate() {
   const remaining = pages.length - nextIndex;
   if (!pages.length) { etaEl.textContent = ""; return; }
   const cost = m => m === "indra" ? remaining * INDRA_SECONDS_PER_PAGE + (indra ? 0 : INDRA_LOAD_SECONDS)
-    : m === "ocria" ? remaining * OCRIA_SECONDS_PER_PAGE + (ocria ? 0 : OCRIA_LOAD_SECONDS)
+    : m === "ocria" ? remaining * ((ocria ? ocria.kind === "gpu" : ocriaWantsGpu()) ? 1 : OCRIA_SECONDS_PER_PAGE) + (ocria ? 0 : OCRIA_LOAD_SECONDS)
     : m === "tesseract" ? remaining * PACKED_SECONDS_PER_PAGE + (tess ? 0 : PACKED_LOAD_SECONDS)
     : usePacked(m) ? remaining * PACKED_SECONDS_PER_PAGE + (packedNets[m] ? 0 : PACKED_LOAD_SECONDS)
     : remaining * SECONDS_PER_PAGE + (paddles[m] ? 0 : LOAD_SECONDS);
@@ -1821,7 +1863,7 @@ async function readOcr(model, out, canvas, role) {
   }
   if (model === "ocria") {
     await ensureOcria();
-    setStatus("OCR " + out.image + " (OCRia-nano-1, WebAssembly on the CPU)...");
+    setStatus("OCR " + out.image + (ocria.kind === "gpu" ? " (OCRia-nano-1 on WebGPU)..." : " (OCRia-nano-1, WebAssembly on the CPU)..."));
     await recognizeOcria(out, canvas);
     return;
   }

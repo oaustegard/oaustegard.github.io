@@ -9,7 +9,7 @@ file by type:
 
 | Input | Engine | Output |
 |---|---|---|
-| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, **OCRia-nano-1** (CPU, best on tables), PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) or **Tesseract** (fine-tuned English); optionally a second model to compare against | Markdown (Indra) or text lines in reading order, with confidence |
+| Images (`png`, `jpg`, …) | OCR: **Indra OCR** (needs WebGPU) by default, **OCRia-nano-1** (WebGPU lines, or Markdown tables on the CPU), PaddleOCR **PP-OCRv6** (packed on WebGPU, onnxruntime-web otherwise) or **Tesseract** (fine-tuned English); optionally a second model to compare against | Markdown (Indra) or text lines in reading order, with confidence |
 | PDFs | pdf.js text layer when present, OCR fallback otherwise | per-page text, exact where the PDF is born-digital |
 | Audio / video (`mp4`, `mov`, `mkv`, `webm`, `mp3`, `wav`, `m4a`, `flac`, `ogg`, …) | Speech-to-text — **Whisper**, from quantized packs on a WebGPU engine ([whisper-pack](https://github.com/oaustegard/experiments/tree/main/whisper-pack)), or via Transformers.js | timestamped transcript, editable, with per-segment playback |
 | Documents (`docx`, `pptx`, `xlsx`, `odt`, EPUB, HTML, LaTeX, … — full list below) | **pandoc** 3.10, the official WebAssembly build, in a web worker | Markdown (GitHub or pandoc) or plain text |
@@ -38,9 +38,11 @@ first place.
   on first use; models for other writing systems and its spelling-correction tables
   download only when a page needs them.
 - **OCRia-nano-1** ([llamaindex/OCRia-nano-1](https://huggingface.co/llamaindex/OCRia-nano-1),
-  8.1M parameters) also writes Markdown and is the strongest choice for tables: it finds rows,
-  columns and spanning header cells. It runs on the CPU in LiteParse's WebAssembly build, so it
-  works without WebGPU, at a few seconds per scanned page. A first run downloads about 14 MB: the
+  8.1M parameters). With WebGPU it runs from int8-packed weights on WGSL kernels with a JS port of
+  LiteParse's OCR page logic: about 4 MB on first run and about 1 s per page, returning text
+  lines. Without WebGPU, or with `?ocria=wasm`, it runs on the CPU in LiteParse's WebAssembly
+  build, which also reads tables (rows, columns, spanning header cells), headings and lists as
+  Markdown, at a few seconds per scanned page; that path downloads about 14 MB: the
   5.7 MB runtime from jsdelivr and 8 MB of int8-packed weights from
   [austegard.com/experiments/ocria-pack](https://austegard.com/experiments/ocria-pack/web/). On
   Omni Parse Bench it scores 67.7 against Indra's 71.7 (tables 73.8 against 59.9). Its weights are
