@@ -2,7 +2,7 @@
 
 A playable re-creation of Richard Greenblatt's chess program for the PDP-6 at MIT's Project MAC
 (1966–67), drawn on a bulging phosphor tube, with its search shown as it happens: the plausible
-moves ranked at each node, the ones kept and the ones clipped, alpha-beta cutoffs crossing out
+moves ranked at each node, the ones kept and the low-ranked ones it discards unexamined ("clipped"), alpha-beta cutoffs crossing out
 branches, the main variation forming. Slow it down to follow each step, or switch to full speed.
 Installable PWA, one self-contained page, no third-party requests.
 
@@ -22,27 +22,31 @@ MIT and meets "a 25-year-old Missourian, Richard Greenblatt":
 > feed in anything, of course."
 
 The writer loses on the tenth move, asks "Could I take my last move back, and play on?", and lasts
-to move 59: "Queen from Queen's Bishop 8 to King's Rook 8!" The article also says the program "can
+to move 59, when the program delivers mate: "Queen from Queen's Bishop 8 to King's Rook 8!" The article also says the program "can
 be adjusted to look two moves ahead, or four, or six". This page is that decision tree, drawn while
 the program uses it. The TAKE BACK button, the 2 / 4 / 6 look-ahead buttons and the descriptive
 notation come from the same page.
 
 ## Controls
 
+The search follows Greenblatt, Eastlake and Crocker, "The Greenblatt Chess Program" (Fall Joint
+Computer Conference, 1967), called "the paper" below. A ply is one move by one side.
+
 | control | does |
 |---|---|
 | tap a piece, then a square | move (a promotion asks which piece) |
-| LOOK-AHEAD 2 / 4 / 6 | depth of the basic search in plies |
-| WIDTH: NORMAL / TOURN. | basic width 6 at every level, or 15, 15, 9, 9, 7 (the paper's two settings) |
+| LOOK-AHEAD 2 / 4 / 6 | how many plies every line is searched before captures and other extensions take over |
+| WIDTH: NORMAL / TOURN. | how many moves are kept at each ply: 6 at every level, or 15, 15, 9, 9, 7 (the paper's two settings) |
 | THINKING RATE | search steps per second, about 1.5 to 2,400 |
 | FULL SPEED | run the search flat out; the tube shows the tree without labels, counters and the top-level table |
 | NEW GAME, TAKE BACK, YOU: WHITE/BLACK | take back removes your last move and the reply; changing side starts a new game |
 | SOUND | relay clicks for search steps, teletype clatter, a bell at the end |
 | P-K4 / e4 | descriptive notation (default) or algebraic |
-| P7 / P1 | blue-white phosphor with yellow-green afterglow (the Type 340's), or green |
+| P7 / P1 | screen colour, named for the phosphor: P7 is the blue-white with yellow-green afterglow of DEC's Type 340 display, which the PDP-6 drove; P1 is plain green |
 | BOOK | a few opening lines (off by default so the first reply shows the search) |
 
-Lamps: RUN while it thinks, CLIP flashes on an alpha-beta cutoff, HASH on a hash-table hit.
+Lamps: RUN while it thinks, YOUR MOVE when it waits for you, CLIP flashes on an alpha-beta cutoff,
+HASH on a hit in the table of positions already valued, CHECK and MATE when they happen on the board.
 
 ## Reading the tube
 
@@ -51,12 +55,13 @@ node being examined: a diamond is the move under study (labelled with its plausi
 filled squares have been valued, hollow squares are waiting, a ring marks the best so far, a cross
 is a move cut off by alpha-beta. The short dashed stubs at the right, with a count, are legal moves
 the plausible move generator ranked too low to keep: clipped by the width. Rows below the look-ahead
-depth are capture sequences or a feedover extension. On the board, the dashed arrow is the top-level
+depth are capture sequences or a feedover extension: extra plies added when the position at the
+look-ahead depth is still unsettled (a piece attacked, a king in check). On the board, the dashed arrow is the top-level
 move being tried and the solid one is the best so far.
 
 Under the tree: what the program did last, its best line, counters, and the paper's own debugging
 aid, "printed record of plausibility of all moves at top level and main variation from each top
-level move", with the two largest reasons for each move's score. Values are in pawns, positive for
+level move", with the two heuristics that added most to each move's plausibility score. Values are in pawns, positive for
 White.
 
 ## What is reproduced, and from where
@@ -81,7 +86,7 @@ Taken from the paper as written:
 - **Static evaluator.** S = B + R + P + K + C with the piece values of Table 2 (pawn 128, knight
   416, bishop 448, rook 640, queen 1248). The king safety term applies only with queens on and is 8
   per rank; center control is ±1 for a pawn on the four center squares against none. The pawn
-  structure term scores the opponent's isolated, doubled-if-isolated, tripled and backward pawns and
+  structure term scores the opponent's isolated, doubled and isolated, tripled and backward pawns and
   our own passed pawns; a backward pawn counts for more on an open file or against rooks or queens.
 - **End of the basic search.** The three feedover conditions (pieces en prise with the side to move
   in check, or trapped, or pinned, and so on) extend the search with the plausible move generator;
@@ -104,13 +109,13 @@ Taken from the paper as written:
 Assumed, because the paper is silent or "more representative than definitive":
 
 - **Every weight in the plausible move generator**, and which of the "about 50" heuristics exist.
-  This page has about twenty. The opening preference for the king's pawn over the queen's is mine.
+  This page has about twenty. The small preference for the king's pawn over the queen's on move one is an addition.
 - **The weights of the pawn-structure sub-terms** (isolated 12, doubled and isolated +8, tripled 24,
   passed 16 + 6 per rank, backward 8 or 14, against a pawn of 128).
 - **Backward pawns.** The paper's rules, read literally, call every pawn that lags a neighbour
   backward (after 1 P-K4, both neighbours of the king's pawn). Here the pawn must also be held:
   its next square occupied by an enemy or covered by an enemy pawn.
-- **The piece ratio term.** The printed formula is garbled ("R = {N/(T-1)}*⅛*M"); I use
+- **The piece ratio term.** The printed formula is garbled ("R = {N/(T-1)}*⅛*M"); this page uses
   (N/T − 1) · M/8, which gives a few points for an even trade when three pawns ahead, as the text
   describes.
 - **King safety ranks** are counted from each side's own back rank.
@@ -133,7 +138,8 @@ low, and can be clipped, so some two-move mates are missed that a full-width sea
 
 ## How it is built
 
-- **One engine source, two places.** `ENGINE()` holds the rules (0x88 board, castling, en passant,
+- **Engine and worker.** Everything is in `index.html`, with no build step; edit it directly.
+  `ENGINE()` holds the rules (0x88 board, castling, en passant,
   promotion, repetition, fifty moves), notation, the plausible move generator, evaluator and search.
   The page calls it for legal moves; a Web Worker built from the same function's source runs the
   search. Without workers the same driver runs on the page.
@@ -150,10 +156,13 @@ low, and can be clipped, so some two-move mates are missed that a full-width sea
 ## Checks
 
 - Move generation matches perft: start position depth 4 = 197,281; Kiwipete depth 3 = 97,862;
-  positions 3 and 5 of the chessprogramming.org suite.
+  positions 3 and 5 of the chessprogramming.org "Perft Results" page.
 - Finds mate in one and a quiet two-move rook mate, finds Scholar's mate at 2 and 4 plies, and does
   not drop material in three opening positions at 4 plies.
-- Played 100-ply games against a random mover and against itself with every move checked legal.
+- Played whole games, every move checked legal: against a random mover (mate in 11 plies as White,
+  54 as Black) and 4 plies against 2 plies (mate after 97 plies).
 - Playwright at desktop and phone size: moves by tap, slow and full-speed replies, an illegal move
   refused, take back, the engine delivering Fool's mate with the game ended, playing as Black, no
   console errors and no requests off the origin.
+
+The engine tests (node) and the Playwright run were written for this build and are not in the repo.
