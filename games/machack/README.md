@@ -146,7 +146,7 @@ low, and can be clipped, so some two-move mates are missed that a full-width sea
 - **The search is a generator.** It yields at every step worth showing. The driver steps it at the
   chosen rate and posts a snapshot of the stack of nodes; at full speed it runs 60 ms slices with
   tracing off. Changing the rate mid-search takes effect on the next step.
-- **The tube** is a 2D canvas (vector pieces, dot-shaded dark squares, text) drawn in grey levels,
+- **The tube** is a 2D canvas (vector pieces, dot-shaded light squares, text) drawn in grey levels,
   then passed through a WebGL shader: barrel bend, phosphor colour, an afterglow buffer that decays
   between frames, bloom, scan lines, flicker, vignette and a glass highlight. Taps are run through
   the same bend to find the square. Without WebGL the canvas is shown flat and tinted.
