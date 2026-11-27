@@ -1,0 +1,1310 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Mac Hack VI</title>
+<meta name="description" content="Play Richard Greenblatt's 1967 MIT chess program on a bulging CRT and watch its decision tree: plausible moves ranked, branches clipped, alpha-beta cutoffs, at human speed or flat out.">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="austegard.com">
+<meta property="og:title" content="Mac Hack VI">
+<meta property="og:description" content="Play Richard Greenblatt's 1967 MIT chess program on a bulging CRT and watch its decision tree: plausible moves ranked, branches clipped, alpha-beta cutoffs, at human speed or flat out.">
+<meta property="og:url" content="https://austegard.com/games/machack/">
+<meta property="og:image" content="https://austegard.com/games/machack/og-image.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="A chess position and a search tree drawn in phosphor on a round-cornered CRT set in a console of lit pushbuttons">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Mac Hack VI">
+<meta name="twitter:description" content="Play Richard Greenblatt's 1967 MIT chess program and watch its decision tree as it thinks.">
+<meta name="twitter:image" content="https://austegard.com/games/machack/og-image.png">
+<meta name="theme-color" content="#14181b">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Mac Hack VI">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+/* Layout: a console. The CRT bay holds one canvas (board and decision tree share the tube), the teletype bay
+   holds the paper log, the panel holds lit pushbuttons and lamps. Desktop fits one screen; a phone stacks and scrolls. */
+:root {
+  --room: #14181b; --case: #3a4a55; --case-hi: #51646f; --case-lo: #25323a; --bezel: #15171a;
+  --legend: #e9e2cf; --amber: #ffb648; --paper: #efe6cf; --ink: #2a2622;
+  --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; background: var(--room); color: var(--legend); font-family: var(--mono); -webkit-text-size-adjust: 100%; }
+body { background: radial-gradient(120% 90% at 50% 0%, #232a2f 0%, #14181b 60%, #0c0e10 100%) fixed; }
+button, input { font: inherit; color: inherit; }
+#rig { max-width: 1500px; margin: 0 auto; padding: max(8px, env(safe-area-inset-top)) max(8px, env(safe-area-inset-right)) max(10px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); display: grid; gap: 8px; grid-template-columns: minmax(0, 1fr); }
+.bay { background: linear-gradient(180deg, var(--case-hi), var(--case) 12%, var(--case) 80%, var(--case-lo)); border: 1px solid #0b0d0f; border-radius: 10px; box-shadow: inset 0 1px 0 #7d909b55, inset 0 -2px 6px #0006, 0 6px 18px #0008; position: relative; }
+#plate { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; padding: 6px 14px; font-size: 10px; letter-spacing: .16em; color: #cfd8dc; }
+#plate b { font-size: 15px; letter-spacing: .3em; color: var(--legend); white-space: nowrap; }
+#plate span { opacity: .8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tag { position: absolute; left: 50%; bottom: 3px; transform: translateX(-50%); font-size: 8.5px; letter-spacing: .22em; color: #c9d3d8; opacity: .75; white-space: nowrap; pointer-events: none; }
+.screw { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #aeb9bf, #4a565d 60%, #1c2226); box-shadow: 0 1px 1px #000a; }
+.screw::after { content: ""; position: absolute; left: 1px; right: 1px; top: 4px; height: 1px; background: #11161a; transform: rotate(35deg); }
+
+#scopeBay { padding: 12px 12px 18px; }
+#bezel { position: relative; width: 100%; aspect-ratio: 10 / 17.6; background: radial-gradient(120% 120% at 50% 40%, #24272b, var(--bezel) 70%); border-radius: 9% / 6%; padding: 3.2%; box-shadow: inset 0 0 0 2px #000, inset 0 6px 14px #000c, inset 0 -3px 8px #4446, 0 1px 0 #6a7c86; }
+#tube { position: relative; width: 100%; height: 100%; border-radius: 11% / 7%; overflow: hidden; background: #020403; box-shadow: 0 0 0 3px #000, 0 0 0 5px #2c3034, inset 0 0 40px #000; }
+#crt { display: block; width: 100%; height: 100%; touch-action: manipulation; cursor: crosshair; }
+#promo { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px; background: #000a; }
+#promo[hidden] { display: none; }
+
+#ttyBay { padding: 10px 12px 18px; display: flex; flex-direction: column; min-height: 0; order: 3; }
+#panel { order: 2; }
+#quote { order: 4; }
+#slot { flex: 1; min-height: 0; background: #0d0f10; border-radius: 6px; padding: 0 10px; box-shadow: inset 0 4px 10px #000; display: flex; }
+#paper { flex: 1; height: 190px; overflow-y: auto; margin: 0; padding: 10px 10px 14px; background: linear-gradient(90deg, #d9cfb6, var(--paper) 6%, var(--paper) 94%, #d9cfb6); color: var(--ink); font-size: 12.5px; line-height: 1.35; white-space: pre-wrap; word-break: break-word; scrollbar-width: thin; box-shadow: inset 0 8px 10px -6px #0007; }
+#paper::after { content: "\2588"; opacity: .55; animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+#panel { padding: 10px 12px 14px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: flex-end; }
+.grp { display: flex; flex-direction: column; gap: 4px; }
+.grp > span { font-size: 8.5px; letter-spacing: .18em; color: #dfe6ea; opacity: .85; white-space: nowrap; }
+.row { display: flex; gap: 5px; align-items: center; }
+.btn { min-width: 44px; height: 38px; padding: 0 8px; border: 2px solid #050607; border-radius: 4px; background: linear-gradient(180deg, #3a2f22, #1e1811); color: #a8946c; font-size: 10px; font-weight: 700; letter-spacing: .08em; line-height: 1.05; cursor: pointer; box-shadow: inset 0 1px 0 #6b5a3e, 0 2px 0 #000; white-space: pre-line; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+.btn:active { transform: translateY(1px); box-shadow: inset 0 1px 0 #6b5a3e; }
+.btn.on { background: radial-gradient(circle at 50% 40%, #fff0c4, var(--amber) 60%, #d98318); color: #2b1600; box-shadow: inset 0 1px 0 #fff8, 0 0 14px #ffab3d99, 0 2px 0 #000; }
+.btn.act { background: linear-gradient(180deg, #d9d2be, #a59d87); color: #1d1b17; box-shadow: inset 0 1px 0 #fff9, 0 2px 0 #000; }
+.btn:focus-visible, input:focus-visible { outline: 2px solid #9fe8ff; outline-offset: 2px; }
+#promo .btn { min-width: 54px; height: 54px; font-size: 20px; }
+input[type=range] { -webkit-appearance: none; appearance: none; width: 150px; height: 38px; background: transparent; margin: 0; }
+input[type=range]::-webkit-slider-runnable-track { height: 6px; background: #0b0d0e; border-radius: 3px; box-shadow: inset 0 1px 2px #000, 0 1px 0 #6f828c; }
+input[type=range]::-moz-range-track { height: 6px; background: #0b0d0e; border-radius: 3px; box-shadow: inset 0 1px 2px #000, 0 1px 0 #6f828c; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 30px; margin-top: -12px; border-radius: 3px; border: 1px solid #000; background: linear-gradient(90deg, #8d8672, #e4dcc6 45%, #8d8672); }
+input[type=range]::-moz-range-thumb { width: 16px; height: 30px; border-radius: 3px; border: 1px solid #000; background: linear-gradient(90deg, #8d8672, #e4dcc6 45%, #8d8672); }
+.lamps { display: flex; gap: 10px; align-items: flex-end; height: 38px; }
+.lamp { display: flex; flex-direction: column; align-items: center; gap: 4px; font-size: 8px; letter-spacing: .12em; color: #dfe6ea; opacity: .9; }
+.lamp i { width: 13px; height: 13px; border-radius: 50%; background: radial-gradient(circle at 35% 30%, #5a3a2a, #2a1710 70%); border: 1px solid #000; box-shadow: inset 0 1px 1px #fff2; }
+.lamp.on i { background: radial-gradient(circle at 40% 35%, #fff3d0, #ff8a3a 55%, #c9431a); box-shadow: 0 0 10px #ff7a3acc, 0 0 2px #fff; }
+#quote { padding: 2px 6px 0; font-size: 11px; line-height: 1.5; color: #9aa7ad; }
+#quote q { color: #cfd8dc; quotes: "\201C" "\201D"; }
+#quote a { color: #b9c9d1; }
+
+@media (min-width: 900px) and (min-height: 560px) {
+  html, body { overflow: hidden; }
+  #rig { height: 100dvh; grid-template-columns: minmax(0, 1fr) 330px; grid-template-rows: auto minmax(0, 1fr) auto auto; }
+  #plate, #panel, #quote { grid-column: 1 / -1; }
+  #scopeBay { grid-row: 2; grid-column: 1; }
+  #ttyBay { grid-row: 2; grid-column: 2; }
+  #panel { grid-row: 3; }
+  #quote { grid-row: 4; }
+  #scopeBay { min-height: 0; }
+  #bezel { aspect-ratio: auto; height: 100%; padding: 1.6%; border-radius: 5% / 8%; }
+  #tube { border-radius: 6% / 9%; }
+  #paper { height: auto; font-size: 13px; }
+  #quote { font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+@media (max-width: 520px) { #plate span:first-child { display: none; } #plate b { font-size: 13px; } input[type=range] { width: 120px; } }
+@media (prefers-reduced-motion: reduce) { #paper::after { animation: none; } }
+</style>
+</head>
+<body>
+<div id="rig">
+  <header id="plate" class="bay"><span>PROJECT MAC · M.I.T. ARTIFICIAL INTELLIGENCE LABORATORY</span><b>MAC HACK VI</b><span>PDP-6 · 1967</span></header>
+
+  <section id="scopeBay" class="bay" aria-label="Display">
+    <i class="screw" style="left:4px;top:4px"></i><i class="screw" style="right:4px;top:4px"></i><i class="screw" style="left:4px;bottom:4px"></i><i class="screw" style="right:4px;bottom:4px"></i>
+    <div id="bezel"><div id="tube">
+      <canvas id="crt" role="img" aria-label="Chess board and search tree"></canvas>
+      <div id="promo" hidden><button class="btn on" data-pr="5">Q</button><button class="btn on" data-pr="4">R</button><button class="btn on" data-pr="3">B</button><button class="btn on" data-pr="2">N</button></div>
+    </div></div>
+    <div class="tag">TYPE 340 PRECISION INCREMENTAL DISPLAY</div>
+  </section>
+
+  <section id="ttyBay" class="bay" aria-label="Teletype log">
+    <div id="slot"><pre id="paper" aria-live="polite"></pre></div>
+    <div class="tag">MODEL 35 TELETYPE</div>
+  </section>
+
+  <section id="panel" class="bay" aria-label="Console">
+    <div class="grp"><span>LOOK-AHEAD, PLIES</span><div class="row"><button class="btn" data-depth="2">2</button><button class="btn" data-depth="4">4</button><button class="btn" data-depth="6">6</button></div></div>
+    <div class="grp"><span>WIDTH OF SEARCH</span><div class="row"><button class="btn" data-tourn="0">NORMAL
+6</button><button class="btn" data-tourn="1">TOURN.
+15·15·9·9·7</button></div></div>
+    <div class="grp"><span>THINKING RATE</span><div class="row"><input id="rate" type="range" min="0" max="100" value="32" aria-label="Thinking rate"><button class="btn" data-tog="full">FULL
+SPEED</button></div></div>
+    <div class="grp"><span>GAME</span><div class="row"><button class="btn act" id="bNew">NEW
+GAME</button><button class="btn act" id="bBack">TAKE
+BACK</button><button class="btn" id="bSide">YOU:
+WHITE</button></div></div>
+    <div class="grp"><span>OPTIONS</span><div class="row"><button class="btn" data-tog="sound">SOUND</button><button class="btn" data-tog="desc" id="bDesc">P-K4</button><button class="btn" data-tog="p7" id="bPh">P7</button><button class="btn" data-tog="book">BOOK</button></div></div>
+    <div class="grp"><span>INDICATORS</span><div class="lamps">
+      <div class="lamp" id="lRun"><i></i>RUN</div><div class="lamp" id="lYou"><i></i>YOUR MOVE</div><div class="lamp" id="lCut"><i></i>CLIP</div><div class="lamp" id="lHash"><i></i>HASH</div><div class="lamp" id="lChk"><i></i>CHECK</div><div class="lamp" id="lMate"><i></i>MATE</div>
+    </div></div>
+  </section>
+
+  <footer id="quote"><q>In any given situation, some moves look more promising than others.</q> He drew me a <q>decision tree</q> … <q>Now I don’t feed in moves any more, I feed in principles.</q> Richard Greenblatt in <i>National Geographic</i>, November 1970. <a href="https://github.com/oaustegard/oaustegard.github.io/blob/main/games/machack/README.md">How it works</a> · <a href="/games/">Games</a></footer>
+</div>
+
+<script>
+// ===== MAC HACK VI engine: rules, plausible move generator, static evaluator, search =====
+// One function so the same source runs on the page (rules, notation) and in the Web Worker (search).
+// Section names follow Greenblatt, Eastlake & Crocker, "The Greenblatt Chess Program" (FJCC 1967).
+function ENGINE() {
+'use strict';
+const VAL = [0, 128, 416, 448, 640, 1248, 1536];           // Table 2 of the paper
+const MATE = 1000000, INF = 9999999, MATEISH = MATE - 1000;
+const ND = [33, 31, 18, 14, -33, -31, -18, -14], KD = [1, -1, 16, -16, 17, 15, -17, -15];
+const BD = [17, 15, -17, -15], RD = [1, -1, 16, -16];
+const PL = ' PNBRQK', FILEN = ['QR', 'QN', 'QB', 'Q', 'K', 'KB', 'KN', 'KR'];
+const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1';
+
+// ---------- board state (0x88) ----------
+const board = new Int8Array(128);
+let side = 0, castle = 0, ep = -1, half = 0, keyLo = 0, keyHi = 0, plyCount = 0;
+const kingSq = [4, 116];
+const hist = [], repL = [], repH = [];
+const CM = new Int8Array(128).fill(15);
+CM[0] = 13; CM[7] = 14; CM[4] = 12; CM[112] = 7; CM[119] = 11; CM[116] = 3;
+
+// Hash coding: the paper says only that positions are hashed into a 32,000-entry table. The XOR-of-random-
+// numbers scheme below is Zobrist's (1970); Hyatt recalls Mac Hack's as "a series of xor operations".
+let seed = 0x1967abcd;
+function rnd() { seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5; return seed | 0; }
+const ZL = [], ZH = [];
+for (let p = 0; p < 16; p++) { ZL.push(new Int32Array(128)); ZH.push(new Int32Array(128)); for (let s = 0; s < 128; s++) { ZL[p][s] = rnd(); ZH[p][s] = rnd(); } }
+const ZCL = new Int32Array(16), ZCH = new Int32Array(16), ZEL = new Int32Array(128), ZEH = new Int32Array(128);
+for (let i = 0; i < 16; i++) { ZCL[i] = rnd(); ZCH[i] = rnd(); }
+for (let i = 0; i < 128; i++) { ZEL[i] = rnd(); ZEH[i] = rnd(); }
+const ZSL = rnd(), ZSH = rnd();
+
+function setFEN(fen) {
+  const a = fen.trim().split(/\s+/);
+  board.fill(0); hist.length = 0; repL.length = 0; repH.length = 0;
+  let r = 7, f = 0;
+  for (const ch of a[0]) {
+    if (ch === '/') { r--; f = 0; }
+    else if (ch >= '1' && ch <= '8') f += +ch;
+    else { const tp = ' pnbrqk'.indexOf(ch.toLowerCase()); const p = tp | (ch === ch.toLowerCase() ? 8 : 0); board[r * 16 + f] = p; if (tp === 6) kingSq[p >> 3] = r * 16 + f; f++; }
+  }
+  side = a[1] === 'b' ? 1 : 0;
+  castle = 0; const c = a[2] || '-';
+  if (c.includes('K')) castle |= 1; if (c.includes('Q')) castle |= 2; if (c.includes('k')) castle |= 4; if (c.includes('q')) castle |= 8;
+  ep = a[3] && a[3] !== '-' ? (a[3].charCodeAt(0) - 97) + (a[3].charCodeAt(1) - 49) * 16 : -1;
+  half = +(a[4] || 0); plyCount = ((+(a[5] || 1)) - 1) * 2 + side;
+  keyLo = 0; keyHi = 0;
+  for (let s = 0; s < 120; s++) { if (s & 0x88) continue; const p = board[s]; if (p) { keyLo ^= ZL[p][s]; keyHi ^= ZH[p][s]; } }
+  keyLo ^= ZCL[castle]; keyHi ^= ZCH[castle];
+  if (ep >= 0) { keyLo ^= ZEL[ep]; keyHi ^= ZEH[ep]; }
+  if (side) { keyLo ^= ZSL; keyHi ^= ZSH; }
+}
+function getFEN() {
+  let s = '';
+  for (let r = 7; r >= 0; r--) {
+    let e = 0;
+    for (let f = 0; f < 8; f++) { const p = board[r * 16 + f]; if (!p) { e++; continue; } if (e) { s += e; e = 0; } const ch = ' pnbrqk'[p & 7]; s += p & 8 ? ch : ch.toUpperCase(); }
+    if (e) s += e; if (r) s += '/';
+  }
+  const c = (castle & 1 ? 'K' : '') + (castle & 2 ? 'Q' : '') + (castle & 4 ? 'k' : '') + (castle & 8 ? 'q' : '');
+  return s + (side ? ' b ' : ' w ') + (c || '-') + ' ' + (ep >= 0 ? sqAlg(ep) : '-') + ' ' + half + ' ' + ((plyCount >> 1) + 1);
+}
+function sqAlg(s) { return 'abcdefgh'[s & 7] + ((s >> 4) + 1); }
+
+function make(m) {
+  const f = m.f, t = m.t, p = m.p;
+  hist.push(castle, ep, half, keyLo, keyHi); repL.push(keyLo); repH.push(keyHi);
+  if (ep >= 0) { keyLo ^= ZEL[ep]; keyHi ^= ZEH[ep]; }
+  keyLo ^= ZCL[castle]; keyHi ^= ZCH[castle];
+  half++; plyCount++;
+  if (m.c) { const cs = m.fl === 1 ? t + (side ? 16 : -16) : t; board[cs] = 0; keyLo ^= ZL[m.c][cs]; keyHi ^= ZH[m.c][cs]; half = 0; }
+  board[f] = 0; keyLo ^= ZL[p][f]; keyHi ^= ZH[p][f];
+  const np = m.pr ? (p & 8) | m.pr : p;
+  board[t] = np; keyLo ^= ZL[np][t]; keyHi ^= ZH[np][t];
+  const tp = p & 7;
+  if (tp === 1) half = 0;
+  else if (tp === 6) {
+    kingSq[side] = t;
+    if (m.fl === 2) { const r = board[t + 1]; board[t + 1] = 0; board[t - 1] = r; keyLo ^= ZL[r][t + 1] ^ ZL[r][t - 1]; keyHi ^= ZH[r][t + 1] ^ ZH[r][t - 1]; }
+    else if (m.fl === 3) { const r = board[t - 2]; board[t - 2] = 0; board[t + 1] = r; keyLo ^= ZL[r][t - 2] ^ ZL[r][t + 1]; keyHi ^= ZH[r][t - 2] ^ ZH[r][t + 1]; }
+  }
+  castle &= CM[f] & CM[t];
+  ep = m.fl === 4 ? (f + t) >> 1 : -1;
+  if (ep >= 0) { keyLo ^= ZEL[ep]; keyHi ^= ZEH[ep]; }
+  keyLo ^= ZCL[castle] ^ ZSL; keyHi ^= ZCH[castle] ^ ZSH;
+  side ^= 1;
+}
+function unmake(m) {
+  side ^= 1; plyCount--;
+  const f = m.f, t = m.t, p = m.p;
+  board[f] = p; board[t] = 0;
+  if (m.c) { if (m.fl === 1) board[t + (side ? 16 : -16)] = m.c; else board[t] = m.c; }
+  if ((p & 7) === 6) {
+    kingSq[side] = f;
+    if (m.fl === 2) { board[t + 1] = board[t - 1]; board[t - 1] = 0; }
+    else if (m.fl === 3) { board[t - 2] = board[t + 1]; board[t + 1] = 0; }
+  }
+  keyHi = hist.pop(); keyLo = hist.pop(); half = hist.pop(); ep = hist.pop(); castle = hist.pop(); repL.pop(); repH.pop();
+}
+
+function attacked(sq, by) {
+  let t, q;
+  if (by === 0) { t = sq - 15; if (!(t & 0x88) && board[t] === 1) return true; t = sq - 17; if (!(t & 0x88) && board[t] === 1) return true; }
+  else { t = sq + 15; if (!(t & 0x88) && board[t] === 9) return true; t = sq + 17; if (!(t & 0x88) && board[t] === 9) return true; }
+  const b8 = by << 3, n = b8 | 2, k = b8 | 6, bq = b8 | 5, bb = b8 | 3, br = b8 | 4;
+  for (let i = 0; i < 8; i++) { t = sq + ND[i]; if (!(t & 0x88) && board[t] === n) return true; t = sq + KD[i]; if (!(t & 0x88) && board[t] === k) return true; }
+  for (let i = 0; i < 4; i++) {
+    let d = BD[i]; t = sq + d;
+    while (!(t & 0x88)) { q = board[t]; if (q) { if (q === bb || q === bq) return true; break; } t += d; }
+    d = RD[i]; t = sq + d;
+    while (!(t & 0x88)) { q = board[t]; if (q) { if (q === br || q === bq) return true; break; } t += d; }
+  }
+  return false;
+}
+function inCheck() { return attacked(kingSq[side], side ^ 1); }
+
+function mk(f, t, p, c, pr, fl) { return { f, t, p, c, pr, fl, s: 0, st: 0, v: 0, chk: false, poor: false, fo: false, safe: true, nm: '', q: false, why: '', pvs: '' }; }
+function gen(capsOnly) {
+  const out = [], s = side, o8 = (s ^ 1) << 3;
+  for (let sq = 0; sq < 120; sq++) {
+    if (sq & 0x88) { sq += 7; continue; }
+    const p = board[sq]; if (!p || (p >> 3) !== s) continue;
+    const tp = p & 7;
+    if (tp === 1) {
+      const d = s ? -16 : 16, r = sq >> 4, last = s ? 1 : 6, first = s ? 6 : 1;
+      let t = sq + d;
+      if (!board[t]) {
+        if (r === last) { out.push(mk(sq, t, p, 0, 5, 0)); if (!capsOnly) out.push(mk(sq, t, p, 0, 4, 0), mk(sq, t, p, 0, 3, 0), mk(sq, t, p, 0, 2, 0)); }
+        else if (!capsOnly) { out.push(mk(sq, t, p, 0, 0, 0)); if (r === first && !board[t + d]) out.push(mk(sq, t + d, p, 0, 0, 4)); }
+      }
+      for (let k = -1; k <= 1; k += 2) {
+        t = sq + d + k; if (t & 0x88) continue;
+        const q = board[t];
+        if (q && (q & 8) === o8) {
+          if (r === last) { out.push(mk(sq, t, p, q, 5, 0)); if (!capsOnly) out.push(mk(sq, t, p, q, 4, 0), mk(sq, t, p, q, 3, 0), mk(sq, t, p, q, 2, 0)); }
+          else out.push(mk(sq, t, p, q, 0, 0));
+        } else if (t === ep && !q) out.push(mk(sq, t, p, o8 | 1, 0, 1));
+      }
+    } else if (tp === 2 || tp === 6) {
+      const D = tp === 2 ? ND : KD;
+      for (let i = 0; i < 8; i++) {
+        const t = sq + D[i]; if (t & 0x88) continue;
+        const q = board[t];
+        if (!q) { if (!capsOnly) out.push(mk(sq, t, p, 0, 0, 0)); }
+        else if ((q & 8) === o8) out.push(mk(sq, t, p, q, 0, 0));
+      }
+      if (tp === 6 && !capsOnly) {
+        const base = s ? 112 : 0, kb = s ? 4 : 1, qb = s ? 8 : 2;
+        if (sq === base + 4 && (castle & (kb | qb)) && !attacked(sq, s ^ 1)) {
+          if ((castle & kb) && !board[base + 5] && !board[base + 6] && !attacked(base + 5, s ^ 1)) out.push(mk(sq, base + 6, p, 0, 0, 2));
+          if ((castle & qb) && !board[base + 3] && !board[base + 2] && !board[base + 1] && !attacked(base + 3, s ^ 1)) out.push(mk(sq, base + 2, p, 0, 0, 3));
+        }
+      }
+    } else {
+      const D = tp === 3 ? BD : tp === 4 ? RD : KD;
+      for (let i = 0; i < D.length; i++) {
+        const d = D[i]; let t = sq + d;
+        while (!(t & 0x88)) {
+          const q = board[t];
+          if (!q) { if (!capsOnly) out.push(mk(sq, t, p, 0, 0, 0)); }
+          else { if ((q & 8) === o8) out.push(mk(sq, t, p, q, 0, 0)); break; }
+          t += d;
+        }
+      }
+    }
+  }
+  return out;
+}
+function legalMoves() {
+  const ps = gen(false), out = [], s = side, o = s ^ 1;
+  for (const m of ps) { make(m); if (!attacked(kingSq[s], o)) { m.chk = attacked(kingSq[o], s); out.push(m); } unmake(m); }
+  return out;
+}
+function uci(m) { return sqAlg(m.f) + sqAlg(m.t) + (m.pr ? ' pnbrq'[m.pr] : ''); }
+function findUCI(u, lm) { lm = lm || legalMoves(); for (const m of lm) if (uci(m) === u) return m; return null; }
+function playUCI(u) { const m = findUCI(u); if (m) make(m); return m; }
+function repCount() { let n = 1; for (let i = repL.length - 2; i >= 0; i -= 2) if (repL[i] === keyLo && repH[i] === keyHi) n++; return n; }
+function isRep() { const lim = Math.max(0, repL.length - half); for (let i = repL.length - 2; i >= lim; i -= 2) if (repL[i] === keyLo && repH[i] === keyHi) return true; return false; }
+function insufficient() {
+  let minor = 0;
+  for (let s = 0; s < 120; s++) { if (s & 0x88) continue; const tp = board[s] & 7; if (tp === 1 || tp === 4 || tp === 5) return false; if (tp === 2 || tp === 3) minor++; }
+  return minor <= 1;
+}
+function status() {
+  const lm = legalMoves(), chk = inCheck();
+  let over = null;
+  if (!lm.length) over = chk ? 'mate' : 'stalemate';
+  else if (half >= 100) over = 'fifty';
+  else if (repCount() >= 3) over = 'repetition';
+  else if (insufficient()) over = 'material';
+  return { legal: lm, check: chk, over, side };
+}
+
+// ---------- notation ----------
+function dsq(sq, s, full) { const n = FILEN[sq & 7]; return (full || n.length === 1 ? n : n[1]) + (s ? 8 - (sq >> 4) : (sq >> 4) + 1); }
+function descNames(moves, s) {
+  const cand = [];
+  for (const m of moves) {
+    if (m.fl === 2 || m.fl === 3) { cand.push([m.fl === 2 ? 'O-O' : 'O-O-O']); continue; }
+    const X = PL[m.p & 7], suf = m.pr ? '=' + PL[m.pr] : '';
+    if (m.c) {
+      const Y = PL[m.c & 7], cs = m.fl === 1 ? m.t + (s ? 16 : -16) : m.t, e = m.fl === 1 ? ' E.P.' : '';
+      cand.push([X + 'x' + Y + suf + e, X + 'x' + (Y === 'P' ? FILEN[cs & 7] + 'P' : Y + '/' + dsq(cs, s, true)) + suf + e,
+        X + '/' + dsq(m.f, s, true) + 'x' + Y + suf + e, X + '/' + dsq(m.f, s, true) + 'x' + Y + '/' + dsq(cs, s, true) + suf + e]);
+    } else cand.push([X + '-' + dsq(m.t, s, false) + suf, X + '-' + dsq(m.t, s, true) + suf, X + '/' + dsq(m.f, s, true) + '-' + dsq(m.t, s, true) + suf]);
+  }
+  for (let i = 0; i < moves.length; i++) {
+    const c = cand[i]; let nm = c[c.length - 1];
+    for (let k = 0; k < c.length; k++) {
+      let n = 0; for (let j = 0; j < moves.length; j++) if (cand[j].length > k ? cand[j][k] === c[k] : cand[j][cand[j].length - 1] === c[k]) n++;
+      if (n === 1) { nm = c[k]; break; }
+    }
+    moves[i].nm = nm.replace('x', 'X') + (moves[i].chk ? 'ch' : '');
+  }
+}
+function sanNames(moves) {
+  for (const m of moves) {
+    if (m.fl === 2 || m.fl === 3) { m.nm = (m.fl === 2 ? 'O-O' : 'O-O-O') + (m.chk ? '+' : ''); continue; }
+    const tp = m.p & 7; let dis = '';
+    if (tp === 1) { if (m.c) dis = 'abcdefgh'[m.f & 7]; }
+    else {
+      const oth = moves.filter(o => o !== m && o.p === m.p && o.t === m.t);
+      if (oth.length) dis = !oth.some(o => (o.f & 7) === (m.f & 7)) ? 'abcdefgh'[m.f & 7] : !oth.some(o => (o.f >> 4) === (m.f >> 4)) ? '' + ((m.f >> 4) + 1) : sqAlg(m.f);
+    }
+    m.nm = (tp === 1 ? '' : PL[tp]) + dis + (m.c ? 'x' : '') + sqAlg(m.t) + (m.pr ? '=' + PL[m.pr] : '') + (m.chk ? '+' : '');
+  }
+}
+let descMode = true;
+function nameMoves(moves, desc) { if (desc === undefined ? descMode : desc) descNames(moves, side); else sanNames(moves); return moves; }
+function longName(m) { return (sqAlg(m.f) + '-' + sqAlg(m.t)).toUpperCase(); }
+
+// ---------- attack tables, pins, en prise ----------
+const cnt = [new Uint8Array(128), new Uint8Array(128)], mn = [new Int16Array(128), new Int16Array(128)];
+const sl = [new Uint8Array(128), new Uint8Array(128)], pin = new Uint8Array(128), qOn = [false, false];
+function computeAttacks() {
+  cnt[0].fill(0); cnt[1].fill(0); mn[0].fill(9999); mn[1].fill(9999); sl[0].fill(0); sl[1].fill(0); qOn[0] = qOn[1] = false;
+  for (let sq = 0; sq < 120; sq++) {
+    if (sq & 0x88) { sq += 7; continue; }
+    const p = board[sq]; if (!p) continue;
+    const s = p >> 3, tp = p & 7, v = VAL[tp], c = cnt[s], m = mn[s];
+    let t;
+    if (tp === 1) {
+      const d = s ? -16 : 16;
+      t = sq + d - 1; if (!(t & 0x88)) { c[t]++; if (v < m[t]) m[t] = v; }
+      t = sq + d + 1; if (!(t & 0x88)) { c[t]++; if (v < m[t]) m[t] = v; }
+    } else if (tp === 2 || tp === 6) {
+      const D = tp === 2 ? ND : KD;
+      for (let i = 0; i < 8; i++) { t = sq + D[i]; if (!(t & 0x88)) { c[t]++; if (v < m[t]) m[t] = v; } }
+    } else {
+      if (tp === 5) qOn[s] = true;
+      const D = tp === 3 ? BD : tp === 4 ? RD : KD, S = sl[s];
+      for (let i = 0; i < D.length; i++) { const d = D[i]; t = sq + d; while (!(t & 0x88)) { c[t]++; if (v < m[t]) m[t] = v; S[t] = 1; if (board[t]) break; t += d; } }
+    }
+  }
+}
+function computePins() {          // pieces pinned against their own king
+  pin.fill(0);
+  for (let s = 0; s < 2; s++) {
+    const k = kingSq[s], o8 = (s ^ 1) << 3;
+    for (let i = 0; i < 8; i++) {
+      const d = KD[i], diag = i >= 4; let t = k + d, own = -1;
+      while (!(t & 0x88)) {
+        const q = board[t];
+        if (q) {
+          if ((q >> 3) === s) { if (own >= 0) break; own = t; }
+          else { const tp = q & 7; if (own >= 0 && (tp === 5 || tp === (diag ? 3 : 4))) pin[own] = 1; break; }
+        }
+        t += d;
+      }
+    }
+  }
+}
+// "A typical determination is made by considering the value of the piece attacked, the number of attackers,
+// the number of defenders and the values of the least valuable attacker and defender."
+function enPriseAt(sq) {
+  const p = board[sq], s = p >> 3, o = s ^ 1, v = VAL[p & 7], a = cnt[o][sq];
+  if (!a) return false;
+  const d = cnt[s][sq];
+  if (!d) return true;
+  if (mn[o][sq] < v) return true;
+  return a > d && v + mn[s][sq] > mn[o][sq];
+}
+function trapped(sq) {            // no safe move, judged from the attack tables
+  const p = board[sq], s = p >> 3, o = s ^ 1, tp = p & 7, v = VAL[tp];
+  const ok = t => { const q = board[t]; if (q && (q >> 3) === s) return false; if (q && VAL[q & 7] >= v) return true; return cnt[o][t] === 0 || (mn[o][t] >= v && cnt[s][t] >= 2); };
+  if (tp === 2) { for (let i = 0; i < 8; i++) { const t = sq + ND[i]; if (!(t & 0x88) && ok(t)) return false; } return true; }
+  const D = tp === 3 ? BD : tp === 4 ? RD : KD;
+  for (let i = 0; i < D.length; i++) { const d = D[i]; let t = sq + d; while (!(t & 0x88)) { if (ok(t)) return false; if (board[t]) break; t += d; } }
+  return true;
+}
+// Feedover conditions, as listed in the paper. Pawns are not counted as "pieces" here (assumption).
+function feedover() {
+  const s = side, o = s ^ 1; const n = [0, 0], w = [-1, -1];
+  for (let sq = 0; sq < 120; sq++) {
+    if (sq & 0x88) { sq += 7; continue; }
+    const p = board[sq], tp = p & 7; if (tp < 2 || tp > 5) continue;
+    if (enPriseAt(sq)) { n[p >> 3]++; w[p >> 3] = sq; }
+  }
+  if (n[s] >= 2) return true;
+  if (n[s] === 1) {
+    const stuck = pin[w[s]] || trapped(w[s]);
+    if (stuck || attacked(kingSq[s], o)) return true;
+    if (n[o] === 1 && (pin[w[o]] || trapped(w[o]))) return true;
+  }
+  return false;
+}
+
+// ---------- the plausible move generator ----------
+// The paper gives the method (square importance, developmental value before and after, en prise tests, a set
+// of special-case heuristics, weighted and summed) but not the ~50 heuristics or any weight. The weights
+// here are this page's, chosen to give sensible orderings.
+const CEN = new Int8Array(128);
+for (let sq = 0; sq < 120; sq++) { if (sq & 0x88) continue; const c = Math.max(Math.abs(2 * (sq & 7) - 7), Math.abs(2 * (sq >> 4) - 7)); CEN[sq] = c === 1 ? 8 : c === 3 ? 4 : c === 5 ? 2 : 1; }
+const ATK = [0, 3, 6, 6, 8, 12, 10];
+const imp = [new Int16Array(128), new Int16Array(128)], devC = new Int16Array(128);
+function computeImp(s) {
+  const im = imp[s], ek = kingSq[s ^ 1], ekf = ek & 7, ekr = ek >> 4;
+  for (let sq = 0; sq < 120; sq++) {
+    if (sq & 0x88) { sq += 7; continue; }
+    const f = sq & 7, r = sq >> 4;
+    let v = CEN[sq];                                                   // closeness to the center
+    const dk = Math.max(Math.abs(f - ekf), Math.abs(r - ekr));
+    if (dk <= 1) v += 6; else if (dk === 2) v += 3;                    // proximity to the opponent's king
+    v += (s ? 7 - r : r) >> 1;                                         // closeness to the opponent's side
+    const p = board[sq];
+    if (p && (p >> 3) === s) { v += 1; const tp = p & 7; if (tp > 1 && tp < 6 && enPriseAt(sq)) v += 8; }   // our piece; our piece en prise
+    im[sq] = v;
+  }
+}
+// Developmental value: "the sum of the values of all the squares it attacks plus values accumulated for
+// actual attacks on enemy pieces".
+function dev(tp, s, sq, from) {
+  const im = imp[s]; let v = 0, t, q;
+  if (tp === 1) {
+    const d = s ? -16 : 16;
+    t = sq + d - 1; if (!(t & 0x88)) { v += im[t]; q = board[t]; if (q && (q >> 3) !== s) v += ATK[q & 7]; }
+    t = sq + d + 1; if (!(t & 0x88)) { v += im[t]; q = board[t]; if (q && (q >> 3) !== s) v += ATK[q & 7]; }
+    return v;
+  }
+  if (tp === 2) { for (let i = 0; i < 8; i++) { t = sq + ND[i]; if (!(t & 0x88)) { v += im[t]; q = board[t]; if (q && (q >> 3) !== s) v += ATK[q & 7]; } } return v; }
+  if (tp === 6) return 0;
+  const D = tp === 3 ? BD : tp === 4 ? RD : KD;
+  for (let i = 0; i < D.length; i++) {
+    const d = D[i]; t = sq + d;
+    while (!(t & 0x88)) { v += im[t]; q = board[t]; if (q && t !== from) { if ((q >> 3) !== s) v += ATK[q & 7]; break; } t += d; }
+  }
+  return tp === 5 ? v >> 1 : v;
+}
+function threats(tp, s, sq, from, v) {
+  const o = s ^ 1; let pts = 0, t;
+  const hit = t => { const q = board[t]; if (q && (q >> 3) === o && (q & 7) !== 6) { const qv = VAL[q & 7]; if (cnt[o][t] === 0 || qv > v) pts += Math.min(qv, 640) >> 5; if (pin[t]) pts += 6; } };
+  if (tp === 1) { const d = s ? -16 : 16; t = sq + d - 1; if (!(t & 0x88)) hit(t); t = sq + d + 1; if (!(t & 0x88)) hit(t); return pts; }
+  if (tp === 2) { for (let i = 0; i < 8; i++) { t = sq + ND[i]; if (!(t & 0x88)) hit(t); } return pts; }
+  const D = tp === 3 ? BD : tp === 4 ? RD : KD;
+  for (let i = 0; i < D.length; i++) { const d = D[i]; t = sq + d; while (!(t & 0x88)) { if (board[t] && t !== from) { hit(t); break; } t += d; } }
+  return pts;
+}
+function passed(sq, s) {
+  const d = s ? -16 : 16, e = s ? 1 : 9, f = sq & 7;
+  for (let t = sq + d; !(t & 0x88); t += d) { if (board[t] === e) return false; if (f > 0 && board[t - 1] === e) return false; if (f < 7 && board[t + 1] === e) return false; }
+  return true;
+}
+function plausible(wantF) {
+  const mv = legalMoves(); if (!mv.length) return mv;
+  const s = side, o = s ^ 1;
+  computeAttacks(); computePins(); computeImp(s); computeImp(o);
+  devC.fill(-1);
+  const opening = plyCount < 16, cr = s ? (castle >> 2) & 3 : castle & 3, back = s ? 7 : 0;
+  for (const m of mv) {
+    const f = m.f, t = m.t, tp = m.p & 7, v = VAL[tp]; let sc = 0; const F = wantF ? [] : null;
+    const add = (label, pts) => { if (pts) { sc += pts; if (F) F.push([label, pts]); } };
+    let d0 = devC[f]; if (d0 < 0) d0 = devC[f] = dev(tp, s, f, -1);
+    const ntp = m.pr || tp, dd = dev(ntp, s, t, f) - d0;
+    add(dd > 0 ? 'DEVELOPMENT' : 'LOSES DEVELOPMENT', dd);
+    const push = tp === 1 && !m.c;
+    let a = cnt[o][t]; const d = cnt[s][t] - (push || tp === 6 ? 0 : 1);
+    if (a === 1 && mn[o][t] === 1536 && d > 0) a = 0;
+    const unsafe = tp !== 6 && a > 0 && (d <= 0 || mn[o][t] < v || (a > d && v + mn[s][t] > mn[o][t]));
+    m.safe = !unsafe;
+    const wasEP = tp !== 6 && tp !== 1 && enPriseAt(f);
+    if (m.c) {
+      const vc = VAL[m.c & 7], g = unsafe ? vc - v : vc, cs = m.fl === 1 ? t + (s ? 16 : -16) : t;
+      add(g >= 0 ? 'WINS ' + PL[m.c & 7] : 'LOSING CAPTURE', g >> 3);
+      if (g >= 0) add('CAPTURED PIECE WAS ACTIVE', dev(m.c & 7, o, cs, -1) >> 1);   // "receives the developmental value of the piece captured"
+    } else if (unsafe) add('EN PRISE THERE', -(v >> 3));
+    if (wasEP && !unsafe) add('SAVES ' + PL[tp] + ' EN PRISE', v >> 3);
+    if (m.chk) add(unsafe ? 'CHECK' : 'SAFE CHECK', unsafe ? 2 : 12);
+    if (!unsafe && tp !== 6) add('ATTACKS WEAK SPOT', threats(ntp, s, t, f, v));
+    if (tp === 1) {
+      const fl = f & 7, adv = s ? 6 - (t >> 4) : (t >> 4) - 1;
+      if (m.pr) add('PROMOTES', m.pr === 5 ? 150 : 40);
+      else if (opening && (fl === 3 || fl === 4)) add('CENTER PAWN', m.fl === 4 ? (fl === 4 ? 26 : 24) : 4);
+      if (passed(f, s)) add('PASSED PAWN', 4 + 2 * adv);
+      const kf = kingSq[s] & 7;
+      if ((kingSq[s] >> 4) === back && (kf >= 5 || kf <= 2) && Math.abs(fl - kf) <= 1 && (f >> 4) === (s ? 6 : 1)) add('OPENS KING', -6);
+    } else if (tp === 6) {
+      if (m.fl === 2 || m.fl === 3) add('CASTLES', 30);
+      else if (cr) add('GIVES UP CASTLING', -20);
+      else if (!qOn[o]) add('KING TO CENTER', (CEN[t] - CEN[f]) * 2);
+    } else {
+      if (tp === 4 && ((f === (s ? 112 : 0) && (cr & 2)) || (f === (s ? 119 : 7) && (cr & 1)))) add('GIVES UP CASTLING', -8);
+      // "it is bad to move pieces in front of center pawns on their original squares"
+      if ((t >> 4) === (s ? 5 : 2) && ((t & 7) === 3 || (t & 7) === 4) && board[((s ? 6 : 1) << 4) | (t & 7)] === ((s << 3) | 1)) add('BLOCKS CENTER PAWN', -15);
+      if (opening) {
+        if ((f >> 4) === back && (tp === 2 || tp === 3)) add('DEVELOPS MINOR PIECE', 6);
+        else if ((f >> 4) !== back && !m.c && !wasEP) add('SAME PIECE TWICE', -4);
+        if (tp === 5 && !m.c && !wasEP) add('EARLY QUEEN', -4);
+      }
+    }
+    if (sl[s][f]) add('UNBLOCKS OWN PIECE', 3);
+    if (!m.c && tp < 3 && sl[s][t]) add('BLOCKS OWN PIECE', -3);
+    m.poor = dd < 0 && !m.c && !m.chk && !(wasEP && !unsafe) && !m.pr && m.fl !== 2 && m.fl !== 3;
+    m.s = sc;
+    if (F) { F.sort((x, y) => Math.abs(y[1]) - Math.abs(x[1])); m.why = F.slice(0, 2).map(x => (x[1] > 0 ? '+' : '') + x[1] + ' ' + x[0]).join(', '); }
+  }
+  mv.sort((x, y) => y.s - x.s);
+  return mv;
+}
+// The width of the search: basic width plus the paper's four widening heuristics (the fourth is in search()).
+function select(mv, W, ply) {
+  const seen = new Set(), pieces = new Set();
+  for (const m of mv) if (m.safe) pieces.add(m.f);
+  for (let i = 0; i < mv.length && i < W; i++) { seen.add(mv[i].f); mv[i].st = 0; }
+  const need = Math.min(Math.ceil(W / 2), pieces.size);
+  for (let i = W; i < mv.length; i++) {
+    const m = mv[i];
+    m.fo = (m.chk && m.safe) || (ply < 2 && !!m.c);                    // 1) all safe checks  2) all captures at levels one and two
+    if (!m.fo && seen.size < need && m.safe && !seen.has(m.f)) m.fo = true;   // 3) a minimum number of distinct pieces
+    if (m.fo) seen.add(m.f);
+    m.st = m.fo ? 0 : 4;
+  }
+}
+
+// ---------- static board evaluator: S = B + R + P + K + C ----------
+const wc = new Int8Array(10), bc = new Int8Array(10), wps = new Int8Array(16), bps = new Int8Array(16);
+let rootRatio = 0;
+const MAT0 = 8 * 128 + 2 * 416 + 2 * 448 + 2 * 640 + 1248 + 1;      // M, with the king valued at 1
+// Sub-term weights of P are not in the paper; these are assumptions (a pawn is 128).
+const W_ISO = 12, W_DBL = 16, W_TRIP = 24, W_PASS = 16, W_PASSADV = 6, W_BACK = 8, W_BACKWEAK = 14;
+function backward(sq, o) {
+  const d = o ? -16 : 16, pc = (o << 3) | 1, f = sq & 7; let t;
+  for (let k = -1; k <= 1; k += 2) {
+    if (f + k < 0 || f + k > 7) continue;
+    t = sq - d + k; if (!(t & 0x88) && board[t] === pc) return false;                       // defended by a pawn
+    t = sq - 2 * d + k; if (!(t & 0x88) && board[t] === pc && !board[t + d]) return false;    // can be defended in one move
+    t = sq - 3 * d + k; if (!(t & 0x88) && board[t] === pc && (t >> 4) === (o ? 6 : 1) && !board[t + d] && !board[t + 2 * d]) return false;
+  }
+  // The paper's last rule read literally makes every pawn that lags a neighbour backward (after 1 P-K4, both
+  // the QP and the KBP). Here it must also be held back: its next square is occupied by an enemy or covered by an enemy pawn.
+  const ep8 = ((o ^ 1) << 3) | 1, stop = sq + d;
+  if (stop & 0x88) return false;
+  const q = board[stop];
+  if (!((q && (q >> 3) !== o) || (f > 0 && board[stop + d - 1] === ep8) || (f < 7 && board[stop + d + 1] === ep8))) return false;
+  for (let k = -1; k <= 1; k += 2) {                                                        // a neighbour it could reach by advancing
+    if (f + k < 0 || f + k > 7) continue;
+    for (t = sq + k; !(t & 0x88); t += d) if (board[t] === pc) return true;
+  }
+  return false;
+}
+function pawnTerm(own, nOwn, ownC, opp, nOpp, oppC, s, ownHeavy) {
+  let v = 0;
+  for (let i = 0; i < nOwn; i++) { const sq = own[i]; if (passed(sq, s)) v += W_PASS + W_PASSADV * (s ? 6 - (sq >> 4) : (sq >> 4) - 1); }
+  for (let i = 0; i < nOpp; i++) {
+    const sq = opp[i], f = (sq & 7) + 1;
+    if (!oppC[f - 1] && !oppC[f + 1]) { v += W_ISO; if (oppC[f] === 2) v += W_DBL >> 1; }
+    else if (backward(sq, s ^ 1)) v += (!ownC[f] || ownHeavy) ? W_BACKWEAK : W_BACK;
+  }
+  for (let f = 1; f <= 8; f++) if (oppC[f] >= 3) v += W_TRIP;
+  return v;
+}
+function material() {
+  let mw = 1, mb = 1;
+  for (let sq = 0; sq < 120; sq++) { if (sq & 0x88) { sq += 7; continue; } const p = board[sq], tp = p & 7; if (!p || tp === 6) continue; if (p & 8) mb += VAL[tp]; else mw += VAL[tp]; }
+  return mw / mb;
+}
+function evaluate() {             // positive is good for White
+  wc.fill(0); bc.fill(0);
+  let nw = 0, nb = 0, mw = 0, mb = 0, queens = false, hw = false, hb = false, cw = false, cb = false;
+  for (let sq = 0; sq < 120; sq++) {
+    if (sq & 0x88) { sq += 7; continue; }
+    const p = board[sq]; if (!p) continue;
+    const tp = p & 7; if (tp === 6) continue;
+    const cen = sq === 0x33 || sq === 0x34 || sq === 0x43 || sq === 0x44;
+    if (p & 8) { mb += VAL[tp]; if (tp === 1) { bc[(sq & 7) + 1]++; bps[nb++] = sq; if (cen) cb = true; } else if (tp >= 4) { hb = true; if (tp === 5) queens = true; } }
+    else { mw += VAL[tp]; if (tp === 1) { wc[(sq & 7) + 1]++; wps[nw++] = sq; if (cen) cw = true; } else if (tp >= 4) { hw = true; if (tp === 5) queens = true; } }
+  }
+  let S = mw - mb;                                                                          // B, material balance
+  if (rootRatio > 0) S += Math.round(((mw + 1) / (mb + 1) / rootRatio - 1) * (MAT0 / 8));  // R, piece ratio change
+  S += pawnTerm(wps, nw, wc, bps, nb, bc, 0, hw) - pawnTerm(bps, nb, bc, wps, nw, wc, 1, hb);   // P, pawn structure
+  if (queens) S += 8 * (7 - (kingSq[1] >> 4)) - 8 * (kingSq[0] >> 4);                      // K, king safety
+  if (cw && !cb) S += 1; else if (cb && !cw) S -= 1;                                        // C, center control
+  return S;
+}
+
+// ---------- search ----------
+const HN = 32768;                 // "a hash table of 32,000 entries with two machine registers per entry"
+const hL = new Int32Array(HN), hH = new Int32Array(HN), hV = new Int32Array(HN), hD = new Int8Array(HN).fill(-1), hF = new Int8Array(HN);
+const EMPTY = [];
+let pvOut = EMPTY, trace = true, msg = '', widths = [6], depthSet = 4, rootSide = 0, rootMoves = null, bestRoot = null;
+const stk = []; let sp = 0;
+const st = { nodes: 0, plaus: 0, statics: 0, hash: 0, cuts: 0, clipped: 0, feed: 0, sec: 0, maxPly: 0 };
+const POOR = 4, QMAX = 12;
+const wv = (v, mover) => mover ? -v : v;                              // to White's point of view
+function fmt(v) { return Math.abs(v) > MATEISH ? (v > 0 ? '+MATE' : '-MATE') : (v >= 0 ? '+' : '') + (v / 128).toFixed(2); }
+function nm(m) { return m.nm || longName(m); }
+
+function* quiesce(alpha, beta, ply, qd) {
+  st.nodes++; if (ply > st.maxPly) st.maxPly = ply;
+  if (!trace && (st.nodes & 2047) === 0) yield;
+  const s = side, o = s ^ 1;
+  pvOut = EMPTY;
+  if (attacked(kingSq[s], o) && !legalMoves().length) return -(MATE - ply);
+  let best = s ? -evaluate() : evaluate(); st.statics++;
+  if (trace) { msg = 'STATIC EVALUATION ' + fmt(wv(best, s)); yield; }
+  if (best >= beta || qd >= QMAX) return best;
+  if (best > alpha) alpha = best;
+  computeAttacks();
+  const caps = [];
+  for (const m of gen(true)) {     // plausible captures: "must appear to lead to relative gain of material"
+    if (m.pr && m.pr !== 5) continue;
+    const v = VAL[m.p & 7], vc = m.c ? VAL[m.c & 7] : 0, t = m.t, a = cnt[o][t], d = cnt[s][t] - 1;
+    if (m.pr || vc > v || a === 0 || (d >= a && vc + mn[o][t] > v)) { m.s = (vc >> 3) - (v >> 6) + (m.pr ? 150 : 0); m.q = true; caps.push(m); }
+  }
+  if (!caps.length) return best;
+  caps.sort((x, y) => y.s - x.s);
+  let pv = EMPTY; const e = { mv: caps, c: -1, b: -1, k: 1, w: caps.length };
+  if (trace) for (const m of caps) m.nm = PL[m.p & 7] + (m.c ? 'X' + PL[m.c & 7] : '') + (m.pr ? '=Q' : '') + '/' + (descMode ? dsq(m.t, s, true) : sqAlg(m.t));
+  stk[sp++] = e;
+  for (let i = 0; i < caps.length; i++) {
+    const m = caps[i];
+    make(m);
+    if (attacked(kingSq[s], o)) { unmake(m); m.st = 3; continue; }
+    m.st = 1; e.c = i;
+    if (trace) { msg = 'CAPTURE ' + nm(m); yield; }
+    const v = -(yield* quiesce(-beta, -alpha, ply + 1, qd + 1)); const cpv = pvOut;
+    unmake(m);
+    m.v = v; m.st = 2;
+    if (v > best) { best = v; e.b = i; pv = [m].concat(cpv); }
+    if (best > alpha) alpha = best;
+    if (alpha >= beta) { st.cuts++; for (let j = i + 1; j < caps.length; j++) caps[j].st = 3; if (trace) { msg = 'CUTOFF: ' + nm(m) + ' REFUTES'; yield; } break; }
+  }
+  sp--;
+  pvOut = pv;
+  return best;
+}
+
+function* search(depth, ply, alpha, beta, ext) {
+  pvOut = EMPTY;
+  if (isRep() || half >= 100) return 0;                               // draw by repetition, found through the hash key
+  let fed = false;
+  if (depth <= 0) {
+    if (ext < 2) { computeAttacks(); computePins(); if (feedover()) { st.feed++; depth = 1; ext++; fed = true; } }
+    if (depth <= 0) return yield* quiesce(alpha, beta, ply, 0);
+  }
+  st.nodes++; if (ply > st.maxPly) st.maxPly = ply;
+  if (!trace && (st.nodes & 2047) === 0) yield;
+  const s = side, idx = keyLo & (HN - 1);
+  if (hL[idx] === keyLo && hH[idx] === keyHi && hD[idx] >= depth && !fed) {
+    const v = hV[idx], fl = hF[idx];
+    if (fl === 0 || (fl === 1 && v >= beta) || (fl === 2 && v <= alpha)) { st.hash++; if (trace) { msg = 'HASH TABLE: POSITION SEEN BEFORE, ' + fmt(wv(v, s)); yield; } return v; }
+  }
+  const mv = plausible(false); st.plaus++;
+  if (!mv.length) return attacked(kingSq[s], s ^ 1) ? -(MATE - ply) : 0;
+  const W = widths[Math.min(ply, widths.length - 1)];
+  select(mv, W, ply);
+  const e = { mv, c: -1, b: -1, k: fed ? 2 : 0, w: W };
+  stk[sp++] = e;
+  if (trace) {
+    nameMoves(mv);
+    let cl = 0; for (const m of mv) if (m.st === 4) cl++;
+    msg = (fed ? 'FEEDOVER. ' : '') + 'PLY ' + (ply + 1) + ': ' + mv.length + ' LEGAL MOVES, KEEP ' + (mv.length - cl) + ', CLIP ' + cl; yield;
+  }
+  const a0 = alpha; let best = -INF, pv = EMPTY, tal = 0;
+  for (let i = 0; i < mv.length; i++) {
+    const m = mv[i];
+    if (!m.fo && tal >= W) continue;
+    m.st = 1; e.c = i;
+    if (trace) { msg = 'TRY ' + nm(m) + ', PLAUSIBILITY ' + m.s; yield; }
+    make(m);
+    let v = -(yield* search(depth - 1, ply + 1, -beta, -alpha, ext)); const cpv = pvOut;
+    unmake(m);
+    if (v > -MATEISH && v < MATEISH) {
+      if (m.poor) v -= POOR;                                          // first modification: developmentally poor
+      if (cpv.length >= 2 && cpv[1].f === m.t) v -= cpv[1].t === m.f ? 6 : 3;   // second: the same piece moved again two plies down
+    }
+    m.v = v; m.st = 2;
+    if (!m.fo && v > -MATEISH) tal++;                                 // 4) moves that get mated are not tallied against the width
+    if (v > best) { best = v; e.b = i; pv = [m].concat(cpv); }
+    if (best > alpha) alpha = best;
+    if (trace) { msg = nm(m) + ' IS WORTH ' + fmt(wv(v, s)) + (e.b === i ? '  (BEST SO FAR)' : ''); yield; }
+    if (alpha >= beta) {
+      st.cuts++; for (let j = i + 1; j < mv.length; j++) if (mv[j].st === 0) mv[j].st = 3;
+      if (trace) { msg = 'ALPHA-BETA: ' + nm(m) + ' REFUTES. CLIP OFF THAT BRANCH'; yield; }
+      break;
+    }
+  }
+  for (const m of mv) if (m.st === 4) st.clipped++;
+  sp--;
+  if (!fed && best > -MATEISH && best < MATEISH) { hL[idx] = keyLo; hH[idx] = keyHi; hV[idx] = best; hD[idx] = depth; hF[idx] = best <= a0 ? 2 : best >= beta ? 1 : 0; }
+  pvOut = pv;
+  return best;
+}
+
+function namePV(m, pv) {
+  const out = [nm(m)], done = [];
+  make(m);
+  for (const x of pv) {
+    const lm = legalMoves(); let y = null;
+    for (const z of lm) if (z.f === x.f && z.t === x.t && z.pr === x.pr) { y = z; break; }
+    if (!y) break;
+    nameMoves(lm); out.push(y.nm); make(y); done.push(y);
+  }
+  while (done.length) unmake(done.pop());
+  unmake(m);
+  return out;
+}
+
+function* think(o) {
+  depthSet = o.depth; widths = o.widths; descMode = o.desc !== false;
+  for (const k in st) st[k] = 0;
+  hD.fill(-1); sp = 0; rootSide = side; bestRoot = null;
+  rootRatio = material();
+  const mv = plausible(true); st.plaus++; st.nodes++;
+  nameMoves(mv);
+  rootMoves = mv;
+  const W = widths[0]; select(mv, W, 0);
+  const e = { mv, c: -1, b: -1, k: 0, w: W };
+  stk[sp++] = e;
+  let cl = 0; for (const m of mv) if (m.st === 4) cl++;
+  msg = mv.length + ' LEGAL MOVES. KEEP ' + (mv.length - cl) + ' PLAUSIBLE, CLIP ' + cl; if (trace) yield;
+  let best = -INF, tal = 0;
+  if (mv.length === 1) { best = 0; bestRoot = mv[0]; mv[0].st = 2; mv[0].pvs = mv[0].nm; e.b = 0; msg = 'ONLY ONE LEGAL MOVE'; if (trace) yield; }
+  else for (let i = 0; i < mv.length; i++) {
+    const m = mv[i];
+    if (!m.fo && tal >= W) continue;
+    m.st = 1; e.c = i;
+    msg = 'TRY ' + m.nm + ', PLAUSIBILITY ' + m.s; if (trace) yield;
+    make(m);
+    let v = -(yield* search(depthSet - 1, 1, -INF, best === -INF ? INF : -best, 0)); const pv = pvOut;
+    const real = v > -MATEISH && v < MATEISH;
+    if (real) { if (m.poor) v -= POOR; if (pv.length >= 2 && pv[1].f === m.t) v -= pv[1].t === m.f ? 6 : 3; }
+    if (v > best && real && depthSet >= 2) {
+      // Secondary search: "move down the principal variation ... and then conduct an additional search", two plies.
+      let k = 0; while (k < pv.length && !pv[k].q && k < depthSet - 1) { make(pv[k]); k++; }
+      st.sec++; msg = 'NEW CANDIDATE ' + m.nm + '. SECONDARY SEARCH AT THE END OF ITS VARIATION'; if (trace) yield;
+      const v2 = yield* search(2, k + 1, -INF, INF, 1), vr = ((k + 1) & 1) ? -v2 : v2;
+      while (k > 0) { k--; unmake(pv[k]); }
+      if (vr < v) { v = vr; msg = 'SECONDARY SEARCH LOWERS ' + m.nm + ' TO ' + fmt(wv(v, rootSide)); if (trace) yield; }
+    }
+    unmake(m);
+    m.v = v; m.st = 2; m.pvs = namePV(m, pv).join(' ');
+    if (v > -MATEISH) tal++;
+    if (v > best) { best = v; bestRoot = m; e.b = i; }
+    msg = m.nm + ' IS WORTH ' + fmt(wv(v, rootSide)) + (bestRoot === m ? '  (BEST SO FAR)' : ''); if (trace) yield;
+  }
+  for (const m of mv) if (m.st === 4) st.clipped++;
+  const m = bestRoot || mv[0];
+  msg = 'MOVE ' + m.nm;
+  const res = { uci: uci(m), name: m.nm, val: wv(best, rootSide), pv: m.pvs, rows: rows(), stats: stats() };
+  sp = 0;
+  return res;
+}
+function rows() {
+  return rootMoves ? rootMoves.map(m => ({ n: m.nm, s: m.s, st: m.st, v: m.st === 2 ? wv(m.v, rootSide) : null, pv: m.pvs, why: m.why, b: m === bestRoot, u: uci(m) })) : [];
+}
+function stats() { return Object.assign({}, st); }
+function snapshot() {
+  const L = [];
+  for (let i = 0; i < sp; i++) {
+    const e = stk[i], mv = e.mv, sts = []; let cl = 0, cur = -1, bi = -1;
+    for (let j = 0; j < mv.length; j++) { const m = mv[j]; if (m.st === 4) { cl++; continue; } if (j === e.c) cur = sts.length; if (j === e.b) bi = sts.length; sts.push(m.st); }
+    const mover = rootSide ^ (i & 1), cm = e.c >= 0 ? mv[e.c] : null, bm = e.b >= 0 ? mv[e.b] : null;
+    L.push({ k: e.k, st: sts, cl, cur, bi, cn: cm ? nm(cm) : '', cs: cm ? cm.s : 0, bn: bm ? nm(bm) : '', bv: bm ? wv(bm.v, mover) : 0, w: e.w });
+  }
+  return { L, rows: rows(), stats: stats(), msg, depth: depthSet, side: rootSide, best: bestRoot ? { n: bestRoot.nm, v: wv(bestRoot.v, rootSide), pv: bestRoot.pvs, u: uci(bestRoot) } : null };
+}
+
+// ---------- a very small opening book ----------
+// The real book (Kaufman and Baisley, "over 5000 moves") is lost to this page. These lines are the opening
+// moves Mac Hack VI itself played in the games printed in the 1967 paper, plus 1...P-Q4 against 1 P-Q4.
+const BOOK = [
+  'e2e4 e7e5 g1f3 b8c6 f1b5 a7a6 b5c6 d7c6 e1g1 f8d6 d2d4 c8g4 d4e5 g4f3 d1f3 d6e5 c2c3',
+  'e2e4 c7c5 d2d4 c5d4 d1d4 b8c6 d4d3',
+  'e2e4 e7e5 g1f3 b8c6 f1c4 g8f6 f3g5 d7d5 e4d5 c6a5 c4b5 c7c6 d5c6 b7c6',
+  'd2d4 d7d5',
+];
+function bookMove(played) {
+  const h = played.join(' ');
+  for (const line of BOOK) {
+    if (line.length > h.length && line.startsWith(h) && (h === '' || line[h.length] === ' ')) return line.slice(h ? h.length + 1 : 0).split(' ')[0];
+  }
+  return null;
+}
+
+setFEN(START);
+return {
+  START, VAL, MATE, board, kingSq, setFEN, getFEN, make, unmake, legalMoves, attacked, inCheck, status, uci, findUCI, playUCI,
+  nameMoves, sqAlg, dsq, evaluate, plausible, select, think, snapshot, stats, fmt, bookMove, repCount,
+  setTrace(v) { trace = v; }, setDesc(v) { descMode = v; },
+  get side() { return side; }, get half() { return half; }, get plyCount() { return plyCount; }, get ep() { return ep; }, get castle() { return castle; },
+};
+}
+
+// ===== driver: paces the search generator. Runs inside the worker, or on the page if workers are unavailable. =====
+function DRIVER(eng, post) {
+  const cfg = { eps: 6, full: false }; let run = 0;
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  async function go(m) {
+    const id = ++run; cfg.eps = m.eps; cfg.full = m.full;
+    eng.setFEN(m.fen); for (const u of m.moves) eng.playUCI(u);
+    const it = eng.think({ depth: m.depth, widths: m.widths, desc: m.desc });
+    const t0 = Date.now(); let r, busy = 0;
+    for (;;) {
+      const t = Date.now();
+      if (cfg.full) { eng.setTrace(false); do { r = it.next(); } while (!r.done && Date.now() - t < 60); }
+      else { eng.setTrace(true); const n = cfg.eps > 40 ? Math.round(cfg.eps / 40) : 1; for (let i = 0; i < n; i++) { r = it.next(); if (r.done) break; } }
+      busy += Date.now() - t;
+      if (r.done) break;
+      post({ t: 'snap', snap: eng.snapshot(), full: cfg.full, ms: Date.now() - t0, busy });
+      await sleep(cfg.full ? 0 : cfg.eps > 40 ? 25 : 1000 / cfg.eps);
+      if (id !== run) return;
+    }
+    post({ t: 'done', res: r.value, ms: Date.now() - t0, busy });
+  }
+  return { go, speed(m) { cfg.eps = m.eps; cfg.full = m.full; }, stop() { run++; } };
+}
+</script>
+<script>
+'use strict';
+// ===== page: game state, worker, teletype, sound, scope drawing, CRT shader =====
+const $ = id => document.getElementById(id);
+const E = ENGINE();
+const KEY = 'machack-v1';
+const S = { hc: 0, depth: 4, tourn: 0, full: false, rate: 32, sound: true, desc: true, p7: true, book: false };
+const G = { moves: [], over: null, legal: [], check: false };   // moves: engine move objects, in order
+let sel = -1, lastMv = null, thinking = false, snap = null, lastRes = null, searchMs = 0, dirty = true, drv = null, worker = null, pendingPromo = null, askedBack = false;
+const widthsOf = () => S.tourn ? [15, 15, 9, 9, 7] : [6];
+const epsOf = () => 1.5 * Math.pow(10, S.rate / 100 * 3.2);
+
+// ---------- sound: relay clicks for the search, a clack per teletype burst, a bell ----------
+let ac = null, noiseBuf = null, lastClick = 0, gestured = false;
+for (const ev of ['pointerdown', 'keydown']) addEventListener(ev, () => { gestured = true; }, { capture: true });
+function audio() {
+  if (!S.sound || !gestured) return null;
+  if (!ac) { try { ac = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+    noiseBuf = ac.createBuffer(1, ac.sampleRate * 0.1, ac.sampleRate); const d = noiseBuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1; }
+  if (ac.state === 'suspended') ac.resume().catch(() => {});
+  return ac.state === 'running' ? ac : null;
+}
+function burst(freq, q, dur, gain, type) {
+  const a = audio(); if (!a) return;
+  const src = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain(), t = a.currentTime;
+  src.buffer = noiseBuf; f.type = type || 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  src.connect(f); f.connect(g); g.connect(a.destination); src.start(t, Math.random() * 0.05, dur + 0.02);
+}
+function tone(freq, dur, gain, type) {
+  const a = audio(); if (!a) return;
+  const o = a.createOscillator(), g = a.createGain(), t = a.currentTime;
+  o.type = type || 'sine'; o.frequency.value = freq; g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(a.destination); o.start(t); o.stop(t + dur + 0.02);
+}
+function relay(strong) { const n = performance.now(); if (n - lastClick < 28) return; lastClick = n; burst(strong ? 2400 : 3600, 2, 0.012, strong ? 0.11 : 0.05, 'highpass'); if (strong) tone(140, 0.03, 0.06, 'square'); }
+function clack() { burst(1800 + Math.random() * 700, 1.2, 0.03, 0.09); tone(95, 0.035, 0.07, 'triangle'); }
+function bell() { tone(1568, 0.9, 0.12); tone(3136, 0.5, 0.04); }
+
+// ---------- teletype ----------
+const paper = $('paper'); let ttyQ = '', ttyTimer = 0, lineOpen = false;
+function tty(s) { ttyQ += s; if (!ttyTimer) ttyTimer = setInterval(ttyTick, 24); }
+function ttyTick() {
+  if (!ttyQ) { clearInterval(ttyTimer); ttyTimer = 0; return; }
+  const n = Math.min(ttyQ.length, ttyQ.length > 120 ? 12 : 4);
+  paper.append(ttyQ.slice(0, n)); ttyQ = ttyQ.slice(n);
+  if (paper.textContent.length > 9000) paper.textContent = paper.textContent.slice(-7000);
+  paper.scrollTop = paper.scrollHeight; clack();
+}
+const pad = (s, n) => (s + '                    ').slice(0, Math.max(n, String(s).length));
+
+// ---------- game ----------
+function refresh() { const s = E.status(); G.legal = s.legal; G.check = s.check; G.over = s.over; E.nameMoves(G.legal, S.desc); lamps(); dirty = true; }
+function lamps() {
+  $('lRun').classList.toggle('on', thinking);
+  $('lYou').classList.toggle('on', !thinking && !G.over && E.side === S.hc);
+  $('lChk').classList.toggle('on', G.check && !G.over);
+  $('lMate').classList.toggle('on', G.over === 'mate');
+}
+function flash(id) { const el = $(id); el.classList.add('on'); clearTimeout(el._t); el._t = setTimeout(() => el.classList.remove('on'), 90); }
+function save() { try { localStorage.setItem(KEY, JSON.stringify({ S, moves: G.moves.map(E.uci) })); } catch {} }
+function load() {
+  try { const d = JSON.parse(localStorage.getItem(KEY) || 'null'); if (!d) return; Object.assign(S, d.S || {}); E.setFEN(E.START); G.moves = [];
+    for (const u of d.moves || []) { const m = E.playUCI(u); if (!m) break; G.moves.push(m); } } catch {}
+}
+function banner() {
+  tty('MAC HACK VI   PROJECT MAC\nLOOK-AHEAD ' + S.depth + ' PLY\nWIDTH ' + widthsOf().join(' ') + '\nYOU PLAY ' + (S.hc ? 'BLACK' : 'WHITE') + '.\n');
+  lineOpen = false;
+}
+function newGame() {
+  stopThink(); E.setFEN(E.START); G.moves = []; sel = -1; lastMv = null; lastRes = null; snap = null; askedBack = false; hidePromo();
+  paper.textContent = ''; ttyQ = ''; banner(); refresh(); save(); next();
+}
+function logMove(name, wasWhite, secs) {
+  const no = (E.plyCount + 1) >> 1, txt = name + (secs != null ? ' (' + secs + ')' : '');
+  if (wasWhite) { tty('\n' + pad(no, 3) + ' ' + pad(txt, 15)); lineOpen = true; }
+  else { tty(lineOpen ? ' ' + txt : '\n' + pad(no, 3) + ' ' + pad('...', 15) + ' ' + txt); lineOpen = false; }
+}
+function play(m, secs) {
+  const white = E.side === 0, byHuman = E.side === S.hc; let name = m.nm;
+  E.make(m); G.moves.push(m); lastMv = m; sel = -1;
+  refresh();
+  if (G.over === 'mate') name = S.desc ? name.replace(/ch$/, '') + ' MATE' : name.replace(/\+$/, '#');
+  logMove(name, white, secs);
+  save();
+  if (G.over) { gameOver(byHuman); return; }
+  next();
+}
+function gameOver(byHuman) {
+  bell(); lineOpen = false;
+  if (G.over === 'mate') {
+    if (byHuman) tty('\nCHECKMATE. YOU WIN.\n');
+    else tty('\nCHECKMATE.\n' + (G.moves.length >= 60 ? '"YOU LASTED LONGER THAN MOST PEOPLE WHO COME IN HERE."' : '"WE HAD A PROFESSOR HERE THE OTHER DAY WHO SAID COMPUTERS CAN\'T THINK. IT BEAT HIM."') + '\n');
+  } else tty('\nDRAWN: ' + ({ stalemate: 'STALEMATE', fifty: 'FIFTY MOVES', repetition: 'REPETITION OF THE POSITION', material: 'NO MATING MATERIAL' })[G.over] + '.\n');
+}
+function next() { lamps(); dirty = true; if (!G.over && E.side !== S.hc) startThink(); }
+
+function startThink() {
+  const played = G.moves.map(E.uci);
+  if (S.book) { const b = E.bookMove(played), m = b && G.legal.find(x => E.uci(x) === b); if (m) { thinking = true; lamps(); setTimeout(() => { thinking = false; snap = null; lastRes = null; play(m, 'BOOK'); }, 500); return; } }
+  thinking = true; snap = null; searchMs = 0; lamps(); dirty = true;
+  const msg = { t: 'go', fen: E.START, moves: played, depth: S.depth, widths: widthsOf(), desc: S.desc, eps: epsOf(), full: S.full };
+  if (!drv) drv = makeDriver();
+  drv.send(msg);
+}
+function stopThink() { if (drv) { drv.kill(); drv = null; } thinking = false; lamps(); }
+function makeDriver() {
+  try {
+    const url = URL.createObjectURL(new Blob([ENGINE.toString(), ';', DRIVER.toString(), ';const d=DRIVER(ENGINE(),m=>postMessage(m));onmessage=e=>d[e.data.t](e.data);'], { type: 'text/javascript' }));
+    worker = new Worker(url);
+    worker.onmessage = e => onEngine(e.data);
+    worker.onerror = e => console.error('engine worker: ' + e.message);
+    return { send: m => worker.postMessage(m), kill: () => { worker.terminate(); worker = null; } };
+  } catch (err) {       // no workers here: run the same driver on the page
+    const d = DRIVER(ENGINE(), m => setTimeout(() => onEngine(m), 0));
+    return { send: m => d[m.t](m), kill: () => d.stop() };
+  }
+}
+function onEngine(d) {
+  if (!thinking) return;
+  if (d.t === 'snap') {
+    const before = snap ? snap.stats : null; snap = d.snap; snap.full = d.full; searchMs = d.busy; dirty = true;
+    if (before) { if (snap.stats.cuts > before.cuts) flash('lCut'); if (snap.stats.hash > before.hash) flash('lHash'); }
+    if (!d.full) relay(/BEST SO FAR|REFUTES/.test(snap.msg));
+    else relay(false);
+  } else if (d.t === 'done') {
+    thinking = false; lastRes = d.res; lastRes.ms = d.busy; lastRes.wall = d.ms; snap = null;
+    const m = G.legal.find(x => E.uci(x) === d.res.uci);
+    if (!m) { console.error('engine returned an illegal move: ' + d.res.uci); tty('\n?ILLEGAL MOVE FROM SEARCH\n'); lamps(); return; }
+    play(m, (d.ms / 1000).toFixed(1));
+  }
+}
+function sendSpeed() { if (drv && thinking) drv.send({ t: 'speed', eps: epsOf(), full: S.full }); }
+
+function takeBack() {
+  if (!G.moves.length) return;
+  stopThink(); hidePromo();
+  let n = 0;
+  if (E.side === S.hc || G.over) { if (G.moves.length && E.side === S.hc) { E.unmake(G.moves.pop()); n++; } }
+  if (G.moves.length && E.side !== S.hc) { E.unmake(G.moves.pop()); n++; }
+  if (!n) return;
+  lastMv = G.moves[G.moves.length - 1] || null; sel = -1; lastRes = null; snap = null;
+  tty('\n' + (askedBack ? 'TAKE BACK.' : '"COULD I TAKE MY LAST MOVE BACK, AND PLAY ON?"  SURE.') + '\n'); askedBack = true; lineOpen = false;
+  refresh(); save(); next();
+}
+function tapSquare(sq) {
+  audio();
+  if (thinking || G.over || E.side !== S.hc || pendingPromo) return;
+  const p = E.board[sq];
+  if (sel >= 0) {
+    const ms = G.legal.filter(m => m.f === sel && m.t === sq);
+    if (ms.length === 1) { relay(true); play(ms[0]); return; }
+    if (ms.length > 1) { pendingPromo = ms; $('promo').hidden = false; return; }
+  }
+  sel = p && (p >> 3) === S.hc && G.legal.some(m => m.f === sq) ? sq : -1; relay(false); dirty = true;
+}
+function hidePromo() { pendingPromo = null; $('promo').hidden = true; }
+$('promo').addEventListener('click', e => { const b = e.target.closest('[data-pr]'); if (!b || !pendingPromo) { hidePromo(); return; } const m = pendingPromo.find(x => x.pr === +b.dataset.pr); hidePromo(); if (m) play(m); });
+
+// ---------- console ----------
+function syncPanel() {
+  document.querySelectorAll('[data-depth]').forEach(b => { const on = +b.dataset.depth === S.depth; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+  document.querySelectorAll('[data-tourn]').forEach(b => { const on = +b.dataset.tourn === S.tourn; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+  document.querySelectorAll('[data-tog]').forEach(b => { const on = !!S[b.dataset.tog]; b.classList.toggle('on', on); b.setAttribute('aria-pressed', on); });
+  $('bDesc').textContent = S.desc ? 'P-K4' : 'e4'; $('bDesc').classList.add('on'); $('bDesc').setAttribute('aria-label', 'Notation: ' + (S.desc ? 'descriptive' : 'algebraic'));
+  $('bPh').textContent = S.p7 ? 'P7\nBLUE' : 'P1\nGREEN'; $('bPh').classList.add('on'); $('bPh').setAttribute('aria-label', 'Phosphor');
+  $('bSide').textContent = 'YOU:\n' + (S.hc ? 'BLACK' : 'WHITE');
+  $('rate').value = S.rate; $('rate').disabled = S.full;
+}
+$('panel').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  audio(); relay(true);
+  if (b.dataset.depth) S.depth = +b.dataset.depth;
+  else if (b.dataset.tourn) S.tourn = +b.dataset.tourn;
+  else if (b.dataset.tog) { const k = b.dataset.tog; S[k] = !S[k]; if (k === 'full') sendSpeed(); if (k === 'desc') { E.nameMoves(G.legal, S.desc); } }
+  else if (b.id === 'bNew') { newGame(); }
+  else if (b.id === 'bBack') takeBack();
+  else if (b.id === 'bSide') { S.hc ^= 1; newGame(); }
+  syncPanel(); save(); dirty = true;
+});
+$('rate').addEventListener('input', e => { S.rate = +e.target.value; sendSpeed(); save(); });
+
+// ---------- scope drawing (a 2D canvas the shader then bends) ----------
+const crt = $('crt'), scope = document.createElement('canvas'), cx = scope.getContext('2d');
+let SW = 0, SH = 0, L = null, dpr = 1;
+const I1 = '#ffffff', I2 = '#9c9c9c', I3 = '#555555', I4 = '#2e2e2e';
+function layout() {
+  const W = SW, H = SH, m = Math.min(W, H) * 0.07, land = W > H * 1.15;
+  const fs = Math.max(9 * dpr, Math.min(15 * dpr, (land ? W * 0.5 : W) / 46));
+  const lab = fs * 1.5; let bs, bx, by, tx, ty, tw, th;
+  if (land) { bs = Math.min(H - 2 * m - 2 * lab, (W - 2 * m) * 0.5 - lab); bx = m + lab + (W * 0.012); by = (H - bs) / 2 - lab * 0.2; tx = bx + bs + lab * 1.6; ty = m * 1.15; tw = W - m * 1.3 - tx; th = H - 2.3 * m; }
+  else { bs = Math.min(W - 2 * m - 2 * lab, (H - 2 * m) * 0.5); bx = (W - bs) / 2 + lab * 0.3; by = m * 1.25; tx = m * 1.1; ty = by + bs + lab * 1.9; tw = W - 2.2 * m; th = H - m * 1.25 - ty; }
+  L = { W, H, bs, bx, by, tx, ty, tw, th, fs: Math.max(8.5 * dpr, Math.min(16 * dpr, tw / (0.602 * (land ? 56 : 52)))), land, q: bs / 8 };
+}
+function T(s, x, y, col, align, size) { cx.font = (size || L.fs) + 'px ' + FONT; cx.fillStyle = col || I1; cx.textAlign = align || 'left'; cx.fillText(s, x, y); }
+const FONT = getComputedStyle(document.documentElement).getPropertyValue('--mono') || 'monospace';
+const chars = () => Math.floor(L.tw / (L.fs * 0.602));
+function clip(s, n) { n = n || chars(); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
+function wrap(s, n) { const out = []; let line = ''; for (const w of s.split(' ')) { if ((line + ' ' + w).trim().length > n) { out.push(line); line = w; } else line = (line + ' ' + w).trim(); } if (line) out.push(line); return out; }
+
+// Piece outlines on a unit square: closed bodies (filled for Black, hollow for White) and open strokes.
+const GLYPH = {
+  1: { b: [[[.3, .86], [.7, .86], [.7, .78], [.6, .76], [.56, .5], [.44, .5], [.4, .76], [.3, .78]]], c: [[.5, .36, .13]] },
+  4: { b: [[[.26, .86], [.74, .86], [.74, .76], [.65, .76], [.65, .42], [.74, .42], [.74, .2], [.62, .2], [.62, .29], [.55, .29], [.55, .2], [.45, .2], [.45, .29], [.38, .29], [.38, .2], [.26, .2], [.26, .42], [.35, .42], [.35, .76], [.26, .76]]] },
+  2: { b: [[[.3, .86], [.74, .86], [.74, .77], [.68, .76], [.72, .5], [.63, .27], [.5, .15], [.47, .25], [.36, .31], [.21, .52], [.28, .6], [.45, .5], [.49, .55], [.36, .76], [.3, .77]]], e: [[.47, .34]] },
+  3: { b: [[[.3, .86], [.7, .86], [.7, .78], [.58, .74], [.67, .5], [.5, .22], [.33, .5], [.42, .74], [.3, .78]]], c: [[.5, .16, .05]], l: [[[.45, .4], [.57, .52]]] },
+  5: { b: [[[.3, .86], [.7, .86], [.7, .78], [.64, .74], [.82, .3], [.65, .52], [.61, .2], [.5, .5], [.39, .2], [.35, .52], [.18, .3], [.36, .74], [.3, .78]]], e: [[.82, .27], [.61, .17], [.39, .17], [.18, .27]] },
+  6: { b: [[[.3, .86], [.7, .86], [.7, .78], [.64, .74], [.76, .46], [.62, .34], [.5, .42], [.38, .34], [.24, .46], [.36, .74], [.3, .78]]], l: [[[.5, .42], [.5, .1]], [[.4, .2], [.6, .2]]] },
+};
+function piece(p, x, y, q) {
+  const g = GLYPH[p & 7], black = p & 8, X = u => x + u * q, Y = v => y + v * q;
+  cx.lineWidth = Math.max(1.3, q * 0.045); cx.lineJoin = 'round'; cx.strokeStyle = I1; cx.fillStyle = black ? '#8c8c8c' : '#000';
+  for (const b of g.b) { cx.beginPath(); b.forEach((pt, i) => i ? cx.lineTo(X(pt[0]), Y(pt[1])) : cx.moveTo(X(pt[0]), Y(pt[1]))); cx.closePath(); cx.fill(); cx.stroke(); }
+  for (const c of g.c || []) { cx.beginPath(); cx.arc(X(c[0]), Y(c[1]), c[2] * q, 0, 7); cx.fill(); cx.stroke(); }
+  for (const l of g.l || []) { cx.beginPath(); cx.moveTo(X(l[0][0]), Y(l[0][1])); cx.lineTo(X(l[1][0]), Y(l[1][1])); cx.stroke(); }
+  cx.fillStyle = black ? '#000' : I1; for (const e of g.e || []) { cx.beginPath(); cx.arc(X(e[0]), Y(e[1]), q * 0.03, 0, 7); cx.fill(); }
+}
+const sqXY = sq => { const f = sq & 7, r = sq >> 4, c = S.hc ? 7 - f : f, w = S.hc ? r : 7 - r; return [L.bx + c * L.q, L.by + w * L.q]; };
+function arrow(u, col, dash) {
+  if (!u) return; const f = (u.charCodeAt(0) - 97) + (u.charCodeAt(1) - 49) * 16, t = (u.charCodeAt(2) - 97) + (u.charCodeAt(3) - 49) * 16;
+  const [x0, y0] = sqXY(f), [x1, y1] = sqXY(t), h = L.q / 2;
+  cx.strokeStyle = col; cx.lineWidth = Math.max(1.5, L.q * 0.05); cx.setLineDash(dash ? [L.q * 0.12, L.q * 0.1] : []);
+  cx.beginPath(); cx.moveTo(x0 + h, y0 + h); cx.lineTo(x1 + h, y1 + h); cx.stroke(); cx.setLineDash([]);
+  cx.beginPath(); cx.arc(x1 + h, y1 + h, L.q * 0.1, 0, 7); cx.stroke();
+}
+function drawBoard(now) {
+  const { bx, by, bs, q, fs } = L;
+  cx.strokeStyle = I2; cx.lineWidth = Math.max(1.5, dpr * 1.2); cx.strokeRect(bx, by, bs, bs);
+  cx.fillStyle = '#7a7a7a';
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) if ((r + c) & 1) { const n = 4, st = q / n; for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) cx.fillRect(bx + c * q + (i + .5) * st - dpr * .6, by + r * q + (j + .5) * st - dpr * .6, dpr * 1.3, dpr * 1.3); }
+  // labels: descriptive files from the human's side, or a-h
+  for (let i = 0; i < 8; i++) {
+    const f = S.hc ? 7 - i : i, r = S.hc ? i + 1 : 8 - i;
+    T(S.desc ? ['QR', 'QN', 'QB', 'Q', 'K', 'KB', 'KN', 'KR'][f] : 'abcdefgh'[f], bx + (i + .5) * q, by + bs + fs * 1.15, I3, 'center', fs * .85);
+    T(String(S.desc && S.hc ? 9 - r : r), bx - fs * .55, by + (i + .5) * q + fs * .3, I3, 'center', fs * .85);
+  }
+  const tick = (sq, col, k) => { const [x, y] = sqXY(sq), a = q * k; cx.strokeStyle = col; cx.lineWidth = Math.max(1.5, dpr * 1.3); cx.beginPath();
+    for (const [sx, sy] of [[0, 0], [1, 0], [0, 1], [1, 1]]) { const px = x + sx * q + (sx ? -2 : 2), py = y + sy * q + (sy ? -2 : 2); cx.moveTo(px + (sx ? -a : a), py); cx.lineTo(px, py); cx.lineTo(px, py + (sy ? -a : a)); } cx.stroke(); };
+  if (lastMv) { tick(lastMv.f, I2, .18); tick(lastMv.t, I2, .18); }
+  if (G.check && !G.over) tick(E.kingSq[E.side], I1, .5);
+  for (let sq = 0; sq < 120; sq++) { if (sq & 0x88) continue; const p = E.board[sq]; if (p) { const [x, y] = sqXY(sq); piece(p, x, y, q); } }
+  if (sel >= 0) {
+    tick(sel, I1, .32);
+    for (const m of G.legal) if (m.f === sel) { const [x, y] = sqXY(m.t), h = q / 2, a = q * (m.c ? .2 : .1); cx.strokeStyle = I1; cx.lineWidth = Math.max(1.5, dpr * 1.3); cx.beginPath(); cx.moveTo(x + h, y + h - a); cx.lineTo(x + h + a, y + h); cx.lineTo(x + h, y + h + a); cx.lineTo(x + h - a, y + h); cx.closePath(); cx.stroke(); }
+  }
+  if (thinking && snap) { if (snap.best) arrow(snap.best.u, I2, false); const cur = snap.rows.find(r => r.st === 1); if (cur && (!snap.best || cur.u !== snap.best.u)) arrow(cur.u, I1, true); }
+}
+const fmt = E.fmt;
+function drawTree(x, y, w, h) {
+  const fs = L.fs, Ls = snap.L, n = Ls.length, rowsWanted = Math.max(n, snap.depth + 1);
+  const rh = Math.min(fs * 3.4, h / (rowsWanted + 0.6)), gut = fs * 2.2, x0 = x + gut, ww = w - gut;
+  let px = x0 + ww / 2, py = y + rh * 0.3;
+  cx.fillStyle = I1; cx.beginPath(); cx.arc(px, py, fs * 0.28, 0, 7); cx.fill();
+  const labels = [];
+  for (let i = 0; i < n; i++) {
+    const lv = Ls[i], yy = y + rh * (i + 1.05), K = lv.st.length, wk = lv.cl ? ww * 0.8 : ww;
+    T((i + 1) + (((snap.side + i) & 1) ? 'B' : 'W'), x, yy + fs * .3, lv.k === 1 ? I3 : I2, 'left', fs * .85);
+    // clipped moves: short dashed stubs that never reach a node
+    if (lv.cl) {
+      const nc = Math.min(lv.cl, 14); cx.strokeStyle = I3; cx.lineWidth = dpr; cx.setLineDash([dpr * 2, dpr * 3]); cx.beginPath();
+      for (let j = 0; j < nc; j++) { const xx = x0 + wk + (j + .7) * (ww - wk) / (nc + .5); cx.moveTo(px, py); cx.lineTo(px + (xx - px) * .45, py + (yy - py) * .45); }
+      cx.stroke(); cx.setLineDash([]);
+      T('+' + lv.cl, x0 + ww, yy + fs * .3, I3, 'right', fs * .8);
+    }
+    let nx = px, ny = py, found = false;
+    for (let j = 0; j < K; j++) {
+      const s = lv.st[j], xx = x0 + (j + .5) * wk / K, cur = j === lv.cur;
+      cx.strokeStyle = cur ? I1 : s === 2 ? I2 : s === 3 ? I4 : I3; cx.lineWidth = cur ? dpr * 2 : dpr;
+      cx.beginPath(); cx.moveTo(px, py); cx.lineTo(xx, yy); cx.stroke();
+      const r = fs * .22;
+      if (s === 3) { cx.strokeStyle = I2; cx.lineWidth = dpr * 1.2; cx.beginPath(); cx.moveTo(xx - r * 1.3, yy - r * 1.3); cx.lineTo(xx + r * 1.3, yy + r * 1.3); cx.moveTo(xx + r * 1.3, yy - r * 1.3); cx.lineTo(xx - r * 1.3, yy + r * 1.3); cx.stroke(); }
+      else if (cur) { cx.fillStyle = I1; cx.beginPath(); cx.moveTo(xx, yy - r * 2); cx.lineTo(xx + r * 2, yy); cx.lineTo(xx, yy + r * 2); cx.lineTo(xx - r * 2, yy); cx.fill(); }
+      else if (s === 2) { cx.fillStyle = I2; cx.fillRect(xx - r, yy - r, r * 2, r * 2); }
+      else { cx.strokeStyle = I3; cx.lineWidth = dpr; cx.strokeRect(xx - r, yy - r, r * 2, r * 2); }
+      if (j === lv.bi && !cur) { cx.strokeStyle = I1; cx.lineWidth = dpr * 1.2; cx.beginPath(); cx.arc(xx, yy, r * 2.3, 0, 7); cx.stroke(); }
+      if (cur) { nx = xx; ny = yy; found = true; if (lv.cn && !snap.full) labels.push([lv.cn + (lv.k === 1 ? '' : ' ' + lv.cs), xx, yy]); }
+    }
+    if (!found) break;
+    px = nx; py = ny;
+  }
+  cx.font = fs * .9 + 'px ' + FONT;
+  for (const [s, xx, yy] of labels) {
+    const tw = cx.measureText(s).width, right = xx + fs * .7 + tw < x + w, lx = right ? xx + fs * .7 : xx - fs * .7 - tw;
+    cx.fillStyle = '#000'; cx.fillRect(lx - 2, yy - fs * .55, tw + 4, fs * 1.1);
+    T(s, lx, yy + fs * .32, I1, 'left', fs * .9);
+  }
+  return y + rh * (rowsWanted + 0.6);
+}
+function drawTable(rows, x, y, yMax) {
+  const fs = L.fs, lh = fs * 1.3, n = chars();
+  T(clip(' MOVE       PLAUS  VALUE  MAIN VARIATION', n), x, y, I3); y += lh;
+  for (const r of rows) {
+    if (y > yMax) break;
+    const mark = r.b ? '*' : r.st === 1 ? '>' : ' ';
+    const tail = r.st === 4 ? 'CLIPPED: ' + r.why : r.st === 2 ? (r.pv || '') : r.why;
+    const s = mark + pad(r.n, 10) + ' ' + String(r.s).padStart(5) + ' ' + (r.v == null ? '      ' : fmt(r.v).padStart(6)) + '  ' + tail;
+    T(clip(s, n), x, y, r.b || r.st === 1 ? I1 : r.st === 4 ? I4 : r.st === 2 ? I2 : I3); y += lh;
+  }
+}
+function statsLines(st, ms) {
+  return ['POSITIONS ' + st.nodes + '  PLAUSIBLE GENERATIONS ' + st.plaus, 'STATIC EVALS ' + st.statics + '  HASH HITS ' + st.hash + '  FEEDOVERS ' + st.feed,
+    'ALPHA-BETA CUTOFFS ' + st.cuts + '  MOVES CLIPPED ' + st.clipped, 'DEEPEST PLY ' + st.maxPly + '  TIME ' + (ms / 1000).toFixed(1) + ' SEC'];
+}
+function drawPanel(now) {
+  const { tx, ty, tw, th, fs } = L, lh = fs * 1.3, n = chars(), blink = (now % 1000) < 500 ? '_' : ' ';
+  let y = ty + fs;
+  const yMax = ty + th;
+  if (thinking && snap) {
+    T(clip('MAC HACK VI SEARCHING, ' + snap.depth + ' PLY' + (snap.full ? '  FULL SPEED' : ''), n), tx, y, I1); y += lh * .6;
+    y = drawTree(tx, y, tw, Math.min(th * (L.land ? .52 : .5), fs * 3.4 * (snap.depth + 6))) + fs * .4;
+    if (!snap.full) { for (const l of wrap('> ' + snap.msg, n).slice(0, 2)) { T(l, tx, y, I1); y += lh; } }
+    if (snap.best) { for (const l of wrap('BEST ' + snap.best.n + ' ' + fmt(snap.best.v) + '  LINE: ' + snap.best.pv, n).slice(0, 2)) { T(l, tx, y, I2); y += lh; } }
+    for (const l of statsLines(snap.stats, searchMs).slice(0, L.land ? 4 : 3)) { if (y > yMax) break; T(clip(l, n), tx, y, I3); y += lh; }
+    y += lh * .3; if (y < yMax - lh) drawTable(snap.rows, tx, y, yMax);
+  } else if (thinking) { T('MAC HACK VI' + blink, tx, y, I1);
+  } else if (G.over) {
+    const who = G.over === 'mate' ? (E.side === S.hc ? 'CHECKMATE. MAC HACK VI WINS.' : 'CHECKMATE. YOU WIN.') : 'DRAWN.';
+    T(who, tx, y, I1); y += lh * 2; T('PRESS NEW GAME, OR TAKE BACK.', tx, y, I2); y += lh * 2;
+    if (lastRes) drawTable(lastRes.rows, tx, y, yMax);
+  } else if (lastRes) {
+    T(clip('MAC HACK VI PLAYED ' + lastRes.name + '   ' + fmt(lastRes.val), n), tx, y, I1); y += lh;
+    for (const l of wrap('IT EXPECTS: ' + lastRes.pv, n).slice(0, 2)) { T(l, tx, y, I2); y += lh; }
+    y += lh * .3; for (const l of statsLines(lastRes.stats, lastRes.ms)) { T(clip(l, n), tx, y, I3); y += lh; }
+    y += lh * .5; T('YOUR MOVE' + blink, tx, y, I1); y += lh * 1.5;
+    T('PLAUSIBILITY OF ALL MOVES AT TOP LEVEL', tx, y, I3, 'left', fs * .9); y += lh;
+    drawTable(lastRes.rows, tx, y, yMax);
+  } else {
+    const txt = ['MAC HACK VI', '', '"IN ANY GIVEN SITUATION, SOME MOVES LOOK MORE PROMISING THAN OTHERS." HE DREW ME A "DECISION TREE," SHOWING VARIOUS BRANCHES, OR POSSIBLE MOVES.', '',
+      'HAVING MADE A LOSING MOVE, THE PROGRAM WILL CLIP OFF THAT BRANCH.', '', '"NOW I DON\'T FEED IN MOVES ANY MORE. I FEED IN PRINCIPLES."', '    R. GREENBLATT, NATIONAL GEOGRAPHIC, 1970', '',
+      E.side === S.hc ? 'YOUR MOVE. TOUCH A PIECE, THEN A SQUARE' + blink : ''];
+    for (const p of txt) { if (!p) { y += lh * .5; continue; } for (const l of wrap(p, n)) { if (y > yMax) break; T(l, tx, y, p === txt[0] || /YOUR MOVE/.test(p) ? I1 : I2); y += lh; } }
+  }
+}
+function drawScope(now) {
+  cx.fillStyle = '#000'; cx.fillRect(0, 0, SW, SH);
+  cx.textBaseline = 'alphabetic';
+  drawBoard(now); drawPanel(now);
+}
+
+// ---------- the tube: barrel-bent glass, phosphor colour and afterglow, bloom, scan lines, flicker ----------
+const BARREL = 0.11;
+function bend(u, v) { const cxn = u * 2 - 1, cyn = v * 2 - 1, k = (1 + BARREL * (cxn * cxn + cyn * cyn)) / (1 + BARREL); return [(cxn * k + 1) / 2, (cyn * k + 1) / 2]; }
+function unbend(u, v) { let a = u * 2 - 1, b = v * 2 - 1; const tx = a, ty = b; for (let i = 0; i < 8; i++) { const k = (1 + BARREL * (a * a + b * b)) / (1 + BARREL); a = tx / k; b = ty / k; } return [(a + 1) / 2, (b + 1) / 2]; }
+let gl = null, glr = null, c2 = null;
+function initGL() {
+  try { gl = crt.getContext('webgl', { antialias: false, alpha: false, premultipliedAlpha: false }); } catch { gl = null; }
+  if (!gl) { c2 = crt.getContext('2d'); return; }
+  const VS = 'attribute vec2 p;varying vec2 uv;void main(){uv=p*.5+.5;gl_Position=vec4(p,0.,1.);}';
+  const FS_P = 'precision mediump float;varying vec2 uv;uniform sampler2D cur,prev;uniform float decay;void main(){float c=texture2D(cur,uv).r;float p=texture2D(prev,uv).r;gl_FragColor=vec4(vec3(max(c,p*decay-.004)),1.);}';
+  const FS_D = `precision mediump float;varying vec2 uv;uniform sampler2D cur,glow;uniform vec2 res;uniform float time,p7;
+float h(vec2 p){return fract(sin(dot(p,vec2(12.9898,78.233)))*43758.5453);}
+void main(){
+  vec2 c=uv*2.-1.;float r2=dot(c,c);
+  vec2 d=c*(1.+${BARREL.toFixed(3)}*r2)/(1.+${BARREL.toFixed(3)});vec2 q=d*.5+.5;
+  vec2 e=1.-smoothstep(vec2(.985),vec2(1.),abs(d));float inside=e.x*e.y;
+  float s=texture2D(cur,q).r;float g=texture2D(glow,q).r;
+  float b=0.;vec2 px=1./res;
+  for(int i=0;i<8;i++){float a=float(i)*.785398;vec2 o=vec2(cos(a),sin(a));b+=texture2D(glow,q+o*px*2.5).r+texture2D(glow,q+o*px*6.).r*.6;}
+  b/=12.8;
+  vec3 core=mix(vec3(.35,1.,.5),vec3(.78,.93,1.),p7);
+  vec3 after=mix(vec3(.12,.75,.25),vec3(.62,.86,.22),p7);
+  vec3 halo=mix(vec3(.1,.8,.3),vec3(.35,.65,.95),p7);
+  vec3 col=core*s*1.15+after*max(g-s,0.)*.5+halo*b*.75;
+  col*=.9+.1*sin(gl_FragCoord.y*2.0944);
+  col*=.965+.035*sin(time*47.)+.02*(h(vec2(time,1.))-.5);
+  col+=(h(gl_FragCoord.xy+time)-.5)*.025;
+  col*=1.-.32*r2;
+  col+=mix(vec3(.012,.03,.016),vec3(.016,.024,.03),p7)*(1.3-r2*.5);
+  col*=inside;
+  float sp=exp(-dot((uv-vec2(.27,.8))*vec2(2.2,5.),(uv-vec2(.27,.8))*vec2(2.2,5.))*3.);
+  col+=vec3(.05,.055,.06)*sp+vec3(.02)*smoothstep(.75,1.4,r2);
+  gl_FragColor=vec4(col,1.);}`;
+  const sh = (t, s) => { const o = gl.createShader(t); gl.shaderSource(o, s); gl.compileShader(o); if (!gl.getShaderParameter(o, gl.COMPILE_STATUS)) throw new Error(gl.getShaderInfoLog(o)); return o; };
+  const prog = fs => { const p = gl.createProgram(); gl.attachShader(p, sh(gl.VERTEX_SHADER, VS)); gl.attachShader(p, sh(gl.FRAGMENT_SHADER, fs)); gl.bindAttribLocation(p, 0, 'p'); gl.linkProgram(p); if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(p)); return p; };
+  try {
+    const pP = prog(FS_P), pD = prog(FS_D), buf = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, buf); gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    const tex = () => { const t = gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D, t); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE); return t; };
+    glr = { pP, pD, src: tex(), a: tex(), b: tex(), fa: gl.createFramebuffer(), fb: gl.createFramebuffer(), w: 0, h: 0, last: 0,
+      u: { cur: gl.getUniformLocation(pP, 'cur'), prev: gl.getUniformLocation(pP, 'prev'), decay: gl.getUniformLocation(pP, 'decay'), dcur: gl.getUniformLocation(pD, 'cur'), glow: gl.getUniformLocation(pD, 'glow'), res: gl.getUniformLocation(pD, 'res'), time: gl.getUniformLocation(pD, 'time'), p7: gl.getUniformLocation(pD, 'p7') } };
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, true);
+  } catch (err) { console.warn('CRT shader unavailable: ' + err.message); gl = null; glr = null; const c = crt.cloneNode(); crt.replaceWith(c); c.id = 'crt'; }
+}
+function sizeGL() {
+  if (!glr) return;
+  for (const [t, f] of [[glr.a, glr.fa], [glr.b, glr.fb]]) { gl.bindTexture(gl.TEXTURE_2D, t); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, SW, SH, 0, gl.RGBA, gl.UNSIGNED_BYTE, null); gl.bindFramebuffer(gl.FRAMEBUFFER, f); gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t, 0); gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT); }
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+}
+function present(now, uploaded) {
+  if (!glr) { const c = $('crt').getContext('2d'); c.globalCompositeOperation = 'source-over'; c.drawImage(scope, 0, 0); c.globalCompositeOperation = 'multiply'; c.fillStyle = S.p7 ? '#c4ecff' : '#59ff80'; c.fillRect(0, 0, SW, SH); return; }
+  const dt = Math.min(0.1, (now - glr.last) / 1000); glr.last = now;
+  gl.viewport(0, 0, SW, SH);
+  if (uploaded) { gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glr.src); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, scope); }
+  gl.useProgram(glr.pP); gl.bindFramebuffer(gl.FRAMEBUFFER, glr.fb);
+  gl.activeTexture(gl.TEXTURE0); gl.bindTexture(gl.TEXTURE_2D, glr.src); gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glr.a);
+  gl.uniform1i(glr.u.cur, 0); gl.uniform1i(glr.u.prev, 1); gl.uniform1f(glr.u.decay, Math.exp(-dt * (S.p7 ? 8 : 12)));
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.useProgram(glr.pD);
+  gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, glr.b);
+  gl.uniform1i(glr.u.dcur, 0); gl.uniform1i(glr.u.glow, 1); gl.uniform2f(glr.u.res, SW, SH); gl.uniform1f(glr.u.time, (now / 1000) % 1000); gl.uniform1f(glr.u.p7, S.p7 ? 1 : 0);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+  [glr.a, glr.b] = [glr.b, glr.a]; [glr.fa, glr.fb] = [glr.fb, glr.fa];
+}
+function resize() {
+  const c = $('crt'), r = c.getBoundingClientRect(); dpr = Math.min(2, window.devicePixelRatio || 1);
+  const w = Math.max(2, Math.round(r.width * dpr)), h = Math.max(2, Math.round(r.height * dpr));
+  if (w === SW && h === SH) return;
+  SW = w; SH = h; c.width = scope.width = w; c.height = scope.height = h; layout(); sizeGL(); dirty = true;
+}
+let lastBlink = 0, lastFrame = 0;
+function frame(now) {
+  requestAnimationFrame(frame);
+  if (now - lastFrame < 30) return; lastFrame = now;
+  resize();
+  const bl = Math.floor(now / 500); if (bl !== lastBlink) { lastBlink = bl; if (!thinking || !snap) dirty = true; }
+  const up = dirty; if (dirty) { dirty = false; drawScope(now); }
+  present(now, up);
+}
+function bindCanvas(c) {
+  c.addEventListener('pointerdown', e => {
+    const r = c.getBoundingClientRect(), [u, v] = bend((e.clientX - r.left) / r.width, (e.clientY - r.top) / r.height), x = u * SW, y = v * SH;
+    const col = Math.floor((x - L.bx) / L.q), row = Math.floor((y - L.by) / L.q);
+    if (col < 0 || col > 7 || row < 0 || row > 7) { audio(); if (sel >= 0) { sel = -1; dirty = true; } return; }
+    tapSquare((S.hc ? row : 7 - row) * 16 + (S.hc ? 7 - col : col));
+  });
+}
+// where a square's centre lands on the page (for tests and keyboard-free automation)
+function squareClient(sq) { const [x, y] = sqXY(sq), [u, v] = unbend((x + L.q / 2) / SW, (y + L.q / 2) / SH), r = $('crt').getBoundingClientRect(); return { x: r.left + u * r.width, y: r.top + v * r.height }; }
+
+// ---------- start ----------
+load(); syncPanel(); initGL(); bindCanvas($('crt')); resize();
+banner();
+if (G.moves.length) { lastMv = G.moves[G.moves.length - 1]; tty('GAME RESUMED AT MOVE ' + ((E.plyCount >> 1) + 1) + '.\n'); }
+refresh(); requestAnimationFrame(frame); next();
+addEventListener('resize', () => { resize(); });
+window.__mh = { E, S, G, squareClient, tapSquare, state: () => ({ thinking, over: G.over, side: E.side, plies: G.moves.length, fen: E.getFEN(), snap: !!snap, last: lastRes && { name: lastRes.name, nodes: lastRes.stats.nodes, ms: lastRes.ms }, gl: !!glr, worker: !!worker }) };
+if ('serviceWorker' in navigator && location.protocol === 'https:') navigator.serviceWorker.register('sw.js').catch(() => {});
+</script>
+</body>
+</html>
