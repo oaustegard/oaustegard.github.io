@@ -10,7 +10,7 @@
 //
 // Bump VERSION to drop every cached file.
 const VERSION = "kokoro-voice-v1";
-const IMMUTABLE_HOSTS = new Set(["pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev", "cdn.jsdelivr.net"]);
+const IMMUTABLE_HOSTS = new Set(["model-packs.austegard.workers.dev", "pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev", "cdn.jsdelivr.net"]);
 const SCOPE = new URL("./", self.location).pathname;
 
 self.addEventListener("install", () => self.skipWaiting());

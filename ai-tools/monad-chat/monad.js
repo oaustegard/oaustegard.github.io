@@ -12,7 +12,7 @@ export const ORT_BASE = (() => {
 export const BASE = (() => {
   const q = Q.get('weights');
   if (q) return new URL(q.endsWith('/') ? q : q + '/', location.href).href;
-  return 'https://pub-38421218e82c4d4ba2bc53974c28b55d.r2.dev/models/monad-chat/v1/';
+  return 'https://model-packs.austegard.workers.dev/models/monad-chat/v1/';
 })();
 
 export const MODELS = {
